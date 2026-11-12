@@ -277,6 +277,7 @@ defmodule Tokengate.Accounts do
         query
         |> order_by([u], [{^dir, field(u, ^sort_column(field))}])
         |> order_by([u], asc: fragment("lower(coalesce(?, ''))", u.name))
+        |> order_by([u], asc: u.id)
     end
   end
 

@@ -246,11 +246,11 @@ msgstr "Top-ups"
 
 #: lib/tokengate_web/live/dashboard_live.html.heex:449
 #: lib/tokengate_web/live/global_cap_live.ex:237
-#: lib/tokengate_web/live/monitoring_live.ex:961
-#: lib/tokengate_web/live/monitoring_live.ex:1061
-#: lib/tokengate_web/live/monitoring_live.ex:1119
-#: lib/tokengate_web/live/monitoring_live.ex:1159
-#: lib/tokengate_web/live/monitoring_live.ex:1333
+#: lib/tokengate_web/live/monitoring_live.ex:964
+#: lib/tokengate_web/live/monitoring_live.ex:1064
+#: lib/tokengate_web/live/monitoring_live.ex:1122
+#: lib/tokengate_web/live/monitoring_live.ex:1162
+#: lib/tokengate_web/live/monitoring_live.ex:1336
 #: lib/tokengate_web/live/profile_modal.ex:239
 #: lib/tokengate_web/live/stats/groups.ex:439
 #: lib/tokengate_web/live/stats/model.ex:563
@@ -313,7 +313,7 @@ msgstr "+ path; vacío = default del adapter."
 #: lib/tokengate_web/live/dashboard_live.html.heex:121
 #: lib/tokengate_web/live/models_live.ex:2823
 #: lib/tokengate_web/live/models_live.ex:3031
-#: lib/tokengate_web/live/monitoring_live.ex:1064
+#: lib/tokengate_web/live/monitoring_live.ex:1067
 #: lib/tokengate_web/live/providers_live.ex:1272
 #: lib/tokengate_web/live/providers_live.ex:1522
 #, elixir-autogen, elixir-format
@@ -408,8 +408,8 @@ msgstr "Los proveedores del catálogo no se pueden eliminar — desactívalo par
 #: lib/tokengate_web/components/core_components.ex:762
 #: lib/tokengate_web/live/dashboard_live.html.heex:616
 #: lib/tokengate_web/live/group_members_live.ex:763
-#: lib/tokengate_web/live/monitoring_live.ex:1314
-#: lib/tokengate_web/live/monitoring_live.ex:1369
+#: lib/tokengate_web/live/monitoring_live.ex:1317
+#: lib/tokengate_web/live/monitoring_live.ex:1372
 #: lib/tokengate_web/live/profile_modal.ex:125
 #: lib/tokengate_web/live/profile_modal.ex:201
 #: lib/tokengate_web/live/providers_live.ex:983
@@ -547,7 +547,7 @@ msgstr "Editar proveedor"
 msgid "Enable"
 msgstr "Activar"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1131
+#: lib/tokengate_web/live/monitoring_live.ex:1134
 #: lib/tokengate_web/live/providers_live.ex:1532
 #, elixir-autogen, elixir-format
 msgid "In flight"
@@ -1159,8 +1159,8 @@ msgstr "Buscar por nombre o correo…"
 #: lib/tokengate_web/components/service_stats_body.ex:233
 #: lib/tokengate_web/components/service_stats_body.ex:357
 #: lib/tokengate_web/live/models_live.ex:2828
-#: lib/tokengate_web/live/monitoring_live.ex:934
-#: lib/tokengate_web/live/monitoring_live.ex:1075
+#: lib/tokengate_web/live/monitoring_live.ex:937
+#: lib/tokengate_web/live/monitoring_live.ex:1078
 #: lib/tokengate_web/live/notifications_live.ex:659
 #: lib/tokengate_web/live/topups_live.html.heex:209
 #: lib/tokengate_web/live/user_stats_live.ex:524
@@ -1470,9 +1470,9 @@ msgstr "Buscar por nombre o perfil de límites..."
 
 #: lib/tokengate_web/components/service_stats_body.ex:167
 #: lib/tokengate_web/live/global_cap_live.ex:243
-#: lib/tokengate_web/live/monitoring_live.ex:961
-#: lib/tokengate_web/live/monitoring_live.ex:1116
-#: lib/tokengate_web/live/monitoring_live.ex:1156
+#: lib/tokengate_web/live/monitoring_live.ex:964
+#: lib/tokengate_web/live/monitoring_live.ex:1119
+#: lib/tokengate_web/live/monitoring_live.ex:1159
 #: lib/tokengate_web/live/services_live.ex:1165
 #: lib/tokengate_web/live/stats/provider.ex:352
 #: lib/tokengate_web/live/stats/services.ex:74
@@ -1661,7 +1661,7 @@ msgstr "Configuración (solo lectura)"
 #: lib/tokengate_web/live/dashboard_live.html.heex:397
 #: lib/tokengate_web/live/dashboard_live.html.heex:451
 #: lib/tokengate_web/live/dashboard_live.html.heex:497
-#: lib/tokengate_web/live/monitoring_live.ex:1085
+#: lib/tokengate_web/live/monitoring_live.ex:1088
 #: lib/tokengate_web/live/stats/groups.ex:281
 #: lib/tokengate_web/live/stats/groups.ex:467
 #: lib/tokengate_web/live/stats/groups.ex:674
@@ -1696,7 +1696,7 @@ msgid "Daily usage per model"
 msgstr "Uso diario por modelo"
 
 #: lib/tokengate_web/live/audit_live.ex:192
-#: lib/tokengate_web/live/monitoring_live.ex:1058
+#: lib/tokengate_web/live/monitoring_live.ex:1061
 #, elixir-autogen, elixir-format
 msgid "Date"
 msgstr "Fecha"
@@ -1711,8 +1711,8 @@ msgstr "Cada usuario pertenece a un solo perfil de límites. Si ya tiene otro, q
 msgid "Full stats"
 msgstr "Stats completos"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1084
-#: lib/tokengate_web/live/monitoring_live.ex:1362
+#: lib/tokengate_web/live/monitoring_live.ex:1087
+#: lib/tokengate_web/live/monitoring_live.ex:1365
 #: lib/tokengate_web/live/stats/provider.ex:125
 #, elixir-autogen, elixir-format
 msgid "Latency"
@@ -1750,8 +1750,8 @@ msgstr "Miembro eliminado."
 #: lib/tokengate_web/live/dashboard_live.html.heex:395
 #: lib/tokengate_web/live/models_live.ex:2825
 #: lib/tokengate_web/live/models_live.ex:3032
-#: lib/tokengate_web/live/monitoring_live.ex:948
-#: lib/tokengate_web/live/monitoring_live.ex:1059
+#: lib/tokengate_web/live/monitoring_live.ex:951
+#: lib/tokengate_web/live/monitoring_live.ex:1062
 #: lib/tokengate_web/live/stats/groups.ex:253
 #: lib/tokengate_web/live/stats/models.ex:89
 #: lib/tokengate_web/live/stats/provider.ex:158
@@ -2057,8 +2057,8 @@ msgstr "Orden inválido para este modelo."
 #: lib/tokengate_web/live/global_cap_live.ex:240
 #: lib/tokengate_web/live/models_live.ex:2540
 #: lib/tokengate_web/live/models_live.ex:3941
-#: lib/tokengate_web/live/monitoring_live.ex:955
-#: lib/tokengate_web/live/monitoring_live.ex:1062
+#: lib/tokengate_web/live/monitoring_live.ex:958
+#: lib/tokengate_web/live/monitoring_live.ex:1065
 #: lib/tokengate_web/live/stats/groups.ex:646
 #: lib/tokengate_web/live/stats/model.ex:429
 #: lib/tokengate_web/live/stats/model.ex:549
@@ -2290,8 +2290,8 @@ msgstr "Prioridad"
 #: lib/tokengate_web/live/models_live.ex:2823
 #: lib/tokengate_web/live/models_live.ex:3030
 #: lib/tokengate_web/live/models_live.ex:3683
-#: lib/tokengate_web/live/monitoring_live.ex:1036
-#: lib/tokengate_web/live/monitoring_live.ex:1065
+#: lib/tokengate_web/live/monitoring_live.ex:1039
+#: lib/tokengate_web/live/monitoring_live.ex:1068
 #, elixir-autogen, elixir-format
 msgid "Provider"
 msgstr "Proveedor"
@@ -3062,7 +3062,7 @@ msgstr "Canal"
 msgid "Chat"
 msgstr "Chat"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1337
+#: lib/tokengate_web/live/monitoring_live.ex:1340
 #: lib/tokengate_web/live/notifications_live.ex:291
 #: lib/tokengate_web/live/notifications_live.ex:540
 #, elixir-autogen, elixir-format
@@ -3147,7 +3147,7 @@ msgstr "Servicios que lo usan"
 #: lib/tokengate_web/live/dashboard_live.html.heex:400
 #: lib/tokengate_web/live/dashboard_live.html.heex:454
 #: lib/tokengate_web/live/dashboard_live.html.heex:500
-#: lib/tokengate_web/live/monitoring_live.ex:1082
+#: lib/tokengate_web/live/monitoring_live.ex:1085
 #: lib/tokengate_web/live/stats/groups.ex:329
 #: lib/tokengate_web/live/stats/groups.ex:515
 #: lib/tokengate_web/live/stats/groups.ex:722
@@ -3466,22 +3466,22 @@ msgid "per hour (7d)"
 msgstr "por hora (7d)"
 
 ## OPERACIONES → Monitoring (log en vivo)
-#: lib/tokengate_web/live/monitoring_live.ex:1063
+#: lib/tokengate_web/live/monitoring_live.ex:1066
 #, elixir-autogen, elixir-format
 msgid "Agent"
 msgstr "Agente"
 
-#: lib/tokengate_web/live/monitoring_live.ex:881
+#: lib/tokengate_web/live/monitoring_live.ex:884
 #, elixir-autogen, elixir-format
 msgid "Avg latency"
 msgstr "Latencia prom"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1081
+#: lib/tokengate_web/live/monitoring_live.ex:1084
 #, elixir-autogen, elixir-format
 msgid "Cache R"
 msgstr "Cache R"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1081
+#: lib/tokengate_web/live/monitoring_live.ex:1084
 #, elixir-autogen, elixir-format
 msgid "Cache read"
 msgstr "Cache read"
@@ -3491,141 +3491,141 @@ msgstr "Cache read"
 msgid "Chats and channels that receive the notifications. The chat id is the number Telegram shows for the conversation."
 msgstr "Chats y canales que reciben las notificaciones. El id del chat es el número que Telegram muestra para la conversación."
 
-#: lib/tokengate_web/live/monitoring_live.ex:1030
+#: lib/tokengate_web/live/monitoring_live.ex:1033
 #, elixir-autogen, elixir-format
 msgid "Client"
 msgstr "Cliente"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1054
+#: lib/tokengate_web/live/monitoring_live.ex:1057
 #, elixir-autogen, elixir-format
 msgid "Costs"
 msgstr "Costos"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1077
+#: lib/tokengate_web/live/monitoring_live.ex:1080
 #, elixir-autogen, elixir-format
 msgid "Effort"
 msgstr "Effort"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1073
+#: lib/tokengate_web/live/monitoring_live.ex:1076
 #, elixir-autogen, elixir-format
 msgid "Error"
 msgstr "Error"
 
 #: lib/tokengate_web/components/service_stats_body.ex:143
-#: lib/tokengate_web/live/monitoring_live.ex:894
-#: lib/tokengate_web/live/monitoring_live.ex:900
+#: lib/tokengate_web/live/monitoring_live.ex:897
+#: lib/tokengate_web/live/monitoring_live.ex:903
 #: lib/tokengate_web/live/supervised_services_live.ex:310
 #: lib/tokengate_web/live/supervised_services_live.ex:411
 #, elixir-autogen, elixir-format
 msgid "Errors"
 msgstr "Errores"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1075
+#: lib/tokengate_web/live/monitoring_live.ex:1078
 #, elixir-autogen, elixir-format
 msgid "HTTP status sent to the client"
 msgstr "Código HTTP enviado al cliente"
 
 #: lib/tokengate_web/components/service_stats_body.ex:235
-#: lib/tokengate_web/live/monitoring_live.ex:1079
+#: lib/tokengate_web/live/monitoring_live.ex:1082
 #, elixir-autogen, elixir-format
 msgid "Input"
 msgstr "Input"
 
 #: lib/tokengate_web/components/service_stats_body.ex:363
 #: lib/tokengate_web/components/service_stats_body.ex:401
-#: lib/tokengate_web/live/monitoring_live.ex:940
-#: lib/tokengate_web/live/monitoring_live.ex:1136
-#: lib/tokengate_web/live/monitoring_live.ex:1244
-#: lib/tokengate_web/live/monitoring_live.ex:1358
+#: lib/tokengate_web/live/monitoring_live.ex:943
+#: lib/tokengate_web/live/monitoring_live.ex:1139
+#: lib/tokengate_web/live/monitoring_live.ex:1247
+#: lib/tokengate_web/live/monitoring_live.ex:1361
 #: lib/tokengate_web/live/user_stats_live.ex:530
 #: lib/tokengate_web/live/user_stats_live.ex:584
 #, elixir-autogen, elixir-format
 msgid "No"
 msgstr "No"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1091
+#: lib/tokengate_web/live/monitoring_live.ex:1094
 #, elixir-autogen, elixir-format
 msgid "No logs match the filters."
 msgstr "No hay logs que coincidan con los filtros."
 
 #: lib/tokengate_web/components/service_stats_body.ex:236
-#: lib/tokengate_web/live/monitoring_live.ex:1080
+#: lib/tokengate_web/live/monitoring_live.ex:1083
 #, elixir-autogen, elixir-format
 msgid "Output"
 msgstr "Output"
 
-#: lib/tokengate_web/live/monitoring_live.ex:869
-#: lib/tokengate_web/live/monitoring_live.ex:1048
+#: lib/tokengate_web/live/monitoring_live.ex:872
+#: lib/tokengate_web/live/monitoring_live.ex:1051
 #, elixir-autogen, elixir-format
 msgid "Performance"
 msgstr "Rendimiento"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1066
+#: lib/tokengate_web/live/monitoring_live.ex:1069
 #, elixir-autogen, elixir-format
 msgid "Prov. key"
 msgstr "Prov. Key"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1067
+#: lib/tokengate_web/live/monitoring_live.ex:1070
 #, elixir-autogen, elixir-format
 msgid "Prov. status"
 msgstr "Prov. Status"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1066
+#: lib/tokengate_web/live/monitoring_live.ex:1069
 #, elixir-autogen, elixir-format
 msgid "Provider API key or model"
 msgstr "API key o model del proveedor"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1067
+#: lib/tokengate_web/live/monitoring_live.ex:1070
 #, elixir-autogen, elixir-format
 msgid "Provider HTTP status"
 msgstr "Código HTTP del proveedor"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1069
+#: lib/tokengate_web/live/monitoring_live.ex:1072
 #, elixir-autogen, elixir-format
 msgid "Provider error reason"
 msgstr "Razón del error del proveedor"
 
-#: lib/tokengate_web/live/monitoring_live.ex:912
+#: lib/tokengate_web/live/monitoring_live.ex:915
 #, elixir-autogen, elixir-format
 msgid "Rate"
 msgstr "Tasa"
 
-#: lib/tokengate_web/live/monitoring_live.ex:821
+#: lib/tokengate_web/live/monitoring_live.ex:824
 #, elixir-autogen, elixir-format
 msgid "Real-time API request log"
 msgstr "Registro de solicitudes a la API en tiempo real"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1042
+#: lib/tokengate_web/live/monitoring_live.ex:1045
 #, elixir-autogen, elixir-format
 msgid "Response"
 msgstr "Respuesta"
 
 #: lib/tokengate_web/components/service_stats_body.ex:364
-#: lib/tokengate_web/live/monitoring_live.ex:1078
-#: lib/tokengate_web/live/monitoring_live.ex:1356
+#: lib/tokengate_web/live/monitoring_live.ex:1081
+#: lib/tokengate_web/live/monitoring_live.ex:1359
 #: lib/tokengate_web/live/user_stats_live.ex:531
 #, elixir-autogen, elixir-format
 msgid "Streaming"
 msgstr "Streaming"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1216
+#: lib/tokengate_web/live/monitoring_live.ex:1219
 #, elixir-autogen, elixir-format
 msgid "The provider failed and the request was recovered by falling back to another provider"
 msgstr "El proveedor falló y la request fue recuperada por fallback a otro proveedor"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1076
+#: lib/tokengate_web/live/monitoring_live.ex:1079
 #, elixir-autogen, elixir-format
 msgid "Think"
 msgstr "Think"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1083
+#: lib/tokengate_web/live/monitoring_live.ex:1086
 #, elixir-autogen, elixir-format
 msgid "Time to first token — streaming only"
 msgstr "Time to first token — solo streaming"
 
 #: lib/tokengate_web/live/global_cap_live.ex:234
 #: lib/tokengate_web/live/global_cap_live.ex:277
-#: lib/tokengate_web/live/monitoring_live.ex:1060
+#: lib/tokengate_web/live/monitoring_live.ex:1063
 #: lib/tokengate_web/live/observability_live.ex:299
 #, elixir-autogen, elixir-format
 msgid "Type"
@@ -3633,10 +3633,10 @@ msgstr "Tipo"
 
 #: lib/tokengate_web/components/service_stats_body.ex:363
 #: lib/tokengate_web/components/service_stats_body.ex:401
-#: lib/tokengate_web/live/monitoring_live.ex:940
-#: lib/tokengate_web/live/monitoring_live.ex:1136
-#: lib/tokengate_web/live/monitoring_live.ex:1244
-#: lib/tokengate_web/live/monitoring_live.ex:1358
+#: lib/tokengate_web/live/monitoring_live.ex:943
+#: lib/tokengate_web/live/monitoring_live.ex:1139
+#: lib/tokengate_web/live/monitoring_live.ex:1247
+#: lib/tokengate_web/live/monitoring_live.ex:1361
 #: lib/tokengate_web/live/user_stats_live.ex:530
 #: lib/tokengate_web/live/user_stats_live.ex:584
 #, elixir-autogen, elixir-format
@@ -5136,33 +5136,33 @@ msgstr ""
 msgid "Sends service_tier: priority — premium serving path."
 msgstr ""
 
-#: lib/tokengate_web/live/monitoring_live.ex:1341
+#: lib/tokengate_web/live/monitoring_live.ex:1344
 #, elixir-autogen, elixir-format
 msgid "API Key"
 msgstr "API Key"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1347
+#: lib/tokengate_web/live/monitoring_live.ex:1350
 #, elixir-autogen, elixir-format
 msgid "Provider key"
 msgstr "Key del proveedor"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1322
+#: lib/tokengate_web/live/monitoring_live.ex:1325
 #, elixir-autogen, elixir-format
 msgid "Upstream message"
 msgstr ""
 
-#: lib/tokengate_web/live/monitoring_live.ex:1190
-#: lib/tokengate_web/live/monitoring_live.ex:1191
+#: lib/tokengate_web/live/monitoring_live.ex:1193
+#: lib/tokengate_web/live/monitoring_live.ex:1194
 #, elixir-autogen, elixir-format
 msgid "View full error detail"
 msgstr ""
 
-#: lib/tokengate_web/live/monitoring_live.ex:1294
+#: lib/tokengate_web/live/monitoring_live.ex:1297
 #, elixir-autogen, elixir-format
 msgid "client"
 msgstr "cliente"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1300
+#: lib/tokengate_web/live/monitoring_live.ex:1303
 #, elixir-autogen, elixir-format
 msgid "provider"
 msgstr "proveedor"
@@ -5515,7 +5515,7 @@ msgstr "Effort de razonamiento por defecto"
 msgid "Reasoning effort override"
 msgstr "Effort de razonamiento (override)"
 
-#: lib/tokengate_web/live/monitoring_live.ex:1234
+#: lib/tokengate_web/live/monitoring_live.ex:1237
 #, elixir-autogen, elixir-format
 msgid "Reasoning effort the gateway sent upstream after the operator's effort policy"
 msgstr "Effort de razonamiento que el gateway mandó al upstream tras la política de effort del operador"

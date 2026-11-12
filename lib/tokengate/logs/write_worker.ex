@@ -26,7 +26,9 @@ defmodule Tokengate.Logs.WriteWorker do
     # job concurrentemente (los intentos son secuenciales): si ya hay fila,
     # el primer intento ya entregó webhook y broadcast — no repetirlos. El
     # índice único (oban_job_id, inserted_at) queda de respaldo durable.
-    if job_id && Logs.request_log_seen?(job_id) do
+    # Passing inserted_at prunes to a single partition (day) instead of
+    # probing the unique index across every partition.
+    if job_id && Logs.request_log_seen?(job_id, parse_inserted_at(args["inserted_at"])) do
       :ok
     else
       insert_and_deliver(job_id, args)

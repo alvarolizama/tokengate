@@ -32,6 +32,14 @@ defmodule Tokengate.Credits do
 
   alias Tokengate.Accounts.{Group, GroupMember, Service, User}
   alias Tokengate.Credits.Topups
+
+  @stats_timeout 120_000
+
+  # Same convention as Logs/Metrics.StatsQueries: aggregates that span every
+  # partition of request_logs get the analytics timeout, not the default 15s.
+  defp stats_timeout,
+    do: Application.get_env(:tokengate, :stats_query_timeout_ms, @stats_timeout)
+
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Repo
 
@@ -216,7 +224,8 @@ defmodule Tokengate.Credits do
     |> only_limit_filter(only_limit)
     |> group_by([rl], rl.user_id)
     |> select([rl], {rl.user_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-    |> Repo.all()
+    # `since(nil)` spans every partition: give it the analytics timeout.
+    |> Repo.all(timeout: stats_timeout())
     |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
   end
 
@@ -229,7 +238,7 @@ defmodule Tokengate.Credits do
     |> only_limit_filter(only_limit)
     |> group_by([rl], rl.service_id)
     |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
     |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
   end
 

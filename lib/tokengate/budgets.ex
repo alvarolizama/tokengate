@@ -528,17 +528,28 @@ defmodule Tokengate.Budgets do
       rollup_from = ceil_hour(from)
 
       if DateTime.compare(rollup_from, cutoff) == :lt do
-        edge =
-          if DateTime.compare(from, rollup_from) == :lt,
-            do: [raw_member_spend(member_ids, from, rollup_from)],
-            else: []
+        rollup = rollup_member_spend(member_ids, rollup_from, cutoff)
 
-        (edge ++
-           [
-             rollup_member_spend(member_ids, rollup_from, cutoff),
-             raw_member_spend(member_ids, cutoff, nil)
-           ])
-        |> Enum.reduce(%{}, &merge_member_spend_maps/2)
+        # Empty rollup for hours that DO have traffic means the backfill has
+        # not run yet (fresh deploy) or the RollupWorker has been down (its
+        # tail window is only @rollup_tail_hours — the gap would be
+        # permanent). Fall back to the full raw aggregate, same guard as
+        # Rollup's rollup-first reads and Logs.total_spend_by_user/0.
+        if map_size(rollup) == 0 and closed_hours_have_logs?(member_ids, rollup_from) do
+          raw_member_spend(member_ids, from, nil)
+        else
+          edge =
+            if DateTime.compare(from, rollup_from) == :lt,
+              do: [raw_member_spend(member_ids, from, rollup_from)],
+              else: []
+
+          (edge ++
+             [
+               rollup,
+               raw_member_spend(member_ids, cutoff, nil)
+             ])
+          |> Enum.reduce(%{}, &merge_member_spend_maps/2)
+        end
       else
         # Window entirely inside the fresh tail (or shorter than an hour).
         raw_member_spend(member_ids, from, nil)
@@ -546,6 +557,13 @@ defmodule Tokengate.Budgets do
     else
       raw_member_spend(member_ids, from, nil)
     end
+  end
+
+  defp closed_hours_have_logs?(member_ids, from) do
+    Repo.exists?(
+      from rl in RequestLog,
+        where: rl.group_member_id in ^member_ids and rl.inserted_at >= ^from
+    )
   end
 
   # Raw half; `to` is exclusive when given so the spans above never overlap.

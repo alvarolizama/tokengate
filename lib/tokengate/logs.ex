@@ -100,6 +100,22 @@ defmodule Tokengate.Logs do
     Repo.exists?(from rl in RequestLog, where: rl.oban_job_id == ^oban_job_id)
   end
 
+  # Partition-pruned variant: request_logs is partitioned by day, so probing
+  # by oban_job_id alone indexes every partition (measured ~91 index-only
+  # scans / 0.78ms). The unique key is (oban_job_id, inserted_at), and the
+  # worker always knows the timestamp from the job args — pinning it prunes
+  # to a single partition.
+  def request_log_seen?(nil, _), do: false
+
+  def request_log_seen?(oban_job_id, %DateTime{} = inserted_at) do
+    Repo.exists?(
+      from rl in RequestLog,
+        where:
+          rl.oban_job_id == ^oban_job_id and
+            rl.inserted_at == ^DateTime.truncate(inserted_at, :second)
+    )
+  end
+
   defp ensure_atom_key(map, key, value) when is_map(map) do
     # Accept both atom and string-keyed maps; normalize to atom key.
     map
@@ -1068,18 +1084,28 @@ defmodule Tokengate.Logs do
   def total_spend_by_user do
     if rollup_hybrid?() do
       cutoff = rollup_cutoff()
+      rollup = rollup_spend_by_user(cutoff)
 
-      # Closed hours from the rollup (integer micro-USD sums, thousands of
-      # rows) + the fresh tail from request_logs (the RollupWorker keeps
-      # re-aggregating the last @rollup_tail_hours, so anything from the cutoff
-      # on may still be missing there). Both halves are additive.
-      merge_spend_maps(
-        rollup_spend_by_user(cutoff),
-        raw_spend_by_user(cutoff)
-      )
+      # Empty rollup for hours that DO have traffic means the backfill has not
+      # run yet (fresh deploy) or the RollupWorker has been down (its tail
+      # window is only @rollup_tail_hours — the gap would be permanent).
+      # Fall back to the full raw aggregate, same guard as Rollup's
+      # rollup-first reads.
+      if map_size(rollup) == 0 and closed_hours_have_logs?(cutoff) do
+        raw_spend_by_user(nil)
+      else
+        merge_spend_maps(rollup, raw_spend_by_user(cutoff))
+      end
     else
       raw_spend_by_user(nil)
     end
+  end
+
+  defp closed_hours_have_logs?(cutoff) do
+    Repo.exists?(
+      from rl in RequestLog,
+        where: not is_nil(rl.user_id) and rl.inserted_at < ^cutoff
+    )
   end
 
   defp raw_spend_by_user(nil) do
@@ -1146,7 +1172,9 @@ defmodule Tokengate.Logs do
     |> where([rl], not is_nil(rl.service_id))
     |> group_by([rl], rl.service_id)
     |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-    |> Repo.all()
+    # Full-partition-spanning aggregate over a growing table: needs the
+    # analytics budget, not the default 15s.
+    |> Repo.all(timeout: stats_timeout())
     |> Map.new(fn {service_id, cost} -> {service_id, Decimal.new(to_string(cost))} end)
   end
 
