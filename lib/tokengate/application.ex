@@ -56,6 +56,9 @@ defmodule Tokengate.Application do
       Tokengate.Metrics.Supervisor,
       Tokengate.Logs.Inflight,
       Tokengate.Accounts.ApiKeyCache,
+      # Generic hot-path ETS cache (exemption sets, observability destinations).
+      # Owns its table; see Tokengate.Cache.
+      Tokengate.Cache,
       # Telegram notifications: owner of the settings cache and the
       # anti-repetition table, plus the single emit funnel (`Notifications.emit/2`).
       Tokengate.Notifications,

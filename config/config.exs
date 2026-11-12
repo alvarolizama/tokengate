@@ -96,7 +96,12 @@ config :tokengate, Oban,
        {"30 4 * * 1", Tokengate.Providers.CatalogRefreshWorker}
      ]}
   ],
-  queues: [default: 10, logs: 20, webhooks: 10, budgets: 5, notifications: 5]
+  # `logs` caps at 8: the queue's jobs are pure DB work (insert + one joined
+  # read + webhook enqueue) and the Repo pool is `pool_size: 10`. At the old
+  # limit of 20 the queue alone could hold every connection, starving the proxy
+  # (auth/budget reads) and the webhook queue behind it — the queue saturated
+  # the pool instead of throttling itself.
+  queues: [default: 10, logs: [limit: 8], webhooks: 10, budgets: 5, notifications: 5]
 
 # At-boot partition ensure (Tokengate.Logs.PartitionWorker.ensure_on_boot/0).
 # Disabled in test.exs — fixtures insert arbitrary historical dates that must

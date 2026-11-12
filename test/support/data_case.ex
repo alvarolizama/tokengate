@@ -63,6 +63,10 @@ defmodule Tokengate.DataCase do
   """
   def setup_sandbox(tags) do
     Tokengate.Metrics.DashboardCache.invalidate_all()
+    # `Tokengate.Cache` is a VM-global ETS table (exemption sets, observability
+    # destinations) whose TTL outlives the sandbox rollback: a later test
+    # sharing a key would read the previous test's rows.
+    Tokengate.Cache.invalidate_all()
     # `GlobalSettings` caches the daily cap in `:persistent_term` (hot path).
     # That term is VM-global and survives the sandbox rollback, so a test that
     # arms the kill-switch would leak the cap into the next test. Flush it with

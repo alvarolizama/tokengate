@@ -167,10 +167,86 @@ defmodule Tokengate.Metrics.DashboardCacheTest do
     end
   end
 
+  describe "single-flight" do
+    test "concurrent misses on the same key compute once and share the result" do
+      key = {:single_flight, System.unique_integer([:positive])}
+      call_count = :counters.new(1, [:atomics])
+
+      compute = fn ->
+        :counters.add(call_count, 1, 1)
+        # Wide enough that every waiter is still blocked when the holder
+        # publishes the value.
+        Process.sleep(150)
+        %{v: :shared}
+      end
+
+      results =
+        1..10
+        |> Enum.map(fn _ ->
+          Task.async(fn -> DashboardCache.fetch_or_compute(key, compute) end)
+        end)
+        |> Task.await_many(5_000)
+
+      assert Enum.uniq(results) == [%{v: :shared}]
+      assert :counters.get(call_count, 1) == 1
+      assert DashboardCache.fetch(key) == {:ok, %{v: :shared}}
+    end
+
+    test "a crashing compute releases the placeholder (no wedged key)" do
+      key = {:single_flight_crash, System.unique_integer([:positive])}
+
+      assert_raise RuntimeError, "boom", fn ->
+        DashboardCache.fetch_or_compute(key, fn -> raise "boom" end, ttl: 60_000)
+      end
+
+      # The next caller must recompute immediately, not wait out the TTL.
+      assert DashboardCache.fetch_or_compute(key, fn -> %{recovered: true} end, ttl: 60_000) ==
+               %{recovered: true}
+    end
+
+    test "a holder killed by an external exit signal releases the lock via monitor" do
+      # The LiveView async-cancel path is Process.exit(pid, reason): the
+      # holder's `after` clause never runs, so without the DOWN monitor the
+      # placeholder would wedge the key for the whole TTL.
+      key = {:single_flight_exit, System.unique_integer([:positive])}
+
+      holder =
+        spawn(fn ->
+          DashboardCache.fetch_or_compute(key, fn -> Process.sleep(10_000) end, ttl: 60_000)
+        end)
+
+      # Wait until the lock is actually taken before killing the holder.
+      wait_until(fn ->
+        match?([_], :ets.lookup(:tokengate_dashboard_cache, {:__computing__, key}))
+      end)
+
+      Process.exit(holder, {:shutdown, :cancel})
+
+      {elapsed, result} =
+        :timer.tc(fn ->
+          DashboardCache.fetch_or_compute(key, fn -> %{recovered: true} end, ttl: 60_000)
+        end)
+
+      assert result == %{recovered: true}
+      # :timer.tc measures microseconds. Generous bound: must not wait out the
+      # TTL (60s) — the monitor releases the lock in a few ms.
+      assert elapsed < 15_000_000
+      refute match?([_], :ets.lookup(:tokengate_dashboard_cache, {:__computing__, key}))
+    end
+  end
+
   describe "build_key/3" do
     test "returns a 3-tuple" do
       key = DashboardCache.build_key("user-1", "7d", "America/Merida")
       assert key == {"user-1", "7d", "America/Merida"}
     end
+  end
+
+  defp wait_until(fun, tries \\ 100)
+
+  defp wait_until(_fun, 0), do: flunk("condition never became true")
+
+  defp wait_until(fun, tries) do
+    if fun.(), do: :ok, else: Process.sleep(10) && wait_until(fun, tries - 1)
   end
 end

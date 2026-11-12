@@ -1106,13 +1106,18 @@ defmodule TokengateWeb.ProxyController do
   # the durable log can persist it.
   defp reserve_credit_budget(member, limits) do
     plan = limits.credit_plan || Tokengate.Credits.plan(member)
+    daily_cap = GlobalSettings.get_daily_cap()
 
+    # `exempt_from?` only exempts the GLOBAL DAILY cap (layer 2); with no cap
+    # configured (`nil` = unlimited) `hold_counter/3` returns `{:ok, 0}` and the
+    # flag is irrelevant — so the exemption lookup (a cache hit, but still a
+    # per-request call into another context) is skipped entirely.
     result =
       Budgets.reserve_plan(
         plan,
-        GlobalSettings.get_daily_cap(),
+        daily_cap,
         max_request_cost_usd(),
-        exempt_from?("global_daily", member)
+        daily_cap != nil and exempt_from?("global_daily", member)
       )
 
     case result do

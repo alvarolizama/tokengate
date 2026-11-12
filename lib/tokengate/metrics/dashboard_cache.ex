@@ -53,6 +53,14 @@ defmodule Tokengate.Metrics.DashboardCache do
   @default_ttl_ms 5_000
   # Sweep cadence: how often the owning GenServer purges expired entries.
   @sweep_interval_ms 5_000
+  # How often a waiter re-checks for the value a concurrent computer is
+  # building. Kept short enough to be invisible next to a stats query, long
+  # enough that a crowd of waiters doesn't spin the scheduler.
+  @poll_interval_ms 10
+  # Hard cap on how long any waiter blocks behind a lock, regardless of the
+  # entry TTL (a 60s structural TTL must never freeze a LiveView for a
+  # wedged holder). Past this window the waiter recomputes locally.
+  @max_wait_ms 1_500
 
   ## Public API ---------------------------------------------------------------
 
@@ -86,6 +94,19 @@ defmodule Tokengate.Metrics.DashboardCache do
   returns it. Runs entirely in the caller's process.
 
   Accepts a per-entry `:ttl` in milliseconds (default: the global TTL).
+
+  ## Single-flight
+
+  Concurrent misses on the SAME key do not fan out onto the database: the
+  first caller wins an `:ets.insert_new/2` placeholder (`{:__computing__,
+  key}`) and computes; the rest wait (bounded by the entry's TTL) for that
+  result instead of running the identical query. N viewers now cost ONE
+  computation per TTL window, not N.
+
+  The placeholder always carries the same deadline the entry would have, so
+  a crashing computer cannot wedge the key: the `after` clause deletes it on
+  normal exit and on raise, and the periodic sweep reaps it when the
+  deadline passes (a wait never outlives the TTL).
   """
   @spec fetch_or_compute(term(), (-> map())) :: map()
   def fetch_or_compute(key, compute_fn) do
@@ -97,13 +118,8 @@ defmodule Tokengate.Metrics.DashboardCache do
     ttl = Keyword.get(opts, :ttl, ttl_ms())
 
     case read(key) do
-      {:ok, data} ->
-        data
-
-      :miss ->
-        data = compute_fn.()
-        put(key, data, ttl)
-        data
+      {:ok, data} -> data
+      :miss -> compute_once(key, compute_fn, ttl)
     end
   end
 
@@ -180,6 +196,110 @@ defmodule Tokengate.Metrics.DashboardCache do
     end
 
     :ok
+  end
+
+  # Single-flight wrapper around the miss path. See `fetch_or_compute/3`.
+  #
+  # Waiters are bounded by construction: at most @max_wait_ms behind the lock
+  # (plus the monitor for a fast :DOWN), then they compute locally. A duplicate
+  # computation is always cheaper than a wedged key — a LiveView holds this
+  # call inside its own process, so there is no safe way to block longer.
+  defp compute_once(key, compute_fn, ttl) do
+    lock_key = {:__computing__, key}
+    deadline = System.monotonic_time(:millisecond) + ttl
+
+    if :ets.insert_new(@table, {lock_key, {:computing, self()}, deadline}) do
+      try do
+        data = compute_fn.()
+        put(key, data, ttl)
+        data
+      after
+        # Releases on normal return AND on raise/exit: a crashing computer
+        # must not leave the key wedged for the whole TTL.
+        :ets.delete(@table, lock_key)
+      end
+    else
+      case await_value(key, lock_key, deadline) do
+        {:ok, data} -> data
+        # The holder released without a value (its compute raised), died on an
+        # external exit signal (its `after` never ran — the waiter cleared the
+        # stale lock via monitor), or outlived the wait window.
+        :miss -> compute_fn.()
+      end
+    end
+  end
+
+  # Waits (bounded) for the process holding the lock to publish the entry.
+  # The placeholder carries the holder's pid, so waiters monitor it: when the
+  # holder dies on an external exit signal (e.g. LiveView async cancellation)
+  # its `after` clause never runs — the `:DOWN` message releases the lock
+  # immediately instead of leaving every waiter polling until the deadline.
+  # Returns `:miss` as soon as the lock is gone without a value, so a crashed
+  # computer costs waiters one poll interval instead of the full TTL.
+  defp await_value(key, lock_key, deadline) do
+    holder_pid = holder_pid(lock_key)
+    wait_deadline = min(deadline, System.monotonic_time(:millisecond) + @max_wait_ms)
+    ref = holder_pid && Process.monitor(holder_pid)
+
+    try do
+      await_value(key, lock_key, wait_deadline, ref)
+    after
+      ref && Process.demonitor(ref, [:flush])
+    end
+  end
+
+  defp holder_pid(lock_key) do
+    case :ets.lookup(@table, lock_key) do
+      [{^lock_key, {:computing, pid}, _deadline}] -> pid
+      _ -> nil
+    end
+  end
+
+  defp await_value(key, lock_key, deadline, ref) do
+    case read(key) do
+      {:ok, data} ->
+        {:ok, data}
+
+      :miss ->
+        now = System.monotonic_time(:millisecond)
+
+        cond do
+          now >= deadline ->
+            :miss
+
+          :ets.lookup(@table, lock_key) == [] ->
+            :miss
+
+          # Holder died without releasing: clear the stale lock so the next
+          # attempt can take it instead of polling until the deadline.
+          received_down?(ref) ->
+            release_stale_lock(lock_key, holder_pid(lock_key))
+            :miss
+
+          true ->
+            Process.sleep(@poll_interval_ms)
+            await_value(key, lock_key, deadline, ref)
+        end
+    end
+  end
+
+  defp received_down?(nil), do: false
+
+  defp received_down?(ref) do
+    receive do
+      {:DOWN, ^ref, :process, _pid, _reason} -> true
+    after
+      0 -> false
+    end
+  end
+
+  # Clears the dead holder's lock, but only if nobody else took it over in
+  # the meantime (a re-attempt may already own the key with its own pid).
+  defp release_stale_lock(lock_key, dead_pid) do
+    case :ets.match(@table, {lock_key, {:computing, :"$1"}, :_}) do
+      [[^dead_pid]] -> :ets.delete(@table, lock_key)
+      _ -> :ok
+    end
   end
 
   defp read(key) do

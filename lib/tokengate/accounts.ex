@@ -737,8 +737,10 @@ defmodule Tokengate.Accounts do
   def scope_member_ids(%{global_role: "admin"}), do: nil
 
   def scope_member_ids(%{global_role: "user"} = user) do
+    # Sorted: the list feeds DashboardCache keys and `in ^ids` filters — it
+    # must be deterministic regardless of row return order.
     memberships = list_group_members_for_user(user.id)
-    Enum.map(memberships, & &1.id)
+    memberships |> Enum.map(& &1.id) |> Enum.sort()
   end
 
   def scope_member_ids(_), do: []

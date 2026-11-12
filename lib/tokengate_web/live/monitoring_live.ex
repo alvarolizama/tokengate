@@ -6,12 +6,17 @@ defmodule TokengateWeb.MonitoringLive do
   alias Tokengate.{Accounts, Logs, Repo}
   alias Tokengate.Accounts.ApiKey
   alias Tokengate.Logs.Inflight
+  alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Providers
 
   @page_size 50
   @pubsub Tokengate.PubSub
   @logs_topic "logs:new"
   @summary_refresh_interval_ms 2_000
+  # El resumen vive en el DashboardCache global: el TTL tiene que sobrevivir
+  # al tick (2s) para que los visores de una misma ventana compartan UN
+  # cálculo; si caduca entre ticks, cada visor recalcula el suyo.
+  @summary_cache_ttl_ms 2_500
   @inflight_refresh_interval_ms 3_000
   @top_card_cache_ms 3_500
 
@@ -32,8 +37,6 @@ defmodule TokengateWeb.MonitoringLive do
       |> assign(:summary, empty_summary())
       |> assign(:top_models, [])
       |> assign(:top_users, [])
-      |> assign(:top_models_cache, nil)
-      |> assign(:top_users_cache, nil)
       |> assign(:summary_refresh_scheduled, false)
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
       |> assign(:pending, [])
@@ -54,13 +57,10 @@ defmodule TokengateWeb.MonitoringLive do
 
       pending = visible_pending(socket.assigns)
 
-      {socket, top_models} = top_models_cached(socket)
-      {socket, top_users} = top_users_cached(socket)
-
       socket =
         socket
-        |> assign(:top_models, top_models)
-        |> assign(:top_users, top_users)
+        |> assign(:top_models, top_models_cached(socket.assigns))
+        |> assign(:top_users, top_users_cached(socket.assigns))
         |> assign(:pending, pending)
 
       # Insert existing pending entries at the top of the logs stream
@@ -118,13 +118,10 @@ defmodule TokengateWeb.MonitoringLive do
   def handle_info(:refresh_inflight, socket) do
     Process.send_after(self(), :refresh_inflight, @inflight_refresh_interval_ms)
 
-    {socket, top_models} = top_models_cached(socket)
-    {socket, top_users} = top_users_cached(socket)
-
     {:noreply,
      socket
-     |> assign(:top_models, top_models)
-     |> assign(:top_users, top_users)}
+     |> assign(:top_models, top_models_cached(socket.assigns))
+     |> assign(:top_users, top_users_cached(socket.assigns))}
   end
 
   def handle_info({:inflight_started, entry}, socket) do
@@ -269,41 +266,29 @@ defmodule TokengateWeb.MonitoringLive do
     end
   end
 
-  defp top_models_card(assigns) do
-    Logs.top_models_last_minutes(1, 3, top_card_filters(assigns))
+  # Top-model / top-user cards se recalculan en cada :refresh_inflight (3s).
+  # Antes había una caché POR VISOR en assigns: N monitores abiertos = N
+  # cálculos por tick. Ahora la entrada vive en el DashboardCache global
+  # (TTL 3.5s, clave = scope + filtros activos), así que el tick de cada
+  # visor es solo el disparador que LEE el resultado compartido.
+  defp top_models_cached(assigns) do
+    filters = top_card_filters(assigns)
+
+    DashboardCache.fetch_or_compute(
+      {:monitoring_top_models, filters},
+      fn -> Logs.top_models_last_minutes(1, 3, filters) end,
+      ttl: @top_card_cache_ms
+    )
   end
 
-  defp top_users_card(assigns) do
-    Logs.top_users_last_minutes(1, 3, top_card_filters(assigns))
-  end
+  defp top_users_cached(assigns) do
+    filters = top_card_filters(assigns)
 
-  # Top-model / top-user cards are recomputed on every :refresh_inflight
-  # (3s cadence). Cache results in assigns with a TTL just above the cadence
-  # so the periodic tick and bursts hit the cache instead of Postgres.
-  defp top_models_cached(socket) do
-    now = System.monotonic_time(:millisecond)
-
-    case socket.assigns[:top_models_cache] do
-      {data, fetched_at} when now - fetched_at < @top_card_cache_ms ->
-        {socket, data}
-
-      _ ->
-        data = top_models_card(socket.assigns)
-        {assign(socket, :top_models_cache, {data, now}), data}
-    end
-  end
-
-  defp top_users_cached(socket) do
-    now = System.monotonic_time(:millisecond)
-
-    case socket.assigns[:top_users_cache] do
-      {data, fetched_at} when now - fetched_at < @top_card_cache_ms ->
-        {socket, data}
-
-      _ ->
-        data = top_users_card(socket.assigns)
-        {assign(socket, :top_users_cache, {data, now}), data}
-    end
+    DashboardCache.fetch_or_compute(
+      {:monitoring_top_users, filters},
+      fn -> Logs.top_users_last_minutes(1, 3, filters) end,
+      ttl: @top_card_cache_ms
+    )
   end
 
   # Converts an Inflight entry to the log shape so it renders inside the
@@ -450,10 +435,21 @@ defmodule TokengateWeb.MonitoringLive do
   end
 
   defp refresh_summary(socket) do
-    summary =
-      Logs.realtime_summary(build_filters(socket, include_limit: false, include_cursor: false))
+    socket |> assign(:summary, summary_for(socket))
+  end
 
-    socket |> assign(:summary, summary)
+  # El resumen (ventana de 5 min con el scope/filtros del visor) se comparte
+  # entre visores con la misma forma de filtros: N monitores = 1 cálculo por
+  # ventana de TTL, no N. La clave lleva los filtros completos, así que dos
+  # visores con scopes distintos nunca leen el mismo número.
+  defp summary_for(socket) do
+    filters = build_filters(socket, include_limit: false, include_cursor: false)
+
+    DashboardCache.fetch_or_compute(
+      {:monitoring_summary, filters},
+      fn -> Logs.realtime_summary(filters) end,
+      ttl: @summary_cache_ttl_ms
+    )
   end
 
   ## Scope resolution ------------------------------------------------------
@@ -463,8 +459,11 @@ defmodule TokengateWeb.MonitoringLive do
   end
 
   defp resolve_scope_member_ids(user) do
+    # Sorted: the list feeds cache keys (DashboardCache) and it must be
+    # deterministic — two viewers with the same memberships must produce the
+    # same key regardless of row return order.
     memberships = Accounts.list_group_members_for_user(user.id)
-    Enum.map(memberships, & &1.id)
+    memberships |> Enum.map(& &1.id) |> Enum.sort()
   end
 
   ## Data loading ----------------------------------------------------------
@@ -485,8 +484,7 @@ defmodule TokengateWeb.MonitoringLive do
 
     logs = Logs.list_logs(list_filters)
 
-    summary =
-      Logs.realtime_summary(build_filters(socket, include_limit: false, include_cursor: false))
+    summary = summary_for(socket)
 
     has_more = length(logs) == @page_size
 
@@ -629,8 +627,6 @@ defmodule TokengateWeb.MonitoringLive do
       |> assign(:filters, filter_params)
       |> assign(:form, to_form(filter_params, as: :filter))
       |> assign(:cursor, nil)
-      |> assign(:top_models_cache, nil)
-      |> assign(:top_users_cache, nil)
       |> assign(
         :pending,
         visible_pending(%{
@@ -640,14 +636,14 @@ defmodule TokengateWeb.MonitoringLive do
       )
       |> assign(
         :top_models,
-        top_models_card(%{
+        top_models_cached(%{
           filters: filter_params,
           scope_member_ids: socket.assigns[:scope_member_ids]
         })
       )
       |> assign(
         :top_users,
-        top_users_card(%{
+        top_users_cached(%{
           filters: filter_params,
           scope_member_ids: socket.assigns[:scope_member_ids]
         })

@@ -61,6 +61,13 @@ defmodule TokengateWeb.StatsLive do
   # MonitoringLive's inflight cadence).
   @live_refresh_interval_ms 3_000
 
+  # TTL of the shared realtime-pulse entry (global, sin scope). Tiene que
+  # sobrevivir al intervalo del tick (3s): con un TTL menor la entrada caduca
+  # ENTRE ticks y cada visor vuelve a calcular el suyo. 3.5s mantiene un
+  # cálculo por ventana para todos los visores (staleness máx. 3.5s, por
+  # debajo del bundle de 5s que lo servía antes).
+  @pulse_cache_ttl_ms 3_500
+
   # "En vivo" feed: how many recent requests to show.
   @live_feed_size 20
 
@@ -96,6 +103,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:per_page, 10)
       |> assign(:shown_counts, %{})
       |> assign(:reload_scheduled, false)
+      |> assign(:pulse_scheduled, false)
       |> assign_budget_reset()
       |> assign(empty_data_assigns())
 
@@ -421,11 +429,17 @@ defmodule TokengateWeb.StatsLive do
   def handle_info({:new_log, log}, socket) do
     case socket.assigns.live_action do
       :live ->
-        {:noreply,
-         socket
-         |> stream_insert(:live_feed, log, at: 0, limit: @live_feed_size)
-         |> assign(:pulse, Logs.realtime_summary(%{}))
-         |> assign(:last_sync_at, DateTime.utc_now())}
+        # El evento NO recalcula el pulso: bajo carga esto corría
+        # `realtime_summary/1` una vez por request y por visor conectado. Se
+        # marca sucio y se programa UN :reload_pulse por intervalo; el valor
+        # sale del DashboardCache (clave global, TTL 3.5s), así que N visores
+        # comparten un solo cálculo.
+        socket =
+          socket
+          |> stream_insert(:live_feed, log, at: 0, limit: @live_feed_size)
+          |> assign(:last_sync_at, DateTime.utc_now())
+
+        {:noreply, schedule_pulse_refresh(socket)}
 
       :index ->
         if not socket.assigns.reload_scheduled do
@@ -476,6 +490,18 @@ defmodule TokengateWeb.StatsLive do
        |> load_live_data()}
     else
       {:noreply, assign(socket, :reload_scheduled, false)}
+    end
+  end
+
+  # Pulso coalescido del feed. Llega como mucho una vez por
+  # @live_refresh_interval_ms aunque el proxy emita cientos de `logs:new`.
+  def handle_info(:reload_pulse, socket) do
+    socket = assign(socket, :pulse_scheduled, false)
+
+    if socket.assigns.live_action == :live do
+      {:noreply, assign(socket, :pulse, live_pulse())}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -1051,6 +1077,29 @@ defmodule TokengateWeb.StatsLive do
     Process.send_after(self(), :clock_tick, ms)
   end
 
+  # Coalesce: un :reload_pulse pendiente absorbe todos los `logs:new` que
+  # lleguen mientras tanto (flag por visor, cadencia la del tab).
+  defp schedule_pulse_refresh(socket) do
+    if socket.assigns[:pulse_scheduled] do
+      socket
+    else
+      Process.send_after(self(), :reload_pulse, @live_refresh_interval_ms)
+      assign(socket, :pulse_scheduled, true)
+    end
+  end
+
+  # El pulso es global (sin filtros de usuario): una entrada compartida sirve
+  # a todos los visores del tab. El TTL (3.5s) sobrevive al tick de 3s, así
+  # que todos los visores de una ventana leen el MISMO cálculo en vez de
+  # re-escanear la ventana cada uno.
+  defp live_pulse do
+    DashboardCache.fetch_or_compute(
+      {:stats_live_pulse},
+      fn -> Logs.realtime_summary(%{}) end,
+      ttl: @pulse_cache_ttl_ms
+    )
+  end
+
   # One bundled realtime refresh. The day partition is scanned ONCE per
   # cache cycle (flat KPI totals + hour × provider profile + budget spend
   # all come out of `Logs.today_live_bundle/0`; it used to be three scans)
@@ -1094,7 +1143,6 @@ defmodule TokengateWeb.StatsLive do
         }
 
         %{
-          pulse: Logs.realtime_summary(%{}),
           today_metrics: live.today,
           minute_series: Logs.requests_per_minute(60),
           day_by_hour: live.day_by_hour,
@@ -1121,7 +1169,7 @@ defmodule TokengateWeb.StatsLive do
 
     socket
     |> assign(:stats_loading, false)
-    |> assign(:pulse, bundle.pulse)
+    |> assign(:pulse, live_pulse())
     # El p95 va aparte del bundle: vive en su propio cache de 60s y no se
     # congela dentro del bundle de 5s.
     |> assign(:today_metrics, Map.put(bundle.today_metrics, :p95_latency_ms, p95_latency_ms))

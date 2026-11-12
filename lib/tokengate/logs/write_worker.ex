@@ -13,8 +13,13 @@ defmodule Tokengate.Logs.WriteWorker do
   """
 
   use Oban.Worker, queue: :logs, max_attempts: 5
+
+  import Ecto.Query, warn: false
+
   alias Tokengate.Logs
+  alias Tokengate.Logs.RequestLog
   alias Tokengate.Observability.WebhookWorker
+  alias Tokengate.Repo
 
   @pubsub Tokengate.PubSub
   @logs_topic "logs:new"
@@ -86,8 +91,7 @@ defmodule Tokengate.Logs.WriteWorker do
 
     case Logs.log_request(attrs) do
       {:ok, request_log} ->
-        request_log =
-          Tokengate.Repo.preload(request_log, [:provider, :service, group_member: [:user, :group]])
+        request_log = reload_for_delivery(request_log)
 
         _ = WebhookWorker.dispatch(request_log)
         broadcast_new_log(request_log)
@@ -95,6 +99,46 @@ defmodule Tokengate.Logs.WriteWorker do
 
       {:error, changeset} ->
         {:error, "request log insert failed: #{inspect(changeset.errors)}"}
+    end
+  end
+
+  # One query for every association the delivery path reads. `Repo.preload/2`
+  # after the insert issued up to four extra round-trips per job; the joins
+  # fetch the same data in a single statement (Ecto still builds one struct per
+  # row, not one per join row).
+  #
+  # The preloads are ALL live on consumers — none is dead weight:
+  #   * `provider`  → `Stats.provider_logo/1` on the "En vivo" feed (`logo_url`)
+  #   * `service`   → `feed_who/1` for service-subject logs (`svc · <name>`)
+  #   * `group_member.user.email` → `feed_who/1` identity column
+  #   * `group_member.group` → Monitoring's scope filter (`group.id`)
+  #   * `group_member.user/group` → `OtlpBuilder.build_identity/1`
+  #     (`"<group.name> - <user.email>"`)
+  #
+  # `inserted_at` is a partition key: pinning it prunes the lookup to the day
+  # the row was just written instead of probing every partition.
+  defp reload_for_delivery(%RequestLog{id: id, inserted_at: inserted_at} = log) do
+    from(rl in RequestLog,
+      where: rl.id == ^id and rl.inserted_at == ^DateTime.truncate(inserted_at, :second),
+      left_join: p in assoc(rl, :provider),
+      left_join: s in assoc(rl, :service),
+      left_join: gm in assoc(rl, :group_member),
+      left_join: u in assoc(gm, :user),
+      left_join: g in assoc(gm, :group),
+      preload: [provider: p, service: s, group_member: {gm, user: u, group: g}]
+    )
+    |> Repo.one()
+    |> case do
+      nil ->
+        # `ON CONFLICT DO NOTHING` (a duplicate (oban_job_id, inserted_at) pair)
+        # leaves no row to reload. Broadcast the bare struct with the
+        # association fields explicitly nil — the same shape the old
+        # `Repo.preload/2` produced — so consumers' `log.provider` style reads
+        # never see a `%Ecto.Association.NotLoaded{}`.
+        %{log | provider: nil, service: nil, group_member: nil}
+
+      reloaded ->
+        reloaded
     end
   end
 

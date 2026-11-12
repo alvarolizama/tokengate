@@ -363,6 +363,12 @@ defmodule Tokengate.Logs do
         query
 
       search ->
+        # Double ILIKE on free text. A catalog-resolved `model_id in ^ids OR
+        # ilike(...)` variant was tried and reverted: the OR kills the index
+        # plan anyway (EXPLAIN: per-partition seq scan) and dropping the
+        # model_responded arm silently hid rows where only the responded
+        # model matches (regression, no test covered it). Revisit only with
+        # GIN trigram indexes on both columns.
         pattern = "%#{search}%"
 
         where(
