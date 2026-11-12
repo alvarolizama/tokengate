@@ -47,6 +47,12 @@ defmodule Tokengate.Limits.Manager do
   def check_rate(_api_key_id, nil), do: :ok
 
   def check_rate(api_key_id, rpm_limit) when is_integer(rpm_limit) do
+    # Fail-open, never 500: if the ETS table is gone (owner restarting, hot
+    # upgrade) the limiter over-admits instead of taking the proxy down.
+    fail_open(:ok, fn -> do_check_rate(api_key_id, rpm_limit) end)
+  end
+
+  defp do_check_rate(api_key_id, rpm_limit) do
     now = System.system_time(:second)
     current_bucket = div(now, 60)
     key = {api_key_id, current_bucket}
@@ -82,12 +88,19 @@ defmodule Tokengate.Limits.Manager do
 
   def acquire_concurrency(api_key_id, nil) do
     key = api_key_id
-    :ets.update_counter(@inflight_table, key, {2, 1}, {key, 0})
-    :ok
+
+    fail_open(:ok, fn ->
+      _ = :ets.update_counter(@inflight_table, key, {2, 1}, {key, 0})
+      :ok
+    end)
   end
 
   def acquire_concurrency(api_key_id, limit) when is_integer(limit) do
     key = api_key_id
+    fail_open(:ok, fn -> do_acquire_concurrency(key, limit) end)
+  end
+
+  defp do_acquire_concurrency(key, limit) do
     new_value = :ets.update_counter(@inflight_table, key, {2, 1}, {key, 0})
 
     if new_value <= limit do
@@ -113,9 +126,10 @@ defmodule Tokengate.Limits.Manager do
     # Use a conditional counter update so the read-then-decrement is atomic
     # from ETS' perspective: if the value is > 0 it is decremented in the
     # same atomic op; otherwise nothing happens.
-    :ets.update_counter(@inflight_table, key, {2, -1, 0, 0}, {key, 0})
-
-    :ok
+    fail_open(:ok, fn ->
+      :ets.update_counter(@inflight_table, key, {2, -1, 0, 0}, {key, 0})
+      :ok
+    end)
   end
 
   @doc """
@@ -161,7 +175,9 @@ defmodule Tokengate.Limits.Manager do
   """
   @spec total_inflight() :: non_neg_integer()
   def total_inflight do
-    :ets.foldl(fn {_key, count}, acc -> acc + count end, 0, @inflight_table)
+    fail_open(0, fn ->
+      :ets.foldl(fn {_key, count}, acc -> acc + count end, 0, @inflight_table)
+    end)
   end
 
   # --- GenServer ---
@@ -230,11 +246,23 @@ defmodule Tokengate.Limits.Manager do
   end
 
   defp read_bucket(api_key_id, bucket) do
-    :ets.lookup_element(@rpm_table, {api_key_id, bucket}, 2, 0)
+    fail_open(0, fn -> :ets.lookup_element(@rpm_table, {api_key_id, bucket}, 2, 0) end)
   end
 
   defp read_concurrency(api_key_id) do
-    :ets.lookup_element(@inflight_table, api_key_id, 2, 0)
+    fail_open(0, fn -> :ets.lookup_element(@inflight_table, api_key_id, 2, 0) end)
+  end
+
+  # The limiter is an optimization: a missing table (owner restarting, hot
+  # upgrade, table dropped) degrades to fail-open — over-admit, never 500.
+  # Same posture as `ApiKeyCache`: a whereis/`ArgumentError` guard around
+  # every ETS access instead of letting the raise reach the request process.
+  defp fail_open(fallback, fun) do
+    try do
+      fun.()
+    rescue
+      ArgumentError -> fallback
+    end
   end
 
   defp retry_after_ms(now) do

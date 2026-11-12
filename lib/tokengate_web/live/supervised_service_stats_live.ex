@@ -100,6 +100,12 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
            |> assign(:has_more, false)
            |> assign(:page_size, @page_size)
            |> assign(:summary_refresh_scheduled, false)
+           |> assign(:load_error, nil)
+           |> assign(:stats_loading, false)
+           # El cuerpo compartido lee `@streams.logs`: la carga async llega
+           # después del primer render (estático y conectado), así que el
+           # stream se registra vacío aquí y `apply_bundle/2` lo rellena.
+           |> stream(:logs, [], reset: true)
            |> attach_read_only_hook()}
         else
           {:ok, deny(socket, gettext("You do not supervise that service."))}
@@ -247,10 +253,43 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
 
   ## Data loading ---------------------------------------------------------
 
+  ## Carga inicial del período en una tarea (`start_async`), igual que el
+  ## admin en `/stats`: el socket responde sin bloquearse en las queries y el
+  ## resultado entra en un `handle_async/3`. El cuerpo compartido calcula y
+  ## aplica — acá sólo se arma el viaje.
   defp load_bundle(socket) do
+    stats_params = ServiceStatsBody.stats_params(socket.assigns)
+    logs_params = ServiceStatsBody.logs_params(socket.assigns)
+
     socket
-    |> ServiceStatsBody.load_stats()
-    |> ServiceStatsBody.load_logs(:reset)
+    |> assign(:load_error, nil)
+    |> assign(:stats_loading, true)
+    |> start_async(:service_bundle, fn ->
+      ServiceStatsBody.compute_bundle(stats_params, logs_params)
+    end)
+  end
+
+  ## El bundle llegó: stats + primera página del stream en un solo diff.
+  @impl true
+  def handle_async(:service_bundle, {:ok, bundle}, socket) do
+    {:noreply,
+     socket
+     |> ServiceStatsBody.apply_bundle(bundle)
+     |> assign(:stats_loading, false)
+     |> assign(:load_error, nil)}
+  end
+
+  ## La tarea murió (timeout de las queries frías o una query explotada): no se
+  ## finge éxito — se muestra el aviso y lo visible sigue siendo el período
+  ## anterior. El motivo original ya está en el log.
+  def handle_async(:service_bundle, {:exit, reason}, socket) do
+    require Logger
+    Logger.warning("supervised service stats load failed: #{inspect(reason)}")
+
+    {:noreply,
+     socket
+     |> assign(:stats_loading, false)
+     |> assign(:load_error, :load_failed)}
   end
 
   ## Template helpers -----------------------------------------------------
@@ -311,6 +350,21 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
             </p>
           </div>
         </header>
+
+        <%!-- Load failure banner: a failed async load must be visible, not just
+        a log line — the panel would otherwise keep showing the previous
+        period's numbers under the newly-active period. --%>
+        <div
+          :if={@load_error}
+          id="supervised-stats-load-error"
+          class="alert alert-warning text-sm"
+          role="alert"
+        >
+          <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
+          <span>
+            {gettext("Could not load this period. The data below is from the previous period.")}
+          </span>
+        </div>
 
         <%!-- Stats body shared with the admin view: key selector, KPIs, per-key
         table, model × key pivot, log filters and the request stream. --%>

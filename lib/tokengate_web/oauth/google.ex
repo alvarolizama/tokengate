@@ -13,6 +13,8 @@ defmodule TokengateWeb.OAuth.Google do
     * `:redirect_uri`
     * `:allowed_domains` — list of email domains allowed to auto-register
       (empty/nil = no auto-registration, only existing users can log in)
+    * `:userinfo_url` — optional override of the userinfo endpoint (tests point
+      it at a local stub; production never sets it)
   """
 
   @auth_url "https://accounts.google.com/o/oauth2/v2/auth"
@@ -95,10 +97,18 @@ defmodule TokengateWeb.OAuth.Google do
   Fetches the user profile from Google's userinfo endpoint.
 
   Returns `{:ok, %{google_id, email, name, avatar_url}}` or `{:error, reason}`.
+
+  **Alto 1 (takeover de cuenta):** sólo se devuelve el perfil cuando Google
+  confirma que el correo está verificado (`verified_email` en el userinfo v2,
+  `email_verified` en el userinfo OpenID). Sin esa garantía, un atacante dueño
+  de una cuenta de Google con el correo de la víctima sin verificar haría que
+  `Accounts.find_or_create_from_google/1` enlazara SU `google_id` a la cuenta
+  existente de la víctima — el link por email es exactamente la operación que
+  convierte un correo no verificado en toma de control de sesión.
   """
   def fetch_userinfo(access_token) when is_binary(access_token) do
     req =
-      Req.get!(@userinfo_url,
+      Req.get!(userinfo_url(),
         headers: %{"Authorization" => "Bearer #{access_token}"}
       )
 
@@ -106,17 +116,31 @@ defmodule TokengateWeb.OAuth.Google do
       200 ->
         body = req.body
 
-        {:ok,
-         %{
-           google_id: body["id"],
-           email: body["email"],
-           name: body["name"],
-           avatar_url: body["picture"]
-         }}
+        if email_verified?(body) do
+          {:ok,
+           %{
+             google_id: body["id"],
+             email: body["email"],
+             name: body["name"],
+             avatar_url: body["picture"]
+           }}
+        else
+          {:error, :email_not_verified}
+        end
 
       _status ->
         {:error, :userinfo_failed}
     end
+  end
+
+  # `true` estricto: Google manda booleanos, y un `"true"` string, ausente o
+  # cualquier otro valor se trata como NO verificado (fail-closed).
+  defp email_verified?(body) when is_map(body) do
+    body["verified_email"] == true or body["email_verified"] == true
+  end
+
+  defp userinfo_url do
+    config()[:userinfo_url] || @userinfo_url
   end
 
   @doc """

@@ -37,28 +37,18 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
       :error ->
         child_spec = {Tokengate.Routing.CircuitBreaker, credential_id: credential_id}
 
+        # The child registers itself in `init/1`, and `DynamicSupervisor.start_child/2`
+        # only returns after that init completed — the Registry entry is already
+        # visible here, so no polling is needed (the old poll burned 200 lookups
+        # in microseconds on every cold credential and still raced the cleanup).
         case DynamicSupervisor.start_child(__MODULE__, child_spec) do
-          {:ok, _pid} ->
-            # The child registers itself in init; wait until the entry is visible
-            # so a subsequent lookup cannot race the registration.
-            wait_until_registered(credential_id)
-            :ok
-
-          {:ok, _pid, _info} ->
-            wait_until_registered(credential_id)
-            :ok
-
-          :ignore ->
-            # A concurrent starter won the race; the existing process is now
-            # (or imminently) registered. Wait for it to appear.
-            wait_until_registered(credential_id)
-            :ok
-
-          {:error, {:already_started, _pid}} ->
-            :ok
-
-          {:error, {:already_started, _pid, _info}} ->
-            :ok
+          {:ok, _pid} -> :ok
+          {:ok, _pid, _info} -> :ok
+          # A concurrent starter won the race; its breaker is (or is about to
+          # be) registered. The caller treats a subsequent miss as fail-open.
+          :ignore -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+          {:error, {:already_started, _pid, _info}} -> :ok
         end
     end
   end
@@ -71,7 +61,7 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
   @spec allow?(credential_id :: term()) :: boolean()
   def allow?(credential_id) do
     ensure_started(credential_id)
-    lookup!(credential_id) |> Tokengate.Routing.CircuitBreaker.allow?()
+    allow_registered(credential_id)
   end
 
   @doc """
@@ -82,7 +72,13 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
   @spec record_success(credential_id :: term()) :: :ok
   def record_success(credential_id) do
     ensure_started(credential_id)
-    lookup!(credential_id) |> Tokengate.Routing.CircuitBreaker.record_success()
+
+    case lookup(credential_id) do
+      {:ok, pid} -> Tokengate.Routing.CircuitBreaker.record_success(pid)
+      # Fail-open: the breaker is an optimization, never a hard dependency of
+      # the proxy. A miss (restarting breaker, racing cleanup) must not 500.
+      :error -> :ok
+    end
   end
 
   @doc """
@@ -101,8 +97,13 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
   def record_failure(credential_id, reason, error_message \\ nil) do
     ensure_started(credential_id)
 
-    lookup!(credential_id)
-    |> Tokengate.Routing.CircuitBreaker.record_failure(reason, error_message)
+    case lookup(credential_id) do
+      {:ok, pid} ->
+        Tokengate.Routing.CircuitBreaker.record_failure(pid, reason, error_message)
+
+      :error ->
+        :ok
+    end
   end
 
   @doc """
@@ -206,26 +207,15 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
     end
   end
 
-  # The child process registers itself during init; there's a brief window
-  # between DynamicSupervisor.start_child returning :ok and the Registry entry
-  # being visible. Poll until it appears so callers never see a phantom miss.
-  defp wait_until_registered(credential_id), do: wait_until_registered(credential_id, 0)
-
-  defp wait_until_registered(_credential_id, 200) do
-    :ok
-  end
-
-  defp wait_until_registered(credential_id, attempts) do
+  # Fail-open lookup for the hot path: `Registry` visibility is guaranteed once
+  # `start_child/2` returns (the child registers in `init/1`), so a miss means
+  # the breaker died or was never started — allow the request rather than
+  # raising a 500 into the proxy, exactly like the other ETS-backed caches
+  # (`ApiKeyCache`) degrade to their uncached path.
+  defp allow_registered(credential_id) do
     case lookup(credential_id) do
-      {:ok, _pid} -> :ok
-      :error -> wait_until_registered(credential_id, attempts + 1)
-    end
-  end
-
-  defp lookup!(credential_id) do
-    case lookup(credential_id) do
-      {:ok, pid} -> pid
-      :error -> raise "no circuit breaker registered for #{inspect(credential_id)}"
+      {:ok, pid} -> Tokengate.Routing.CircuitBreaker.allow?(pid)
+      :error -> true
     end
   end
 end

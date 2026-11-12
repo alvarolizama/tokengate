@@ -276,7 +276,7 @@ defmodule Tokengate.LogsTest do
       assert log.cache_creation_tokens == 0
     end
 
-    test "dedupes a retried job: the same job id performed twice inserts exactly one row and skips webhook/broadcast" do
+    test "retried job: one row, and the fan-out is re-run (dispatch idempotent, broadcast tolerated)" do
       {group_member, _group} = group_member_fixture()
 
       {:ok, _destination} =
@@ -312,17 +312,78 @@ defmodule Tokengate.LogsTest do
 
       assert webhook_jobs.() == 1
 
-      # Second attempt of the SAME job: row already seen → :ok with NO
-      # re-broadcast and NO extra webhook job (exactly-once delivery).
+      # Segundo intento del MISMO job (auditoría Alto 2): el INSERT sigue
+      # siendo idempotente (una sola fila) y el fan-out se RE-EJECUTA — ya no
+      # hay atajo `request_log_seen?` que se lo salte, porque si el primer
+      # intento murió entre el insert y el dispatch el webhook se perdía para
+      # siempre. El dispatch es idempotente por (destination_id, log) vía el
+      # `unique` de Oban: no aparece un segundo job de webhook.
       assert :ok = Tokengate.Logs.WriteWorker.perform(job)
-      refute_receive {:new_log, _}
       assert webhook_jobs.() == 1
+
+      # El broadcast sí se repite en ese reintento y es inocuo: los feeds usan
+      # `stream_insert/4`, llaveado por el id del log (actualiza, no duplica).
+      assert_receive {:new_log, rebroadcast}
 
       assert [log] = Logs.list_logs(%{group_member_id: group_member.id})
       assert log.oban_job_id == 4242
+
+      # El reintento NO puede fanoutear el id "fantasma" que Ecto devuelve en
+      # `insert(on_conflict: :nothing)` (genera una PK nueva aunque no inserte):
+      # el broadcast y el webhook deben llevar el id REAL de la fila.
+      assert rebroadcast.id == log.id
+
+      assert [%{args: %{"request_log_ids" => [webhook_log_id]}}] =
+               Repo.all(from(j in Oban.Job, where: j.queue == "webhooks"))
+
+      assert webhook_log_id == to_string(log.id)
+
       # The pinned inserted_at survived the round-trip — same partition, same
       # dedupe pair across attempts.
       assert log.inserted_at == ~U[2026-11-08 12:00:00Z]
+    end
+
+    test "legacy job without inserted_at in args does not raise (Alto 3)" do
+      {group_member, _group} = group_member_fixture()
+
+      # Jobs encolados antes de que el proxy fijara `inserted_at`: el args no
+      # trae el timestamp, así que el pre-check de partición recibía nil.
+      args = %{
+        "group_member_id" => group_member.id,
+        "model_requested" => "deepseek-chat",
+        "prompt_tokens" => 1,
+        "completion_tokens" => 1
+      }
+
+      job = %Oban.Job{id: 4343, args: args}
+
+      assert :ok = Tokengate.Logs.WriteWorker.perform(job)
+
+      assert [log] = Logs.list_logs(%{group_member_id: group_member.id})
+      assert log.oban_job_id == 4343
+    end
+  end
+
+  describe "request_log_seen?/2 — jobs legacy (Alto 3)" do
+    test "un job sin inserted_at responde false en vez de lanzar FunctionClauseError" do
+      refute Logs.request_log_seen?(123, nil)
+      refute Logs.request_log_seen?(nil, nil)
+    end
+
+    test "con inserted_at sí consulta la partición" do
+      {group_member, _group} = group_member_fixture()
+      inserted_at = ~U[2026-11-08 12:00:00Z]
+
+      {:ok, _log} =
+        Logs.log_request(%{
+          group_member_id: group_member.id,
+          model_requested: "deepseek-chat",
+          inserted_at: inserted_at,
+          oban_job_id: 5555
+        })
+
+      assert Logs.request_log_seen?(5555, inserted_at)
+      refute Logs.request_log_seen?(5555, ~U[2026-11-09 12:00:00Z])
     end
   end
 

@@ -49,6 +49,18 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   Named public ETS table owned by this GenServer; reads and writes run in
   the caller process (no bottleneck). The GenServer only creates the table
   and runs a periodic sweep of expired entries.
+
+  Misses are single-flight: the first caller takes an `insert_new/2`
+  placeholder `{:__computing__, key_hash}`, the rest wait (bounded to
+  `@max_wait_ms`) for that entry instead of running the identical lookup.
+  A crowd of proxy requests arriving right after the 60s TTL — or a
+  brute-force burst on the same hash — costs one DB query per key, not N.
+  A waiter that outlives its wait window computes locally (never raises),
+  and caches its own result. Failures (`:error`) are never cached.
+
+  The placeholder carries the holder's pid so waiters can monitor it: an
+  external exit signal skips the `after` clause, and the `:DOWN` message
+  releases the stale lock instead of wedging the key for the whole TTL.
   """
 
   use GenServer
@@ -56,6 +68,13 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   @table :tokengate_api_key_cache
   @ttl_ms :timer.seconds(60)
   @sweep_ms :timer.seconds(60)
+  # How often a waiter re-checks for the entry a concurrent holder is
+  # building. Short enough to be invisible next to the key lookup.
+  @poll_interval_ms 5
+  # Hard cap on how long a waiter blocks behind the lock: an auth request
+  # cannot afford to stall behind a slow query. Past this window the waiter
+  # runs its own lookup (a duplicate query is cheaper than a stalled proxy).
+  @max_wait_ms 50
 
   # ---------------------------------------------------------------------------
   # Public API — hot path
@@ -97,7 +116,7 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   defp cached_fetch(key_hash, fun) do
     case :ets.lookup(@table, key_hash) do
       [{^key_hash, entry, expires_at}] ->
-        if System.monotonic_time(:millisecond) < expires_at do
+        if now() < expires_at do
           entry
         else
           :ets.delete(@table, key_hash)
@@ -184,16 +203,119 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   # ---------------------------------------------------------------------------
 
   defp put_new(key, fun) do
+    lock_key = {:__computing__, key}
+    deadline = now() + @max_wait_ms
+
+    if :ets.insert_new(@table, {lock_key, {:computing, self()}, deadline}) do
+      try do
+        compute_and_cache(key, fun)
+      after
+        # Releases on normal return AND on raise/exit: a crashing lookup
+        # must not leave the key wedged for the whole TTL.
+        :ets.delete(@table, lock_key)
+      end
+    else
+      case await_entry(key, lock_key, deadline) do
+        {:ok, entry} ->
+          entry
+
+        # The holder died (its `after` never ran — the waiter cleared the
+        # stale lock via monitor), or outlived the capped wait window.
+        # Compute locally and cache the result; never raise: auth must keep
+        # working even when the coalescing path can't help.
+        :miss ->
+          compute_and_cache(key, fun)
+      end
+    end
+  end
+
+  # `fun` is the DB lookup: a map is cached for @ttl_ms, `:error` (invalid
+  # key) is never cached so brute-force probes always hit the database.
+  defp compute_and_cache(key, fun) do
     case fun.() do
       :error ->
         :error
 
       entry when is_map(entry) ->
-        expires_at = System.monotonic_time(:millisecond) + @ttl_ms
-        :ets.insert(@table, {key, entry, expires_at})
+        :ets.insert(@table, {key, entry, now() + @ttl_ms})
         entry
     end
   end
+
+  # Waits (bounded) for the holder to publish the entry. The placeholder
+  # carries the holder's pid, so waiters monitor it: when the holder dies on
+  # an external exit signal its `after` clause never runs — the `:DOWN`
+  # message releases the lock instead of leaving every waiter until deadline.
+  defp await_entry(key, lock_key, deadline) do
+    holder_pid = holder_pid(lock_key)
+    wait_deadline = min(deadline, now() + @max_wait_ms)
+    ref = holder_pid && Process.monitor(holder_pid)
+
+    try do
+      await_entry(key, lock_key, wait_deadline, ref)
+    after
+      ref && Process.demonitor(ref, [:flush])
+    end
+  end
+
+  defp await_entry(key, lock_key, deadline, ref) do
+    case lookup_fresh(key) do
+      {:ok, entry} ->
+        {:ok, entry}
+
+      :miss ->
+        cond do
+          now() >= deadline ->
+            :miss
+
+          :ets.lookup(@table, lock_key) == [] ->
+            :miss
+
+          received_down?(ref) ->
+            release_stale_lock(lock_key, holder_pid(lock_key))
+            :miss
+
+          true ->
+            Process.sleep(@poll_interval_ms)
+            await_entry(key, lock_key, deadline, ref)
+        end
+    end
+  end
+
+  defp lookup_fresh(key) do
+    case :ets.lookup(@table, key) do
+      [{^key, entry, expires_at}] -> if now() < expires_at, do: {:ok, entry}, else: :miss
+      [] -> :miss
+    end
+  end
+
+  defp holder_pid(lock_key) do
+    case :ets.lookup(@table, lock_key) do
+      [{^lock_key, {:computing, pid}, _deadline}] -> pid
+      _ -> nil
+    end
+  end
+
+  defp received_down?(nil), do: false
+
+  defp received_down?(ref) do
+    receive do
+      {:DOWN, ^ref, :process, _pid, _reason} -> true
+    after
+      0 -> false
+    end
+  end
+
+  # Clears the dead holder's lock, but only if nobody else took it over in
+  # the meantime (a re-attempt may already own the key with its own pid).
+  defp release_stale_lock(lock_key, dead_pid) do
+    case :ets.match(@table, {lock_key, {:computing, :"$1"}, :_}) do
+      [[^dead_pid]] -> :ets.delete(@table, lock_key)
+      _ -> :ok
+    end
+  end
+
+  defp now, do: System.monotonic_time(:millisecond)
 
   defp ensure_table do
     if :ets.whereis(@table) == :undefined do

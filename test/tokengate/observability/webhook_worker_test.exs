@@ -32,6 +32,7 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
         signature = get_req_header(conn, "x-tokengate-signature")
         content_type = get_req_header(conn, "content-type")
         custom = get_req_header(conn, "x-custom-header")
+        delivery_id = get_req_header(conn, "x-tokengate-delivery-id")
 
         send(
           pid,
@@ -42,7 +43,8 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
              body: body,
              signature: signature,
              content_type: content_type,
-             custom_header: custom
+             custom_header: custom,
+             delivery_id: delivery_id
            }}
         )
       end
@@ -292,6 +294,52 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
       job = %Oban.Job{args: %{"destination_id" => dest.id, "request_log_ids" => [fake_id]}}
       assert {:discard, _} = WebhookWorker.perform(job)
     end
+
+    # Un destino borrado entre el dispatch y la ejecución es TERMINAL:
+    # `Repo.get!` lanzaba `Ecto.NoResultsError` y el job reintentaba 5 veces
+    # para volver a fallar igual.
+    test "destination deleted before execution → {:discard, \"destination gone\"}" do
+      {tm, _group} = group_member_fixture()
+      log = log_fixture(tm.id)
+      dest = destination_fixture(base_url())
+
+      {:ok, _} = Observability.delete_destination(dest)
+
+      job = %Oban.Job{
+        args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
+      }
+
+      assert {:discard, "destination gone"} = WebhookWorker.perform(job)
+    end
+
+    test "sends x-tokengate-delivery-id with the Oban job id" do
+      {tm, _group} = group_member_fixture()
+      log = log_fixture(tm.id)
+      dest = destination_fixture(base_url())
+
+      job = %Oban.Job{
+        id: 987_654,
+        args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
+      }
+
+      assert :ok = WebhookWorker.perform(job)
+
+      assert_receive {:captured, %{delivery_id: ["987654"]}}
+    end
+
+    test "skips the header when the worker runs without a job id" do
+      {tm, _group} = group_member_fixture()
+      log = log_fixture(tm.id)
+      dest = destination_fixture(base_url())
+
+      job = %Oban.Job{
+        args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
+      }
+
+      assert :ok = WebhookWorker.perform(job)
+
+      assert_receive {:captured, %{delivery_id: []}}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -361,6 +409,53 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
       assert_enqueued(
         worker: WebhookWorker,
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
+      )
+    end
+
+    # Auditoría Alto 2: el WriteWorker re-ejecuta el fan-out en cada reintento,
+    # así que un segundo dispatch del MISMO (destino, log) no puede duplicar el
+    # webhook — el receptor recibiría el mismo span dos veces.
+    test "is idempotent per (destination, log): a repeat enqueues nothing new" do
+      {tm, _group} = group_member_fixture()
+      log = log_fixture(tm.id)
+
+      dest = destination_fixture(base_url())
+
+      assert {:ok, 1} = WebhookWorker.dispatch(log)
+      assert {:ok, 0} = WebhookWorker.dispatch(log)
+
+      assert Repo.aggregate(
+               from(j in Oban.Job, where: j.queue == "webhooks"),
+               :count,
+               :id
+             ) == 1
+
+      # Y el par en cola es el esperado (no un args distinto que esquive el unique).
+      assert_enqueued(
+        worker: WebhookWorker,
+        args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
+      )
+    end
+
+    test "a different log for the same destination is a separate job" do
+      {tm, _group} = group_member_fixture()
+      log_a = log_fixture(tm.id)
+      log_b = log_fixture(tm.id)
+
+      dest = destination_fixture(base_url())
+
+      assert {:ok, 1} = WebhookWorker.dispatch(log_a)
+      assert {:ok, 1} = WebhookWorker.dispatch(log_b)
+
+      assert Repo.aggregate(
+               from(j in Oban.Job, where: j.queue == "webhooks"),
+               :count,
+               :id
+             ) == 2
+
+      assert_enqueued(
+        worker: WebhookWorker,
+        args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log_b.id)]}
       )
     end
   end

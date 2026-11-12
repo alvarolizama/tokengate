@@ -59,6 +59,8 @@ defmodule TokengateWeb.ProxyController do
 
   use TokengateWeb, :controller
 
+  require Logger
+
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Budgets.Manager, as: Budgets
@@ -425,7 +427,12 @@ defmodule TokengateWeb.ProxyController do
         ResponseCache.cache_key(conn.assigns.api_key_hash, route.model_responded, payload)
       end
 
-    with :miss <- cache_lookup(conn, cache_key) do
+    with :miss <-
+           cache_lookup(conn, cache_key, :passthrough, %{
+             route: route,
+             member: member,
+             request_type: to_string(kind)
+           }) do
       receive_timeout = receive_timeout(route.credential)
 
       case adapter_fun.(provider, route.credential, payload,
@@ -1188,6 +1195,23 @@ defmodule TokengateWeb.ProxyController do
     Tokengate.Repo.preload(credential, :provider).provider
   end
 
+  # Adapter seams for the chat family.
+  #
+  # The adapter is passed as a VALUE (instead of calling the module directly) so
+  # Elixir's type checker does not narrow the result to `OpenAIAdapter`'s
+  # concrete return: a dialect adapter can refuse synchronously (a body it
+  # cannot translate, a missing knob) with the shapes
+  # `ProviderAdapter.chat_result/0` / `stream_chat_completion/4` declare, and
+  # those must reach the callers' error clauses instead of crashing the case.
+  # Routing is untouched — the module is still chosen at the call site.
+  defp adapter_chat_completion(adapter, provider, credential, payload, opts) do
+    adapter.chat_completion(provider, credential, payload, opts)
+  end
+
+  defp adapter_stream_chat_completion(adapter, provider, credential, payload, opts) do
+    adapter.stream_chat_completion(provider, credential, payload, opts)
+  end
+
   # Extracts whitelisted client headers to forward upstream, plus the
   # gateway-generated Idempotency-Key (stable across all attempts of the
   # same client request).
@@ -1248,12 +1272,12 @@ defmodule TokengateWeb.ProxyController do
   #     travel untouched, same as the live passthrough contract.
   #
   # A hit costs $0: the upstream was already paid by the request that filled
-  # the entry, and this one never reached it.
-  defp cache_lookup(conn, key, body_shape \\ :passthrough)
+  # the entry, and this one never reached it. It is still a request the gateway
+  # served, so it books a row and a realtime-collector hit like any other
+  # response (see `record_cache_hit/3`).
+  defp cache_lookup(_conn, nil, _body_shape, _log_ctx), do: :miss
 
-  defp cache_lookup(_conn, nil, _body_shape), do: :miss
-
-  defp cache_lookup(conn, key, body_shape) do
+  defp cache_lookup(conn, key, body_shape, log_ctx) do
     case ResponseCache.lookup(key) do
       {:ok, body_json, _age} ->
         conn =
@@ -1263,12 +1287,63 @@ defmodule TokengateWeb.ProxyController do
           |> put_resp_header("x-tokengate-cost", Decimal.to_string(@zero_cost, :normal))
           |> send_resp(200, cached_body(body_json, body_shape))
 
+        record_cache_hit(conn, body_shape, log_ctx)
+
         {:hit, conn}
 
       :miss ->
         :miss
     end
   end
+
+  # Accounting for a served cache hit: the durable row is booked at $0 / 0
+  # tokens (nothing was consumed upstream) and the request is counted in the
+  # realtime collector, so a cache-heavy minute is not invisible in the
+  # dashboard. `RequestLog` has no cache-hit column, so the row is told apart
+  # by its $0 cost together with the `x-tokengate-cache: hit` header the client
+  # received. The budget hold is RELEASED (not settled) by the caller's
+  # `after`, because `:tg_budget_actual_cost` stays unset — hence no
+  # `credit_topup_id` on the row.
+  defp record_cache_hit(_conn, _body_shape, nil), do: :ok
+
+  defp record_cache_hit(conn, body_shape, %{route: route, member: member} = log_ctx) do
+    usage = %{
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0
+    }
+
+    request_type = Map.get(log_ctx, :request_type, cache_hit_request_type(body_shape))
+
+    Collector.record_request(%{
+      model_id: route.model.id,
+      provider_id: route.model_provider.credential.provider_id,
+      credential_name: route.credential.name,
+      agent_type: conn.assigns.agent_type,
+      status: 200,
+      latency_ms: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: @zero_cost,
+      streaming: false
+    })
+
+    enqueue_log(route, member, conn.assigns.agent_type, usage, @zero_cost, 0, 200, false,
+      think: conn.assigns[:think] || false,
+      effort: conn.assigns[:effort],
+      effort_applied: conn.assigns[:effort_applied],
+      session_id: conn.assigns[:session_key],
+      client_agent: conn.assigns.client_agent,
+      request_type: request_type,
+      credit_topup_id: nil
+    )
+  end
+
+  # `:chat_usage` is the chat path; every other shape is a requested service
+  # whose own `kind` the caller passes in `log_ctx`.
+  defp cache_hit_request_type(:chat_usage), do: "chat"
+  defp cache_hit_request_type(_), do: "embedding"
 
   # Chat: `usage.cost_usd` is part of the response contract, so the hit carries
   # it too (at $0). An upstream body without a `usage` object (some providers
@@ -1339,10 +1414,15 @@ defmodule TokengateWeb.ProxyController do
     cache_key =
       ResponseCache.cache_key(conn.assigns.api_key_hash, route.model_responded, attempt_payload)
 
-    with :miss <- cache_lookup(conn, cache_key, :chat_usage) do
+    with :miss <-
+           cache_lookup(conn, cache_key, :chat_usage, %{
+             route: route,
+             member: member,
+             request_type: "chat"
+           }) do
       receive_timeout = receive_timeout(route.credential)
 
-      case OpenAIAdapter.chat_completion(provider, route.credential, attempt_payload,
+      case adapter_chat_completion(OpenAIAdapter, provider, route.credential, attempt_payload,
              receive_timeout: receive_timeout,
              forwarded_headers: extract_forwarded_headers(conn, route)
            ) do
@@ -1461,6 +1541,17 @@ defmodule TokengateWeb.ProxyController do
               error_message: error_message
             )
           end
+
+        # `ProviderAdapter.chat_completion/4`'s declared shape
+        # (`{:error, reason, status}`): a dialect adapter that failed before
+        # producing a body. Without this clause a TypeSafe-style adapter answer
+        # crashed the request with a CaseClauseError (500, no log row).
+        {:error, reason, status} ->
+          Router.record_outcome(route, {:failure, breaker_reason(reason)})
+
+          log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
+            error_reason: safe_reason(reason)
+          )
       end
     else
       # Acierto de caché: la respuesta (y sus headers) YA salió — `with` sólo
@@ -1590,7 +1681,11 @@ defmodule TokengateWeb.ProxyController do
     request_start = System.monotonic_time(:millisecond)
     receive_timeout = receive_timeout(route.credential)
 
-    case OpenAIAdapter.stream_chat_completion(provider, route.credential, attempt_payload,
+    case adapter_stream_chat_completion(
+           OpenAIAdapter,
+           provider,
+           route.credential,
+           attempt_payload,
            receive_timeout: receive_timeout,
            forwarded_headers: extract_forwarded_headers(conn, route)
          ) do
@@ -1717,7 +1812,37 @@ defmodule TokengateWeb.ProxyController do
                 )
             end
         end
+
+      # The adapter refused to even start the stream (a dialect that has to
+      # translate the body before opening the socket, a missing required knob).
+      # Nothing was committed to the client yet, so the upstream status is
+      # rendered as JSON — a 4xx/5xx the caller can act on, or 502 when the
+      # adapter carried no status.
+      {:error, reason, status, error_message} ->
+        render_adapter_start_error(conn, route, member, reason, status, error_message)
+
+      # `ProviderAdapter.stream_chat_completion/4`'s own error shape (no
+      # upstream body to surface).
+      {:error, reason, status} ->
+        render_adapter_start_error(conn, route, member, reason, status, nil)
     end
+  end
+
+  # Terminal handling for an attempt the adapter refused before any bytes were
+  # sent (stream or non-streaming): mirror the first-chunk failure branch — auth
+  # failures disable the credential, every reason feeds the breaker, and the
+  # client gets the upstream status as JSON instead of a CaseClauseError 500.
+  defp render_adapter_start_error(conn, route, member, reason, status, error_message) do
+    if reason == :auth_error do
+      disable_credential_async(route.credential, "auth_error_stream", error_message)
+    end
+
+    Router.record_outcome(route, {:failure, breaker_reason(reason)})
+
+    log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
+      error_reason: safe_reason(reason),
+      error_message: error_message
+    )
   end
 
   defp retry_stream_with_fallback(
@@ -2223,11 +2348,13 @@ defmodule TokengateWeb.ProxyController do
 
           {:sse_error, _reason} ->
             # Mid-stream failure: the 200 is already committed — close the
-            # stream and record what we have.
-            finish_stream(conn, route, member, acc)
+            # stream and record what we have. The row reports 502: the gateway
+            # may have charged the provider for the emitted partial, but the
+            # upstream stream itself failed.
+            finish_stream(conn, route, member, acc, 502, "stream_error")
 
           {:DOWN, ^ref, :process, ^pid, _reason} ->
-            finish_stream(conn, route, member, acc)
+            finish_stream(conn, route, member, acc, 502, "stream_error")
         after
           stream_idle_timeout_ms() ->
             # El upstream quedó mudo con la conexión abierta (el
@@ -2247,12 +2374,26 @@ defmodule TokengateWeb.ProxyController do
                 ~s(data: {"error":{"message":"upstream stream stalled"}}\n\n)
               )
 
-            finish_stream(conn, route, member, acc)
+            finish_stream(conn, route, member, acc, 504, "stream_timeout")
         end
 
-      {:client_gone, conn} ->
+      {:client_gone, conn, acc} ->
+        # El cliente cortó la conexión a media respuesta. El proveedor YA cobró
+        # los tokens emitidos hasta aquí, así que el request se cierra como
+        # cualquier otro: matar el upstream (antes de seguir gastando), soltar
+        # el monitor y pasar por `finish_stream` para que el costo real se
+        # escriba y el `settle` del caller libere sólo el remanente del hold.
+        # Sin esto el log no existía, el hold completo quedaba liberado (costo
+        # real perdido) y no había ni una línea de diagnóstico.
         Process.exit(pid, :kill)
-        conn
+        Process.demonitor(ref, [:flush])
+
+        Logger.info(
+          "proxy stream: client disconnected mid-stream " <>
+            "model_id=#{inspect(route.model.id)} credential_id=#{inspect(route.credential.id)}"
+        )
+
+        finish_stream(conn, route, member, acc, 499, "client_gone")
     end
   end
 
@@ -2269,13 +2410,15 @@ defmodule TokengateWeb.ProxyController do
 
   # Forwards one chunk as an SSE frame. When the chunk carries the provider's
   # final usage payload, the cost dimensions are injected before forwarding
-  # (same contract as the non-streaming response).
+  # (same contract as the non-streaming response). The updated acc travels back
+  # on BOTH outcomes: a closed client must still book the usage captured for
+  # this very chunk (that is the cost the provider already charged).
   defp forward_stream_chunk(conn, chunk, route, acc) do
     {chunk, acc} = maybe_capture_usage(chunk, route, acc)
 
     case Plug.Conn.chunk(conn, "data: #{chunk}\n\n") do
       {:ok, conn} -> {:ok, conn, acc}
-      {:error, _closed} -> {:client_gone, conn}
+      {:error, _closed} -> {:client_gone, conn, acc}
     end
   end
 
@@ -2321,7 +2464,7 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  defp finish_stream(conn, route, member, acc) do
+  defp finish_stream(conn, route, member, acc, status \\ 200, error_reason \\ nil) do
     # Latency se mide ANTES de nuestros frames de cierre: describe el stream
     # del upstream, no lo que escribimos después de que terminó.
     latency_ms = System.monotonic_time(:millisecond) - acc.latency_start
@@ -2367,7 +2510,7 @@ defmodule TokengateWeb.ProxyController do
       provider_id: route.model_provider.credential.provider_id,
       credential_name: route.credential.name,
       agent_type: conn.assigns.agent_type,
-      status: 200,
+      status: status,
       latency_ms: latency_ms,
       prompt_tokens: usage.prompt_tokens,
       completion_tokens: usage.completion_tokens,
@@ -2375,13 +2518,17 @@ defmodule TokengateWeb.ProxyController do
       streaming: true
     })
 
-    enqueue_log(route, member, conn.assigns.agent_type, usage, cost, latency_ms, 200, true,
+    enqueue_log(route, member, conn.assigns.agent_type, usage, cost, latency_ms, status, true,
       ttft_ms: acc.ttft_ms,
       think: conn.assigns[:think] || false,
       effort: conn.assigns[:effort],
       effort_applied: conn.assigns[:effort_applied],
       session_id: conn.assigns[:session_key],
-      client_agent: conn.assigns.client_agent
+      client_agent: conn.assigns.client_agent,
+      # `nil` on a clean stream; "client_gone" / "stream_error" /
+      # "stream_timeout" when the stream was cut. The provider charged what it
+      # emitted — the row books that real cost under the closure reason.
+      error_reason: error_reason
     )
 
     conn
@@ -2623,7 +2770,10 @@ defmodule TokengateWeb.ProxyController do
       "cache_read_tokens" => Map.get(usage, :cache_read_tokens, 0),
       "cache_creation_tokens" => Map.get(usage, :cache_creation_tokens, 0),
       "provider_cost_usd" => Decimal.to_string(cost, :normal),
-      "credit_topup_id" => Process.get(:tg_credit_topup_id),
+      # `credit_topup_id: nil` is passed by cache hits: their hold is RELEASED
+      # (nothing was charged), so the reservation id would name a debit that
+      # never happened.
+      "credit_topup_id" => Keyword.get(extra, :credit_topup_id, Process.get(:tg_credit_topup_id)),
       "latency_ms" => latency_ms,
       "ttft_ms" => Keyword.get(extra, :ttft_ms),
       "streaming" => streaming,
@@ -2646,7 +2796,36 @@ defmodule TokengateWeb.ProxyController do
       "inserted_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     }
     |> WriteWorker.new()
-    |> Oban.insert()
+    |> insert_log_job(%{
+      model_id: route.model.id,
+      provider_id: route.model_provider.credential.provider_id,
+      status: status,
+      error_reason: Keyword.get(extra, :error_reason)
+    })
+  end
+
+  # `Oban.insert/1`'s failure used to be discarded: on a saturated pool or a
+  # downed DB the job — and with it the `request_logs` row, the webhook fan-out
+  # and the dashboard feed — vanished without a trace. It is still not fatal to
+  # the response (the client already has its answer), but every loss is logged
+  # with enough context to reconstruct the missing row. No loss counter exists
+  # in `Collector`, so the log line is the metric.
+  defp insert_log_job(job, context) do
+    case Oban.insert(job) do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "durable request log enqueue failed: #{inspect(reason)} " <>
+            "model_id=#{inspect(context[:model_id])} " <>
+            "provider_id=#{inspect(context[:provider_id])} " <>
+            "status=#{inspect(context[:status])} " <>
+            "error_reason=#{inspect(context[:error_reason])}"
+        )
+
+        :error
+    end
   end
 
   # Enqueues a durable log for a failed request, then renders the error to the
@@ -2769,7 +2948,12 @@ defmodule TokengateWeb.ProxyController do
       "inserted_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     }
     |> WriteWorker.new()
-    |> Oban.insert()
+    |> insert_log_job(%{
+      model_id: route.model.id,
+      provider_id: route.model_provider.credential.provider_id,
+      status: Keyword.get(opts, :client_status),
+      error_reason: Keyword.get(opts, :error_reason)
+    })
   end
 
   defp enqueue_gate_error_log(member, model, agent_type, opts) do
@@ -2802,7 +2986,12 @@ defmodule TokengateWeb.ProxyController do
       "inserted_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     }
     |> WriteWorker.new()
-    |> Oban.insert()
+    |> insert_log_job(%{
+      model_id: nil,
+      provider_id: nil,
+      status: Keyword.get(opts, :client_status),
+      error_reason: Keyword.get(opts, :error_reason)
+    })
   end
 
   # Extracts the provider's HTTP status code from an upstream error tuple.

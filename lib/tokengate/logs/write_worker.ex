@@ -26,18 +26,27 @@ defmodule Tokengate.Logs.WriteWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{id: job_id, args: args}) do
-    # Idempotencia (C2): los reintentos de Oban re-ejecutan perform con el
-    # MISMO job id. El pre-check es seguro porque Oban nunca ejecuta el mismo
-    # job concurrentemente (los intentos son secuenciales): si ya hay fila,
-    # el primer intento ya entregó webhook y broadcast — no repetirlos. El
-    # índice único (oban_job_id, inserted_at) queda de respaldo durable.
-    # Passing inserted_at prunes to a single partition (day) instead of
-    # probing the unique index across every partition.
-    if job_id && Logs.request_log_seen?(job_id, parse_inserted_at(args["inserted_at"])) do
-      :ok
-    else
-      insert_and_deliver(job_id, args)
-    end
+    # Idempotencia — dos garantías SEPARADAS (auditoría Alto 2):
+    #
+    #   1. **INSERT**: el par único (oban_job_id, inserted_at) y el
+    #      `on_conflict: :nothing` de `Logs.log_request/1` hacen que un
+    #      reintento nunca duplique la fila. Se mantiene intacto.
+    #
+    #   2. **Fan-out** (dispatch de webhooks + broadcast `{:new_log, _}`): NO
+    #      se salta en el reintento. Antes había un atajo
+    #      `if request_log_seen?(...) -> :ok` que asumía "si la fila existe, el
+    #      primer intento ya entregó todo": falso cuando el proceso murió en el
+    #      HUECO entre el insert y el dispatch (o cuando `Oban.insert` del
+    #      webhook falló). Esa fila quedaba persistida y el webhook se perdía
+    #      para siempre, porque el reintento se iba por el atajo.
+    #
+    # Por eso el reintento vuelve a correr el insert (no-op), el dispatch y el
+    # broadcast. El dispatch es idempotente por (destination_id, request_log_id)
+    # vía `unique` de Oban en `WebhookWorker`; el broadcast puede repetirse una
+    # vez en esa ventana de crash y es inocuo: `stream_insert/4` está llaveado
+    # por el id del log, así que reinsertar la misma fila actualiza el item en
+    # el feed en vez de duplicarlo.
+    insert_and_deliver(job_id, args)
   end
 
   defp insert_and_deliver(job_id, args) do
@@ -91,11 +100,22 @@ defmodule Tokengate.Logs.WriteWorker do
 
     case Logs.log_request(attrs) do
       {:ok, request_log} ->
-        request_log = reload_for_delivery(request_log)
+        request_log = reload_for_delivery(request_log, job_id)
 
-        _ = WebhookWorker.dispatch(request_log)
-        broadcast_new_log(request_log)
-        :ok
+        case WebhookWorker.dispatch(request_log) do
+          {:ok, _count} ->
+            broadcast_new_log(request_log)
+            :ok
+
+          # `Oban.insert` puede fallar (pool saturado, conexión caída). Antes
+          # era `Oban.insert!`/se ignoraba: la excepción mataba el job DESPUÉS
+          # del insert y el atajo `request_log_seen?` del reintento se comía el
+          # fan-out, así que el webhook no se entregaba nunca. Devolver
+          # `{:error, _}` deja que Oban reintente: el insert es no-op y el
+          # dispatch se reintenta (idempotente por destino+log).
+          {:error, reason} ->
+            {:error, "webhook dispatch failed: #{inspect(reason)}"}
+        end
 
       {:error, changeset} ->
         {:error, "request log insert failed: #{inspect(changeset.errors)}"}
@@ -117,9 +137,40 @@ defmodule Tokengate.Logs.WriteWorker do
   #
   # `inserted_at` is a partition key: pinning it prunes the lookup to the day
   # the row was just written instead of probing every partition.
-  defp reload_for_delivery(%RequestLog{id: id, inserted_at: inserted_at} = log) do
+  #
+  # `job_id` is the FALLBACK key: `Logs.log_request/1` inserts with
+  # `on_conflict: :nothing`, and Ecto still returns `{:ok, struct}` with the
+  # NEWLY generated primary key — a PHANTOM id when the row already existed.
+  # Reloading by that id misses, and the old code then broadcast/dispatched a
+  # log id that is nowhere in the table (the webhook receiver got a span for a
+  # nonexistent request, and the retried fan-out never deduped because the
+  # phantom id is fresh on every attempt). The unique key the worker actually
+  # knows is (oban_job_id, inserted_at), so that is where the reload lands.
+  defp reload_for_delivery(%RequestLog{id: id, inserted_at: inserted_at} = log, job_id) do
+    inserted_at = DateTime.truncate(inserted_at, :second)
+
+    with nil <- delivery_query() |> where(^by_id(id, inserted_at)) |> Repo.one(),
+         nil <- delivery_query() |> where(^by_job(job_id, inserted_at)) |> Repo.one() do
+      bare_for_broadcast(log)
+    end
+  end
+
+  defp by_id(id, inserted_at), do: dynamic([rl], rl.id == ^id and rl.inserted_at == ^inserted_at)
+
+  defp by_job(job_id, inserted_at) when is_integer(job_id),
+    do: dynamic([rl], rl.oban_job_id == ^job_id and rl.inserted_at == ^inserted_at)
+
+  defp by_job(_job_id, _inserted_at), do: dynamic(false)
+
+  # `ON CONFLICT DO NOTHING` (a duplicate (oban_job_id, inserted_at) pair)
+  # leaves no row to reload. Broadcast the bare struct with the association
+  # fields explicitly nil — the same shape the old `Repo.preload/2` produced —
+  # so consumers' `log.provider` style reads never see a
+  # `%Ecto.Association.NotLoaded{}`.
+  defp bare_for_broadcast(log), do: %{log | provider: nil, service: nil, group_member: nil}
+
+  defp delivery_query do
     from(rl in RequestLog,
-      where: rl.id == ^id and rl.inserted_at == ^DateTime.truncate(inserted_at, :second),
       left_join: p in assoc(rl, :provider),
       left_join: s in assoc(rl, :service),
       left_join: gm in assoc(rl, :group_member),
@@ -127,19 +178,6 @@ defmodule Tokengate.Logs.WriteWorker do
       left_join: g in assoc(gm, :group),
       preload: [provider: p, service: s, group_member: {gm, user: u, group: g}]
     )
-    |> Repo.one()
-    |> case do
-      nil ->
-        # `ON CONFLICT DO NOTHING` (a duplicate (oban_job_id, inserted_at) pair)
-        # leaves no row to reload. Broadcast the bare struct with the
-        # association fields explicitly nil — the same shape the old
-        # `Repo.preload/2` produced — so consumers' `log.provider` style reads
-        # never see a `%Ecto.Association.NotLoaded{}`.
-        %{log | provider: nil, service: nil, group_member: nil}
-
-      reloaded ->
-        reloaded
-    end
   end
 
   defp parse_inserted_at(nil), do: nil

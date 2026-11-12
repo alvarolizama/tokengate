@@ -363,7 +363,12 @@ defmodule TokengateWeb.ServiceStatsBody do
           options={[{gettext("Yes"), "true"}, {gettext("No"), "false"}]}
           label={gettext("Streaming")}
         />
-        <.input field={@form[:model_search]} type="text" label={gettext("Model")} />
+        <.input
+          field={@form[:model_search]}
+          type="text"
+          label={gettext("Model")}
+          phx-debounce="400"
+        />
         <.input field={@form[:from]} type="date" label="Desde" />
         <.input field={@form[:to]} type="date" label="Hasta" />
       </.form>
@@ -435,16 +440,36 @@ defmodule TokengateWeb.ServiceStatsBody do
   service, periodo y timezone (y el `key_filter` en el summary).
   """
   def load_stats(socket) do
-    service_id = socket.assigns.service.id
-    period = socket.assigns.period
-    timezone = socket.assigns.timezone
+    socket
+    |> assign(compute_stats_assigns(stats_params(socket.assigns)))
+  end
+
+  @doc false
+  # Inputs de la carga de stats como valores planos — lo que una tarea async
+  # puede capturar sin tocar el socket (`start_async` no admite assigns).
+  def stats_params(assigns) do
+    %{
+      service_id: assigns.service.id,
+      service_api_keys: assigns.service_api_keys,
+      period: assigns.period,
+      timezone: assigns.timezone,
+      key_filter: assigns.key_filter
+    }
+  end
+
+  @doc false
+  def compute_stats_assigns(%{
+        service_id: service_id,
+        service_api_keys: api_keys,
+        period: period,
+        timezone: timezone,
+        key_filter: key_filter
+      }) do
     %{from: from} = Periods.period_bounds(period, timezone)
 
     # El group by de la tabla SIEMPRE es del servicio completo (una query, el
     # trim a una fila es en memoria); el summary sí se scopea por key cuando el
     # selector lo pide — y su llave de cache lleva el scope.
-    key_filter = socket.assigns.key_filter
-
     key_stats =
       DashboardCache.fetch_or_compute({:service_key_stats, service_id, period, timezone}, fn ->
         Logs.service_key_stats(service_id, from: from)
@@ -463,11 +488,11 @@ defmodule TokengateWeb.ServiceStatsBody do
     key_rows =
       case key_filter do
         "all" ->
-          build_key_rows(socket.assigns.service_api_keys, key_stats)
+          build_key_rows(api_keys, key_stats)
 
         key_id ->
           Enum.filter(
-            build_key_rows(socket.assigns.service_api_keys, key_stats),
+            build_key_rows(api_keys, key_stats),
             &(&1.stats.api_key_id == key_id)
           )
       end
@@ -479,16 +504,17 @@ defmodule TokengateWeb.ServiceStatsBody do
         [from: from, api_key_id: key_filter]
       end
 
-    socket
-    |> assign(
-      :summary,
+    summary =
       DashboardCache.fetch_or_compute(
         {:service_stats, service_id, period, timezone, key_filter},
         fn -> Logs.service_stats(service_id, summary_opts) end
       )
-    )
-    |> assign(:key_rows, key_rows)
-    |> assign(:model_breakdown, build_model_breakdown(model_key_stats, key_rows, key_filter))
+
+    %{
+      summary: summary,
+      key_rows: key_rows,
+      model_breakdown: build_model_breakdown(model_key_stats, key_rows, key_filter)
+    }
   end
 
   @doc """
@@ -608,53 +634,82 @@ defmodule TokengateWeb.ServiceStatsBody do
   `:more` (siguiente página, preserva lo ya insertado).
   """
   def load_logs(socket, mode) do
-    service_id = socket.assigns.service.id
-    page_size = socket.assigns[:page_size] || @page_size
+    socket
+    |> apply_logs(compute_logs(logs_params(socket.assigns), mode, socket.assigns[:cursor]), mode)
+  end
 
+  @doc false
+  # Inputs de la lista de logs como valores planos (para la carga async).
+  def logs_params(assigns) do
+    %{
+      service_id: assigns.service.id,
+      filters: Map.get(assigns, :filters, default_filters()),
+      key_filter: assigns[:key_filter] || "all",
+      page_size: assigns[:page_size] || @page_size
+    }
+  end
+
+  @doc false
+  def compute_logs(params, mode, cursor) do
     base_filters =
-      socket.assigns
-      |> Map.get(:filters, default_filters())
-      |> Map.put("service_id", service_id)
-      |> maybe_key_filter(socket.assigns[:key_filter] || "all")
+      params.filters
+      |> Map.put("service_id", params.service_id)
+      |> maybe_key_filter(params.key_filter)
       |> drop_empty_filters()
 
     logs =
       case mode do
         :reset ->
-          Logs.list_logs(Map.put(base_filters, "limit", page_size))
+          Logs.list_logs(Map.put(base_filters, "limit", params.page_size))
 
         :more ->
           cursor_filters =
-            if socket.assigns[:cursor] do
-              Map.put(base_filters, "before", socket.assigns.cursor)
+            if cursor do
+              Map.put(base_filters, "before", cursor)
             else
               base_filters
             end
 
-          Logs.list_logs(Map.put(cursor_filters, "limit", page_size))
+          Logs.list_logs(Map.put(cursor_filters, "limit", params.page_size))
       end
 
-    has_more = length(logs) == page_size
-
-    socket =
-      socket
-      |> assign(:has_more, has_more)
-      |> case do
-        s when mode == :reset -> stream(s, :logs, logs, reset: true)
-        s -> stream(s, :logs, logs)
-      end
-
-    case logs do
-      [] ->
-        socket
-
-      _ ->
-        oldest = List.last(logs)
-        # Tuple cursor {inserted_at, id}: the second alone repeats/skips rows
-        # when several logs share a timestamp (timestamp(0) column).
-        assign(socket, :cursor, {oldest.inserted_at, oldest.id})
-    end
+    %{logs: logs, has_more: length(logs) == params.page_size, cursor: next_cursor(logs)}
   end
+
+  @doc false
+  # Aplica el resultado de `compute_logs/3` al socket. El cursor sólo se pisa
+  # cuando llegaron filas (misma semántica que la carga síncrona original).
+  def apply_logs(socket, %{logs: logs, has_more: has_more, cursor: cursor}, mode) do
+    socket
+    |> assign(:has_more, has_more)
+    |> then(fn s -> if cursor, do: assign(s, :cursor, cursor), else: s end)
+    |> then(fn s ->
+      case mode do
+        :reset -> stream(s, :logs, logs, reset: true)
+        :more -> stream(s, :logs, logs)
+      end
+    end)
+  end
+
+  @doc false
+  # Bundle completo de la página (stats + primera página de logs) calculado
+  # como valores planos: es lo que corre dentro de `start_async/3`.
+  def compute_bundle(stats_params, logs_params) do
+    %{
+      stats: compute_stats_assigns(stats_params),
+      logs: compute_logs(logs_params, :reset, nil)
+    }
+  end
+
+  @doc false
+  def apply_bundle(socket, %{stats: stats, logs: logs}) do
+    socket
+    |> assign(stats)
+    |> apply_logs(logs, :reset)
+  end
+
+  defp next_cursor([]), do: nil
+  defp next_cursor(logs), do: {List.last(logs).inserted_at, List.last(logs).id}
 
   # Logs.list_logs/1 doesn't tolerate empty-string values for boolean fields
   # (streaming) — strip them before forwarding.

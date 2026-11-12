@@ -329,6 +329,31 @@ defmodule TokengateWeb.ProxyControllerTest do
     end
   end
 
+  # Adapter de conexión que simula un cliente HTTP que corta el socket a media
+  # respuesta: el frame de usage del upstream (el que reporta el costo) ya se
+  # capturó y, acto seguido, el chunk siguiente falla con `{:error, :closed}`
+  # como un socket cerrado. Es la única forma de ejercitar `{:client_gone, _}`
+  # en ConnTest: su `dispatch/5` reinstala `Plug.Adapters.Test.Conn`.
+  defmodule ClientGoneAdapter do
+    @moduledoc false
+
+    defdelegate send_resp(state, status, headers, body), to: Plug.Adapters.Test.Conn
+
+    defdelegate send_file(state, status, headers, path, offset, length),
+      to: Plug.Adapters.Test.Conn
+
+    defdelegate send_chunked(state, status, headers), to: Plug.Adapters.Test.Conn
+    defdelegate read_req_body(state, opts), to: Plug.Adapters.Test.Conn
+
+    def chunk(state, body) do
+      if IO.iodata_to_binary(body) =~ ~s("usage") do
+        {:error, :closed}
+      else
+        Plug.Adapters.Test.Conn.chunk(state, body)
+      end
+    end
+  end
+
   setup do
     :persistent_term.put({ProviderPlug, :test_pid}, self())
     :persistent_term.put({ProviderPlug, :reject_body_fields}, [])
@@ -444,6 +469,22 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   defp authed_conn(conn, token) do
     put_req_header(conn, "authorization", "Bearer #{token}")
+  end
+
+  # Despacha por el endpoint real con `ClientGoneAdapter` instalado: ConnTest
+  # reinstala su adapter en `dispatch/5`, así que la llamada va directa.
+  defp post_with_closing_client(token, path, body) do
+    base = Plug.Test.conn(:post, path, Jason.encode!(body))
+    {_adapter, payload} = base.adapter
+
+    conn =
+      base
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("authorization", "Bearer #{token}")
+
+    conn
+    |> Map.put(:adapter, {ClientGoneAdapter, payload})
+    |> TokengateWeb.Endpoint.call(TokengateWeb.Endpoint.init([]))
   end
 
   defp chat_body(model) do
@@ -2524,7 +2565,7 @@ defmodule TokengateWeb.ProxyControllerTest do
         else: Application.delete_env(:tokengate, :stream_idle_timeout_ms)
     end)
 
-    %{token: token, model: model} =
+    %{token: token, model: model, member: member} =
       proxy_fixture(%{path_overrides: %{"chat" => "/stallstream"}})
 
     [model_provider] = Providers.list_model_providers(model.id)
@@ -2545,6 +2586,46 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     # El corte quedó registrado como fallo de timeout contra la credencial.
     assert CircuitBreakerManager.details(credential_id).failures == 1
+
+    # La fila reporta el cierre real (504 timeout de stream), no un 200.
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.status_code == 504
+    assert log.error_reason == "stream_timeout"
+    assert log.streaming == true
+  end
+
+  # C1: un cliente que corta la conexión a media respuesta no puede dejar el
+  # request sin costo: el proveedor YA cobró lo emitido. El cierre pasa por
+  # `finish_stream` (fila 499 + razón) y el hold del budget se liquida con el
+  # costo real, no se libera completo.
+  test "stream: a client disconnect mid-stream books the emitted cost under 499", %{conn: _conn} do
+    %{token: token, model: model, member: member} = proxy_fixture(%{credit_units: 100})
+
+    conn =
+      post_with_closing_client(
+        token,
+        "/v1/chat/completions",
+        Map.put(chat_body(model.name), "stream", true)
+      )
+
+    # El stream llegó a emitir contenido y el frame de usage del upstream
+    # (costo real reportado) antes de que el socket apareciera cerrado.
+    assert conn.state == :chunked
+    assert conn.resp_body =~ ~s("content":"qué")
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.status_code == 499
+    assert log.error_reason == "client_gone"
+    assert log.streaming == true
+    assert log.prompt_tokens == 20
+    assert log.completion_tokens == 2
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000070"))
+
+    # Se cobró lo generado: el hold se liquidó con ese costo.
+    assert %{consumed_micro: 70} = Budgets.limit_spend({:user, member.user_id})
   end
 
   # A non-400 4xx (a marketplace/aggregator "no available sellers" 404) is
@@ -3737,6 +3818,48 @@ defmodule TokengateWeb.ProxyControllerTest do
       # El hit no debita nada: sigue el gasto del primer request (150 micro-USD
       # = el costo real que reportó el upstream).
       assert %{consumed_micro: 150} = Budgets.limit_spend({:user, member.user_id})
+    end
+
+    test "chat: a cache hit books a $0 row and counts in the realtime collector", %{conn: conn} do
+      %{token: token, model: model, member: member} = proxy_fixture(%{credit_units: 100})
+      body = chat_body(model.name)
+
+      before = Tokengate.Metrics.Collector.snapshot_lite()
+
+      first = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", body)
+      assert json_response(first, 200)
+      assert_receive {:provider_request, _}
+
+      _ = :sys.get_state(ResponseCache)
+
+      second = conn |> recycle() |> authed_conn(token) |> post(~p"/v1/chat/completions", body)
+      assert get_resp_header(second, "x-tokengate-cache") == ["hit"]
+      refute_receive {:provider_request, _}, 100
+
+      # M10: el hit dejaba de existir para la contabilidad. Ahora deja fila
+      # durable con costo $0 / 0 tokens (nada se consumió aguas arriba) y sin
+      # top-up — el hold se LIBERA, no se debita.
+      assert %{success: 2} = Oban.drain_queue(queue: :logs)
+
+      rows =
+        Repo.all(
+          from l in RequestLog,
+            where: l.group_member_id == ^member.id,
+            order_by: [asc: l.inserted_at, asc: l.id]
+        )
+
+      assert length(rows) == 2
+
+      hit = Enum.find(rows, &(&1.prompt_tokens == 0))
+      assert hit.status_code == 200
+      assert hit.streaming == false
+      assert hit.completion_tokens == 0
+      assert hit.credit_topup_id == nil
+      assert Decimal.equal?(hit.provider_cost_usd, Decimal.new(0))
+
+      # Y cuenta como request en el collector en vivo (2: miss + hit).
+      after_run = Tokengate.Metrics.Collector.snapshot_lite()
+      assert after_run.requests_total == before.requests_total + 2
     end
 
     test "embeddings: a cache hit keeps the passthrough body and reports $0", %{conn: conn} do

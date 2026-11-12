@@ -165,4 +165,89 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
       {:ok, _pid} = Supervisor.restart_child(Tokengate.Supervisor, ApiKeyCache)
     end
   end
+
+  describe "single-flight" do
+    test "concurrent misses on the same hash run the lookup once" do
+      # Force a miss on a hash nobody else touches.
+      key_hash =
+        :crypto.hash(:sha256, "burst-#{System.unique_integer([:positive])}")
+        |> Base.encode16(case: :lower)
+
+      call_count = :counters.new(1, [:atomics])
+
+      fun = fn ->
+        :counters.add(call_count, 1, 1)
+        Process.sleep(5)
+        %{member: %{id: "member-single-flight"}}
+      end
+
+      results =
+        1..10
+        |> Enum.map(fn _ -> Task.async(fn -> ApiKeyCache.fetch(key_hash, fun) end) end)
+        |> Task.await_many(5_000)
+
+      assert Enum.uniq(results) == [%{member: %{id: "member-single-flight"}}]
+      assert :counters.get(call_count, 1) == 1
+      # The placeholder is gone once the value is published.
+      assert :ets.lookup(ApiKeyCache.table(), {:__computing__, key_hash}) == []
+      assert [{^key_hash, %{member: _}, _exp}] = :ets.lookup(ApiKeyCache.table(), key_hash)
+    end
+
+    test "invalid keys are still not cached, even under a burst" do
+      key_hash =
+        :crypto.hash(:sha256, "bogus-#{System.unique_integer([:positive])}")
+        |> Base.encode16(case: :lower)
+
+      results =
+        1..5
+        |> Enum.map(fn _ ->
+          Task.async(fn -> ApiKeyCache.fetch(key_hash, fn -> :error end) end)
+        end)
+        |> Task.await_many(5_000)
+
+      assert Enum.uniq(results) == [:error]
+      assert :ets.lookup(ApiKeyCache.table(), key_hash) == []
+    end
+
+    test "a waiter computes locally when the holder overruns the wait window" do
+      key_hash =
+        :crypto.hash(:sha256, "slow-#{System.unique_integer([:positive])}")
+        |> Base.encode16(case: :lower)
+
+      # The holder blocks past the 50ms wait cap → the waiter degrades to its
+      # own lookup instead of raising or stalling the request.
+      holder =
+        Task.async(fn ->
+          ApiKeyCache.fetch(key_hash, fn ->
+            Process.sleep(80)
+            %{member: %{id: "slow-holder"}}
+          end)
+        end)
+
+      wait_until(fn ->
+        match?([_], :ets.lookup(ApiKeyCache.table(), {:__computing__, key_hash}))
+      end)
+
+      {elapsed, entry} =
+        :timer.tc(fn ->
+          ApiKeyCache.fetch(key_hash, fn -> %{member: %{id: "local"}} end)
+        end)
+
+      assert %{member: %{id: "local"}} = entry
+      # :timer.tc measures microseconds; the bound is loose on purpose — the
+      # behavior assert above (the waiter's OWN value, not the holder's) is
+      # what proves degradation. This only rules out waiting out the holder.
+      assert div(elapsed, 1000) < 500
+
+      assert %{member: %{id: "slow-holder"}} = Task.await(holder, 5_000)
+    end
+  end
+
+  defp wait_until(fun, tries \\ 100)
+
+  defp wait_until(_fun, 0), do: flunk("condition never became true")
+
+  defp wait_until(fun, tries) do
+    if fun.(), do: :ok, else: Process.sleep(5) && wait_until(fun, tries - 1)
+  end
 end

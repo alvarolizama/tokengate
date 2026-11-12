@@ -236,6 +236,29 @@ defmodule Tokengate.Limits.ManagerTest do
     end
   end
 
+  describe "fail-open when the ETS tables are gone" do
+    # El gate es una optimización: si las tablas desaparecen (manager
+    # reiniciándose, hot upgrade) el proxy debe sobre-admitir, nunca recibir un
+    # 500. `terminate_child` mata al dueño de las tablas sin reiniciarlo.
+    test "every gate call degrades to :ok instead of raising" do
+      key = unique_key()
+
+      assert :ok = Supervisor.terminate_child(Tokengate.Limits.Supervisor, Manager)
+
+      on_exit(fn ->
+        Supervisor.restart_child(Tokengate.Limits.Supervisor, Manager)
+      end)
+
+      assert :ok = Manager.check_rate(key, 1)
+      assert :ok = Manager.acquire_concurrency(key, 1)
+      assert :ok = Manager.acquire_concurrency(key, nil)
+      assert :ok = Manager.release_concurrency(key)
+      assert Manager.current_concurrency(key) == 0
+      assert Manager.total_inflight() == 0
+      assert :ok = Manager.acquire(key, %{rpm_limit: 1, concurrency_limit: 1})
+    end
+  end
+
   describe "total_inflight/0" do
     test "sums in-flight counts across keys" do
       key_a = unique_key()

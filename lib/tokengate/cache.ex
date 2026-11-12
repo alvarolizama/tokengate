@@ -25,6 +25,16 @@ defmodule Tokengate.Cache do
   reload into a tree that predates the module) the function runs uncached.
   The cache is an optimization, never a dependency.
 
+  ## Single-flight
+
+  Concurrent misses on the same key do not run `fun` N times: the first
+  caller takes an `insert_new/2` placeholder, the rest wait (bounded to
+  `@max_wait_ms`, then compute locally) for that value. The placeholder
+  carries the holder's pid and waiters monitor it, so a holder killed by
+  an external exit signal releases the lock immediately instead of wedging
+  the key until the TTL sweep. Whatever `fun` returns is stored — this
+  module caches values, not successes.
+
   ## Tests
 
   The table is VM-global and outlives the Ecto sandbox rollback, so
@@ -36,6 +46,13 @@ defmodule Tokengate.Cache do
 
   @table :tokengate_cache
   @sweep_ms :timer.seconds(30)
+  # Waiters behind a single-flight lock re-check at this cadence…
+  @poll_interval_ms 5
+
+  # …and never block longer than this. Cache entries here are cheap
+  # hot-path reads (exemptions, observability destinations): a duplicate
+  # computation beats stalling a proxied request behind a slow holder.
+  @max_wait_ms 200
 
   @doc false
   def start_link(opts \\ []) do
@@ -59,11 +76,11 @@ defmodule Tokengate.Cache do
               value
             else
               :ets.delete(@table, key)
-              put(key, ttl_ms, fun)
+              put_new(key, ttl_ms, fun)
             end
 
           [] ->
-            put(key, ttl_ms, fun)
+            put_new(key, ttl_ms, fun)
         end
       rescue
         # The table raced away between the whereis check and the lookup
@@ -114,10 +131,111 @@ defmodule Tokengate.Cache do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp put(key, ttl_ms, fun) do
+  defp put_new(key, ttl_ms, fun) do
+    lock_key = {:__computing__, key}
+    deadline = now() + @max_wait_ms
+
+    if :ets.insert_new(@table, {lock_key, {:computing, self()}, deadline}) do
+      try do
+        compute_and_store(key, ttl_ms, fun)
+      after
+        # Releases on normal return AND on raise/exit: a crashing computer
+        # must not leave the key wedged for the whole TTL.
+        :ets.delete(@table, lock_key)
+      end
+    else
+      case await_value(key, lock_key, deadline) do
+        {:ok, value} ->
+          value
+
+        # The holder died (its `after` never ran — the waiter cleared the
+        # stale lock via monitor), or outlived the capped wait window.
+        # Cache our own result: without the write every later caller keeps
+        # recomputing, which is the stampede single-flight exists to stop.
+        :miss ->
+          compute_and_store(key, ttl_ms, fun)
+      end
+    end
+  end
+
+  defp compute_and_store(key, ttl_ms, fun) do
     value = fun.()
     :ets.insert(@table, {key, value, now() + ttl_ms})
     value
+  end
+
+  # Waits (bounded) for the process holding the lock to publish the entry.
+  # The placeholder carries the holder's pid, so waiters monitor it: when
+  # the holder dies on an external exit signal its `after` clause never
+  # runs — the `:DOWN` message releases the lock immediately instead of
+  # leaving every waiter polling until the deadline.
+  defp await_value(key, lock_key, deadline) do
+    holder = holder_pid(lock_key)
+    wait_deadline = min(deadline, now() + @max_wait_ms)
+    ref = holder && Process.monitor(holder)
+
+    try do
+      await_value(key, lock_key, wait_deadline, ref)
+    after
+      ref && Process.demonitor(ref, [:flush])
+    end
+  end
+
+  defp await_value(key, lock_key, deadline, ref) do
+    case fresh_value(key) do
+      {:ok, value} ->
+        {:ok, value}
+
+      :miss ->
+        cond do
+          now() >= deadline ->
+            :miss
+
+          :ets.lookup(@table, lock_key) == [] ->
+            :miss
+
+          received_down?(ref) ->
+            release_stale_lock(lock_key, holder_pid(lock_key))
+            :miss
+
+          true ->
+            Process.sleep(@poll_interval_ms)
+            await_value(key, lock_key, deadline, ref)
+        end
+    end
+  end
+
+  defp fresh_value(key) do
+    case :ets.lookup(@table, key) do
+      [{^key, value, expires_at}] -> if now() < expires_at, do: {:ok, value}, else: :miss
+      [] -> :miss
+    end
+  end
+
+  defp holder_pid(lock_key) do
+    case :ets.lookup(@table, lock_key) do
+      [{^lock_key, {:computing, pid}, _deadline}] -> pid
+      _ -> nil
+    end
+  end
+
+  defp received_down?(nil), do: false
+
+  defp received_down?(ref) do
+    receive do
+      {:DOWN, ^ref, :process, _pid, _reason} -> true
+    after
+      0 -> false
+    end
+  end
+
+  # Clears the dead holder's lock, but only if nobody else took it over in
+  # the meantime.
+  defp release_stale_lock(lock_key, dead_pid) do
+    case :ets.match(@table, {lock_key, {:computing, :"$1"}, :_}) do
+      [[^dead_pid]] -> :ets.delete(@table, lock_key)
+      _ -> :ok
+    end
   end
 
   defp now, do: System.monotonic_time(:millisecond)

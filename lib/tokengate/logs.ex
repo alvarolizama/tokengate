@@ -107,6 +107,14 @@ defmodule Tokengate.Logs do
   # to a single partition.
   def request_log_seen?(nil, _), do: false
 
+  # Jobs legacy encolados ANTES de que el proxy fijara `inserted_at` en los
+  # args: el timestamp no viaja en el payload, `parse_inserted_at/1` devuelve
+  # nil y esta cláusula evita un `FunctionClauseError` que tumbaría el
+  # `WriteWorker` en cada reintento (y, con él, el log entero). No se puede
+  # probar la partición sin la fecha, así que se responde "no visto": el
+  # INSERT sigue siendo idempotente por el índice único.
+  def request_log_seen?(_oban_job_id, nil), do: false
+
   def request_log_seen?(oban_job_id, %DateTime{} = inserted_at) do
     Repo.exists?(
       from rl in RequestLog,

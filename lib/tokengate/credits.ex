@@ -314,12 +314,13 @@ defmodule Tokengate.Credits do
   defp topup_positive?(_), do: false
 
   @doc """
-  Resúmenes de varias membresías en lote (para los tableros): 3 queries fijas,
-  nunca una por miembro. `%{member_id => summary}` con las mismas llaves que
-  `summary/2`, más `:member`.
+  Resúmenes de varias membresías en lote (para los tableros): un número fijo
+  de queries — el preload de `user`/`group` para toda la lista, el gasto, el
+  gasto contra límite y los top-ups — nunca una por miembro.
+  `%{member_id => summary}` con las mismas llaves que `summary/2`, más `:member`.
   """
   def summaries(members) when is_list(members) do
-    members = Enum.map(members, &Repo.preload(&1, [:user, :group]))
+    members = Repo.preload(members, [:user, :group])
     subjects = Enum.map(members, &{:user, &1.user_id})
     spend = spend_by_subjects(subjects)
     limit_spend = spend_by_subjects(subjects, only_limit: true)
@@ -410,25 +411,6 @@ defmodule Tokengate.Credits do
         limit: 1
       )
     )
-  end
-
-  @doc """
-  Sujetos que hoy no tienen camino de gasto (sin límite, sin ilimitado, sin
-  top-up vigente) — para la vigilancia de mantenimiento.
-  """
-  def blocked_users do
-    users = Repo.all(from(u in User))
-    summaries = summaries(Enum.flat_map(users, &Repo.preload(&1, :group_members).group_members))
-
-    users
-    |> Enum.filter(fn user ->
-      membership = Enum.find(Repo.preload(user, :group_members).group_members, & &1.user_id)
-
-      case membership do
-        nil -> true
-        member -> Map.get(summaries, member.id, %{has_path?: false}).has_path? == false
-      end
-    end)
   end
 
   defp max_decimal(a, b) do

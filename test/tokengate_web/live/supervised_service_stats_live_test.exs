@@ -114,6 +114,13 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
   defp assigns_of(view), do: :sys.get_state(view.pid).socket.assigns
 
+  # La carga del período corre en `start_async/3` (carga async, igual que el
+  # admin en /stats): el primer render llega con los assigns vacíos, así que se
+  # espera el assign y no el HTML — que conserva las clases de loading.
+  defp wait_loaded(view) do
+    wait_for_assign(view, fn assigns -> assigns.stats_loading == false end)
+  end
+
   # El summary del realtime se recomputa con el timer de coalescing (2 s);
   # :sys.get_state devuelve el estado actual, así que se espera a que el
   # assign cumpla la condición en vez de dormir a ciegas.
@@ -232,6 +239,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     conn = login(conn, user, password)
     {:ok, view, html} = live(conn, ~p"/services/supervised/#{service.id}")
+    wait_loaded(view)
 
     assert has_element?(view, "#supervised-service-readonly")
     assert html =~ "Bot de Telegram"
@@ -274,8 +282,10 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
     {:ok, _} = log_for(other, %{model_requested: "otro-servicio"})
 
     conn = login(conn, user, password)
-    {:ok, view, html} = live(conn, ~p"/services/supervised/#{service.id}")
+    {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    wait_loaded(view)
 
+    html = render(view)
     assert html =~ "solo-este"
     refute html =~ "otro-servicio"
     assert Enum.count(log_rows(view)) == 1
@@ -288,6 +298,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     conn = login(conn, user, password)
     {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    wait_loaded(view)
 
     assert has_element?(view, "#service-supervisor-#{user.id}")
     assert has_element?(view, "#service-supervisor-#{peer.user.id}")
@@ -299,6 +310,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     conn = login(conn, user, password)
     {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    wait_loaded(view)
 
     assert has_element?(view, "#service-model-breakdown-empty")
     assert render(element(view, "#kpi-cost")) =~ "$0.00"
@@ -324,6 +336,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     conn = login(conn, user, password)
     {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    wait_loaded(view)
 
     # 30d default: both requests.
     assert render(element(view, "#kpi-cost")) =~ "$0.50"
@@ -341,11 +354,13 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     # Navigating with the param answers the narrower window: only the fresh one.
     {:ok, view_week, _html} = live(conn, ~p"/services/supervised/#{service.id}?period=week")
+    wait_loaded(view_week)
     assert render(element(view_week, "#kpi-cost")) =~ "$0.25"
     refute render(element(view_week, "#kpi-cost")) =~ "$0.50"
 
     # An unknown period falls back to the 30d default instead of crashing.
     {:ok, view_bogus, _html} = live(conn, ~p"/services/supervised/#{service.id}?period=banana")
+    wait_loaded(view_bogus)
     assert render(element(view_bogus, "#kpi-cost")) =~ "$0.50"
   end
 
@@ -367,6 +382,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     conn = login(conn, user, password)
     {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    wait_loaded(view)
 
     assert Enum.count(log_rows(view)) == 25
     assert has_element?(view, "#load-more-supervised-logs")
@@ -385,6 +401,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     conn = login(conn, user, password)
     {:ok, view, html} = live(conn, ~p"/services/supervised/#{service.id}")
+    wait_loaded(view)
 
     refute has_element?(view, "#new-service-btn")
     refute html =~ "phx-click=\"edit_service\""
@@ -403,6 +420,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     conn = login(conn, user, password)
     {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    wait_loaded(view)
 
     html = render_click(view, "delete_service", %{"id" => service.id})
 
@@ -428,6 +446,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
       conn = login(conn, user, password)
       {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+      wait_loaded(view)
 
       assert has_element?(view, "#service-api-keys-table")
       assert cell_text(view, "#api-key-row-#{active.id} td:nth-child(1)") == "Activa"
@@ -457,6 +476,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
       conn = login(conn, user, password)
       {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+      wait_loaded(view)
 
       # Todas: dos filas, los dos modelos en el pivote y KPI = 2.
       assert has_element?(view, "#api-key-row-#{key_a.id}")
@@ -497,6 +517,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
       conn = login(conn, user, password)
       {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+      wait_loaded(view)
 
       assert has_element?(view, "#logs-#{ok_log.id}")
       assert has_element?(view, "#logs-#{boom_log.id}")
@@ -526,6 +547,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
       conn = login(conn, user, password)
       {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+      wait_loaded(view)
 
       assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*0\s*</
 
@@ -559,6 +581,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
       conn = login(conn, user, password)
       {:ok, view, html} = live(conn, ~p"/services/supervised/#{service.id}")
+      wait_loaded(view)
 
       refute html =~ "Uso diario por modelo"
       assert has_element?(view, "#service-model-breakdown-table")
@@ -576,6 +599,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     conn = login(conn, user, password)
     {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    wait_loaded(view)
 
     {:ok, :removed} = Accounts.remove_service_supervisor(service.id, user.id)
 
@@ -589,10 +613,41 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     conn = login(conn, user, password)
     {:ok, view, _html} = live(conn, ~p"/services/supervised/#{kept.id}")
+    wait_loaded(view)
 
     {:ok, :removed} = Accounts.remove_service_supervisor(peer_service.id, user.id)
 
     # Still rendering the page of the service that is still supervised.
     assert has_element?(view, "#kpi-cost")
+  end
+
+  test "a failed async load (timeout) surfaces a visible banner", %{conn: conn} do
+    %{user: user, password: password} = register()
+    service = service() |> supervised(user)
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    wait_loaded(view)
+
+    # Happy path: no banner.
+    refute has_element?(view, "#supervised-stats-load-error")
+
+    # The async bundle died (cold queries hitting the start_async timeout):
+    # the callback must leave a visible error state, not just a log line.
+    socket = :sys.get_state(view.pid).socket
+
+    assert {:noreply, socket} =
+             TokengateWeb.SupervisedServiceStatsLive.handle_async(
+               :service_bundle,
+               {:exit, :timeout},
+               socket
+             )
+
+    assert socket.assigns.load_error == :load_failed
+    assert socket.assigns.stats_loading == false
+
+    # The template gates `#supervised-stats-load-error` on `load_error` (the
+    # full template can't be rendered outside a LiveView: it mounts the
+    # profile-modal LiveComponent), so the assign is the contract here.
   end
 end

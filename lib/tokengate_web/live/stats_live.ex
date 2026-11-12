@@ -336,7 +336,13 @@ defmodule TokengateWeb.StatsLive do
           |> cached_structural_bundle()
           |> case do
             {:ok, bundle} ->
-              assign(socket, bundle)
+              # Even on a structural hit the counters must still load: their
+              # fresh state is period-scoped and not cached, so skipping the
+              # async would leave stats_loading true and no KPIs for later
+              # viewers inside the structural TTL.
+              socket
+              |> assign(bundle)
+              |> start_async(:stats_counters, fn -> compute_counter_assigns(params) end)
 
             :miss ->
               socket
@@ -611,18 +617,44 @@ defmodule TokengateWeb.StatsLive do
     if DateTime.compare(prev_from, earliest) == :lt do
       empty_summary()
     else
-      do_previous_summary(params, "90d", timezone)
+      cached_prev_summary(params, "90d", timezone)
     end
   end
 
   defp previous_summary(params, period, timezone) do
-    do_previous_summary(params, period, timezone)
+    cached_prev_summary(params, period, timezone)
   end
 
   defp do_previous_summary(params, period, timezone) do
     %{from: prev_from, to: prev_to} = Periods.previous_period_bounds(period, timezone)
     prev_opts = [from: prev_from, to: prev_to, timezone: timezone]
     fetch_summary(params, prev_opts)
+  end
+
+  # La ventana ANTERIOR está cerrada e inmutable: su resumen no cambia entre
+  # recargas, pero el Resumen se recarga cada 3 s por visor (`logs:new`) y
+  # cada uno re-ejecutaba este agregado. Va por DashboardCache con TTL de
+  # 60 s —la misma ventana que el bundle estructural— y llave que lleva TODO
+  # lo que cambia el resultado: filtros, período, timezone y scope. El
+  # contador del período actual sigue sin caché (un KPI viejo se lee como
+  # número roto).
+  @prev_summary_cache_ttl 60_000
+
+  defp cached_prev_summary(params, period, timezone) do
+    if structural_cache_enabled?() do
+      DashboardCache.fetch_or_compute(
+        prev_summary_cache_key(params, period, timezone),
+        fn -> do_previous_summary(params, period, timezone) end,
+        ttl: @prev_summary_cache_ttl
+      )
+    else
+      do_previous_summary(params, period, timezone)
+    end
+  end
+
+  defp prev_summary_cache_key(params, period, timezone) do
+    {:stats_prev_summary, params.model_filter, params.group_filter, period, timezone,
+     params.scope_member_ids}
   end
 
   # Merge prev_metrics into the :metrics map as delta percentages.

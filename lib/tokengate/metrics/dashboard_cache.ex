@@ -103,10 +103,11 @@ defmodule Tokengate.Metrics.DashboardCache do
   result instead of running the identical query. N viewers now cost ONE
   computation per TTL window, not N.
 
-  The placeholder always carries the same deadline the entry would have, so
-  a crashing computer cannot wedge the key: the `after` clause deletes it on
-  normal exit and on raise, and the periodic sweep reaps it when the
-  deadline passes (a wait never outlives the TTL).
+  The placeholder carries the holder's pid and the entry's deadline; waiters
+  monitor the holder so an external exit signal (LiveView async cancel) also
+  releases the lock immediately. A waiter that outlives its capped wait window
+  (@max_wait_ms) computes locally and caches its own result, so a crashed or
+  slow holder never strands the key.
   """
   @spec fetch_or_compute(term(), (-> map())) :: map()
   def fetch_or_compute(key, compute_fn) do
@@ -220,11 +221,17 @@ defmodule Tokengate.Metrics.DashboardCache do
       end
     else
       case await_value(key, lock_key, deadline) do
-        {:ok, data} -> data
+        {:ok, data} ->
+          data
+
         # The holder released without a value (its compute raised), died on an
         # external exit signal (its `after` never ran — the waiter cleared the
-        # stale lock via monitor), or outlived the wait window.
-        :miss -> compute_fn.()
+        # stale lock via monitor), or outlived the wait window. Cache our own
+        # result: without the put every later caller keeps recomputing.
+        :miss ->
+          data = compute_fn.()
+          put(key, data, ttl)
+          data
       end
     end
   end

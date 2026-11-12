@@ -77,6 +77,11 @@ config :tokengate, Oban,
   repo: Tokengate.Repo,
   plugins: [
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
+    # Rescata jobs que quedaron en `executing` porque el nodo murió a media
+    # ejecución (deploy, OOM, kill -9): sin Lifeline quedan atorados para
+    # siempre en esa cola. 30 min supera el timeout más largo de la app
+    # (webhook 30s, stats 120s) con margen de sobra.
+    {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)},
     {Oban.Plugins.Cron,
      crontab: [
        {"0 0 1 * *", Tokengate.Budgets.ResetWorker},
@@ -96,12 +101,15 @@ config :tokengate, Oban,
        {"30 4 * * 1", Tokengate.Providers.CatalogRefreshWorker}
      ]}
   ],
-  # `logs` caps at 8: the queue's jobs are pure DB work (insert + one joined
-  # read + webhook enqueue) and the Repo pool is `pool_size: 10`. At the old
-  # limit of 20 the queue alone could hold every connection, starving the proxy
-  # (auth/budget reads) and the webhook queue behind it — the queue saturated
-  # the pool instead of throttling itself.
-  queues: [default: 10, logs: [limit: 8], webhooks: 10, budgets: 5, notifications: 5]
+  # La suma de límites se mantiene cerca del `pool_size: 10` del Repo: cada job
+  # en vuelo retiene una conexión mientras corre, así que una suma muy por
+  # encima del pool los pone a esperar checkout entre sí y estrella al proxy
+  # (auth/budget) detrás de los workers. Antes sumaba 38 (default 10 + logs 8 +
+  # webhooks 10 + budgets 5 + notifications 5) con pool 10: la cola `default`
+  # sola podía acaparar el pool entero. 15 = default 3 + logs 4 + webhooks 4 +
+  # budgets 2 + notifications 2 deja aire para las peticiones del proxy y para
+  # ráfagas (un pico de logs dura lo que su insert, no lo que su backoff).
+  queues: [default: 3, logs: [limit: 4], webhooks: 4, budgets: 2, notifications: 2]
 
 # At-boot partition ensure (Tokengate.Logs.PartitionWorker.ensure_on_boot/0).
 # Disabled in test.exs — fixtures insert arbitrary historical dates that must
