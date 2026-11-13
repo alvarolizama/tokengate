@@ -137,19 +137,24 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
       {tm, _group} = group_member_fixture()
 
       now = DateTime.utc_now()
+      floored = %{now | minute: 0, second: 0, microsecond: {0, 0}}
+      latest_hour = DateTime.add(floored, -3600, :second)
 
-      log_request(tm.id, DateTime.add(now, -3600, :second), %{
+      # Adjacent UTC buckets by construction. now-3600 and now-3660 share an
+      # hour once the clock is past :01, which made this fixture depend on
+      # the wall-clock minute the suite happened to run in.
+      log_request(tm.id, DateTime.add(latest_hour, 5, :second), %{
         cost_usd: Decimal.new("1.500000")
       })
 
-      log_request(tm.id, DateTime.add(now, -3660, :second), %{
+      log_request(tm.id, DateTime.add(latest_hour, -5, :second), %{
         cost_usd: Decimal.new("2.500000"),
         prompt_tokens: 7,
         completion_tokens: 3,
         latency_ms: 200
       })
 
-      log_request(tm.id, DateTime.add(now, -7200, :second), %{
+      log_request(tm.id, DateTime.add(latest_hour, -7200, :second), %{
         cost_usd: Decimal.new("0.250000")
       })
 
@@ -169,19 +174,28 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
       # by calling the private fallback indirectly: run the read BEFORE
       # aggregating in a second fixture set is covered by the "no rollup
       # data" test below. Here: compare rollup numbers directly.
-      assert length(rollup_series) == 2
+      assert length(rollup_series) == 3
 
-      [first, second] = rollup_series
-      # Newest bucket first? No — ascending by hour.
-      assert DateTime.compare(first.hour, second.hour) == :lt
+      [oldest, previous, latest] = rollup_series
+
+      # UTC ascending, with the three fixture logs kept in distinct buckets.
+      assert DateTime.compare(oldest.hour, previous.hour) == :lt
+      assert DateTime.compare(previous.hour, latest.hour) == :lt
 
       latest = List.last(rollup_series)
 
-      assert latest.request_count == 2
-      assert latest.prompt_tokens == 107
-      assert latest.completion_tokens == 53
-      assert latest.total_latency_ms == 700
-      assert Decimal.round(latest.cost_usd, 5) == Decimal.round(Decimal.new("4.000000"), 5)
+      # One row per explicit bucket: verify the newest and previous rows instead
+      # of summing a count fixture that never shared a bucket.
+      assert Enum.map(rollup_series, & &1.request_count) == [1, 1, 1]
+      assert latest.request_count == 1
+      assert latest.prompt_tokens == 100
+      assert latest.completion_tokens == 50
+      assert latest.total_latency_ms == 500
+      assert Decimal.equal?(latest.cost_usd, Decimal.new("1.500000"))
+      assert previous.prompt_tokens == 7
+      assert previous.completion_tokens == 3
+      assert previous.total_latency_ms == 200
+      assert Decimal.equal?(previous.cost_usd, Decimal.new("2.500000"))
     end
 
     test "hourly_series_for_members falls back to request_logs when rollup is empty" do

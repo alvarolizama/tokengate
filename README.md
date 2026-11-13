@@ -9,7 +9,7 @@
 ### OpenAI-compatible LLM API gateway
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-9FE88D.svg)](./mix.exs)
+[![Version](https://img.shields.io/badge/version-1.1.0-9FE88D.svg)](./mix.exs)
 [![Elixir](https://img.shields.io/badge/Elixir-1.15+-4B275F?logo=elixir&logoColor=white)](https://elixir-lang.org)
 [![Phoenix](https://img.shields.io/badge/Phoenix-1.8_LiveView-FD4F00?logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-partitioned-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
@@ -18,13 +18,16 @@
 
 ## What is TokenGate
 
-TokenGate sits between your agents/apps and the model providers. Clients call TokenGate
-with a TokenGate API key using the **OpenAI SDK unchanged** (just base URL + key);
-TokenGate routes each request to the best provider credential — with per-subject
-budgets, rate limits, circuit breakers, prompt-cache intelligence and cost
-accounting in between.
+TokenGate is an **OpenAI-compatible API gateway** for teams and machine services.
+It sits between your agents/apps and one or more model providers: clients keep
+using their OpenAI SDK (change only `base_url` and `api_key`), while TokenGate
+owns the routing, provider credentials, spending limits, operational telemetry
+and audit trail behind one entry point.
 
-Think "LiteLLM, but as an Elixir app with a real admin UI".
+It is a self-hosted Elixir/Phoenix application with a real admin UI — not a hosted
+SaaS or another client library. The goal is operational control: decide which
+credential serves a model, who may spend how much, see what was charged, and
+recover instead of failing on the first bad upstream.
 
 The UI ships in **English by default** with an in-app **EN/ES** selector
 (`users.locale`). Most strings are translated; a handful of legacy ones are still
@@ -91,8 +94,9 @@ The public surface is exactly these seven routes:
   running automatic prefix caching.
 - **Local response cache** — identical non-streaming requests (same key + model +
   canonical payload) are served from an in-process ETS cache without touching the
-  upstream: faster answers, $0 cost — and the hit still answers with
-  `X-Tokengate-Cost: 0` (`usage.cost_usd = 0` on chat), so the cost contract of a
+  upstream: faster answers and $0 upstream cost for that hit. The durable request row
+  carries `cache_hit: true`, and the response still answers with
+  `X-Tokengate-Cost: 0` (`usage.cost_usd = 0` on chat),
   live answer never disappears. Requests with a captured raw body (multipart
   audio) and streaming requests are never cached.
 - **Prompt optimizer** — every chat completion gets system messages hoisted and
@@ -107,7 +111,8 @@ The public surface is exactly these seven routes:
   the intent (`none → low` badge) and the CSV export carries the column.
 - **Usage normalization** — OpenAI-compatible usage is normalized into
   `prompt_tokens` / `completion_tokens` / `cache_read_tokens` /
-  `cache_creation_tokens`, priced separately at cache rates.
+  `cache_creation_tokens`. Provider-reported cost wins; otherwise the route can
+  price cached reads and cache writes at explicit, optional rates.
 
 ## Budgets & credit
 
@@ -128,15 +133,19 @@ The public surface is exactly these seven routes:
   (LiteLLM upstreams via `x-litellm-response-cost`) and, on chat, in the
   response's `usage.cost_usd`. A stream commits its 200 before the cost is known, so the cost
   travels in the SSE — the upstream's own usage frame, or a closing usage frame
-  TokenGate emits before `data: [DONE]` when the upstream sends none. No upstream
-  cost → manual per-route pricing → `$0`; no phantom estimates.
+  TokenGate emits before `data: [DONE]` when the upstream sends none. The fallback
+  chain is upstream-reported cost → explicit per-route pricing (token units or
+  the service's billable quantity) → `$0`. If an upstream omits token usage,
+  TokenGate uses its documented chars-based estimator before applying optional
+  manual pricing: that path produces an estimate, not an invented upstream fee.
+  With neither an upstream cost nor configured rates, the cost stays `$0`.
 
 ## Admin console (LiveView)
 
 | Page | What it does |
 |---|---|
 | `/dashboard` | Personal live consumption, period selector, the user's API keys with create/rename/rotate/revoke, supervised-services shortcut |
-| `/stats` | Analytics hub — Live pulse + tabs: Overview, Providers (tier/score ranking), Models, Limit profiles, Users, Services. One period selector — **Today / This week / This month / 30 days / 90 days** — shared by the hub and every detail page, with the choice in the URL so it survives bookmarks and refresh; role-scoped, previous-period deltas, CSV export (`/stats/export`) |
+| `/stats` | Analytics hub — Live pulse + tabs: Overview, Providers (tier/score ranking), Models, Limit profiles, Users, Services. One period selector — **Today / This week / This month / Last month / 30 days** — shared by the hub and every detail page, with the choice in the URL so it survives bookmarks and refresh; role-scoped, previous-period deltas, CSV export (`/stats/export`) |
 | `/calculator` | Real provider spend vs an estimated cost from custom pricing (input/cache/output per M + cache-hit rate) |
 | `/catalog/labs` | Labs catalog — read-only models.dev labs + operator **custom** labs (name, key, icon/logo) |
 | `/catalog/providers` | Provider CRUD with multiple credentials each; per-provider operational limits; custom providers declare their capabilities (chat/decisions/embeddings/audio/image) and can override the upstream path per capability; billing surface label |
@@ -241,22 +250,50 @@ What the app actually enforces today — no more, no less:
 
 ## Quick start
 
+### Requirements
+
+- Elixir **1.15+** on Erlang/OTP.
+- PostgreSQL running locally. The default dev config expects
+  `postgres:postgres@localhost/tokengate_dev`.
+- The usual build tools used by the project; the provided Mix aliases install the
+  Tailwind and esbuild binaries, so you don't need a separate frontend app.
+
+### Install and run
+
 ```bash
-git clone git@github.com:alvarolizama/tokengate.git && cd tokengate
-mix setup        # deps → create DB → migrate → assets → seed admin + dev dataset
+git clone https://github.com/alvarolizama/tokengate.git
+cd tokengate
+mix setup        # deps → create DB → migrate → assets → seed the local admin
 mix phx.server
 ```
 
-Visit [localhost:4000](http://localhost:4000) and sign in with the seeded admin:
+Visit [localhost:4000](http://localhost:4000) and sign in with the **local development** admin:
+
 
 | | Default | Override with |
 | --- | --- | --- |
 | Email | `admin@tokengate.local` | `TOKENGATE_ADMIN_EMAIL` |
 | Password | `tokengate-admin-secret-1` | `TOKENGATE_ADMIN_PASSWORD` |
 
-Then: create a **provider** with a credential → create a **model** alias and assign the
-provider → give a **limit profile** a monthly cap → your member API key is already on
-your dashboard. You can proxy a request in ~5 minutes.
+**These defaults are development-only.** Override the credentials locally with
+`TOKENGATE_ADMIN_EMAIL` / `TOKENGATE_ADMIN_PASSWORD` before setup if you prefer.
+In production there is no default password: the image creates an administrator only if
+`TOKENGATE_ADMIN_PASSWORD` is supplied; without it, the first account is created at
+`/onboarding`.
+
+The setup uses `config/dev.exs`; `.env.example` is the complete template for
+production/deployment settings, not something `mix setup` automatically sources.
+Use your dotenv loader (or `direnv allow`) if you copy it to `.env`.
+
+To make a real request: create a **provider** with its real credential → create a
+**model** alias and assign it a route in a provider credential → give your user's
+**limit profile** a monthly cap. Your member API token is on your dashboard. Point
+your OpenAI client at TokenGate using that token and the alias.
+
+### First proxy request
+
+Install your preferred OpenAI client (for Python, `python -m pip install openai`)
+and use it as follows:
 
 ### Demo dataset (a month of usage)
 
@@ -485,7 +522,7 @@ formula neutralization).
 ## Tech stack
 
 Phoenix 1.8 + LiveView · Bandit · Ecto/Postgres (RANGE partitions) · Finch (upstream
-HTTP/SSE) · Req (outbound) · Oban · Tailwind CSS v4 + daisyUI (dim) · esbuild ·
+HTTP/SSE) · Req (outbound) · Oban · Tailwind CSS v4 + daisyUI (night) · esbuild ·
 bcrypt_elixir
 
 ## License

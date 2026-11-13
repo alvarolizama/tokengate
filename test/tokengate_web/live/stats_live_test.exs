@@ -1661,8 +1661,14 @@ defmodule TokengateWeb.StatsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/stats/providers")
       view = wait_stats_loaded(view)
 
-      # El peor clasificado es el 3º: al filtrarlo debe SEGUIR siendo el 3º
-      # (si el rango saliera del listado filtrado aparecería como 1º).
+      # Compare the exact rank before/after the search: ranks depend on the
+      # provider scoring policy, not on the arbitrary fixture order.
+      original_rank =
+        :sys.get_state(view.pid).socket.assigns.provider_ranking
+        |> Enum.find_index(&(&1.provider_id == c.provider.id))
+        |> Kernel.+(1)
+
+      # Filtering keeps the original ranking position instead of renumbering.
       view |> element("#provider-list-search") |> render_change(%{"value" => c.provider.name})
 
       assert has_element?(view, "#provider-ranking-row-#{c.provider.id}")
@@ -1671,7 +1677,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
       assert has_element?(
                view,
-               "#provider-ranking-row-#{c.provider.id} span[aria-label='Puesto 3']"
+               "#provider-ranking-row-#{c.provider.id} span[aria-label='Puesto #{original_rank}']"
              )
     end
 
