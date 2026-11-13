@@ -148,6 +148,30 @@ defmodule Tokengate.PeriodsTest do
       assert to == current.from
     end
 
+    test "last_month: mes calendario UTC cerrado y su previo es el mes anterior" do
+      current = Periods.period_bounds("last_month", "Etc/UTC")
+      this_month = Periods.start_of_month_utc("Etc/UTC")
+
+      assert current.to == this_month
+      assert current.from.zone_abbr == "UTC"
+
+      assert DateTime.to_date(current.from) ==
+               this_month
+               |> DateTime.add(-1, :day)
+               |> DateTime.to_date()
+               |> Date.beginning_of_month()
+
+      %{from: from, to: to} = Periods.previous_period_bounds("last_month", "Etc/UTC")
+
+      assert to == current.from
+
+      assert DateTime.to_date(from) ==
+               current.from
+               |> DateTime.add(-1, :day)
+               |> DateTime.to_date()
+               |> Date.beginning_of_month()
+    end
+
     # La semana del 2026-09-07 cruza el cambio de hora de Chile (2026-09-06,
     # DST): el lunes previo LOCAL está a 167h, no a 168h — un shift absoluto
     # de -168h aterriza domingo 23:00 local y el delta compara 169h vs 168h.

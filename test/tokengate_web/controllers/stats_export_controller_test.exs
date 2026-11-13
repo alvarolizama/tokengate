@@ -163,21 +163,30 @@ defmodule TokengateWeb.StatsExportControllerTest do
   end
 
   test "providers export: respeta el período del selector", %{conn: conn} do
-    %{provider: old_provider} =
-      group_with_log(inserted_at: DateTime.add(DateTime.utc_now(), -40, :day))
+    # Mid previous calendar month: inside `last_month`, outside this week.
+    last_month_mid =
+      DateTime.utc_now()
+      |> DateTime.to_date()
+      |> Date.beginning_of_month()
+      |> Date.add(-15)
+      |> DateTime.new!(~T[12:00:00], "Etc/UTC")
+
+    %{provider: old_provider} = group_with_log(inserted_at: last_month_mid)
 
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
 
-    # 30d no alcanza un log de hace 40 días; 90d sí.
-    assert response(get(conn, ~p"/stats/export?type=providers&period=30d"), 200) =~
+    # A log from last calendar month is outside "this week" but inside
+    # "last_month": the export keyboard must respect the period window.
+    assert response(get(conn, ~p"/stats/export?type=providers&period=week"), 200) =~
              "proveedor,tier,score"
 
-    refute get(conn, ~p"/stats/export?type=providers&period=30d").resp_body =~
+    refute get(conn, ~p"/stats/export?type=providers&period=week").resp_body =~
              old_provider.name
 
-    assert get(conn, ~p"/stats/export?type=providers&period=90d").resp_body =~ old_provider.name
+    assert get(conn, ~p"/stats/export?type=providers&period=last_month").resp_body =~
+             old_provider.name
   end
 
   # Un servicio (subject_type "service") con un log propio.
@@ -448,7 +457,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
 
   describe "logs export period coverage" do
     # The UI list is capped at 500 rows; exports must NOT be, otherwise a
-    # busy day alone would eat the whole CSV and 30d/90d exports would only
+    # busy day alone would eat the whole CSV and 30d exports would only
     # contain today's data.
     test "30d export includes logs older than the 500-row UI cap", %{conn: conn} do
       u = unique()

@@ -63,8 +63,10 @@ defmodule Tokengate.Metrics.ResetAndParityTest do
     hour_end = DateTime.add(old_hour, 3600, :second)
     assert {:ok, _} = HourlyAggregate.aggregate_hours(old_hour, hour_end)
 
-    # Sanity pre-reset: el híbrido ve el gasto completo.
-    from = Tokengate.Periods.start_of_day_utc("Etc/UTC")
+    # Sanity pre-reset: el híbrido ve el gasto completo. La ventana arranca
+    # antes de `old_hour` (no `start_of_day_utc`): entre 00:00 y 02:00 UTC ese
+    # log cae en el día anterior y el test se rompía por la hora del día.
+    from = DateTime.add(now, -6 * 3600, :second)
     pre = StatsQueries.summary(from: from, user_ids: [user.id])
     assert pre.request_count == 2
 

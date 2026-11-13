@@ -69,58 +69,68 @@ defmodule Tokengate.Periods do
     * `"today"` — start of UTC day → now (la ventana que resetea el kill-switch)
     * `"week"`   — start of local week (Monday) → now
     * `"month"`  — start of UTC month → now (la ventana que resetea el budget mensual)
+    * `"last_month"` — previous UTC calendar month, closed (from → first day of the current month)
     * `"7d"`     — start of local day 6 days ago → now
     * `"30d"`    — start of local day 29 days ago → now
-    * `"90d"`    — start of local day 89 days ago → now
   """
   def period_bounds(period, tz \\ @default_timezone, opts \\ []) do
     # `now` inyectable: previous_period_bounds tiene que poder calcular la
     # ventana previa de una SEMANA FIJA (tests DST deterministas) y las
     # bounds de hoy/mes dependen del instante actual.
     now = opts[:now] || DateTime.now!(tz)
+    now_utc = now |> DateTime.shift_zone!("Etc/UTC") |> DateTime.truncate(:second)
 
-    from =
+    this_month_start =
+      now_utc |> DateTime.to_date() |> Date.beginning_of_month() |> local_midnight_utc("Etc/UTC")
+
+    # Open (rolling) periods end at `now`; closed calendar periods ("last_month")
+    # end at their own boundary.
+    {from, to} =
       case period do
         # "Hoy" mide el día UTC — la misma ventana que resetea el kill-switch
         # global (ver Budgets.Manager): KPIs, tope y Mantenimiento tienen que
         # ver el mismo número. La zona del usuario sigue usándose para mostrar
         # horas (distribución por hora, "en tu hora local"), no para windowar.
         "today" ->
-          now
-          |> DateTime.shift_zone!("Etc/UTC")
-          |> DateTime.to_date()
-          |> local_midnight_utc("Etc/UTC")
+          {local_midnight_utc(DateTime.to_date(now_utc), "Etc/UTC"), now_utc}
 
         "week" ->
           # Date.day_of_week/1 returns 1=Monday … 7=Sunday
           days_since_monday = Date.day_of_week(DateTime.to_date(now)) - 1
-          local_midnight_utc(Date.add(DateTime.to_date(now), -days_since_monday), tz)
+          {local_midnight_utc(Date.add(DateTime.to_date(now), -days_since_monday), tz), now_utc}
 
         # Igual que "today": el mes UTC es la ventana en que resetea el
         # presupuesto mensual de cada sujeto (Budgets.Manager), así que el KPI
         # "Este mes" y los gastos mensuales de Mantenimiento tienen que medir
         # lo mismo que el enforcement.
         "month" ->
-          now
-          |> DateTime.shift_zone!("Etc/UTC")
-          |> DateTime.to_date()
-          |> Date.beginning_of_month()
-          |> local_midnight_utc("Etc/UTC")
+          {this_month_start, now_utc}
+
+        # Closed previous calendar month (UTC, same window the monthly budget
+        # resets in): from the first day of last month to the first day of
+        # this one. Unlike "month" it does not grow, so it is immutable and
+        # cache-friendly.
+        "last_month" ->
+          last_month_start =
+            this_month_start
+            |> DateTime.to_date()
+            |> Date.add(-1)
+            |> Date.beginning_of_month()
+            |> local_midnight_utc("Etc/UTC")
+
+          {last_month_start, this_month_start}
 
         "7d" ->
-          local_midnight_utc(Date.add(DateTime.to_date(now), -6), tz)
+          {local_midnight_utc(Date.add(DateTime.to_date(now), -6), tz), now_utc}
 
         "30d" ->
-          local_midnight_utc(Date.add(DateTime.to_date(now), -29), tz)
-
-        "90d" ->
-          local_midnight_utc(Date.add(DateTime.to_date(now), -89), tz)
+          {local_midnight_utc(Date.add(DateTime.to_date(now), -29), tz), now_utc}
 
         _ ->
-          local_midnight_utc(DateTime.to_date(now), "Etc/UTC")
+          {local_midnight_utc(DateTime.to_date(now_utc), "Etc/UTC"), now_utc}
       end
 
-    %{from: from, to: now |> DateTime.shift_zone!("Etc/UTC") |> DateTime.truncate(:second)}
+    %{from: from, to: to}
   end
 
   @doc """
@@ -130,9 +140,9 @@ defmodule Tokengate.Periods do
     * `"today"` → the previous complete UTC day
     * `"week"`  → previous week (Mon–Sun, local calendar)
     * `"month"` → previous UTC calendar month (same window the budget resets in)
+    * `"last_month"` → the UTC calendar month before it
     * `"7d"`    → the 7 days before the last 7 days (span shift)
     * `"30d"`   → the 30 days before the last 30 days
-    * `"90d"`   → the 90 days before the last 90 days
 
   El `to` del periodo previo es EXCLUSIVO (es el `from` del actual): con
   `>=`/`<` en las queries, un log exactamente en el borde no cuenta doble.
@@ -165,7 +175,15 @@ defmodule Tokengate.Periods do
           |> Date.beginning_of_month()
           |> local_midnight_utc("Etc/UTC")
 
-        # 30d/90d: span shift — son ventanas rodantes, no calendario.
+        # Closed calendar month: its previous window is the month before it.
+        "last_month" ->
+          current.from
+          |> DateTime.to_date()
+          |> Date.add(-1)
+          |> Date.beginning_of_month()
+          |> local_midnight_utc("Etc/UTC")
+
+        # 30d: span shift — son ventanas rodantes, no calendario.
         _ ->
           DateTime.add(current.from, -DateTime.diff(current.to, current.from, :second), :second)
       end

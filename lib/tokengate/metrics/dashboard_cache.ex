@@ -3,7 +3,7 @@ defmodule Tokengate.Metrics.DashboardCache do
   ETS-backed TTL cache for dashboard query results.
 
   The dashboard (`DashboardLive`) shows period-scoped aggregates (today,
-  7d, 30d, 90d) that cannot be answered by the Collector's lifetime
+  7d, 30d, last_month) that cannot be answered by the Collector's lifetime
   counters. Without this cache, every connected dashboard re-queries
   Postgres on each `metrics:updated` PubSub broadcast (debounced to 2s).
   With N connected dashboards and a busy proxy, that is N × 8+ queries

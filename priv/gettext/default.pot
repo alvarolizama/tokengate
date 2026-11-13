@@ -1306,7 +1306,7 @@ msgstr ""
 #: lib/tokengate_web/live/supervised_services_live.ex:383
 #: lib/tokengate_web/live/supervised_services_live.ex:391
 #: lib/tokengate_web/live/supervised_services_live.ex:423
-#: lib/tokengate_web/stats_helpers.ex:94
+#: lib/tokengate_web/stats_helpers.ex:95
 #: lib/tokengate_web/topup_helpers.ex:112
 #, elixir-autogen, elixir-format
 msgid "30 days"
@@ -1588,9 +1588,6 @@ msgstr ""
 msgid "7 days"
 msgstr ""
 
-#: lib/tokengate_web/live/calculator_live.ex:205
-#: lib/tokengate_web/live/dashboard_live.ex:846
-#: lib/tokengate_web/stats_helpers.ex:95
 #: lib/tokengate_web/topup_helpers.ex:114
 #, elixir-autogen, elixir-format
 msgid "90 days"
@@ -3422,11 +3419,6 @@ msgstr ""
 #: lib/tokengate_web/live/dashboard_live.ex:863
 #, elixir-autogen, elixir-format
 msgid "per day (30d)"
-msgstr ""
-
-#: lib/tokengate_web/live/dashboard_live.ex:864
-#, elixir-autogen, elixir-format
-msgid "per day (90d)"
 msgstr ""
 
 #: lib/tokengate_web/live/dashboard_live.ex:861
@@ -5503,4 +5495,16 @@ msgstr ""
 #: lib/tokengate_web/live/models_live.ex:3506
 #, elixir-autogen, elixir-format
 msgid "— No override —"
+msgstr ""
+
+#: lib/tokengate_web/live/calculator_live.ex:205
+#: lib/tokengate_web/live/dashboard_live.ex:846
+#: lib/tokengate_web/stats_helpers.ex:94
+#, elixir-autogen, elixir-format
+msgid "Last month"
+msgstr ""
+
+#: lib/tokengate_web/live/dashboard_live.ex:864
+#, elixir-autogen, elixir-format
+msgid "per day (last month)"
 msgstr ""

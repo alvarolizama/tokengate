@@ -91,8 +91,8 @@ defmodule TokengateWeb.StatsHelpers do
   def period_label("today"), do: gettext("Today")
   def period_label("week"), do: gettext("This week")
   def period_label("month"), do: gettext("This month")
+  def period_label("last_month"), do: gettext("Last month")
   def period_label("30d"), do: gettext("30 days")
-  def period_label("90d"), do: gettext("90 days")
   def period_label(_), do: gettext("Today")
 
   @doc """
@@ -101,7 +101,7 @@ defmodule TokengateWeb.StatsHelpers do
   soporta — y un solo formato: botones en grupo `join` con el periodo en la
   URL (`?period=`) para que viaje con bookmark/refresh/back-forward.
   """
-  @canonical_periods ~w(today week month 30d 90d)
+  @canonical_periods ~w(today week month last_month 30d)
 
   def canonical_periods, do: @canonical_periods
 

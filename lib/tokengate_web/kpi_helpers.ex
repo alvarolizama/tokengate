@@ -32,7 +32,7 @@ defmodule TokengateWeb.KpiHelpers do
 
   @doc """
   Assigns the 4-card KPI metrics for a calendar `period` ("today", "7d",
-  "30d", "90d") computed against the user's local timezone.
+  "30d", "last_month") computed against the user's local timezone.
 
   The underlying cost aggregates are served through the shared
   `Tokengate.Metrics.DashboardCache` ETS (5s TTL, keyed per user + period +
@@ -239,7 +239,7 @@ defmodule TokengateWeb.KpiHelpers do
            (día/mes, ver Periods.period_bounds) — la MISMA que el kill-switch
            y Mantenimiento — y anuncia el reinicio; con "period" muestra solo
            el gasto del período seleccionado, uniforme con el resto de la
-           fila. Los períodos rolling (7d/30d/90d) no tienen tope. --%>
+           fila. Los períodos rolling (7d/30d) y last_month no tienen tope. --%>
       <.kpi_card
         id="kpi-cost"
         label={if(@cost_window == "cap", do: cost_label(@period), else: gettext("Cost"))}

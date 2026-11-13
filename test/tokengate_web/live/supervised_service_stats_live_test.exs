@@ -349,7 +349,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     assert has_element?(
              view,
-             "#period-90d[href='/services/supervised/#{service.id}?period=90d']"
+             "#period-last_month[href='/services/supervised/#{service.id}?period=last_month']"
            )
 
     # Navigating with the param answers the narrower window: only the fresh one.

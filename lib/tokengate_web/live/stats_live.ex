@@ -16,7 +16,7 @@ defmodule TokengateWeb.StatsLive do
     * `:users`   — per-user consolidated breakdown (all memberships)
     * `:credits` — budgets (calendar counters, no period)
 
-  Periods: Hoy, Esta semana, Este mes, 30d, 90d (all but :live/:credits).
+  Periods: Hoy, Esta semana, Este mes, Mes pasado, 30d (all but :live/:credits).
 
   Scoping by role:
     * admin   — org-wide
@@ -601,26 +601,9 @@ defmodule TokengateWeb.StatsLive do
     ]
   end
 
-  # Fetch the previous period's summary for delta comparison.
-  #
-  # 90d es el caso especial: su previous arranca ~179 días atrás y la
-  # retención de request_logs es de 90 días — el delta se compararía contra
-  # datos ya dropeados (prev ≈ 0, "cambio infinito" falso). Delta nil
-  # honesto por diseño. Fuente de la retención: logs/partition_worker.ex
-  # (@retention_days); si algún día cambia ahí, ajustar este guard.
-  @retention_days 90
-
-  defp previous_summary(params, "90d", timezone) do
-    %{from: prev_from} = Periods.previous_period_bounds("90d", timezone)
-    earliest = DateTime.add(DateTime.utc_now(), -@retention_days * 86_400, :second)
-
-    if DateTime.compare(prev_from, earliest) == :lt do
-      empty_summary()
-    else
-      cached_prev_summary(params, "90d", timezone)
-    end
-  end
-
+  # Fetch the previous period's summary for delta comparison. `previous_period_bounds`
+  # handles every period; "last_month" (closed calendar month) is fully inside
+  # the 90-day retention, so it needs no special-casing.
   defp previous_summary(params, period, timezone) do
     cached_prev_summary(params, period, timezone)
   end
@@ -668,7 +651,7 @@ defmodule TokengateWeb.StatsLive do
   # Queries share the Repo pool, so wall time is pool rounds, not the sum of
   # every query — this is what makes period switching feel fast.
   #
-  # Si una query explota (timeout de los scans crudos de 30d/90d, DST, lo que
+  # Si una query explota (timeout de los scans crudos de 30d, DST, lo que
   # sea), se RE-ELEVA el motivo original: antes el {:exit, ...} no matcheaba
   # `{:ok, result}` y moría con FunctionClauseError — el log enmascaraba el
   # error real. handle_async ya sabe manejar {:exit, ...}: lo loguea y deja
@@ -1251,7 +1234,7 @@ defmodule TokengateWeb.StatsLive do
   ## Helpers --------------------------------------------------------------
 
   defp parse_period(nil), do: "today"
-  defp parse_period(period) when period in ~w(today week month 30d 90d), do: period
+  defp parse_period(period) when period in ~w(today week month last_month 30d), do: period
   defp parse_period(_), do: "today"
 
   defp empty_metrics do

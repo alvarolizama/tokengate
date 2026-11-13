@@ -359,7 +359,7 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#period-week")
     assert has_element?(view, "#period-month")
     assert has_element?(view, "#period-30d")
-    assert has_element?(view, "#period-90d")
+    assert has_element?(view, "#period-last_month")
   end
 
   test "admin sees KPI cards on index (no tops/rankings anymore)", %{conn: conn} do
@@ -559,7 +559,7 @@ defmodule TokengateWeb.StatsLiveTest do
     # no al listado (regresión: tiraba el drilldown en silencio).
     assert has_element?(
              view,
-             "#period-90d[href='/stats/models/#{ma.id}?period=90d']"
+             "#period-last_month[href='/stats/models/#{ma.id}?period=last_month']"
            )
 
     {:ok, detail, _html} = live(conn, ~p"/stats/models/#{ma.id}?period=today")
@@ -851,12 +851,12 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/stats")
 
     refute has_element?(view, "#period-selector")
-    refute has_element?(view, "#period-90d")
+    refute has_element?(view, "#period-last_month")
 
     # Sigue presente en las tabs de datos.
     {:ok, overview, _html} = live(conn, ~p"/stats/overview")
     assert has_element?(overview, "#period-selector")
-    assert has_element?(overview, "#period-90d")
+    assert has_element?(overview, "#period-last_month")
   end
 
   test "En vivo: el estado de auto-refresh vive en el header, no en el contenido", %{conn: conn} do

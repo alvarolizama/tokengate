@@ -34,7 +34,7 @@ defmodule TokengateWeb.StatsPeriodReproTest do
     {:ok, conn: conn}
   end
 
-  for period <- ~w(today week month 30d 90d) do
+  for period <- ~w(today week month last_month 30d) do
     test "overview con periodo #{period} no revienta", %{conn: conn} do
       _log = repro_log()
 

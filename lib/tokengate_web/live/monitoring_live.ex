@@ -1002,11 +1002,11 @@ defmodule TokengateWeb.MonitoringLive do
             <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Logs 30d
           </.link>
           <.link
-            href="/stats/export?type=logs&period=90d"
+            href="/stats/export?type=logs&period=last_month"
             class="btn btn-sm btn-ghost"
-            id="csv-logs-90d"
+            id="csv-logs-last-month"
           >
-            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Logs 90d
+            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Logs (mes pasado)
           </.link>
           <.link
             href="/stats/export?type=errors"

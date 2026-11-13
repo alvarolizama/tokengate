@@ -16,7 +16,7 @@ defmodule TokengateWeb.DashboardLive do
   On `{:metrics_updated, _}` the LiveView debounces and re-reads from
   cache — a cache hit skips all Postgres queries.
 
-  A period selector lets the user choose: Hoy (24h), 7d, 30d, 90d.
+  A period selector lets the user choose: Hoy (24h), 7d, 30d, Mes pasado.
   All UI strings are in Spanish (the app's UI language).
   """
 
@@ -94,7 +94,7 @@ defmodule TokengateWeb.DashboardLive do
   @impl true
   def handle_params(unsigned_params, _uri, socket) do
     case Map.get(unsigned_params, "period") do
-      period when period in ~w(today 7d 30d 90d) ->
+      period when period in ~w(today 7d 30d last_month) ->
         {:noreply,
          socket
          |> assign(:period, period)
@@ -319,7 +319,7 @@ defmodule TokengateWeb.DashboardLive do
 
   @impl true
   def handle_event("set_period", %{"period" => period}, socket)
-      when period in ~w(today 7d 30d 90d) do
+      when period in ~w(today 7d 30d last_month) do
     user = socket.assigns[:current_user]
 
     {:noreply,
@@ -843,7 +843,7 @@ defmodule TokengateWeb.DashboardLive do
   def period_label("today"), do: gettext("Today")
   def period_label("7d"), do: gettext("7 days")
   def period_label("30d"), do: gettext("30 days")
-  def period_label("90d"), do: gettext("90 days")
+  def period_label("last_month"), do: gettext("Last month")
   def period_label(_), do: gettext("Today")
 
   def period_active?(current, target), do: current == target
@@ -861,7 +861,7 @@ defmodule TokengateWeb.DashboardLive do
         "today" -> gettext("per hour")
         "7d" -> gettext("per hour (7d)")
         "30d" -> gettext("per day (30d)")
-        "90d" -> gettext("per day (90d)")
+        "last_month" -> gettext("per day (last month)")
         _ -> gettext("per hour")
       end
 

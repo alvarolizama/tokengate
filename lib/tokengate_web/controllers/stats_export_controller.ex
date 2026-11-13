@@ -4,7 +4,7 @@ defmodule TokengateWeb.StatsExportController do
 
   Accepts query params:
     * `type`   — `models`, `groups`, `providers`, `services`, `errors`, or `logs` (required)
-    * `period` — `today`, `week`, `month`, `7d`, `30d`, `90d` (default: `7d`)
+    * `period` — `today`, `week`, `month`, `last_month`, `7d`, `30d` (default: `7d`)
     * `model_id` — filter by model (for models type only)
     * `group_id`  — filter by group (for groups type only)
 
@@ -440,6 +440,6 @@ defmodule TokengateWeb.StatsExportController do
   defp load_group_breakdown(_, _), do: []
 
   defp parse_period(nil), do: "7d"
-  defp parse_period(period) when period in ~w(today week month 7d 30d 90d), do: period
+  defp parse_period(period) when period in ~w(today week month last_month 7d 30d), do: period
   defp parse_period(_), do: "7d"
 end

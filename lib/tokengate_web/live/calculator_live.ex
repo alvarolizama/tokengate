@@ -22,7 +22,7 @@ defmodule TokengateWeb.CalculatorLive do
 
   import TokengateWeb.KpiHelpers, only: [kpi_card: 1, format_compact: 1]
 
-  @periods ~w(today week 7d 30d 90d)
+  @periods ~w(today week 7d 30d last_month)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -202,7 +202,7 @@ defmodule TokengateWeb.CalculatorLive do
   def period_label("week"), do: "Esta semana"
   def period_label("7d"), do: gettext("7 days")
   def period_label("30d"), do: gettext("30 days")
-  def period_label("90d"), do: gettext("90 days")
+  def period_label("last_month"), do: gettext("Last month")
   def period_label(_), do: "—"
 
   def format_cost(%Decimal{} = d) do

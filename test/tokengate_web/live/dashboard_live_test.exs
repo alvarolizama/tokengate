@@ -148,7 +148,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#period-today")
     assert has_element?(view, "#period-7d")
     assert has_element?(view, "#period-30d")
-    assert has_element?(view, "#period-90d")
+    assert has_element?(view, "#period-last_month")
     _ = html
   end
 
