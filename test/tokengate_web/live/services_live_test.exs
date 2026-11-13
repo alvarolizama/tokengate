@@ -380,6 +380,52 @@ defmodule TokengateWeb.ServicesLiveTest do
       assert Enum.map(Accounts.list_api_keys_for_service(service.id), & &1.id) == [k2.id]
     end
 
+    test "una clave revocada se lista aparte y se puede reactivar", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      k1 = create_service_key(service, "volver")
+      k2 = create_service_key(service, "seguir")
+
+      {:ok, _} = Accounts.revoke_service_api_key(k1)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+
+      refute has_element?(view, "#key-#{k1.id}")
+      assert has_element?(view, "#revoked-key-#{k1.id}", "volver")
+      assert has_element?(view, "#revoke-key-#{k2.id}")
+
+      html = view |> element("#reactivate-key-#{k1.id}") |> render_click()
+      assert html =~ "Clave reactivada"
+
+      assert has_element?(view, "#key-#{k1.id}", "volver")
+      assert has_element?(view, "#key-#{k1.id}", "Activo")
+      refute has_element?(view, "#revoked-key-#{k1.id}")
+
+      assert Accounts.get_api_key(k1.id).status == "active"
+      assert Accounts.get_api_key(k2.id).status == "active"
+    end
+
+    test "reactivar una clave de otro servicio se rechaza", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      other_service = service_fixture()
+      foreign = create_service_key(other_service, "ajena")
+      {:ok, _} = Accounts.revoke_service_api_key(foreign)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+
+      html = render_hook(view, "reactivate_service_key", %{"key-id" => foreign.id})
+
+      assert html =~ "Clave no encontrada"
+      assert Accounts.get_api_key(foreign.id).status == "revoked"
+    end
+
     test "renombrar una clave cambia su label sin tocar hash ni status", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       service = service_fixture()

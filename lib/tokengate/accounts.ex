@@ -1012,6 +1012,31 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
+  Reactiva una API key revocada (vuelve a `status: "active"`).
+
+  Revocar no borra la fila ni la key material: el hash sigue siendo el mismo,
+  así que reactivar es simplemente devolver el status a `active`. Lo que SÍ
+  cambia es el cache de auth: el entry viejo (o su ausencia, si el TTL ya lo
+  barrió) se descarta por hash **y** por sujeto dueño para que la key funcione
+  en el siguiente request — y en todos los nodos (invalidación vía PubSub).
+
+  El chequeo de "no reusar una sesión revocada" es de la capa que llama
+  (LiveView/admin): aquí solo se cambia el estado de la fila.
+  """
+  @spec reactivate_api_key(ApiKey.t()) :: {:ok, ApiKey.t()} | {:error, Ecto.Changeset.t()}
+  def reactivate_api_key(%ApiKey{} = api_key) do
+    # `force_change/3`, no `cast`: el caller puede traer un struct con
+    # `status: "active"` en memoria (creado antes de revocar). Ecto descarta
+    # un `put_change` igual al valor del struct y el UPDATE sería un no-op
+    # silencioso — la fila seguiría revocada.
+    api_key
+    |> Ecto.Changeset.change()
+    |> Ecto.Changeset.force_change(:status, "active")
+    |> Repo.update()
+    |> tap_invalidate_key_subject()
+  end
+
+  @doc """
   Crea una API key. Acepta `label` y `user_id` (key de usuario, el caso nuevo)
   además de `service_id`. Devuelve `{:ok, api_key}` o `{:error, changeset}`.
 
@@ -1022,7 +1047,7 @@ defmodule Tokengate.Accounts do
     %ApiKey{}
     |> ApiKey.changeset(attrs)
     |> Repo.insert()
-    |> tap_invalidate_created_api_key()
+    |> tap_invalidate_key_subject()
   end
 
   # Keys activas de un usuario (con label), más recientes primero.
@@ -1031,6 +1056,19 @@ defmodule Tokengate.Accounts do
     Repo.all(
       from ak in ApiKey,
         where: ak.user_id == ^user_id and ak.status == "active",
+        order_by: [desc: ak.inserted_at]
+    )
+  end
+
+  @doc """
+  Lista **todas** las keys de un usuario —activas y revocadas—, más recientes
+  primero. Espejo de `list_api_keys_for_service_all/1`: el panel de claves
+  muestra las revocadas para poder reactivarlas.
+  """
+  def list_api_keys_for_user_all(user_id) do
+    Repo.all(
+      from ak in ApiKey,
+        where: ak.user_id == ^user_id,
         order_by: [desc: ak.inserted_at]
     )
   end
@@ -1739,10 +1777,10 @@ defmodule Tokengate.Accounts do
 
   defp tap_invalidate_api_key(result, _key), do: result
 
-  # Al crear una key hay que tumbar el cache por hash y por sujeto dueño: el
-  # entry guarda la key resuelta y el plan, así que una key nueva (o el mismo
-  # sujeto con otra key) no debe seguir sirviendo el entry viejo.
-  defp tap_invalidate_created_api_key({:ok, %ApiKey{} = key} = result) do
+  # Al crear o reactivar una key hay que tumbar el cache por hash y por sujeto
+  # dueño: el entry guarda la key resuelta y el plan, así que una key nueva (o
+  # el mismo sujeto con otra key) no debe seguir sirviendo el entry viejo.
+  defp tap_invalidate_key_subject({:ok, %ApiKey{} = key} = result) do
     safe_invalidate(fn ->
       ApiKeyCache.invalidate_hash(key.key_hash)
       invalidate_key_subject(key)
@@ -1751,7 +1789,7 @@ defmodule Tokengate.Accounts do
     result
   end
 
-  defp tap_invalidate_created_api_key(result), do: result
+  defp tap_invalidate_key_subject(result), do: result
 
   defp invalidate_key_subject(%ApiKey{user_id: user_id}) when is_binary(user_id) do
     ApiKeyCache.invalidate_user(user_id)

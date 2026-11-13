@@ -510,12 +510,18 @@ defmodule Tokengate.BudgetsTest do
       refute user_spend.exhausted?
     end
 
-    test "users without memberships are absent from the map" do
+    test "users without memberships remain expense-bearing subjects" do
       user = user_fixture()
       _member = member_fixture()
 
       spend = Budgets.spend_by_user()
-      refute Map.has_key?(spend, user.id)
+      user_spend = Map.fetch!(spend, user.id)
+
+      # No live group to attribute a daily display value, but the monthly
+      # subject still exists: a regenerated key must not erase its spend.
+      assert user_spend.monthly_usd == Decimal.new(0)
+      assert user_spend.real_monthly_usd == Decimal.new(0)
+      assert user_spend.exhausted?
     end
   end
 

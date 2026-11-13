@@ -246,6 +246,26 @@ defmodule TokengateWeb.ModelsLive do
   """
   def token_priced?(unit), do: Pricing.token_unit?(unit)
 
+  # Provider keys whose OpenAI-compatible bodies can carry
+  # `prompt_tokens_details.cache_write_tokens` (the counter
+  # `UsageNormalizer` normalizes into `cache_creation_tokens`). Only for these
+  # roots does a cache WRITE premium have anything to charge, so the form hides
+  # the field for every other provider instead of offering a rate that can
+  # never apply.
+  @cache_write_provider_keys ~w(openai openrouter)
+
+  @doc """
+  True cuando el upstream del lane reporta tokens ESCRITOS en la caché de
+  prompt (OpenAI-compatible: `openai`, `openrouter`). Es lo que decide si el
+  form muestra la cuarta tarifa, `cache_write_cost_per_million`.
+  """
+  def cache_write_priced?(nil), do: false
+
+  def cache_write_priced?(provider_key) when is_binary(provider_key),
+    do: provider_key in @cache_write_provider_keys
+
+  def cache_write_priced?(_provider_key), do: false
+
   # El path del endpoint /v1 que sirve cada tipo de modelo — el mismo contrato
   # que lib/tokengate_web/router.ex expone y que Routing.Router hace cumplir
   # (capability = model_type). `nil` para un tipo fuera del vocabulario: la
@@ -4290,13 +4310,25 @@ defmodule TokengateWeb.ModelsLive do
                     </div>
 
                     <%= if token_priced?(@provider_form_pricing_unit) do %>
-                      <div class="grid grid-cols-3 gap-3">
+                      <%!-- El rótulo del precio sigue a la UNIDAD del lane: un
+                           `per_1k_tokens` cobra USD por 1K, no por 1M. --%>
+                      <div class={[
+                        "grid gap-3",
+                        if(cache_write_priced?(@provider_form_provider_key),
+                          do: "grid-cols-2 md:grid-cols-4",
+                          else: "grid-cols-3"
+                        )
+                      ]}>
                         <.input
                           field={@provider_form[:input_cost_per_million]}
                           type="number"
                           step="0.000001"
                           min="0"
-                          label={gettext("Input cost (USD / 1M)")}
+                          label={
+                            gettext("Input cost (USD / %{unit})",
+                              unit: Pricing.rate_suffix(@provider_form_pricing_unit)
+                            )
+                          }
                           hint={
                             gettext(
                               "Non-cached input tokens. Fallback when the provider does not report cost."
@@ -4308,19 +4340,45 @@ defmodule TokengateWeb.ModelsLive do
                           type="number"
                           step="0.000001"
                           min="0"
-                          label={gettext("Cache cost (USD / 1M)")}
+                          label={
+                            gettext("Cache cost (USD / %{unit})",
+                              unit: Pricing.rate_suffix(@provider_form_pricing_unit)
+                            )
+                          }
                           hint={
                             gettext(
                               "Input tokens with a cache hit (cheaper). Empty = use the input price for all of them."
                             )
                           }
                         />
+                        <%= if cache_write_priced?(@provider_form_provider_key) do %>
+                          <.input
+                            field={@provider_form[:cache_write_cost_per_million]}
+                            type="number"
+                            step="0.000001"
+                            min="0"
+                            label={
+                              gettext("Cache write cost (USD / %{unit})",
+                                unit: Pricing.rate_suffix(@provider_form_pricing_unit)
+                              )
+                            }
+                            hint={
+                              gettext(
+                                "Tokens written into the prompt cache. Only charged when the call reports cache-write tokens; empty = not charged."
+                              )
+                            }
+                          />
+                        <% end %>
                         <.input
                           field={@provider_form[:output_cost_per_million]}
                           type="number"
                           step="0.000001"
                           min="0"
-                          label={gettext("Output cost (USD / 1M)")}
+                          label={
+                            gettext("Output cost (USD / %{unit})",
+                              unit: Pricing.rate_suffix(@provider_form_pricing_unit)
+                            )
+                          }
                           hint={gettext("Output tokens. Same fallback as input.")}
                         />
                       </div>

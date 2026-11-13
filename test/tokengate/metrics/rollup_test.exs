@@ -961,6 +961,177 @@ defmodule Tokengate.Metrics.RollupTest do
       assert row.request_count == 10
       assert row.error_count == 0
     end
+
+    test "p95 exacto y descarte de provider_id huérfano (join al catálogo tras agregar)" do
+      {tm, _group} = group_member_fixture()
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "P95Co", base_url: "http://localhost:1"})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      # 20 latencias equiespaciadas: percentile_cont(0.95) = 1900 + 0.05*100.
+      for i <- 1..20 do
+        log_request(tm.id, now, %{
+          provider_id: provider.id,
+          status_code: 200,
+          latency_ms: 100 * i
+        })
+      end
+
+      # provider_id que no existe en providers: el join inner lo descarta.
+      log_request(tm.id, now, %{provider_id: Ecto.UUID.generate(), latency_ms: 9_000})
+
+      [row] = Rollup.provider_ranking(nil, from: DateTime.add(now, -3600, :second))
+
+      assert row.provider_id == provider.id
+      assert row.request_count == 20
+      assert row.p95_latency_ms == 1905
+      assert row.avg_latency_ms == 1050
+    end
+
+    test "respeta el scope de grupo (join de membresía dentro de la subquery)" do
+      {tm, group} = group_member_fixture()
+      {other_tm, _other_group} = group_member_fixture()
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "ScopeCo", base_url: "http://localhost:1"})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for _ <- 1..10 do
+        log_request(tm.id, now, %{provider_id: provider.id, status_code: 200, latency_ms: 500})
+      end
+
+      for _ <- 1..4 do
+        log_request(other_tm.id, now, %{
+          provider_id: provider.id,
+          status_code: 200,
+          latency_ms: 500
+        })
+      end
+
+      [row] = Rollup.provider_ranking(group.id, from: DateTime.add(now, -3600, :second))
+
+      assert row.provider_name == "ScopeCo"
+      assert row.request_count == 10
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # model_ranking/2
+  # ---------------------------------------------------------------------
+
+  describe "model_ranking/2" do
+    test "agrega por modelo con p95 exacto, avg_ttft y conteo, ordenado por score" do
+      {tm, _group} = group_member_fixture()
+      model = model_fixture(%{})
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      # 20 latencias equiespaciadas 100..2000ms: percentile_cont(0.95) cae en
+      # rango = 0.95 * (20-1) = 18.05 → 1900 + 0.05 * (2000-1900) = 1905.
+      for i <- 1..20 do
+        log_request(tm.id, now, %{
+          model_id: model.id,
+          status_code: 200,
+          latency_ms: 100 * i,
+          ttft_ms: 50 * i
+        })
+      end
+
+      [row] = Rollup.model_ranking(nil, from: DateTime.add(now, -3600, :second))
+
+      assert row.model_id == model.id
+      assert row.model_name == model.name
+      assert row.request_count == 20
+      assert row.error_count == 0
+      assert row.p95_latency_ms == 1905
+      assert row.avg_latency_ms == 1050
+      assert row.avg_ttft_ms == 525
+    end
+
+    test "excluye logs cuyo modelo no está en el catálogo y respeta :member_ids" do
+      {tm, _group} = group_member_fixture()
+      {other_tm, _group2} = group_member_fixture()
+      model = model_fixture(%{})
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for _ <- 1..3 do
+        log_request(tm.id, now, %{model_id: model.id, status_code: 200, latency_ms: 400})
+      end
+
+      # model_id huérfano (no existe en models): el join inner lo descarta.
+      log_request(tm.id, now, %{model_id: Ecto.UUID.generate(), latency_ms: 400})
+
+      for _ <- 1..5 do
+        log_request(other_tm.id, now, %{model_id: model.id, status_code: 200, latency_ms: 900})
+      end
+
+      [row] =
+        Rollup.model_ranking(nil,
+          from: DateTime.add(now, -3600, :second),
+          member_ids: [tm.id]
+        )
+
+      assert row.model_id == model.id
+      assert row.request_count == 3
+      assert row.avg_latency_ms == 400
+    end
+
+    test "latencia nil no rompe el ranking: score por confiabilidad y avg/p95 nil" do
+      {tm, _group} = group_member_fixture()
+      model = model_fixture(%{})
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for _ <- 1..10 do
+        log_request(tm.id, now, %{model_id: model.id, status_code: 200, latency_ms: nil})
+      end
+
+      log_request(tm.id, now, %{model_id: model.id, status_code: 500, latency_ms: nil})
+
+      [row] = Rollup.model_ranking(nil, from: DateTime.add(now, -3600, :second))
+
+      assert row.request_count == 11
+      assert row.error_count == 1
+      assert is_nil(row.avg_latency_ms)
+      assert is_nil(row.p95_latency_ms)
+      assert row.score == round(0.6 * ((1 - 1 / 11) * 100))
+      assert row.tier != "—"
+    end
+
+    test "proveedor/modelo con menos de 10 requests queda sin score" do
+      {tm, _group} = group_member_fixture()
+      model = model_fixture(%{})
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for _ <- 1..3 do
+        log_request(tm.id, now, %{model_id: model.id, status_code: 200, latency_ms: 300})
+      end
+
+      [row] = Rollup.model_ranking(nil, from: DateTime.add(now, -3600, :second))
+
+      assert is_nil(row.score)
+      assert row.tier == "—"
+    end
+
+    test "respeta el scope de grupo" do
+      {tm, group} = group_member_fixture()
+      {other_tm, _other_group} = group_member_fixture()
+      model = model_fixture(%{})
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for _ <- 1..6 do
+        log_request(tm.id, now, %{model_id: model.id, status_code: 200, latency_ms: 300})
+      end
+
+      for _ <- 1..2 do
+        log_request(other_tm.id, now, %{model_id: model.id, status_code: 200, latency_ms: 300})
+      end
+
+      [row] = Rollup.model_ranking(group.id, from: DateTime.add(now, -3600, :second))
+
+      assert row.request_count == 6
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -1195,6 +1366,44 @@ defmodule Tokengate.Metrics.RollupTest do
       assert [first | _] = rows
       assert first.request_count == 8
       assert first.bucket.second == 0
+    end
+
+    test "bucket local con round-trip al timezone y empate resuelto por bucket asc" do
+      {tm, _group} = group_member_fixture()
+
+      # 05:30Z = 23:30 CDMX (30 jul) y 06:10Z = 00:10 CDMX (31 jul): mismo
+      # conteo, el bucket más temprano (en el instante convertido) va primero.
+      log_request(tm.id, ~U[2026-07-31 05:30:00Z])
+      log_request(tm.id, ~U[2026-07-31 06:10:00Z])
+
+      rows =
+        Rollup.busiest_minutes(nil,
+          from: ~U[2026-07-31 00:00:00Z],
+          to: ~U[2026-07-31 23:59:59Z],
+          timezone: "America/Mexico_City"
+        )
+
+      assert [first, second] = rows
+      assert first.request_count == 1
+      assert second.request_count == 1
+      assert DateTime.truncate(first.bucket, :second) == ~U[2026-07-31 05:30:00Z]
+      assert DateTime.truncate(second.bucket, :second) == ~U[2026-07-31 06:10:00Z]
+      assert DateTime.shift_zone!(first.bucket, "America/Mexico_City").hour == 23
+    end
+
+    test "respeta el scope de grupo" do
+      {tm, _group} = group_member_fixture()
+      {other_tm, other_group} = group_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      log_request(tm.id, now)
+      for _ <- 1..4, do: log_request(other_tm.id, now)
+
+      rows =
+        Rollup.busiest_minutes(other_group.id, from: DateTime.add(now, -1200, :second))
+
+      assert [row] = rows
+      assert row.request_count == 4
     end
   end
 

@@ -223,38 +223,19 @@ defmodule Tokengate.Routing.CircuitBreakerTest do
              "rate_limited recovery took #{elapsed_ms}ms, expected < #{@cooldown_ms}ms"
     end
 
-    test "rate_limited recovery is meaningfully faster than server_error recovery",
+    test "rate_limited keeps the same trip threshold as server_error",
          %{breaker: breaker} do
-      # Measure server_error recovery time.
-      trip_to_open(breaker)
-
-      {server_us, :ok} =
-        :timer.tc(fn ->
-          assert_eventually(fn -> CircuitBreaker.status(breaker) == :half_open end)
-        end)
-
-      # Reset to closed so we can trip again with rate_limited.
-      CircuitBreaker.reset(breaker)
-      sync(breaker)
-      assert CircuitBreaker.status(breaker) == :closed
-
-      for _ <- 1..@threshold do
-        CircuitBreaker.record_failure(breaker, :rate_limited)
+      # Both reasons count toward the same threshold; the previous test
+      # exercises the shorter cooldown directly. Sequential wall-clock
+      # measurements here only compare scheduler placement, not breaker policy.
+      for reason <- [:server_error, :rate_limited] do
+        for _ <- 1..@threshold, do: CircuitBreaker.record_failure(breaker, reason)
+        sync(breaker)
+        assert CircuitBreaker.status(breaker) == :open
+        assert CircuitBreaker.details(breaker).last_reason == reason
+        CircuitBreaker.reset(breaker)
+        assert CircuitBreaker.status(breaker) == :closed
       end
-
-      sync(breaker)
-      assert CircuitBreaker.status(breaker) == :open
-
-      {rl_us, :ok} =
-        :timer.tc(fn ->
-          assert_eventually(fn -> CircuitBreaker.status(breaker) == :half_open end)
-        end)
-
-      # rate_limited recovery should be ~3x faster (20ms vs 50ms).
-      # Allow a generous lower bound to tolerate scheduler jitter; the key
-      # invariant is rl << server.
-      assert rl_us * 2 < server_us,
-             "rate_limited (#{rl_us / 1000}ms) should be much faster than server_error (#{server_us / 1000}ms)"
     end
   end
 

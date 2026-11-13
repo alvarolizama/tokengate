@@ -59,6 +59,10 @@ defmodule Tokengate.Application do
       # Generic hot-path ETS cache (exemption sets, observability destinations).
       # Owns its table; see Tokengate.Cache.
       Tokengate.Cache,
+      # Cross-node propagation of cache invalidations over the PubSub above.
+      # The caches are per-node ETS; a write on one node must drop the same
+      # entry everywhere instead of waiting out each node's TTL.
+      Tokengate.CacheInvalidation,
       # Telegram notifications: owner of the settings cache and the
       # anti-repetition table, plus the single emit funnel (`Notifications.emit/2`).
       Tokengate.Notifications,

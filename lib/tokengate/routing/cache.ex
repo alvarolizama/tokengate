@@ -81,10 +81,8 @@ defmodule Tokengate.Routing.Cache do
       group (after a `GroupMemberExtraModel` / `ServiceModel` change).
   """
   @spec invalidate_accessible_models(term() | nil, term() | nil) :: :ok
-  def invalidate_accessible_models(group_id, member_id) do
-    :ets.match_delete(@table, {{:accessible_models, group_id || :_, member_id || :_}, :_, :_})
-    :ok
-  end
+  def invalidate_accessible_models(group_id, member_id),
+    do: dispatch({:accessible_models, group_id, member_id})
 
   @doc """
   Returns a `MapSet` of credential ids that are currently NOT `status ==
@@ -97,27 +95,47 @@ defmodule Tokengate.Routing.Cache do
 
   @doc """
   Invalidates a specific cache key (`{:model_providers, model_id, group_id}`)
-  or the whole `:disabled_credentials` set.
+  or the whole `:disabled_credentials` set — on this node and the others.
   """
   @spec invalidate(tuple() | :disabled_credentials) :: :ok
-  def invalidate(key) do
-    # El dueño puede no estar vivo (seed/release corren con with_repo, sin el
-    # árbol de supervisión): sin tabla no hay nada que invalidar.
+  def invalidate(key), do: dispatch({:invalidate, key})
+
+  @doc """
+  Drops every cached entry. Called after bulk writes (group deletion, provider
+  deletion, etc.) — on this node and the others.
+  """
+  @spec invalidate_all() :: :ok
+  def invalidate_all, do: dispatch(:all)
+
+  # Local-only application, used by `Tokengate.CacheInvalidation` for the
+  # operations that arrive from another node (and synchronously for the
+  # caller's own node through `dispatch/1`).
+  #
+  # Tolerates a missing table: seeds/release tasks run with `with_repo`, no
+  # supervision tree, so there is nothing to invalidate.
+  @doc false
+  @spec apply_local(term()) :: :ok
+  def apply_local({:invalidate, key}) do
     if :ets.whereis(@table) != :undefined, do: :ets.delete(@table, key)
     :ok
   end
 
-  @doc """
-  Drops every cached entry. Called after bulk writes (group deletion, provider
-  deletion, etc.).
-  """
-  @spec invalidate_all() :: :ok
-  def invalidate_all do
-    # Misma tolerancia que invalidate/1: sin GenServer dueño no hay tabla ETS
-    # y por tanto no hay entradas que limpiar — no-op, no crash.
+  def apply_local({:accessible_models, group_id, member_id}) do
+    if :ets.whereis(@table) != :undefined do
+      :ets.match_delete(@table, {{:accessible_models, group_id || :_, member_id || :_}, :_, :_})
+    end
+
+    :ok
+  end
+
+  def apply_local(:all) do
     if :ets.whereis(@table) != :undefined, do: :ets.delete_all_objects(@table)
     :ok
   end
+
+  def apply_local(_op), do: :ok
+
+  defp dispatch(op), do: Tokengate.CacheInvalidation.dispatch(:routing_cache, op)
 
   @doc false
   def table, do: @table

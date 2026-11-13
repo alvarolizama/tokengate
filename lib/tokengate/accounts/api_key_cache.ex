@@ -44,6 +44,12 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   revoked key or edited limit takes to propagate. 60s is the same staleness
   contract the routing cache already accepts.
 
+  Invalidation is per node (the table lives in this node's ETS) but every
+  writer propagates through `Tokengate.CacheInvalidation`: the calling node
+  drops the entry synchronously and the other connected nodes drop theirs on
+  the PubSub broadcast, so a revocation does not linger on the node that did
+  not serve the write.
+
   ## Concurrency
 
   Named public ETS table owned by this GenServer; reads and writes run in
@@ -132,28 +138,20 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   # Invalidation
   # ---------------------------------------------------------------------------
 
-  @doc "Drops a single entry by token hash."
+  @doc "Drops a single entry by token hash (on this node and the others)."
   @spec invalidate_hash(binary() | nil) :: :ok
   def invalidate_hash(nil), do: :ok
 
-  def invalidate_hash(key_hash) when is_binary(key_hash) do
-    :ets.delete(@table, key_hash)
-    :ok
-  end
+  def invalidate_hash(key_hash) when is_binary(key_hash),
+    do: dispatch({:hash, key_hash})
 
   @doc "Drops every entry whose member id matches (any token hash of that member)."
   @spec invalidate_member(term()) :: :ok
-  def invalidate_member(member_id) do
-    :ets.match_delete(@table, {:_, %{member: %{id: member_id}}, :_})
-    :ok
-  end
+  def invalidate_member(member_id), do: dispatch({:member, member_id})
 
   @doc "Drops every entry belonging to members of the given group."
   @spec invalidate_group(term()) :: :ok
-  def invalidate_group(group_id) do
-    :ets.match_delete(@table, {:_, %{member: %{group_id: group_id}}, :_})
-    :ok
-  end
+  def invalidate_group(group_id), do: dispatch({:group, group_id})
 
   @doc """
   Drops every entry of a **user** (across all their memberships).
@@ -164,17 +162,53 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   perfil de límites — invalidar por usuario es lo correcto.
   """
   @spec invalidate_user(term()) :: :ok
-  def invalidate_user(user_id) do
-    :ets.match_delete(@table, {:_, %{member: %{user_id: user_id}}, :_})
+  def invalidate_user(user_id), do: dispatch({:user, user_id})
+
+  @doc "Drops the whole cache (on this node and the others)."
+  @spec invalidate_all() :: :ok
+  def invalidate_all, do: dispatch(:all)
+
+  # Local-only application of an invalidation operation. Used by
+  # `Tokengate.CacheInvalidation` for the operations that arrive from another
+  # node, and called synchronously for the caller's own node by `dispatch/1`.
+  #
+  # Guarded by `:ets.whereis/1`: a cache without its owner (early boot,
+  # post-crash restart, a release task with no supervision tree) has nothing
+  # to invalidate.
+  @doc false
+  @spec apply_local(term()) :: :ok
+  def apply_local({:hash, key_hash}) do
+    if table_exists?(), do: :ets.delete(@table, key_hash)
     :ok
   end
 
-  @doc "Drops the whole cache."
-  @spec invalidate_all() :: :ok
-  def invalidate_all do
-    :ets.delete_all_objects(@table)
+  def apply_local({:member, member_id}) do
+    if table_exists?(), do: :ets.match_delete(@table, {:_, %{member: %{id: member_id}}, :_})
     :ok
   end
+
+  def apply_local({:group, group_id}) do
+    if table_exists?(), do: :ets.match_delete(@table, {:_, %{member: %{group_id: group_id}}, :_})
+    :ok
+  end
+
+  def apply_local({:user, user_id}) do
+    if table_exists?(),
+      do: :ets.match_delete(@table, {:_, %{member: %{user_id: user_id}}, :_})
+
+    :ok
+  end
+
+  def apply_local(:all) do
+    if table_exists?(), do: :ets.delete_all_objects(@table)
+    :ok
+  end
+
+  def apply_local(_op), do: :ok
+
+  defp dispatch(op), do: Tokengate.CacheInvalidation.dispatch(:api_key_cache, op)
+
+  defp table_exists?, do: :ets.whereis(@table) != :undefined
 
   @doc false
   def table, do: @table

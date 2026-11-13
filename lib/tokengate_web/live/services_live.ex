@@ -54,6 +54,7 @@ defmodule TokengateWeb.ServicesLive do
         |> assign(:keys_service_id, nil)
         |> assign(:keys_service_name, nil)
         |> assign(:keys, [])
+        |> assign(:revoked_keys, [])
         |> assign(:keys_spend, %{})
         |> assign(:keys_by_service, %{})
         |> assign(:editing_key_id, nil)
@@ -444,6 +445,7 @@ defmodule TokengateWeb.ServicesLive do
      |> assign(:keys_service_id, nil)
      |> assign(:keys_service_name, nil)
      |> assign(:keys, [])
+     |> assign(:revoked_keys, [])
      |> assign(:keys_spend, %{})
      |> assign(:new_token, nil)
      |> assign(:editing_key_id, nil)}
@@ -559,6 +561,35 @@ defmodule TokengateWeb.ServicesLive do
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
+      end
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
+    end
+  end
+
+  # Reactivar una key revocada del servicio (el token vuelve a valer). Mismo
+  # scope hermético que revoke: la fila debe ser de ESTE servicio y estar
+  # realmente revocada.
+  def handle_event("reactivate_service_key", %{"key-id" => api_key_id}, socket) do
+    with {:ok, api_key_id} <- Ecto.UUID.cast(api_key_id),
+         %{} = api_key <- Accounts.get_service_api_key(api_key_id),
+         true <- is_binary(socket.assigns.keys_service_id),
+         true <- api_key.service_id == socket.assigns.keys_service_id,
+         true <- api_key.status == "revoked" do
+      case Accounts.reactivate_api_key(api_key) do
+        {:ok, _} ->
+          audit(socket, "api_key.reactivate", "api_key", api_key.id, %{
+            "label" => api_key.label,
+            "service_id" => api_key.service_id
+          })
+
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Key reactivated."))
+           |> load_service_keys(socket.assigns.keys_service_id)}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not reactivate the key."))}
       end
     else
       _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
@@ -711,11 +742,14 @@ defmodule TokengateWeb.ServicesLive do
 
   # Keys activas del servicio + consumo por key, cargadas solo al abrir el panel.
   defp load_service_keys(socket, service_id) do
-    keys = Accounts.list_api_keys_for_service(service_id)
-    spend = Accounts.spend_by_api_key(Enum.map(keys, & &1.id))
+    all = Accounts.list_api_keys_for_service_all(service_id)
+    keys = Enum.filter(all, &(&1.status == "active"))
+    revoked_keys = Enum.reject(all, &(&1.status == "active"))
+    spend = Accounts.spend_by_api_key(Enum.map(all, & &1.id))
 
     socket
     |> assign(:keys, keys)
+    |> assign(:revoked_keys, revoked_keys)
     |> assign(:keys_spend, spend)
   end
 
@@ -935,10 +969,12 @@ defmodule TokengateWeb.ServicesLive do
             subject_kind="service"
             subject_id={@keys_service_id}
             keys={@keys}
+            revoked_keys={@revoked_keys}
             spend={@keys_spend}
             new_token={@new_token}
             create_event="create_service_key"
             revoke_event="revoke_service_key"
+            reactivate_event="reactivate_service_key"
             dismiss_event="dismiss_new_key_token"
             sticky_event="clear_service_sticky_routes"
             rename_event="rename_service_key"

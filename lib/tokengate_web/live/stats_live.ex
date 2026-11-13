@@ -756,8 +756,12 @@ defmodule TokengateWeb.StatsLive do
         case params.model_filter do
           nil ->
             # Sin ranking: la tabla muestra el consumo, y el tier/score (que sale
-            # del ranking) vive en la cabecera del detalle, que sí lo carga.
-            [fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end]
+            # del ranking) vive en la cabecera del detalle, que sí la carga.
+            # Lectura híbrida: el rollup responde los buckets de hora completos
+            # y sólo la cola (≤3h) va cruda — con el guard de cobertura de
+            # StatsQueries, que reconcilia conteos y cae al crudo completo de la
+            # ventana si el rollup no cubre el tramo cerrado.
+            [fn -> {:breakdown_model, StatsQueries.breakdown_by_model(nil, opts)} end]
 
           model_id ->
             model_detail_tasks(model_id, params.user, opts)
@@ -855,7 +859,9 @@ defmodule TokengateWeb.StatsLive do
 
       :users ->
         [
-          fn -> {:breakdown_user, Rollup.breakdown_by_user(opts)} end,
+          # Híbrido por identidad durable (`user_id` del bucket): el histórico
+          # de una membresía rotada sigue apareciendo bajo su usuario.
+          fn -> {:breakdown_user, StatsQueries.breakdown_by_user(opts)} end,
           fn -> {:budgets_by_user, Budgets.spend_by_user(params.timezone)} end
         ]
 
@@ -1019,7 +1025,7 @@ defmodule TokengateWeb.StatsLive do
     }
   end
 
-  defp breakdown_by_group_if_admin(true, opts), do: Rollup.breakdown_by_group(opts)
+  defp breakdown_by_group_if_admin(true, opts), do: StatsQueries.breakdown_by_group(opts)
   defp breakdown_by_group_if_admin(false, _opts), do: []
 
   defp breakdown_by_service_if_admin(true, opts), do: Rollup.breakdown_by_service(opts)
@@ -1035,12 +1041,15 @@ defmodule TokengateWeb.StatsLive do
   end
 
   defp fetch_summary(%{user: %{global_role: "user"} = user}, opts) do
-    memberships = Accounts.list_group_members_for_user(user.id)
-    member_ids = Enum.map(memberships, & &1.id)
-
+    # Durable identity, NOT the current memberships: a rotated membership
+    # (key/member re-created for the same user) must keep its historical spend
+    # in the KPI. `request_logs.user_id` / the rollup's `user_id` column carry
+    # it; `group_member_ids` would silently drop everything logged under the
+    # old membership. A user with no live membership still answers (their
+    # rotated history), so no empty-list short-circuit here.
     opts
     |> Map.new()
-    |> Map.put(:group_member_ids, member_ids)
+    |> Map.put(:user_ids, [user.id])
     |> StatsQueries.summary()
   end
 

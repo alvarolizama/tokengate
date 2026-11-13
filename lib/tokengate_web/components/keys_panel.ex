@@ -63,6 +63,8 @@ defmodule TokengateWeb.KeysPanel do
   attr :new_token, :string, default: nil
   attr :create_event, :string, required: true
   attr :revoke_event, :string, required: true
+  attr :reactivate_event, :string, default: nil
+  attr :revoked_keys, :list, default: []
   attr :dismiss_event, :string, required: true
   attr :sticky_event, :string, default: nil
   attr :rename_event, :string, default: nil
@@ -209,6 +211,42 @@ defmodule TokengateWeb.KeysPanel do
       <p :if={@keys == []} class="text-sm text-base-content/50 py-2" id="no-keys">
         {TokengateWeb.Gettext.translate(@empty_text)}
       </p>
+    </div>
+
+    <%!-- Revocadas: siguen existiendo (revocar solo cambia el status) y el
+         admin puede reactivarlas. La lista de arriba solo trae las activas. --%>
+    <div :if={@revoked_keys != []} class="space-y-2 mb-4" id="revoked-keys">
+      <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+        {gettext("Revoked keys")}
+      </p>
+      <div
+        :for={key <- @revoked_keys}
+        class="flex items-center justify-between gap-2 p-2 rounded-lg bg-base-200/30"
+        id={"revoked-key-#{key.id}"}
+      >
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold truncate text-base-content/60">
+              {key.label || gettext("no label")}
+            </span>
+            <span class="badge badge-xs badge-ghost">{gettext("Revoked")}</span>
+          </div>
+          <div class="text-xs font-mono text-base-content/40">{key.key_prefix}••••</div>
+        </div>
+        <button
+          :if={@reactivate_event}
+          type="button"
+          phx-click={@reactivate_event}
+          phx-value-key-id={key.id}
+          class="btn btn-xs btn-ghost text-success shrink-0"
+          id={"reactivate-key-#{key.id}"}
+          title={gettext("Reactivate this key")}
+          aria-label={gettext("Reactivate this key")}
+          data-confirm={gettext("Reactivate this key? The token works again.")}
+        >
+          {gettext("Reactivate")}
+        </button>
+      </div>
     </div>
 
     <.form

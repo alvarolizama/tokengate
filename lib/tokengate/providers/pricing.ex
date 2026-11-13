@@ -107,13 +107,30 @@ defmodule Tokengate.Providers.Pricing do
 
   `per_1m_tokens` → 1_000_000, `per_1k_tokens` y `per_1k_characters` → 1_000,
   y el resto → 1 (el precio YA es por unidad). Es lo que permite escribir
-  `cantidad × precio / divisor` con una sola fórmula.
+  `cantidad × precio / divisor` con una sola fórmula — y es el divisor que
+  `CostCalculator` aplica TAMBIÉN a los campos `*_cost_per_million` de un lane
+  de tokens: un lane `per_1k_tokens` divide por 1_000, no por 1_000_000.
   """
   @spec divisor(String.t() | nil) :: pos_integer()
   def divisor("per_1m_tokens"), do: 1_000_000
   def divisor("per_1k_tokens"), do: 1_000
   def divisor("per_1k_characters"), do: 1_000
   def divisor(_unit), do: 1
+
+  @doc """
+  Sufijo corto del divisor, para etiquetar un precio con SU unidad.
+
+  El formulario rotula `USD / 1M` o `USD / 1K` según la unidad del lane; sin
+  esto el label mentía cuando el operador elegía `per_1k_tokens`.
+  """
+  @spec rate_suffix(String.t() | nil) :: String.t()
+  def rate_suffix(unit) do
+    case divisor(unit) do
+      1_000_000 -> "1M"
+      1_000 -> "1K"
+      _ -> "unit"
+    end
+  end
 
   @doc """
   Etiqueta legible de una unidad, en el idioma del usuario.

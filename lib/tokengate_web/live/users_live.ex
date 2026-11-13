@@ -57,6 +57,7 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:keys_user_id, nil)
       |> assign(:keys_user_name, nil)
       |> assign(:keys, [])
+      |> assign(:revoked_keys, [])
       |> assign(:keys_spend, %{})
       |> assign(:keys_counts, %{})
       |> assign(:new_key_token, nil)
@@ -513,6 +514,7 @@ defmodule TokengateWeb.UsersLive do
      |> assign(:keys_user_id, nil)
      |> assign(:keys_user_name, nil)
      |> assign(:keys, [])
+     |> assign(:revoked_keys, [])
      |> assign(:keys_spend, %{})
      |> assign(:new_key_token, nil)}
   end
@@ -572,6 +574,35 @@ defmodule TokengateWeb.UsersLive do
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
+      end
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
+    end
+  end
+
+  # Reactivar una key revocada: el token vuelve a valer en el siguiente
+  # request. Scope exacto: la fila debe pertenecer al usuario cuyo panel está
+  # abierto (nil == nil no autoriza) y estar realmente revocada.
+  def handle_event("reactivate_user_key", %{"key-id" => api_key_id}, socket) do
+    with {:ok, api_key_id} <- Ecto.UUID.cast(api_key_id),
+         %{} = api_key <- Accounts.get_api_key(api_key_id),
+         true <- is_binary(socket.assigns.keys_user_id),
+         true <- api_key.user_id == socket.assigns.keys_user_id,
+         true <- api_key.status == "revoked" do
+      case Accounts.reactivate_api_key(api_key) do
+        {:ok, _} ->
+          audit(socket, "api_key.reactivate", "api_key", api_key.id, %{
+            "label" => api_key.label,
+            "user_id" => api_key.user_id
+          })
+
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Key reactivated."))
+           |> load_user_keys(socket.assigns.keys_user_id)}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not reactivate the key."))}
       end
     else
       _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
@@ -772,11 +803,14 @@ defmodule TokengateWeb.UsersLive do
 
   # Keys activas del usuario + consumo por key (una sola query por lote).
   defp load_user_keys(socket, user_id) do
-    keys = Accounts.list_api_keys_for_user(user_id)
-    spend = Accounts.spend_by_api_key(Enum.map(keys, & &1.id))
+    all = Accounts.list_api_keys_for_user_all(user_id)
+    keys = Enum.filter(all, &(&1.status == "active"))
+    revoked_keys = Enum.reject(all, &(&1.status == "active"))
+    spend = Accounts.spend_by_api_key(Enum.map(all, & &1.id))
 
     socket
     |> assign(:keys, keys)
+    |> assign(:revoked_keys, revoked_keys)
     |> assign(:keys_spend, spend)
   end
 
@@ -1310,10 +1344,12 @@ defmodule TokengateWeb.UsersLive do
           subject_kind="user"
           subject_id={@keys_user_id}
           keys={@keys}
+          revoked_keys={@revoked_keys}
           spend={@keys_spend}
           new_token={@new_key_token}
           create_event="create_key"
           revoke_event="revoke_user_key"
+          reactivate_event="reactivate_user_key"
           dismiss_event="dismiss_new_key_token"
           sticky_event="clear_user_sticky_routes"
           empty_text={gettext("This user has no active keys.")}

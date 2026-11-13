@@ -979,6 +979,59 @@ defmodule TokengateWeb.UsersLiveTest do
       assert Enum.map(Accounts.list_api_keys_for_user(target.id), & &1.id) == [k2.id]
     end
 
+    test "a revoked key stays in the panel and can be reactivated", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      k1 = create_key(target, "volver")
+      k2 = create_key(target, "seguir")
+
+      {:ok, _} = Accounts.revoke_api_key(k1)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#keys-#{target.id}") |> render_click()
+
+      # La revocada no está en la lista de activas: vive en su propia sección
+      # con el botón de reactivar.
+      refute has_element?(view, "#key-#{k1.id}")
+      assert has_element?(view, "#revoked-key-#{k1.id}", "volver")
+      assert has_element?(view, "#revoke-key-#{k2.id}")
+
+      html = view |> element("#reactivate-key-#{k1.id}") |> render_click()
+      assert html =~ "Clave reactivada"
+
+      # Reconocimiento de estado: vuelve al bloque de activas con su badge.
+      assert has_element?(view, "#key-#{k1.id}", "volver")
+      assert has_element?(view, "#key-#{k1.id}", "Activo")
+      refute has_element?(view, "#revoked-key-#{k1.id}")
+      assert has_element?(view, "#revoke-key-#{k1.id}")
+
+      assert Accounts.get_api_key(k1.id).status == "active"
+      # La otra clave no se toca.
+      assert Accounts.get_api_key(k2.id).status == "active"
+    end
+
+    test "reactivating a key of another user is refused", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      %{user: other} = register("other")
+      foreign = create_key(other, "ajena")
+      {:ok, _} = Accounts.revoke_api_key(foreign)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#keys-#{target.id}") |> render_click()
+
+      # Forged event with a foreign key-id while the panel is open.
+      html = render_hook(view, "reactivate_user_key", %{"key-id" => foreign.id})
+
+      assert html =~ "Clave no encontrada"
+
+      assert Accounts.get_api_key(foreign.id).status == "revoked"
+    end
+
     test "creating a key with a label adds it alongside the existing ones", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       %{user: target} = register("user")

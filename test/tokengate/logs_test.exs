@@ -1027,6 +1027,34 @@ defmodule Tokengate.LogsTest do
     end
   end
 
+  describe "user_stats/2 con rango abierto (sólo :from)" do
+    test "el from acota status_breakdown, top_models y last_request_at" do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      from = DateTime.add(now, -3600, :second)
+
+      {_inside, member} =
+        log_fixture(%{inserted_at: now, status_code: 500, model_requested: "inside-model"})
+
+      # Fuera de la ventana: antes se colaba en el desglose y en los top models
+      # porque `apply_member_stats_range/2` sólo matcheaba el mapa CON :to.
+      {_outside, _} =
+        log_fixture(%{
+          group_member_id: member.id,
+          inserted_at: DateTime.add(from, -3600, :second),
+          status_code: 200,
+          model_requested: "outside-model"
+        })
+
+      stats = Logs.user_stats(member.user_id, from: from)
+
+      assert stats.request_count == 1
+      assert stats.status_breakdown["5xx"] == 1
+      assert stats.status_breakdown["2xx"] == 0
+      assert Enum.map(stats.top_models, & &1.model_requested) == ["inside-model"]
+      assert DateTime.compare(stats.last_request_at, now) == :eq
+    end
+  end
+
   describe "service_stats/2 con opt :api_key_id" do
     test "scopea summary, desglose, top models y último request a una key" do
       service = service_fixture()

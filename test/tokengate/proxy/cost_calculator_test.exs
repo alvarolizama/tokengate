@@ -310,7 +310,7 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
       assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.0075"))
     end
 
-    test "per_1k_tokens es token: sigue leyendo manual_pricing" do
+    test "per_1k_tokens es token: lee manual_pricing con el divisor de SU unidad" do
       opts = [
         pricing_unit: "per_1k_tokens",
         unit_cost: Decimal.new("999"),
@@ -322,8 +322,180 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
         usage: %{prompt_tokens: 1000, completion_tokens: 500}
       ]
 
-      # 2-term: (1000×2.50 + 500×10.00)/1M = 0.0075
-      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.0075"))
+      # 2-term con el divisor de 1K: (1000×2.50 + 500×10.00)/1000 = 7.5.
+      # Antes dividía por 1M y daba 0.0075 — 1000× menos que la unidad
+      # declarada; esa era la semántica rota que este cambio corrige.
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("7.5"))
+    end
+  end
+
+  describe "provider_cost/2 — cache write premium (optional fourth term)" do
+    # `cache_creation_tokens` es un contador DISTINTO en el usage normalizado
+    # (no un subconjunto de prompt), así que se cobra SUMANDO su término: ni se
+    # resta del prompt ni se cobra dos veces.
+    test "creation × write rate se suma al prompt sin restarlo" do
+      opts = [
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("0.14"),
+          output_cost_per_million: Decimal.new("0.44"),
+          cache_cost_per_million: Decimal.new("0.026"),
+          cache_write_cost_per_million: Decimal.new("0.175")
+        },
+        usage: %{
+          prompt_tokens: 113,
+          completion_tokens: 10,
+          cache_read_tokens: 64,
+          cache_creation_tokens: 20
+        }
+      ]
+
+      # 49×0.14 + 64×0.026 + 20×0.175 + 10×0.44 = 16.424 / 1M = 0.000016424
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.000016"))
+
+      # Y es EXACTAMENTE la base de tres términos más el término de escritura:
+      # si la creación se restara del prompt, el resultado sería menor.
+      baseline = [
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("0.14"),
+          output_cost_per_million: Decimal.new("0.44"),
+          cache_cost_per_million: Decimal.new("0.026")
+        },
+        usage: %{prompt_tokens: 113, completion_tokens: 10, cache_read_tokens: 64}
+      ]
+
+      assert Decimal.gt?(
+               CostCalculator.provider_cost(nil, opts),
+               CostCalculator.provider_cost(nil, baseline)
+             )
+    end
+
+    test "sin cache_creation_tokens: la fórmula histórica de tres términos, intacta" do
+      opts = [
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("0.14"),
+          output_cost_per_million: Decimal.new("0.44"),
+          cache_cost_per_million: Decimal.new("0.026"),
+          cache_write_cost_per_million: Decimal.new("0.175")
+        },
+        usage: %{prompt_tokens: 113, completion_tokens: 10, cache_read_tokens: 64}
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.000013"))
+    end
+
+    test "sin write rate: los tokens de creación NO se cobran (comportamiento previo)" do
+      opts = [
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("0.14"),
+          output_cost_per_million: Decimal.new("0.44"),
+          cache_cost_per_million: Decimal.new("0.026"),
+          cache_write_cost_per_million: nil
+        },
+        usage: %{
+          prompt_tokens: 113,
+          completion_tokens: 10,
+          cache_read_tokens: 64,
+          cache_creation_tokens: 20
+        }
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.000013"))
+    end
+
+    test "write rate con la ruta de dos términos (sin cache read rate)" do
+      opts = [
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("2.50"),
+          output_cost_per_million: Decimal.new("10.00"),
+          cache_cost_per_million: nil,
+          cache_write_cost_per_million: Decimal.new("0.30")
+        },
+        usage: %{
+          prompt_tokens: 1000,
+          completion_tokens: 500,
+          cache_read_tokens: 200,
+          cache_creation_tokens: 200
+        }
+      ]
+
+      # (1000×2.50 + 200×0.30 + 500×10.00) / 1M = (2500 + 60 + 5000)/1M = 0.00756
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.00756"))
+    end
+
+    test "el coste reportado por el upstream sigue ganando al premium de escritura" do
+      opts = [
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("0.14"),
+          output_cost_per_million: Decimal.new("0.44"),
+          cache_write_cost_per_million: Decimal.new("0.175")
+        },
+        usage: %{prompt_tokens: 113, cache_creation_tokens: 20}
+      ]
+
+      assert Decimal.equal?(
+               CostCalculator.provider_cost(Decimal.new("0.0009"), opts),
+               Decimal.new("0.0009")
+             )
+    end
+  end
+
+  describe "provider_cost/2 — unidad per_1k_tokens" do
+    # `Pricing.divisor/1` promete 1M para `per_1m_tokens` y 1K para
+    # `per_1k_tokens`; el calculador dividía siempre por 1M, así que un lane
+    # per-1K cobraba 1000× menos de lo que declara su unidad.
+    @per_1m [
+      manual_pricing: %{
+        input_cost_per_million: Decimal.new("2.50"),
+        output_cost_per_million: Decimal.new("10.00"),
+        cache_cost_per_million: Decimal.new("0.50")
+      },
+      usage: %{prompt_tokens: 1000, completion_tokens: 500}
+    ]
+
+    test "tarifas equivalentes en 1M y 1K dan el mismo coste" do
+      per_1k = [
+        pricing_unit: "per_1k_tokens",
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("0.0025"),
+          output_cost_per_million: Decimal.new("0.01"),
+          cache_cost_per_million: Decimal.new("0.0005")
+        },
+        usage: %{prompt_tokens: 1000, completion_tokens: 500}
+      ]
+
+      # ambas: (1000×2.50 + 500×10.00) / 1M = 0.0075
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, @per_1m), Decimal.new("0.0075"))
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, per_1k), Decimal.new("0.0075"))
+    end
+
+    test "la MISMA tarifa numérica en per_1k vale 1000× el coste de per_1m" do
+      per_1k = [
+        pricing_unit: "per_1k_tokens",
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("2.50"),
+          output_cost_per_million: Decimal.new("10.00"),
+          cache_cost_per_million: Decimal.new("0.50")
+        },
+        usage: %{prompt_tokens: 1000, completion_tokens: 500}
+      ]
+
+      # (2500 + 5000) / 1K = 7.5
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, per_1k), Decimal.new("7.5"))
+    end
+
+    test "el término de cache write también usa el divisor de la unidad" do
+      opts = [
+        pricing_unit: "per_1k_tokens",
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("0.0025"),
+          output_cost_per_million: Decimal.new("0.01"),
+          cache_write_cost_per_million: Decimal.new("0.003")
+        },
+        usage: %{prompt_tokens: 0, completion_tokens: 0, cache_creation_tokens: 100}
+      ]
+
+      # 100 × 0.003 / 1K = 0.0003
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.0003"))
     end
   end
 end

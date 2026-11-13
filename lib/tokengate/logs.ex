@@ -1342,6 +1342,16 @@ defmodule Tokengate.Logs do
     query |> maybe_members_from(from) |> maybe_members_to(to)
   end
 
+  # A half-open range is a NORMAL caller shape (`user_stats(id, from: ...)`,
+  # `member_stats(ids, from: ...)` from the 5d/30d cards): pattern-matching only
+  # the both-keys map silently DROPPED the bound, so the per-status and
+  # top-models sub-queries scanned all 90 retained partitions (~90 index
+  # probes + planning) while the summary was windowed. Bind each side on its
+  # own so a partial range really bounds the query.
+  defp apply_member_stats_range(query, %{from: from}), do: maybe_members_from(query, from)
+
+  defp apply_member_stats_range(query, %{to: to}), do: maybe_members_to(query, to)
+
   defp apply_member_stats_range(query, _), do: query
 
   @doc """

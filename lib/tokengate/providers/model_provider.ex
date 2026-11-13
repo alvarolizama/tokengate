@@ -58,16 +58,24 @@ defmodule Tokengate.Providers.ModelProvider do
     field :priority, :integer
     field :enabled, :boolean, default: true
     field :sticky_ttl_ms, :integer
-    # Manual pricing fallback (USD per 1M tokens). Used when the upstream
-    # doesn't report a cost (e.g. LiteLLM streaming). NULL = not set.
+    # Manual pricing fallback (USD per the lane's token unit — see
+    # `pricing_unit`: 1M for `per_1m_tokens`, 1K for `per_1k_tokens`). Used
+    # when the upstream doesn't report a cost (e.g. LiteLLM streaming).
+    # NULL = not set.
     #
-    # These three are the PARAMETERS OF THE TOKEN UNIT: they only mean anything
+    # These are the PARAMETERS OF THE TOKEN UNIT: they only mean anything
     # when `pricing_unit` is `per_1m_tokens` (or `per_1k_tokens`). A lane priced
     # per image/second/character uses `unit_cost` instead — see
     # `Tokengate.Providers.Pricing`.
     field :input_cost_per_million, :decimal
     field :output_cost_per_million, :decimal
     field :cache_cost_per_million, :decimal
+    # Premium for tokens WRITTEN into the prompt cache
+    # (`cache_creation_tokens`, from `prompt_tokens_details.cache_write_tokens`).
+    # Optional: NULL keeps the historical formula (writes unbilled). Charged
+    # only when the call reports creation tokens > 0, and added on top of the
+    # prompt — the normalized counter is distinct, never a subset to subtract.
+    field :cache_write_cost_per_million, :decimal
     # La unidad en la que ESTE lane cobra, y su precio por unidad. La unidad por
     # defecto es la de siempre (tokens por millón), así que un row que no la
     # toque se comporta exactamente como antes. El vocabulario es cerrado y vive
@@ -139,6 +147,7 @@ defmodule Tokengate.Providers.ModelProvider do
       :input_cost_per_million,
       :output_cost_per_million,
       :cache_cost_per_million,
+      :cache_write_cost_per_million,
       :pricing_unit,
       :unit_cost,
       :exclusive_to_group_member_id,

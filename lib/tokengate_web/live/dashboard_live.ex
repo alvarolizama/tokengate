@@ -510,10 +510,14 @@ defmodule TokengateWeb.DashboardLive do
     tokens_series = to_token_points(series_with_tps, period, timezone)
     tps_series = to_chart_points(series_with_tps, period, :tps, &tps_tooltip/1, timezone)
 
-    # Breakdowns
+    # Breakdowns — ONE grouped read per half (rollup + tail) for the two
+    # tables: both are pivots of the same (user, membership, group, model)
+    # rows, so batching them removes a full scan without changing the UI
+    # contract (structures identical to breakdown_by_model/_member).
     breakdown_opts = Keyword.put(opts, :user_ids, user_ids)
-    breakdown_model = StatsQueries.breakdown_by_model(nil, breakdown_opts)
-    breakdown_member = StatsQueries.breakdown_by_member(nil, breakdown_opts)
+
+    {breakdown_model, breakdown_member} =
+      StatsQueries.breakdown_by_model_and_member(breakdown_opts)
 
     # Model usage stats
 

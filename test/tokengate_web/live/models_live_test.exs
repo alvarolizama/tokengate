@@ -105,6 +105,18 @@ defmodule TokengateWeb.ModelsLiveTest do
     :ok
   end
 
+  # OpenRouter sale de la materialización del catálogo (no se puede crear a
+  # mano: su key es builtin). El base_url se apunta a un upstream muerto para
+  # que el listado del modal falle rápido, sin red.
+  defp openrouter_provider! do
+    seed_mirror!()
+
+    Tokengate.Providers.Provider
+    |> Repo.get_by!(key: "openrouter")
+    |> Ecto.Changeset.change(base_url: "http://localhost:1")
+    |> Repo.update!()
+  end
+
   defp create_model_provider(model, provider, attrs \\ %{}) do
     u = unique()
 
@@ -650,6 +662,121 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     assert ap.pricing_unit == "per_image"
     assert Decimal.equal?(ap.unit_cost, Decimal.new("0.0400"))
+  end
+
+  # La cuarta tarifa (cache WRITE) sólo tiene algo que cobrar donde el upstream
+  # reporta los tokens escritos en la caché: los cuerpos OpenAI-compatible
+  # (`prompt_tokens_details.cache_write_tokens`). Fuera de openai/openrouter el
+  # campo no se ofrece.
+  test "la tarifa de cache write sólo se ofrece en lanes openai/openrouter", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    openrouter = openrouter_provider!()
+    other = create_provider()
+    model_record = create_model(%{model_type: "llm"})
+
+    {:ok, or_cred} =
+      Providers.create_credential(%{
+        provider_id: openrouter.id,
+        api_key_encrypted: "sk-or-test",
+        status: "active"
+      })
+
+    {:ok, other_cred} =
+      Providers.create_credential(%{
+        provider_id: other.id,
+        api_key_encrypted: "sk-other",
+        status: "active"
+      })
+
+    {:ok, or_ap} =
+      Providers.create_model_provider(%{
+        model_id: model_record.id,
+        credential_id: or_cred.id,
+        provider_model: "anthropic/claude-sonnet-4.5",
+        priority: 1,
+        enabled: true
+      })
+
+    {:ok, other_ap} =
+      Providers.create_model_provider(%{
+        model_id: model_record.id,
+        credential_id: other_cred.id,
+        provider_model: "whatever-model",
+        priority: 2,
+        enabled: true
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#edit-ap-#{or_ap.id}") |> render_click()
+    assert has_element?(view, "#model_provider_cache_write_cost_per_million")
+
+    view |> element("#edit-ap-#{other_ap.id}") |> render_click()
+    refute has_element?(view, "#model_provider_cache_write_cost_per_million")
+  end
+
+  # El rótulo del precio sigue a la UNIDAD del lane (USD / 1M o USD / 1K), y la
+  # cuarta tarifa persiste tal cual — sin tocar los otros tres campos.
+  test "el lane guarda su tarifa de cache write y el label sigue la unidad", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    openrouter = openrouter_provider!()
+    model_record = create_model(%{model_type: "llm"})
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: openrouter.id,
+        api_key_encrypted: "sk-or-test",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+    # Elegir la API key deriva el proveedor del lane (openrouter): ahí aparece
+    # la cuarta tarifa.
+    view
+    |> form("#model-provider-form", %{model_provider: %{credential_id: credential.id}})
+    |> render_change()
+
+    assert has_element?(view, "#model_provider_cache_write_cost_per_million")
+
+    # per_1k_tokens: los rótulos dicen 1K, no 1M.
+    view
+    |> element("#ap-pricing-unit")
+    |> render_change(%{"model_provider" => %{"pricing_unit" => "per_1k_tokens"}})
+
+    html = render(view)
+    assert html =~ "USD / 1K"
+    refute html =~ "Input cost (USD / 1M)"
+
+    view
+    |> form("#model-provider-form", %{
+      model_provider: %{
+        credential_id: credential.id,
+        provider_model: "anthropic/claude-sonnet-4.5",
+        priority: 1,
+        enabled: true,
+        pricing_unit: "per_1k_tokens",
+        input_cost_per_million: "0.0025",
+        cache_cost_per_million: "0.0005",
+        cache_write_cost_per_million: "0.0030",
+        output_cost_per_million: "0.0100"
+      }
+    })
+    |> render_submit()
+
+    ap =
+      Repo.one(
+        from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model_record.id
+      )
+
+    assert ap.pricing_unit == "per_1k_tokens"
+    assert Decimal.equal?(ap.cache_write_cost_per_million, Decimal.new("0.0030"))
+    assert Decimal.equal?(ap.cache_cost_per_million, Decimal.new("0.0005"))
+    assert Decimal.equal?(ap.input_cost_per_million, Decimal.new("0.0025"))
   end
 
   # El wizard crea el modelo Y su primer lane en una sola pasada: elegido el

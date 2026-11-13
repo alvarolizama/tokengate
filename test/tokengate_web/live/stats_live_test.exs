@@ -324,7 +324,7 @@ defmodule TokengateWeb.StatsLiveTest do
           cache_read_tokens: Map.get(opts, :cache_read_tokens, 0),
           cache_creation_tokens: Map.get(opts, :cache_creation_tokens, 0),
           provider_cost_usd: cost,
-          latency_ms: 42,
+          latency_ms: Map.get(opts, :latency_ms, 42),
           streaming: false,
           inserted_at: inserted_at
         })
@@ -1607,8 +1607,10 @@ defmodule TokengateWeb.StatsLiveTest do
     test "providers: tabla única con medallas en el podio y liga al detalle", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
-      # 3/2/1 requests → clasificación determinista para los puestos 1-3.
-      [a, b, c] = for _ <- 1..3, do: group_with_log(%{cost: "0.005"})
+      # Reliability/speed score ranking: distinct latencies avoid ties.
+      [a, b, c] =
+        for latency <- [10, 20, 80], do: group_with_log(%{cost: "0.005", latency_ms: latency})
+
       log_extra(a, 2)
       log_extra(b, 1)
 
@@ -1649,7 +1651,9 @@ defmodule TokengateWeb.StatsLiveTest do
     test "providers: el buscador filtra en vivo sin renumerar los puestos", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
-      [a, b, c] = for _ <- 1..3, do: group_with_log(%{cost: "0.005"})
+      [a, b, c] =
+        for latency <- [10, 20, 80], do: group_with_log(%{cost: "0.005", latency_ms: latency})
+
       log_extra(a, 2)
       log_extra(b, 1)
 

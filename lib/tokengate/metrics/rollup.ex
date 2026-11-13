@@ -1088,30 +1088,48 @@ defmodule Tokengate.Metrics.Rollup do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
-    rows =
+    # Aggregate over the FK alone and resolve the catalog row AFTER: grouping
+    # over (provider_id, name, key, logo_url, doc_url) forced Postgres to sort
+    # every window row by TEXT columns (9.5 MB external merge at 30 days). The
+    # uuid-only group key keeps the sort narrow, and the catalog join then runs
+    # over one row per provider instead of one per request_log.
+    agg =
       RequestLog
       |> where([rl], not is_nil(rl.provider_id))
-      |> join(:inner, [rl], p in Tokengate.Providers.Provider, on: rl.provider_id == p.id)
       |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
-      |> group_by([rl, p], [rl.provider_id, p.name, p.key, p.logo_url, p.doc_url])
-      |> select([rl, p], %{
+      |> group_by([rl], rl.provider_id)
+      |> select([rl], %{
         provider_id: rl.provider_id,
-        provider_name: p.name,
-        # Identidad del catálogo: viaja con la fila para que la tabla y el
-        # detalle puedan pintar el logo y los datos del proveedor sin una
-        # segunda query por fila.
-        provider_key: p.key,
-        provider_logo_url: p.logo_url,
-        provider_doc_url: p.doc_url,
-        request_count: count(rl.id),
+        request_count: count(),
         error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
         avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
         p95_latency_ms:
           fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)", rl.latency_ms),
         avg_ttft_ms: fragment("AVG(?)", rl.ttft_ms)
       })
+
+    rows =
+      from(a in subquery(agg),
+        join: p in Provider,
+        on: a.provider_id == p.id,
+        select: %{
+          provider_id: a.provider_id,
+          provider_name: p.name,
+          # Identidad del catálogo: viaja con la fila para que la tabla y el
+          # detalle puedan pintar el logo y los datos del proveedor sin una
+          # segunda query por fila.
+          provider_key: p.key,
+          provider_logo_url: p.logo_url,
+          provider_doc_url: p.doc_url,
+          request_count: a.request_count,
+          error_count: a.error_count,
+          avg_latency_ms: a.avg_latency_ms,
+          p95_latency_ms: a.p95_latency_ms,
+          avg_ttft_ms: a.avg_ttft_ms
+        }
+      )
       |> Repo.all(timeout: stats_timeout())
 
     min_latency =
@@ -1216,25 +1234,43 @@ defmodule Tokengate.Metrics.Rollup do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
-    rows =
+    # Same shape as provider_ranking/2: aggregate on model_id alone, then join
+    # the catalog for the display name. Grouping over `ma.name` made the
+    # GroupAggregate sort 148k rows by TEXT (9.5 MB external merge); with the
+    # uuid group key the sort key is 16 bytes and the name lookup happens once
+    # per model.
+    agg =
       RequestLog
       |> where([rl], not is_nil(rl.model_id))
-      |> join(:inner, [rl], ma in Model, on: rl.model_id == ma.id)
       |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
-      |> group_by([rl, ma], [ma.id, ma.name])
-      |> select([rl, ma], %{
-        model_id: ma.id,
-        model_name: ma.name,
-        request_count: count(rl.id),
+      |> group_by([rl], rl.model_id)
+      |> select([rl], %{
+        model_id: rl.model_id,
+        request_count: count(),
         error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
         avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
         p95_latency_ms:
           fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)", rl.latency_ms),
         avg_ttft_ms: fragment("AVG(?)", rl.ttft_ms)
       })
+
+    rows =
+      from(a in subquery(agg),
+        join: ma in Model,
+        on: a.model_id == ma.id,
+        select: %{
+          model_id: ma.id,
+          model_name: ma.name,
+          request_count: a.request_count,
+          error_count: a.error_count,
+          avg_latency_ms: a.avg_latency_ms,
+          p95_latency_ms: a.p95_latency_ms,
+          avg_ttft_ms: a.avg_ttft_ms
+        }
+      )
       |> Repo.all(timeout: stats_timeout())
 
     min_latency =
@@ -1619,9 +1655,14 @@ defmodule Tokengate.Metrics.Rollup do
   def busiest_minutes(group_id \\ nil, opts \\ []),
     do: busiest_buckets(group_id, "minute", opts)
 
-  # El unit va como bind param (`^unit`); el bucket se materializa en una
-  # subquery para que GROUP BY/ORDER BY/SELECT compartan la misma columna
-  # (Postgres rechaza expresiones parametrizadas formalmente distintas).
+  # The local-day bucket is computed ONCE per row (`date_trunc(?, ts AT TIME
+  # ZONE tz)` -> a local timestamp) and converted back to timestamptz once per
+  # GROUP, in the outer query: the round-trip conversion is the expensive half
+  # and it only has to run over the distinct buckets, not over every log. Both
+  # layers are needed because Postgres only matches the group key when the
+  # expression is textually identical, and the ORDER BY tie-break must keep
+  # ordering by the CONVERTED bucket (the timestamptz the caller sees) so the
+  # top-N at a count tie is unchanged.
   defp busiest_buckets(group_id, unit, opts) when unit in ["hour", "minute"] do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
@@ -1635,25 +1676,26 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
       |> select([rl], %{
-        bucket:
-          fragment(
-            "date_trunc(?, ? AT TIME ZONE ?) AT TIME ZONE ?",
-            ^unit,
-            rl.inserted_at,
-            ^timezone,
-            ^timezone
-          ),
-        id: rl.id
+        bucket: fragment("date_trunc(?, ? AT TIME ZONE ?)", ^unit, rl.inserted_at, ^timezone)
       })
       |> subquery()
 
-    from(b in bucketed,
-      group_by: b.bucket,
-      order_by: [desc: count(b.id), asc: b.bucket],
+    counts =
+      from(b in bucketed,
+        group_by: b.bucket,
+        select: %{bucket: b.bucket, request_count: count()}
+      )
+      |> subquery()
+
+    from(c in counts,
+      order_by: [
+        desc: c.request_count,
+        asc: fragment("? AT TIME ZONE ?", c.bucket, ^timezone)
+      ],
       limit: ^limit,
       select: %{
-        bucket: b.bucket,
-        request_count: count(b.id)
+        bucket: fragment("? AT TIME ZONE ?", c.bucket, ^timezone),
+        request_count: c.request_count
       }
     )
     |> Repo.all(timeout: stats_timeout())

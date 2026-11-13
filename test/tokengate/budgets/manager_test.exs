@@ -785,9 +785,10 @@ defmodule Tokengate.Budgets.ManagerTest do
 
       :ets.insert(:tokengate_credits, {{:topup, "tt1"}, 5, 10, nil, true, nil, false})
 
-      deleted = Manager.clear_topup_counters()
+      _deleted = Manager.clear_topup_counters()
 
-      assert deleted == 1
+      # The return count is global (other tests/lazy seeds may coexist).
+      # Assert the targeted deletion and the surviving limit, not that count.
       assert [] == :ets.lookup(:tokengate_credits, {:topup, "tt1"})
       # El límite NO se toca: clear_topup_counters es complemento del truncate,
       # no un sustituto del reset mensual (que sí borra los límites).

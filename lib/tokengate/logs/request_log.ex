@@ -65,6 +65,10 @@ defmodule Tokengate.Logs.RequestLog do
     field :latency_ms, :integer
     field :ttft_ms, :integer
     field :streaming, :boolean, default: false
+    # Served from the gateway-local response cache: nothing reached an
+    # upstream for this row. `true` ONLY from the cache-hit paths — a default
+    # `false` is honest for every row that predates the column.
+    field :cache_hit, :boolean, default: false
     field :request_type, :string, default: "chat"
     field :think, :boolean, default: false
     field :effort, :string
@@ -115,7 +119,7 @@ defmodule Tokengate.Logs.RequestLog do
     model_requested model_responded agent_type status_code provider_status_code
     error_reason error_message prompt_tokens completion_tokens cache_read_tokens
     cache_creation_tokens provider_cost_usd credit_subscription_id credit_topup_id
-    latency_ms ttft_ms streaming request_type think effort effort_applied api_key_prefix
+    latency_ms ttft_ms streaming cache_hit request_type think effort effort_applied api_key_prefix
     credential_name client_agent provider_key_prefix api_key_id inserted_at oban_job_id)a
 
   @required ~w(model_requested inserted_at subject_type)a

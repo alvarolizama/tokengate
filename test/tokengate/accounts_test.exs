@@ -955,4 +955,76 @@ defmodule Tokengate.AccountsTest do
       assert Enum.map(desc.entries, & &1.id) == [zeta.id, alpha.id]
     end
   end
+
+  describe "reactivate_api_key/1" do
+    test "returns a revoked user key to active and lists it again" do
+      user = user_fixture()
+      {:ok, key} = create_user_key(user, "laptop")
+
+      assert {:ok, %ApiKey{status: "revoked"}} = Accounts.revoke_api_key(key)
+      assert Accounts.list_api_keys_for_user(user.id) == []
+      assert [%ApiKey{id: revoked_id}] = Accounts.list_api_keys_for_user_all(user.id)
+      assert revoked_id == key.id
+
+      assert {:ok, %ApiKey{status: "active"}} = Accounts.reactivate_api_key(key)
+
+      assert Enum.map(Accounts.list_api_keys_for_user(user.id), & &1.id) == [key.id]
+      assert [%ApiKey{status: "active"}] = Accounts.list_api_keys_for_user_all(user.id)
+    end
+
+    test "returns a revoked service key to active and lists it again" do
+      service = service_fixture()
+      {:ok, key} = create_service_key(service, "batch")
+
+      assert {:ok, %ApiKey{status: "revoked"}} = Accounts.revoke_service_api_key(key)
+      assert Accounts.list_api_keys_for_service(service.id) == []
+
+      assert {:ok, %ApiKey{status: "active"}} = Accounts.reactivate_api_key(key)
+      assert Enum.map(Accounts.list_api_keys_for_service(service.id), & &1.id) == [key.id]
+    end
+
+    test "drops the cached auth entry by hash and by owner, so the token works again immediately" do
+      user = user_fixture()
+      {:ok, key} = create_user_key(user, "reactivar")
+
+      # Prime the auth cache with the entry the proxy would have stored.
+      Tokengate.Accounts.ApiKeyCache.fetch(key.key_hash, fn -> %{member: %{id: user.id}} end)
+      assert [_] = :ets.lookup(Tokengate.Accounts.ApiKeyCache.table(), key.key_hash)
+
+      assert {:ok, _} = Accounts.revoke_api_key(key)
+      assert [] = :ets.lookup(Tokengate.Accounts.ApiKeyCache.table(), key.key_hash)
+
+      # Re-prime, then reactivate: the reactivation must drop it too, or the
+      # next request would keep serving the revoked entry until the TTL.
+      Tokengate.Accounts.ApiKeyCache.fetch(key.key_hash, fn -> %{member: %{id: user.id}} end)
+      assert [_] = :ets.lookup(Tokengate.Accounts.ApiKeyCache.table(), key.key_hash)
+
+      assert {:ok, _} = Accounts.reactivate_api_key(key)
+      assert [] = :ets.lookup(Tokengate.Accounts.ApiKeyCache.table(), key.key_hash)
+    end
+
+    defp create_user_key(user, label) do
+      {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      Accounts.create_api_key(%{
+        "subject_type" => "member",
+        "user_id" => user.id,
+        "key_hash" => key_hash,
+        "key_prefix" => key_prefix,
+        "label" => label
+      })
+    end
+
+    defp create_service_key(service, label) do
+      {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      Accounts.create_api_key(%{
+        "subject_type" => "service",
+        "service_id" => service.id,
+        "key_hash" => key_hash,
+        "key_prefix" => key_prefix,
+        "label" => label
+      })
+    end
+  end
 end

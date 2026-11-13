@@ -402,6 +402,55 @@ defmodule Tokengate.Budgets do
          exhausted?: Enum.all?(budgets, & &1.exhausted?)
        }}
     end)
+    |> include_unattached_user_spend()
+  end
+
+  # A user with no live membership still has a subject and potentially a full
+  # month of spend: member deletion keeps the log's user_id. The old member-
+  # derived map silently treated that spend as absent. Resolve these users in
+  # the same batch as group members; the virtual member id is internal only and
+  # never escapes this function.
+  defp include_unattached_user_spend(rows) do
+    present_ids = Map.keys(rows)
+
+    unattached =
+      if present_ids == [] do
+        Repo.all(
+          from(u in Accounts.User,
+            select: map(u, [:id, :monthly_spend_limit_usd, :unlimited_spend])
+          )
+        )
+      else
+        Repo.all(
+          from(u in Accounts.User,
+            where: u.id not in ^present_ids,
+            select: map(u, [:id, :monthly_spend_limit_usd, :unlimited_spend])
+          )
+        )
+      end
+
+    virtual_members =
+      Enum.map(unattached, fn user ->
+        user = struct(Accounts.User, user)
+        %GroupMember{id: user.id, user_id: user.id, user: user, group: nil, group_id: nil}
+      end)
+
+    unattached_rows =
+      virtual_members
+      |> Tokengate.Credits.summaries()
+      |> Map.new(fn {user_id, summary} ->
+        {user_id,
+         %{
+           daily_usd: Decimal.new(0),
+           monthly_usd: summary.limit_spend_usd,
+           real_monthly_usd: summary.spend_usd,
+           monthly_limit_usd: summary.limit_usd,
+           monthly_pct: pct(summary.limit_spend_usd, summary.limit_usd),
+           exhausted?: not summary.has_path?
+         }}
+      end)
+
+    Map.merge(unattached_rows, rows)
   end
 
   @doc "Builds the budget status map for a single group member (ETS counters)."
@@ -435,7 +484,10 @@ defmodule Tokengate.Budgets do
           daily_exhausted?: false,
           monthly_exhausted?: not summary.has_path?,
           exhausted?: not summary.has_path?,
-          real_monthly_spend_usd: monthly_usd,
+          # All real spend is owned by the durable user subject, including
+          # requests charged to a top-up and logs left by rotated memberships.
+          # The member-id aggregate is not a substitute for this identity.
+          real_monthly_spend_usd: summary.spend_usd,
           # `has_credit?` = el sujeto tiene límite mensual definido (propio o
           # heredado). Un sujeto ilimitado o sin límite no lo tiene.
           has_credit?: not is_nil(limit_usd),

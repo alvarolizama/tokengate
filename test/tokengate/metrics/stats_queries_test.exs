@@ -449,6 +449,419 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
     end
   end
 
+  # ---------------------------------------------------------------------
+  # Tab reads: models / groups / users hybrid parity + rollup-coverage guard
+  # ---------------------------------------------------------------------
+  describe "tab breakdowns hybrid parity" do
+    setup do
+      original = Application.get_env(:tokengate, :stats_rollup)
+      Application.put_env(:tokengate, :stats_rollup, hybrid: true)
+      on_exit(fn -> Application.put_env(:tokengate, :stats_rollup, original) end)
+      :ok
+    end
+
+    defp add_member(group, user_id) do
+      {:ok, member} = Accounts.create_group_member(%{group_id: group.id, user_id: user_id})
+      member
+    end
+
+    defp tail_floor do
+      DateTime.utc_now() |> DateTime.add(-3 * 3600, :second) |> floor_to_hour()
+    end
+
+    defp by_id(rows, key) do
+      Map.new(rows, &{Map.fetch!(&1, key), &1})
+    end
+
+    defp assert_rows_match(hybrid, raw, key) do
+      h = by_id(hybrid, key)
+      r = by_id(raw, key)
+
+      assert Map.keys(h) |> Enum.sort() == Map.keys(r) |> Enum.sort()
+
+      for id <- Map.keys(h) do
+        assert h[id].request_count == r[id].request_count
+        assert Decimal.compare(h[id].cost_usd, r[id].cost_usd) == :eq
+        assert h[id].prompt_tokens == r[id].prompt_tokens
+        assert h[id].completion_tokens == r[id].completion_tokens
+      end
+    end
+
+    test "breakdown_by_model parity on the models tab (rollup + tail)" do
+      {member, _group} = group_member_fixture()
+      gpt = model_fixture()
+      claude = model_fixture()
+
+      log_request(member.id, hours_ago(48), model_id: gpt.id, model_requested: gpt.name)
+      log_request(member.id, hours_ago(48), model_id: claude.id, model_requested: claude.name)
+      log_request(member.id, hours_ago(1), model_id: gpt.id, model_requested: gpt.name)
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to]
+
+      hybrid = StatsQueries.breakdown_by_model(nil, opts)
+      raw = Tokengate.Metrics.Rollup.breakdown_by_model(nil, opts)
+
+      assert_rows_match(hybrid, raw, :model_id)
+    end
+
+    test "breakdown_by_model honours the member scope on BOTH halves" do
+      {member_a, group} = group_member_fixture()
+
+      {:ok, user_b} =
+        Accounts.register_user(%{
+          email: "sq-scope-#{System.unique_integer([:positive])}@example.com",
+          name: "SQ Scope B",
+          password: "ValidPassword123"
+        })
+
+      member_b = add_member(group, user_b.id)
+      gpt = model_fixture()
+
+      log_request(member_a.id, hours_ago(48), model_id: gpt.id, model_requested: gpt.name)
+      log_request(member_b.id, hours_ago(48), model_id: gpt.id, model_requested: gpt.name)
+      log_request(member_b.id, hours_ago(1), model_id: gpt.id, model_requested: gpt.name)
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to, member_ids: [member_a.id]]
+
+      hybrid = StatsQueries.breakdown_by_model(nil, opts)
+      raw = Tokengate.Metrics.Rollup.breakdown_by_model(nil, opts)
+
+      assert_rows_match(hybrid, raw, :model_id)
+      # Exactly the one request of member_a in the closed window — the rollup
+      # half used to ignore `member_ids` and answer org-wide.
+      assert Enum.map(hybrid, & &1.request_count) == [1]
+    end
+
+    test "breakdown_by_group parity on the groups tab" do
+      {member_a, _group_a} = group_member_fixture()
+
+      {:ok, group_b} =
+        Accounts.create_group(%{name: "SQ Group B #{System.unique_integer([:positive])}"})
+
+      {:ok, user_b} =
+        Accounts.register_user(%{
+          email: "sq-gb-#{System.unique_integer([:positive])}@example.com",
+          name: "SQ GB",
+          password: "ValidPassword123"
+        })
+
+      member_b = add_member(group_b, user_b.id)
+
+      log_request(member_a.id, hours_ago(48), cost_usd: Decimal.new("3.000000"))
+      log_request(member_b.id, hours_ago(48), cost_usd: Decimal.new("7.000000"))
+      log_request(member_a.id, hours_ago(1), cost_usd: Decimal.new("1.000000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to]
+
+      hybrid = StatsQueries.breakdown_by_group(opts)
+      raw = Tokengate.Metrics.Rollup.breakdown_by_group(opts)
+
+      assert_rows_match(hybrid, raw, :group_id)
+      assert length(hybrid) == 2
+    end
+
+    test "breakdown_by_user parity, one row per durable user" do
+      {member_a, group} = group_member_fixture()
+
+      {:ok, user_b} =
+        Accounts.register_user(%{
+          email: "sq-u2-#{System.unique_integer([:positive])}@example.com",
+          name: "SQ U2",
+          password: "ValidPassword123"
+        })
+
+      member_b = add_member(group, user_b.id)
+
+      log_request(member_a.id, hours_ago(48), cost_usd: Decimal.new("2.000000"))
+      log_request(member_b.id, hours_ago(48), cost_usd: Decimal.new("5.000000"))
+      log_request(member_a.id, hours_ago(1), cost_usd: Decimal.new("1.000000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to]
+
+      hybrid = StatsQueries.breakdown_by_user(opts)
+      raw = Tokengate.Metrics.Rollup.breakdown_by_user(opts)
+
+      assert_rows_match(hybrid, raw, :user_id)
+      assert length(hybrid) == 2
+
+      # Membership context parity too: memberships/groups come from the union
+      # of both halves.
+      for h <- hybrid do
+        r = Enum.find(raw, &(&1.user_id == h.user_id))
+        assert h.memberships == r.memberships
+        assert h.user_email == r.user_email
+        assert Enum.map(h.groups, & &1.id) == Enum.map(r.groups, & &1.id)
+      end
+    end
+
+    # Member turnover: the user's old membership is deleted (request_logs and
+    # the rollup buckets keep `user_id`, `group_member_id` goes NULL) and a new
+    # membership is created for the fresh tail. The user must still answer ONE
+    # row carrying the whole window — this is the durable-identity contract.
+    test "breakdown_by_user keeps the whole window across a membership turnover" do
+      {member_a, group} = group_member_fixture()
+
+      log_request(member_a.id, hours_ago(48), cost_usd: Decimal.new("4.000000"))
+      log_request(member_a.id, hours_ago(47), cost_usd: Decimal.new("2.000000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      {:ok, group_b} =
+        Accounts.create_group(%{name: "SQ Turnover #{System.unique_integer([:positive])}"})
+
+      # `group_members` allows ONE membership per user, so the turnover is
+      # delete-then-create — after the rollup captured the old buckets.
+      {:ok, _} = Accounts.delete_group_member(member_a)
+      member_b = add_member(group_b, member_a.user_id)
+
+      log_request(member_b.id, hours_ago(1), cost_usd: Decimal.new("1.500000"))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to]
+
+      hybrid = StatsQueries.breakdown_by_user(opts)
+      raw = Tokengate.Metrics.Rollup.breakdown_by_user(opts)
+
+      assert length(hybrid) == 1
+      [row] = hybrid
+
+      assert row.user_id == member_b.user_id
+      assert row.request_count == 3
+      assert Decimal.compare(row.cost_usd, Decimal.new("7.500000")) == :eq
+      # Only the LIVE membership counts, on both halves.
+      assert row.memberships == 1
+      assert Enum.map(row.groups, & &1.id) == [group_b.id]
+      refute Enum.any?(row.groups, &(&1.id == group.id))
+
+      assert_rows_match(hybrid, raw, :user_id)
+    end
+
+    # The KPI of a scoped viewer must be scoped by the DURABLE user id, not by
+    # the current membership list: after a rotation the old membership is gone
+    # and `member_ids`-scoped totals lose that history.
+    test "summary scoped by user_ids keeps the rotated history" do
+      {member_a, _group} = group_member_fixture()
+
+      log_request(member_a.id, hours_ago(48), cost_usd: Decimal.new("2.000000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      {:ok, group_b} =
+        Accounts.create_group(%{name: "SQ SumTurn #{System.unique_integer([:positive])}"})
+
+      {:ok, _} = Accounts.delete_group_member(member_a)
+      member_b = add_member(group_b, member_a.user_id)
+
+      log_request(member_b.id, hours_ago(1), cost_usd: Decimal.new("1.000000"))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      durable = StatsQueries.summary(%{from: from, to: to, user_ids: [member_b.user_id]})
+      current_only = StatsQueries.summary(%{from: from, to: to, group_member_ids: [member_b.id]})
+
+      assert durable.request_count == 2
+      assert Decimal.compare(durable.total_cost_usd, Decimal.new("3.000000")) == :eq
+      # The membership-scoped read only sees the tail — the shape the KPI had.
+      assert current_only.request_count == 1
+    end
+
+    test "breakdown_by_user honours a user_ids scope on BOTH halves" do
+      {member_a, group} = group_member_fixture()
+
+      {:ok, user_b} =
+        Accounts.register_user(%{
+          email: "sq-scope-u-#{System.unique_integer([:positive])}@example.com",
+          name: "SQ Scope U",
+          password: "ValidPassword123"
+        })
+
+      member_b = add_member(group, user_b.id)
+
+      log_request(member_a.id, hours_ago(48), cost_usd: Decimal.new("2.000000"))
+      log_request(member_b.id, hours_ago(48), cost_usd: Decimal.new("10.000000"))
+      log_request(member_a.id, hours_ago(1), cost_usd: Decimal.new("1.000000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to, user_ids: [member_a.user_id]]
+
+      hybrid = StatsQueries.breakdown_by_user(opts)
+
+      assert [row] = hybrid
+      assert row.user_id == member_a.user_id
+      assert row.request_count == 2
+
+      raw =
+        Tokengate.Metrics.Rollup.breakdown_by_user(opts)
+        |> Enum.filter(&(&1.user_id in [member_a.user_id]))
+
+      assert_rows_match(hybrid, raw, :user_id)
+    end
+
+    test "dashboard batch (model + member from ONE read) matches the separate reads" do
+      {member_a, group} = group_member_fixture()
+
+      {:ok, user_b} =
+        Accounts.register_user(%{
+          email: "sq-batch-#{System.unique_integer([:positive])}@example.com",
+          name: "SQ Batch",
+          password: "ValidPassword123"
+        })
+
+      member_b = add_member(group, user_b.id)
+      gpt = model_fixture()
+      claude = model_fixture()
+      user_ids = [member_a.user_id, member_b.user_id]
+
+      log_request(member_a.id, hours_ago(48), model_id: gpt.id, model_requested: gpt.name)
+      log_request(member_b.id, hours_ago(48), model_id: claude.id, model_requested: claude.name)
+      log_request(member_a.id, hours_ago(1), model_id: claude.id, model_requested: claude.name)
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to, user_ids: user_ids]
+
+      {batch_models, batch_members} = StatsQueries.breakdown_by_model_and_member(opts)
+      models = StatsQueries.breakdown_by_model(nil, opts)
+      members = StatsQueries.breakdown_by_member(nil, opts)
+
+      assert_rows_match(batch_models, models, :model_id)
+      assert_rows_match(batch_members, members, :group_member_id)
+      assert length(batch_members) == 2
+    end
+
+    test "empty rollup falls back to raw for the tab reads (never tail-only figures)" do
+      {member, _group} = group_member_fixture()
+      gpt = model_fixture()
+
+      # Closed-window traffic but NO rollup rows at all: the fresh-deploy /
+      # no-backfill shape.
+      log_request(member.id, hours_ago(48), model_id: gpt.id, model_requested: gpt.name)
+      log_request(member.id, hours_ago(47), model_id: gpt.id, model_requested: gpt.name)
+      log_request(member.id, hours_ago(1), model_id: gpt.id, model_requested: gpt.name)
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to]
+
+      assert StatsQueries.summary(%{from: from, to: to}).request_count == 3
+
+      assert Decimal.compare(
+               StatsQueries.summary(%{from: from, to: to}).total_cost_usd,
+               Decimal.new("2.400000")
+             ) == :eq
+
+      model_hybrid = StatsQueries.breakdown_by_model(nil, opts)
+      assert Enum.map(model_hybrid, & &1.request_count) == [3]
+
+      group_hybrid = StatsQueries.breakdown_by_group(opts)
+      assert Enum.map(group_hybrid, & &1.request_count) == [3]
+
+      user_hybrid = StatsQueries.breakdown_by_user(opts)
+      assert Enum.map(user_hybrid, & &1.request_count) == [3]
+    end
+
+    test "a rollup gap at the newest closed hour falls back to raw" do
+      {member, _group} = group_member_fixture()
+
+      bound = tail_floor()
+      # Inside the closed window, at the newest closed hour: raw has it, the
+      # rollup does NOT (the worker "was down" from 24h ago on).
+      log_request(member.id, DateTime.add(bound, -1800, :second),
+        cost_usd: Decimal.new("6.000000")
+      )
+
+      log_request(member.id, hours_ago(48), cost_usd: Decimal.new("3.000000"))
+      # Fresh tail.
+      log_request(member.id, hours_ago(1), cost_usd: Decimal.new("1.000000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(24))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to]
+
+      hybrid = StatsQueries.breakdown_by_model(nil, opts)
+      raw = Tokengate.Metrics.Rollup.breakdown_by_model(nil, opts)
+
+      # 3 + 6 + 1 requests: the 6.00 row sits in the gap and must be counted.
+      assert Enum.map(hybrid, & &1.request_count) == Enum.map(raw, & &1.request_count)
+      assert Enum.sum(Enum.map(hybrid, & &1.request_count)) == 3
+
+      assert Decimal.compare(
+               Enum.reduce(hybrid, Decimal.new(0), &Decimal.add(&1.cost_usd, &2)),
+               Decimal.new("10.000000")
+             ) == :eq
+
+      assert StatsQueries.summary(%{from: from, to: to}).request_count == 3
+      assert Enum.map(StatsQueries.breakdown_by_user(opts), & &1.request_count) == [3]
+    end
+
+    # Partial rollup: the newest closed hours are there, an INTERIOR hour is
+    # missing (a backfill that skipped a day). A presence probe would call this
+    # covered and undercount; the exact count reconciliation catches it and the
+    # full-window raw answer must not double count the tail either.
+    test "an interior rollup gap falls back to raw without double counting" do
+      {member, _group} = group_member_fixture()
+
+      log_request(member.id, hours_ago(48), cost_usd: Decimal.new("2.000000"))
+      log_request(member.id, hours_ago(30), cost_usd: Decimal.new("4.000000"))
+      log_request(member.id, hours_ago(1), cost_usd: Decimal.new("1.000000"))
+
+      # Rollup covers 72h→36h only: 48h IS aggregated, 30h is the hole.
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(36))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to]
+
+      hybrid = StatsQueries.breakdown_by_model(nil, opts)
+      assert Enum.map(hybrid, & &1.request_count) == [3]
+
+      assert Decimal.compare(
+               Enum.reduce(hybrid, Decimal.new(0), &Decimal.add(&1.cost_usd, &2)),
+               Decimal.new("7.000000")
+             ) == :eq
+
+      assert StatsQueries.summary(%{from: from, to: to}).request_count == 3
+
+      assert Decimal.compare(
+               StatsQueries.summary(%{from: from, to: to}).total_cost_usd,
+               Decimal.new("7.000000")
+             ) == :eq
+
+      assert Enum.map(StatsQueries.breakdown_by_group(opts), & &1.request_count) == [3]
+      assert Enum.map(StatsQueries.breakdown_by_user(opts), & &1.request_count) == [3]
+
+      {batch_models, _batch_members} =
+        StatsQueries.breakdown_by_model_and_member(opts ++ [user_ids: [member.user_id]])
+
+      assert Enum.map(batch_models, & &1.request_count) == [3]
+    end
+  end
+
   describe "hybrid off (test env default)" do
     test "answers raw" do
       {member, _group} = group_member_fixture()

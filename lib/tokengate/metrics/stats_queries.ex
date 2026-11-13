@@ -31,6 +31,7 @@ defmodule Tokengate.Metrics.StatsQueries do
 
   Only aggregates whose dimensions exist in the rollup go hybrid: summary,
   `breakdown_by_model`, `breakdown_by_member`, `breakdown_by_group`,
+  `breakdown_by_user`, `breakdown_by_model_and_member`,
   `usage_by_hour_of_day`. Aggregates keyed on `service_id`, `status_code` or
   sub-hour buckets have no rollup counterpart and stay raw (callers keep
   using `Tokengate.Metrics.Rollup` / `Tokengate.Logs` directly for those).
@@ -38,6 +39,8 @@ defmodule Tokengate.Metrics.StatsQueries do
 
   import Ecto.Query, warn: false
 
+  alias Tokengate.Accounts.GroupMember
+  alias Tokengate.Accounts.User
   alias Tokengate.Logs
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.RequestMetricsHourly
@@ -91,7 +94,7 @@ defmodule Tokengate.Metrics.StatsQueries do
       bound = rollup_bound(to)
       rollup_from = ceil_hour(from)
 
-      parts = [
+      rollup_summary =
         Rollup.summary_from_rollup(
           member_ids: filters[:member_ids] || filters[:group_member_ids],
           user_ids: filters[:user_ids],
@@ -100,10 +103,16 @@ defmodule Tokengate.Metrics.StatsQueries do
           from: rollup_from,
           to: bound
         )
-        | raw_edge_summaries(filters, from, rollup_from, bound, to)
-      ]
 
-      Enum.reduce(parts, &merge_summaries/2)
+      # Coverage guard: an empty/behind rollup half must NOT answer as "the
+      # period had almost no traffic" — fall back to the full raw window.
+      # See `rollup_trusted?/3`.
+      if rollup_trusted?(filters, rollup_from, bound, rollup_summary.request_count) do
+        parts = [rollup_summary | raw_edge_summaries(filters, from, rollup_from, bound, to)]
+        Enum.reduce(parts, &merge_summaries/2)
+      else
+        raw_summary(filters)
+      end
     else
       raw_summary(filters)
     end
@@ -177,10 +186,7 @@ defmodule Tokengate.Metrics.StatsQueries do
   @doc "Per-model breakdown. Same row shape as `Rollup.breakdown_by_model/2`."
   def breakdown_by_model(group_id \\ nil, opts \\ []) do
     if hybrid?(opts) and is_nil(group_id) do
-      merge_rows(
-        rollup_breakdown(:model, opts),
-        raw_breakdown(:model, group_id, opts)
-      )
+      hybrid_breakdown(:model, group_id, opts)
     else
       Rollup.breakdown_by_model(group_id, opts)
     end
@@ -189,10 +195,7 @@ defmodule Tokengate.Metrics.StatsQueries do
   @doc "Per-member breakdown. Same row shape as `Rollup.breakdown_by_member/2`."
   def breakdown_by_member(group_id \\ nil, opts \\ []) do
     if hybrid?(opts) and is_nil(group_id) do
-      merge_rows(
-        rollup_breakdown(:member, opts),
-        raw_breakdown(:member, group_id, opts)
-      )
+      hybrid_breakdown(:member, group_id, opts)
     else
       Rollup.breakdown_by_member(group_id, opts)
     end
@@ -201,12 +204,70 @@ defmodule Tokengate.Metrics.StatsQueries do
   @doc "Per-group breakdown. Same row shape as `Rollup.breakdown_by_group/1`."
   def breakdown_by_group(opts \\ []) do
     if hybrid?(opts) do
-      merge_rows(
-        rollup_breakdown(:group, opts),
-        raw_breakdown(:group, nil, opts)
-      )
+      hybrid_breakdown(:group, nil, opts)
     else
       Rollup.breakdown_by_group(opts)
+    end
+  end
+
+  @doc """
+  Per-user breakdown. Same row shape as `Rollup.breakdown_by_user/1`.
+
+  Attribution is the DURABLE `user_id` column of the bucket (the rollup keeps
+  it when the membership is let go), so a member turnover — the old
+  `group_member` deleted, a new one created for the same user — still answers
+  with one row per user carrying the whole window. `memberships`/`groups` are
+  rebuilt from the union of live memberships seen on each half, matching the
+  raw aggregation over the full window.
+  """
+  def breakdown_by_user(opts \\ []) do
+    if hybrid?(opts) do
+      {from, to} = rollup_window(opts)
+
+      if rollup_trusted?(opts, from, to) do
+        merge_user_rows(rollup_by_user_rows(opts), raw_user_edges(opts))
+      else
+        # Rollup without coverage for the closed part: the WHOLE window raw,
+        # never just the ≤3h tail (that is the "figures collapse to almost
+        # nothing" failure the guard exists for).
+        raw_by_user_rows(opts, Keyword.fetch!(opts, :from), Keyword.get(opts, :to))
+      end
+    else
+      Rollup.breakdown_by_user(opts)
+    end
+  end
+
+  @doc """
+  Model + member breakdowns from ONE grouped read per half (rollup + tail) —
+  the dashboard's per-viewer batch. Returns `{model_rows, member_rows}` with
+  exactly the shapes of `breakdown_by_model/2` and `breakdown_by_member/2`.
+
+  Only used with a NON-EMPTY `:user_ids` scope (the dashboard's shape): the
+  shared rows are grouped per (user, membership, group, model) and pivoted in
+  the BEAM, so a pure user scope is required — without it the pivot would have
+  to carry service traffic too and the member half would not match its raw
+  counterpart.
+  """
+  def breakdown_by_model_and_member(opts \\ []) do
+    user_ids = Keyword.get(opts, :user_ids)
+
+    cond do
+      not is_list(user_ids) or user_ids == [] ->
+        {breakdown_by_model(nil, opts), breakdown_by_member(nil, opts)}
+
+      hybrid?(opts) ->
+        {from, to} = rollup_window(opts)
+
+        if rollup_trusted?(opts, from, to) do
+          model_and_member_rows(rollup_model_member_rows(opts) ++ raw_model_member_edges(opts))
+        else
+          opts
+          |> raw_model_member_rows(Keyword.fetch!(opts, :from), Keyword.get(opts, :to))
+          |> model_and_member_rows()
+        end
+
+      true ->
+        {breakdown_by_model(nil, opts), breakdown_by_member(nil, opts)}
     end
   end
 
@@ -343,10 +404,29 @@ defmodule Tokengate.Metrics.StatsQueries do
   # quedaba a caballo de los dos lados — contado doble o descubierto según
   # `<=`/`<` — y un arranque de ventana a media hora perdía su bucket
   # parcial en el lado rollup.
+  # Same time partition as `summary/2` for every hybrid aggregate. In a closed
+  # window (last month, previous period) the cutoff MUST honor its `to`: the
+  # fresh-tail floor alone would fold current-month rollup buckets into an old
+  # month, while the raw tail would (correctly) return empty and not catch it.
+  defp rollup_window(opts) do
+    {ceil_hour(Keyword.fetch!(opts, :from)), rollup_bound(Keyword.get(opts, :to))}
+  end
+
+  defp raw_tail_start(opts) do
+    {rollup_from, rollup_to} = rollup_window(opts)
+    max_dt(rollup_to, rollup_from)
+  end
+
   defp rollup_breakdown(:model, opts) do
+    {from, to} = rollup_window(opts)
+
     Rollup.breakdown_by_model_from_rollup(
-      from: ceil_hour(Keyword.fetch!(opts, :from)),
-      to: tail_floor(),
+      from: from,
+      to: to,
+      # Member scope is a rollup column (`group_member_id`) and the raw half
+      # filters on it too — dropping it here made a member-scoped viewer see
+      # org-wide model rows on the closed part of the window.
+      member_ids: opts[:member_ids],
       user_ids: opts[:user_ids],
       model_id: opts[:model_id],
       provider_id: opts[:provider_id]
@@ -354,9 +434,11 @@ defmodule Tokengate.Metrics.StatsQueries do
   end
 
   defp rollup_breakdown(:member, opts) do
+    {from, to} = rollup_window(opts)
+
     Rollup.breakdown_by_member_from_rollup(
-      from: ceil_hour(Keyword.fetch!(opts, :from)),
-      to: tail_floor(),
+      from: from,
+      to: to,
       member_ids: opts[:member_ids],
       user_ids: opts[:user_ids],
       model_id: opts[:model_id],
@@ -365,9 +447,11 @@ defmodule Tokengate.Metrics.StatsQueries do
   end
 
   defp rollup_breakdown(:group, opts) do
+    {from, to} = rollup_window(opts)
+
     Rollup.breakdown_by_group_from_rollup(
-      from: ceil_hour(Keyword.fetch!(opts, :from)),
-      to: tail_floor(),
+      from: from,
+      to: to,
       member_ids: opts[:member_ids],
       user_ids: opts[:user_ids],
       model_id: opts[:model_id],
@@ -375,12 +459,350 @@ defmodule Tokengate.Metrics.StatsQueries do
     )
   end
 
+  # ---------------------------------------------------------------------
+  # Per-user reads (hybrid: rollup closed buckets + raw tail)
+  # ---------------------------------------------------------------------
+
+  # Rollup half of `breakdown_by_user/1`. Mirrors `Rollup.breakdown_by_user/1`
+  # exactly — the durable identity is the bucket's own `user_id` column, the
+  # membership context is LEFT joined (a rotated membership leaves the bucket
+  # alive with a NULL `group_member_id`), and `membership_ids`/`group_ids` ride
+  # along so the tail merge can rebuild `memberships`/`groups` as the UNION
+  # seen over the whole window instead of approximating with a max.
+  defp rollup_by_user_rows(opts) do
+    {from, to} = rollup_window(opts)
+
+    from(m in RequestMetricsHourly,
+      where: m.hour_utc >= ^from and m.hour_utc < ^to,
+      left_join: tm in GroupMember,
+      on: m.group_member_id == tm.id,
+      as: :member,
+      left_join: u in User,
+      on: m.user_id == u.id,
+      as: :user,
+      where: not is_nil(u.id),
+      group_by: [m.user_id, u.id],
+      select: %{
+        user_id: u.id,
+        user_name: u.name,
+        user_email: u.email,
+        membership_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.id),
+        group_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.group_id),
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms)
+      }
+    )
+    |> rollup_day_bounds(from, to)
+    |> maybe_rollup_scope(opts)
+    |> Repo.all(timeout: stats_query_timeout())
+    |> Enum.map(&by_user_row/1)
+  end
+
+  # Raw side of `breakdown_by_user/1`: a copy of `Rollup.breakdown_by_user/1`
+  # bounded to the arm being read. It is duplicated here on purpose (rollup
+  # module is not ours to change) — if `Rollup.breakdown_by_user/1` gains or
+  # renames a dimension, this must follow, and the parity test in
+  # `stats_queries_test.exs` is what catches the drift: it asserts the hybrid
+  # result equals the raw aggregation over the same window.
+  defp raw_by_user_rows(opts, from, to) do
+    RequestLog
+    |> where([rl], rl.inserted_at >= ^from)
+    |> maybe_to(to)
+    |> maybe_member_ids(opts[:member_ids])
+    |> maybe_user_ids(opts[:user_ids])
+    |> maybe_provider_id(opts[:provider_id])
+    |> join(:left, [rl], tm in GroupMember, on: rl.group_member_id == tm.id, as: :member)
+    |> join(:left, [rl], u in User, on: rl.user_id == u.id, as: :user)
+    |> where([user: u], not is_nil(u.id))
+    |> group_by([user: u], u.id)
+    |> select([rl, user: u, member: tm], %{
+      user_id: u.id,
+      user_name: u.name,
+      user_email: u.email,
+      membership_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.id),
+      group_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.group_id),
+      request_count: count(rl.id),
+      cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+      prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+      completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+      total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
+    })
+    |> Repo.all(timeout: stats_query_timeout())
+    |> Enum.map(fn row ->
+      %{
+        user_id: row.user_id,
+        user_name: row.user_name,
+        user_email: row.user_email,
+        membership_ids: row.membership_ids,
+        group_ids: row.group_ids,
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        total_latency_ms: row.total_latency_ms
+      }
+    end)
+  end
+
+  defp by_user_row(row) do
+    %{
+      user_id: row.user_id,
+      user_name: row.user_name,
+      user_email: row.user_email,
+      membership_ids: row.membership_ids,
+      group_ids: row.group_ids,
+      request_count: row.request_count,
+      cost_usd: micro_to_decimal(row.cost_usd_raw),
+      prompt_tokens: row.prompt_tokens,
+      completion_tokens: row.completion_tokens,
+      total_latency_ms: row.total_latency_ms
+    }
+  end
+
+  # Raw arms of the per-user hybrid: the partial first hour (when `from` is
+  # not hour-aligned) plus everything from the rollup's end of window. Same
+  # partition as `raw_breakdown/3`.
+  defp raw_user_edges(opts) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+    rollup_from = ceil_hour(from)
+
+    start_rows =
+      if DateTime.compare(rollup_from, from) == :gt do
+        edge_to = min_dt(DateTime.add(rollup_from, -1, :second), to)
+        raw_by_user_rows(opts, from, edge_to)
+      else
+        []
+      end
+
+    start_rows ++ raw_by_user_rows(opts, raw_tail_start(opts), to)
+  end
+
+  # Merges the two halves per user: additive counters summed, `memberships`
+  # and `groups` rebuilt from the union of the live memberships each half saw.
+  defp merge_user_rows(rollup_rows, raw_rows) do
+    group_names = Tokengate.Accounts.group_names_by_id()
+
+    (rollup_rows ++ raw_rows)
+    |> Enum.group_by(& &1.user_id)
+    |> Enum.map(fn {_user_id, [first | rest]} ->
+      member_ids = union_ids([first | rest], :membership_ids)
+      group_ids = union_ids([first | rest], :group_ids)
+
+      merged = Enum.reduce(rest, first, &sum_row/2)
+
+      %{
+        user_id: merged.user_id,
+        user_name: merged.user_name,
+        user_email: merged.user_email,
+        memberships: length(member_ids),
+        groups:
+          group_ids
+          |> Enum.map(&%{id: &1, name: Map.get(group_names, &1, "—")})
+          |> Enum.sort_by(& &1.name),
+        request_count: merged.request_count,
+        cost_usd: merged.cost_usd,
+        prompt_tokens: merged.prompt_tokens,
+        completion_tokens: merged.completion_tokens,
+        # A single-row group never went through `sum_row/2`, so derive the
+        # ratio here (same formula) instead of reading a missing key.
+        avg_tps: compute_tps(merged.completion_tokens, merged[:total_latency_ms] || 0)
+      }
+    end)
+    |> sort_by_cost()
+  end
+
+  defp union_ids(rows, key) do
+    rows
+    |> Enum.flat_map(&(Map.get(&1, key) || []))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  # ---------------------------------------------------------------------
+  # Model + member batch (dashboard): ONE grouped read per half
+  # ---------------------------------------------------------------------
+
+  # Flat rows keyed by (user, membership, group, model). Both the per-model and
+  # the per-member tables are pivots of this SAME result, so the dashboard pays
+  # one scan per half instead of two.
+  defp rollup_model_member_rows(opts) do
+    {from, to} = rollup_window(opts)
+
+    from(m in RequestMetricsHourly,
+      where: m.hour_utc >= ^from and m.hour_utc < ^to,
+      left_join: ma in Model,
+      on: m.model_id == ma.id,
+      as: :model,
+      left_join: u in User,
+      on: m.user_id == u.id,
+      as: :user,
+      left_join: tm in GroupMember,
+      on: m.group_member_id == tm.id,
+      as: :member,
+      left_join: t in assoc(tm, :group),
+      as: :group,
+      group_by: [m.user_id, u.id, tm.id, t.id, m.model_id, ma.id],
+      select: %{
+        user_id: m.user_id,
+        user_email: u.email,
+        group_member_id: tm.id,
+        group_name: t.name,
+        model_id: ma.id,
+        model_name: ma.name,
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_read_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms)
+      }
+    )
+    |> rollup_day_bounds(from, to)
+    |> maybe_rollup_scope(opts)
+    |> Repo.all(timeout: stats_query_timeout())
+    |> Enum.map(fn row -> Map.put(row, :cost_usd, micro_to_decimal(row.cost_usd_raw)) end)
+  end
+
+  defp raw_model_member_rows(opts, from, to) do
+    RequestLog
+    |> where([rl], rl.inserted_at >= ^from)
+    |> maybe_to(to)
+    |> maybe_member_ids(opts[:member_ids])
+    |> maybe_user_ids(opts[:user_ids])
+    |> maybe_provider_id(opts[:provider_id])
+    |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id, as: :model)
+    |> join(:left, [rl], u in User, on: rl.user_id == u.id, as: :user)
+    |> join(:left, [rl], tm in GroupMember, on: rl.group_member_id == tm.id, as: :member)
+    |> join(:left, [member: tm], t in assoc(tm, :group), as: :group)
+    |> group_by([rl, user: u, member: tm, group: t, model: ma], [
+      rl.user_id,
+      u.id,
+      tm.id,
+      t.id,
+      rl.model_id,
+      ma.id
+    ])
+    |> select([rl, user: u, member: tm, group: t, model: ma], %{
+      user_id: rl.user_id,
+      user_email: u.email,
+      group_member_id: tm.id,
+      group_name: t.name,
+      model_id: ma.id,
+      model_name: ma.name,
+      request_count: count(rl.id),
+      cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+      prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+      completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+      cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+      total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
+    })
+    |> Repo.all(timeout: stats_query_timeout())
+    |> Enum.map(fn row -> Map.put(row, :cost_usd, Decimal.new(to_string(row.cost_usd))) end)
+  end
+
+  defp raw_model_member_edges(opts) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+    rollup_from = ceil_hour(from)
+
+    start_rows =
+      if DateTime.compare(rollup_from, from) == :gt do
+        edge_to = min_dt(DateTime.add(rollup_from, -1, :second), to)
+        raw_model_member_rows(opts, from, edge_to)
+      else
+        []
+      end
+
+    start_rows ++ raw_model_member_rows(opts, raw_tail_start(opts), to)
+  end
+
+  defp model_and_member_rows(flat_rows) do
+    {model_rows(flat_rows), member_rows(flat_rows)}
+  end
+
+  defp model_rows(flat_rows) do
+    flat_rows
+    |> Enum.group_by(& &1.model_id)
+    |> Enum.map(fn {model_id, rows} ->
+      agg = aggregate_flat(rows)
+      [first | _] = rows
+
+      %{
+        model_id: model_id,
+        model_name: first.model_name || "—",
+        request_count: agg.request_count,
+        cost_usd: agg.cost_usd,
+        prompt_tokens: agg.prompt_tokens,
+        completion_tokens: agg.completion_tokens,
+        cache_read_tokens: agg.cache_read_tokens,
+        avg_tps: compute_tps(agg.completion_tokens, agg.total_latency_ms)
+      }
+    end)
+    |> sort_by_cost()
+  end
+
+  # Member rows follow `Rollup.breakdown_by_member/1`: one row per
+  # (user, live membership, group) and only rows whose user still resolves
+  # (the raw aggregation joins the user table, so a deleted user's traffic is
+  # absent from the member table even though it stays in the model table).
+  defp member_rows(flat_rows) do
+    flat_rows
+    |> Enum.reject(&is_nil(&1.user_email))
+    |> Enum.group_by(&{&1.user_id, &1.group_member_id, &1.group_name})
+    |> Enum.map(fn {_identity, rows} ->
+      agg = aggregate_flat(rows)
+      [first | _] = rows
+
+      %{
+        group_member_id: first.group_member_id,
+        user_id: first.user_id,
+        group_name: first.group_name,
+        user_email: first.user_email,
+        request_count: agg.request_count,
+        cost_usd: agg.cost_usd,
+        prompt_tokens: agg.prompt_tokens,
+        completion_tokens: agg.completion_tokens,
+        cache_read_tokens: agg.cache_read_tokens,
+        avg_tps: compute_tps(agg.completion_tokens, agg.total_latency_ms)
+      }
+    end)
+    |> sort_by_cost()
+  end
+
+  defp aggregate_flat(rows) do
+    Enum.reduce(
+      rows,
+      %{
+        request_count: 0,
+        cost_usd: Decimal.new(0),
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cache_read_tokens: 0,
+        total_latency_ms: 0
+      },
+      fn row, acc ->
+        %{
+          request_count: acc.request_count + row.request_count,
+          cost_usd: Decimal.add(acc.cost_usd, row.cost_usd),
+          prompt_tokens: acc.prompt_tokens + (row.prompt_tokens || 0),
+          completion_tokens: acc.completion_tokens + (row.completion_tokens || 0),
+          cache_read_tokens: acc.cache_read_tokens + (row.cache_read_tokens || 0),
+          total_latency_ms: acc.total_latency_ms + (row.total_latency_ms || 0)
+        }
+      end
+    )
+  end
+
   defp rollup_hour_counts(opts) do
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
-    from = Keyword.fetch!(opts, :from)
+    {from, to} = rollup_window(opts)
 
     from(m in Tokengate.Metrics.RequestMetricsHourly,
-      where: m.hour_utc >= ^from and m.hour_utc < ^tail_floor(),
+      where: m.hour_utc >= ^from and m.hour_utc < ^to,
       group_by: fragment("1"),
       select: %{
         hour:
@@ -395,7 +817,7 @@ defmodule Tokengate.Metrics.StatsQueries do
         n: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count)
       }
     )
-    |> rollup_day_bounds(from, tail_floor())
+    |> rollup_day_bounds(from, to)
     |> maybe_rollup_scope(opts)
     |> Repo.all()
     |> Enum.map(&{&1.hour, &1.n})
@@ -434,7 +856,7 @@ defmodule Tokengate.Metrics.StatsQueries do
       end
 
     tail_rows =
-      raw_breakdown_query(kind, group_id, opts, max_dt(tail_floor(), rollup_from), to)
+      raw_breakdown_query(kind, group_id, opts, raw_tail_start(opts), to)
 
     merge_rows(start_rows, tail_rows)
   end
@@ -451,11 +873,141 @@ defmodule Tokengate.Metrics.StatsQueries do
     Rollup.breakdown_by_group(Keyword.merge(opts, from: from, to: to))
   end
 
+  # Hybrid read for one breakdown kind with the ROLLUP-COVERAGE GUARD: the
+  # rollup half is only merged when it actually covers the closed part of the
+  # window. Without the guard an empty/behind rollup (fresh deploy before
+  # `mix tokengate.rollup.backfill`, or a worker down >3h — its re-aggregation
+  # only reaches 3h back, so the gap is permanent) silently answers with the
+  # ≤3h tail only, i.e. figures that "collapsed to nothing" with no error.
+  defp hybrid_breakdown(kind, group_id, opts) do
+    {from, to} = rollup_window(opts)
+
+    # Guard FIRST: the reconciliation is two small queries, while the rollup
+    # aggregate is the heavy half. Running it only when the closed span is
+    # provably covered avoids paying for a read whose result would be thrown
+    # away on the fallback.
+    if rollup_trusted?(opts, from, to) do
+      merge_rows(rollup_breakdown(kind, opts), raw_breakdown(kind, group_id, opts))
+    else
+      # Full raw over the requested window — INCLUDING the tail — never just
+      # the closed arms (that would double-count the tail rows).
+      raw_breakdown_query(
+        kind,
+        group_id,
+        opts,
+        Keyword.fetch!(opts, :from),
+        Keyword.get(opts, :to)
+      )
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # Rollup coverage guard
+  # ---------------------------------------------------------------------
+
+  # Decides whether the rollup half of a hybrid read may be trusted for the
+  # closed span `[rollup_from, rollup_to)` (both bounds hour-aligned, so the
+  # raw rows and the rollup buckets cover the SAME instants).
+  #
+  # The check is an EXACT reconciliation, not a presence probe:
+  #
+  #     count(request_logs   in the closed span, same scope) ==
+  #     sum(request_metrics_hourly.request_count in the same span)
+  #
+  # Equal counts mean every row of the closed span is aggregated, so the
+  # rollup half + raw tail is the whole window. Any mismatch — empty rollup
+  # (fresh deploy before the backfill), a worker down long enough that the gap
+  # left its 3h re-aggregation window (permanent), an interior day a backfill
+  # skipped, or rollup rows whose raw rows were dropped by retention — falls
+  # back to the WHOLE window raw, which is exact by construction and cannot
+  # double count (the tail is not merged on top).
+  #
+  # Cost: one COUNT over the closed span plus one SUM over the rollup span, per
+  # hybrid read. The count is an index-only range scan (no decimal/token
+  # aggregation) and the reads that use this guard are behind the 60s
+  # structural/dashboard caches; a truthful guard is worth that and the silent
+  # shrinkage it prevents reads to the owner as "the period had no traffic".
+  defp rollup_trusted?(opts, rollup_from, rollup_to, known_rollup_requests \\ nil) do
+    if DateTime.compare(rollup_to, rollup_from) != :gt do
+      true
+    else
+      rollup_requests =
+        known_rollup_requests || rollup_requests_between(opts, rollup_from, rollup_to)
+
+      raw_rows_between?(opts, rollup_from, rollup_to) == rollup_requests
+    end
+  end
+
+  defp raw_rows_between?(opts, from, to) do
+    RequestLog
+    |> where([rl], rl.inserted_at >= ^from and rl.inserted_at < ^to)
+    |> maybe_guard_member_ids(opts)
+    |> maybe_user_ids(filter_value(opts, :user_ids))
+    |> maybe_guard_model_id(opts)
+    |> maybe_guard_provider_id(opts)
+    |> Repo.aggregate(:count, :id, timeout: stats_query_timeout())
+  end
+
+  defp rollup_requests_between(opts, from, to) do
+    RequestMetricsHourly
+    |> where([m], m.hour_utc >= ^from and m.hour_utc < ^to)
+    |> rollup_day_bounds(from, to)
+    |> maybe_rollup_scope(normalize_guard_scope(opts))
+    |> select([m], %{n: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count)})
+    |> Repo.one(timeout: stats_query_timeout())
+    |> case do
+      nil -> 0
+      %{n: n} -> n
+    end
+  end
+
+  # `filter_value/2` reads the same key off the map form (`summary/1`) and the
+  # keyword form (breakdowns). Member scope arrives as `:member_ids` on the
+  # breakdowns and as `:group_member_ids` from `StatsLive.fetch_summary/2` —
+  # both are the same rollup column, so the guard accepts either.
+  defp filter_value(filters, key) when is_map(filters), do: Map.get(filters, key)
+  defp filter_value(opts, key) when is_list(opts), do: Keyword.get(opts, key)
+
+  defp maybe_guard_member_ids(query, opts) do
+    case filter_value(opts, :member_ids) || filter_value(opts, :group_member_ids) do
+      nil -> query
+      ids -> maybe_member_ids(query, ids)
+    end
+  end
+
+  defp maybe_guard_model_id(query, opts) do
+    case filter_value(opts, :model_id) do
+      nil -> query
+      model_id -> where(query, [rl], rl.model_id == ^model_id)
+    end
+  end
+
+  defp maybe_guard_provider_id(query, opts) do
+    case filter_value(opts, :provider_id) do
+      nil -> query
+      provider_id -> where(query, [rl], rl.provider_id == ^provider_id)
+    end
+  end
+
+  # `maybe_rollup_scope/2` reads keyword keys; the summary's map form gets the
+  # member scope translated to its rollup column name first.
+  defp normalize_guard_scope(filters) when is_map(filters) do
+    case Map.get(filters, :group_member_ids) do
+      nil ->
+        Map.to_list(filters)
+
+      ids ->
+        filters |> Map.delete(:group_member_ids) |> Map.put(:member_ids, ids) |> Map.to_list()
+    end
+  end
+
+  defp normalize_guard_scope(opts) when is_list(opts), do: opts
+
   defp tail_hour_counts(opts) do
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
     from(rl in RequestLog,
-      where: rl.inserted_at >= ^tail_floor(),
+      where: rl.inserted_at >= ^raw_tail_start(opts),
       group_by: fragment("1"),
       select: %{
         hour:
@@ -486,6 +1038,11 @@ defmodule Tokengate.Metrics.StatsQueries do
   defp maybe_user_ids(query, ids),
     do: where(query, [rl], rl.user_id in ^ids)
 
+  defp maybe_provider_id(query, nil), do: query
+
+  defp maybe_provider_id(query, provider_id) when is_binary(provider_id),
+    do: where(query, [rl], rl.provider_id == ^provider_id)
+
   defp maybe_to(query, nil), do: query
   defp maybe_to(query, %DateTime{} = to), do: where(query, [rl], rl.inserted_at <= ^to)
 
@@ -498,10 +1055,10 @@ defmodule Tokengate.Metrics.StatsQueries do
   # bias de zonas con offset no-entero (:30/:45) es el aceptado ahí.
   defp rollup_hour_provider_rows(opts) do
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
-    from = ceil_hour(Keyword.fetch!(opts, :from))
+    {from, to} = rollup_window(opts)
 
     from(m in RequestMetricsHourly,
-      where: m.hour_utc >= ^from and m.hour_utc < ^tail_floor(),
+      where: m.hour_utc >= ^from and m.hour_utc < ^to,
       group_by: [fragment("1"), m.provider_id],
       select: %{
         hour:
@@ -518,7 +1075,7 @@ defmodule Tokengate.Metrics.StatsQueries do
         cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)
       }
     )
-    |> rollup_day_bounds(from, tail_floor())
+    |> rollup_day_bounds(from, to)
     |> maybe_rollup_scope(opts)
     |> Repo.all(timeout: stats_query_timeout())
     |> Enum.map(fn row ->
@@ -537,7 +1094,7 @@ defmodule Tokengate.Metrics.StatsQueries do
     to = Keyword.get(opts, :to)
 
     RequestLog
-    |> where([rl], rl.inserted_at >= ^tail_floor())
+    |> where([rl], rl.inserted_at >= ^raw_tail_start(opts))
     |> maybe_to(to)
     |> group_by([rl], [fragment("1"), rl.provider_id])
     |> select([rl], %{
@@ -562,10 +1119,10 @@ defmodule Tokengate.Metrics.StatsQueries do
   # Modelo × proveedor desde el rollup: `provider_stats_id` es el id del
   # PROVEEDOR (dimensión del rollup) — el mismo que abre el detalle.
   defp rollup_model_provider_rows(opts) do
-    from = ceil_hour(Keyword.fetch!(opts, :from))
+    {from, to} = rollup_window(opts)
 
     from(m in RequestMetricsHourly,
-      where: m.hour_utc >= ^from and m.hour_utc < ^tail_floor(),
+      where: m.hour_utc >= ^from and m.hour_utc < ^to,
       group_by: [m.model_id, m.provider_id],
       select: %{
         model_id: m.model_id,
@@ -574,7 +1131,7 @@ defmodule Tokengate.Metrics.StatsQueries do
         cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)
       }
     )
-    |> rollup_day_bounds(from, tail_floor())
+    |> rollup_day_bounds(from, to)
     |> maybe_rollup_scope(opts)
     |> Repo.all(timeout: stats_query_timeout())
   end
@@ -583,7 +1140,7 @@ defmodule Tokengate.Metrics.StatsQueries do
   # acotada al corte — reusa `Rollup.model_provider_flat_rows/1`.
   defp tail_model_provider_rows(opts) do
     Rollup.model_provider_flat_rows(
-      from: tail_floor(),
+      from: raw_tail_start(opts),
       to: Keyword.get(opts, :to),
       member_ids: opts[:member_ids]
     )
@@ -682,14 +1239,14 @@ defmodule Tokengate.Metrics.StatsQueries do
   # el mismo date_trunc local del lado completo. Ambos lados normalizan el
   # key a UTC para que el merge sea por instante.
   defp rollup_hour_buckets(opts) do
-    from = ceil_hour(Keyword.fetch!(opts, :from))
+    {from, to} = rollup_window(opts)
 
     from(m in RequestMetricsHourly,
-      where: m.hour_utc >= ^from and m.hour_utc < ^tail_floor(),
+      where: m.hour_utc >= ^from and m.hour_utc < ^to,
       group_by: m.hour_utc,
       select: %{hour_utc: m.hour_utc, n: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count)}
     )
-    |> rollup_day_bounds(from, tail_floor())
+    |> rollup_day_bounds(from, to)
     |> maybe_rollup_scope(opts)
     |> Repo.all(timeout: stats_query_timeout())
     |> Map.new(fn row -> {to_utc_dt(row.hour_utc), row.n} end)
@@ -701,7 +1258,7 @@ defmodule Tokengate.Metrics.StatsQueries do
 
     bucketed =
       RequestLog
-      |> where([rl], rl.inserted_at >= ^tail_floor())
+      |> where([rl], rl.inserted_at >= ^raw_tail_start(opts))
       |> maybe_to(to)
       |> select([rl], %{
         bucket:
@@ -789,6 +1346,18 @@ defmodule Tokengate.Metrics.StatsQueries do
     end)
   end
 
+  # Ranking shared by every breakdown: real cost first, then volume. Same
+  # order the raw aggregates publish (`ORDER BY SUM(provider_cost_usd) DESC`).
+  defp sort_by_cost(rows) do
+    Enum.sort(rows, fn a, b ->
+      case Decimal.compare(a.cost_usd, b.cost_usd) do
+        :eq -> a.request_count > b.request_count
+        :lt -> false
+        :gt -> true
+      end
+    end)
+  end
+
   # Row identity is EVERY breakdown dimension, not "any of them": two rows
   # are the same row only when all four ids match (nil == nil counts). The
   # old `Enum.any?` collapsed a model row with an unrelated user row whenever
@@ -804,12 +1373,18 @@ defmodule Tokengate.Metrics.StatsQueries do
     tokens = (a.completion_tokens || 0) + (b.completion_tokens || 0)
     latency = (a[:total_latency_ms] || 0) + (b[:total_latency_ms] || 0)
 
+    # `Map.get` for the optional counters: the per-user rows (and any caller
+    # that does not publish `cache_read_tokens`) simply have no such key, and
+    # dot access on a missing key raises.
     a
     |> Map.put(:request_count, a.request_count + b.request_count)
     |> Map.put(:cost_usd, Decimal.add(a.cost_usd, b.cost_usd))
     |> Map.put(:prompt_tokens, (a.prompt_tokens || 0) + (b.prompt_tokens || 0))
     |> Map.put(:completion_tokens, tokens)
-    |> Map.put(:cache_read_tokens, (a.cache_read_tokens || 0) + (b.cache_read_tokens || 0))
+    |> Map.put(
+      :cache_read_tokens,
+      Map.get(a, :cache_read_tokens, 0) + Map.get(b, :cache_read_tokens, 0)
+    )
     |> Map.put(:avg_tps, compute_tps(tokens, latency))
   end
 

@@ -14,6 +14,8 @@ defmodule Tokengate.Logs.WriteWorker do
 
   use Oban.Worker, queue: :logs, max_attempts: 5
 
+  require Logger
+
   import Ecto.Query, warn: false
 
   alias Tokengate.Logs
@@ -23,6 +25,97 @@ defmodule Tokengate.Logs.WriteWorker do
 
   @pubsub Tokengate.PubSub
   @logs_topic "logs:new"
+
+  @doc """
+  Enqueues `job` on the `:logs` queue, falling back to a direct insert when
+  the enqueue itself fails.
+
+  `Oban.insert/1` is a plain INSERT in the caller process (Basic engine), so a
+  saturated pool or a downed DB makes it return `{:error, _}` — and the job,
+  with it the durable row, the webhook fan-out and the feed event, used to
+  vanish behind a log line. The client already got its answer, so the response
+  must not change; but the row IS the accounting record: losing it leaves the
+  realtime collector counting a request that no spend/budget report can see.
+
+  Fallback contract (no in-process retry):
+
+    * the row is inserted synchronously via `Logs.log_request/1` with the SAME
+      args — same subject, cost, tokens, `inserted_at` partition — so the
+      accounting row survives;
+    * the fan-out (webhooks + `logs:new` broadcast) is NOT re-run inline: that
+      is Oban's job and coupling the response tail to a second delivery path
+      would be a redesign. The row survives; that event is not broadcast;
+    * the budget settlement already happened in the caller's `after`, so the
+      fallback never re-prices the request: no phantom cost is created.
+
+  `insert_fun` lets tests force the failure branch; production always uses
+  `Oban.insert/1`.
+  """
+  @spec enqueue(
+          Ecto.Changeset.t() | Oban.Job.t(),
+          map(),
+          (Ecto.Changeset.t() | Oban.Job.t() -> {:ok, Oban.Job.t()} | {:error, term()})
+        ) :: :ok | :error
+  def enqueue(job, context, insert_fun \\ &Oban.insert/1) do
+    case insert_fun.(job) do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "durable request log enqueue failed: #{inspect(reason)} " <> context_fields(context)
+        )
+
+        fallback_insert(job_args(job), context)
+    end
+  end
+
+  # `WriteWorker.new/1` returns a changeset (that is what `Oban.insert/1`
+  # takes), while a performed/queued job is a struct — the fallback must read
+  # the same attrs from either shape.
+  defp job_args(%Oban.Job{args: args}), do: args
+
+  defp job_args(%Ecto.Changeset{} = changeset),
+    do: Ecto.Changeset.get_field(changeset, :args) || %{}
+
+  # Last-resort direct insert. Reuses the job args through `attrs_from_args/1`,
+  # so the row is identical to the one the worker would have written (minus
+  # `oban_job_id`, which only the enqueued job knows). Never raises: the proxy
+  # tail must stay silent.
+  defp fallback_insert(args, context) do
+    case Logs.log_request(attrs_from_args(args)) do
+      {:ok, log} ->
+        Logger.warning(
+          "durable request log persisted by fallback insert: id=#{log.id} " <>
+            context_fields(context)
+        )
+
+        :ok
+
+      {:error, changeset} ->
+        Logger.error(
+          "durable request log fallback insert failed: #{inspect(changeset.errors)} " <>
+            context_fields(context)
+        )
+
+        :error
+    end
+  rescue
+    error ->
+      Logger.error(
+        "durable request log fallback insert raised: #{Exception.message(error)} " <>
+          context_fields(context)
+      )
+
+      :error
+  end
+
+  defp context_fields(context) do
+    "model_id=#{inspect(context[:model_id])} " <>
+      "provider_id=#{inspect(context[:provider_id])} " <>
+      "status=#{inspect(context[:status])} " <>
+      "error_reason=#{inspect(context[:error_reason])}"
+  end
 
   @impl Oban.Worker
   def perform(%Oban.Job{id: job_id, args: args}) do
@@ -50,7 +143,39 @@ defmodule Tokengate.Logs.WriteWorker do
   end
 
   defp insert_and_deliver(job_id, args) do
-    attrs = %{
+    attrs = args |> attrs_from_args() |> Map.put(:oban_job_id, job_id)
+
+    case Logs.log_request(attrs) do
+      {:ok, request_log} ->
+        request_log = reload_for_delivery(request_log, job_id)
+
+        case WebhookWorker.dispatch(request_log) do
+          {:ok, _count} ->
+            broadcast_new_log(request_log)
+            :ok
+
+          # `Oban.insert` puede fallar (pool saturado, conexión caída). Antes
+          # era `Oban.insert!`/se ignoraba: la excepción mataba el job DESPUÉS
+          # del insert y el atajo `request_log_seen?` del reintento se comía el
+          # fan-out, así que el webhook no se entregaba nunca. Devolver
+          # `{:error, _}` deja que Oban reintente: el insert es no-op y el
+          # dispatch se reintenta (idempotente por destino+log).
+          {:error, reason} ->
+            {:error, "webhook dispatch failed: #{inspect(reason)}"}
+        end
+
+      {:error, changeset} ->
+        {:error, "request log insert failed: #{inspect(changeset.errors)}"}
+    end
+  end
+
+  # The exact `RequestLog` attrs the enqueued job carries, built once and
+  # shared by the worker path and the enqueue fallback: both must write the
+  # SAME row (same subject, cost, tokens and partition timestamp). The atom
+  # keys matter — `Logs.log_request/1` merges an atom `:inserted_at`, so a
+  # string-keyed map would raise `Ecto.CastError` (mixed keys).
+  defp attrs_from_args(args) do
+    %{
       group_member_id: args["group_member_id"],
       # El sujeto del gasto viaja en la fila: sin la columna, agregar por
       # usuario exigía un `join` a `group_members` que el servicio no paga.
@@ -79,6 +204,9 @@ defmodule Tokengate.Logs.WriteWorker do
       latency_ms: args["latency_ms"],
       ttft_ms: args["ttft_ms"],
       streaming: args["streaming"] || false,
+      # Durable marker for a gateway-local cache hit (nothing reached an
+      # upstream): set ONLY by the cache-hit log paths.
+      cache_hit: args["cache_hit"] || false,
       request_type: args["request_type"] || "chat",
       think: args["think"] || false,
       effort: args["effort"],
@@ -91,35 +219,8 @@ defmodule Tokengate.Logs.WriteWorker do
       credential_id: args["credential_id"],
       client_agent: args["client_agent"],
       provider_key_prefix: args["provider_key_prefix"],
-      inserted_at: parse_inserted_at(args["inserted_at"]),
-      # Idempotencia (C2): la pareja única con `inserted_at`. NULL cuando el
-      # job no tiene id (perform directo en tests) — Postgres trata NULLs
-      # como distintos y el índice no los toca.
-      oban_job_id: job_id
+      inserted_at: parse_inserted_at(args["inserted_at"])
     }
-
-    case Logs.log_request(attrs) do
-      {:ok, request_log} ->
-        request_log = reload_for_delivery(request_log, job_id)
-
-        case WebhookWorker.dispatch(request_log) do
-          {:ok, _count} ->
-            broadcast_new_log(request_log)
-            :ok
-
-          # `Oban.insert` puede fallar (pool saturado, conexión caída). Antes
-          # era `Oban.insert!`/se ignoraba: la excepción mataba el job DESPUÉS
-          # del insert y el atajo `request_log_seen?` del reintento se comía el
-          # fan-out, así que el webhook no se entregaba nunca. Devolver
-          # `{:error, _}` deja que Oban reintente: el insert es no-op y el
-          # dispatch se reintenta (idempotente por destino+log).
-          {:error, reason} ->
-            {:error, "webhook dispatch failed: #{inspect(reason)}"}
-        end
-
-      {:error, changeset} ->
-        {:error, "request log insert failed: #{inspect(changeset.errors)}"}
-    end
   end
 
   # One query for every association the delivery path reads. `Repo.preload/2`

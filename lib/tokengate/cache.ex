@@ -16,8 +16,10 @@ defmodule Tokengate.Cache do
 
   TTL is a safety net, not the invalidation mechanism: every writer that
   changes the underlying rows invalidates its own key, so a mutation is
-  visible on the next read. The TTL only bounds the staleness of a write
-  that bypasses the context (raw SQL, another node, a rolled-back sandbox).
+  visible on the next read — on the writer's node immediately and, through
+  `Tokengate.CacheInvalidation`, on every other connected node. The TTL only
+  bounds the staleness of a write that bypasses the context (raw SQL, a
+  disconnected node, a rolled-back sandbox).
 
   ## Degradation
 
@@ -91,19 +93,31 @@ defmodule Tokengate.Cache do
     end
   end
 
-  @doc "Drops one entry. A no-op when the table is gone."
+  @doc "Drops one entry (on this node and the others). A no-op when the table is gone."
   @spec invalidate(term()) :: :ok
-  def invalidate(key) do
+  def invalidate(key), do: dispatch({:invalidate, key})
+
+  @doc "Drops every entry (on this node and the others). A no-op when the table is gone."
+  @spec invalidate_all() :: :ok
+  def invalidate_all, do: dispatch(:all)
+
+  # Local-only application of an invalidation operation, used by
+  # `Tokengate.CacheInvalidation` for operations arriving from another node.
+  @doc false
+  @spec apply_local(term()) :: :ok
+  def apply_local({:invalidate, key}) do
     if :ets.whereis(@table) != :undefined, do: :ets.delete(@table, key)
     :ok
   end
 
-  @doc "Drops every entry. A no-op when the table is gone."
-  @spec invalidate_all() :: :ok
-  def invalidate_all do
+  def apply_local(:all) do
     if :ets.whereis(@table) != :undefined, do: :ets.delete_all_objects(@table)
     :ok
   end
+
+  def apply_local(_op), do: :ok
+
+  defp dispatch(op), do: Tokengate.CacheInvalidation.dispatch(:cache, op)
 
   @doc false
   def table, do: @table

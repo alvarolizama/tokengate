@@ -640,7 +640,7 @@ defmodule TokengateWeb.ProxyController do
     # keeps the accounting readers on the map shapes they expect.
     reportable = reportable_body(body)
 
-    {usage, _} = simple_usage(conn.body_params, reportable, kind)
+    {usage, _} = simple_usage(conn.body_params, reportable, kind, resp_headers)
     provider_reported = UsageNormalizer.extract_reported_cost(:openai, reportable, resp_headers)
 
     # Las cantidades facturables del TIPO de esta llamada: es lo que el lane
@@ -708,8 +708,16 @@ defmodule TokengateWeb.ProxyController do
   # Pure passthrough — the upstream response body is returned untouched.
   # Usage is read from the upstream `usage` object when present; otherwise
   # it's estimated over the request payload (inputs for :embedding).
-  defp simple_usage(payload, body, :embedding) do
-    usage = UsageNormalizer.normalize(:openai, body) || estimate_embedding_usage(payload)
+  #
+  # `resp_headers` rides along exactly like the chat path: some upstreams
+  # report the cached-prompt-token split ONLY in a header
+  # (`fireworks-cached-prompt-tokens`) while the body carries the plain
+  # `usage`. Without the headers the cached subset was lost and the request
+  # was priced entirely at the input rate (embeddings, images, audio).
+  defp simple_usage(payload, body, :embedding, resp_headers) do
+    usage =
+      UsageNormalizer.normalize(:openai, body, resp_headers) || estimate_embedding_usage(payload)
+
     {usage, body}
   end
 
@@ -724,13 +732,13 @@ defmodule TokengateWeb.ProxyController do
   #      embeddings path has always used);
   #   3. no text at all estimates to zero, and zero is `CostCalculator`'s
   #      explicit $0 — we never invent a cost.
-  defp simple_usage(payload, body, kind)
+  defp simple_usage(payload, body, kind, resp_headers)
        when kind in [:stt, :tts, :image, :decision] do
-    {reported_or_estimated_usage(payload, body), body}
+    {reported_or_estimated_usage(payload, body, resp_headers), body}
   end
 
-  defp reported_or_estimated_usage(payload, body) do
-    reported = UsageNormalizer.normalize(:openai, body)
+  defp reported_or_estimated_usage(payload, body, resp_headers) do
+    reported = UsageNormalizer.normalize(:openai, body, resp_headers)
 
     cond do
       reported != nil and not zero_usage?(reported) -> reported
@@ -1299,11 +1307,10 @@ defmodule TokengateWeb.ProxyController do
   # Accounting for a served cache hit: the durable row is booked at $0 / 0
   # tokens (nothing was consumed upstream) and the request is counted in the
   # realtime collector, so a cache-heavy minute is not invisible in the
-  # dashboard. `RequestLog` has no cache-hit column, so the row is told apart
-  # by its $0 cost together with the `x-tokengate-cache: hit` header the client
-  # received. The budget hold is RELEASED (not settled) by the caller's
-  # `after`, because `:tg_budget_actual_cost` stays unset — hence no
-  # `credit_topup_id` on the row.
+  # dashboard. `request_logs.cache_hit` marks the row (the header only reaches
+  # the client, not the table). The budget hold is RELEASED (not settled) by
+  # the caller's `after`, because `:tg_budget_actual_cost` stays unset — hence
+  # no `credit_topup_id` on the row.
   defp record_cache_hit(_conn, _body_shape, nil), do: :ok
 
   defp record_cache_hit(conn, body_shape, %{route: route, member: member} = log_ctx) do
@@ -1336,7 +1343,8 @@ defmodule TokengateWeb.ProxyController do
       session_id: conn.assigns[:session_key],
       client_agent: conn.assigns.client_agent,
       request_type: request_type,
-      credit_topup_id: nil
+      credit_topup_id: nil,
+      cache_hit: true
     )
   end
 
@@ -2593,12 +2601,10 @@ defmodule TokengateWeb.ProxyController do
   # Computes cost using the full fallback chain: reported cost first, then
   # manual pricing, then $0.
   #
-  # Manual pricing has TWO shapes and the lane declares which one it uses
-  # (`model_providers.pricing_unit`): token units read the three
-  # `*_cost_per_million` columns against the token counts, and every other unit
-  # (per image/second/minute/character/request) reads `unit_cost` against the
-  # billable `quantities` of the call — which is what makes the media services
-  # priceable at all.
+  # Manual pricing has two shapes: token units read input/output plus the
+  # optional cache-read/cache-write rates; other units use `unit_cost` against
+  # the call's quantities (per image/second/minute/character/request), so media
+  # services are priceable too.
   #
   # Used by finalize_simple_success and finalize_success (non-streaming).
   defp cost_with_fallback(route, provider_reported, usage, quantities) do
@@ -2608,7 +2614,8 @@ defmodule TokengateWeb.ProxyController do
       manual_pricing: %{
         input_cost_per_million: mp.input_cost_per_million,
         output_cost_per_million: mp.output_cost_per_million,
-        cache_cost_per_million: mp.cache_cost_per_million
+        cache_cost_per_million: mp.cache_cost_per_million,
+        cache_write_cost_per_million: mp.cache_write_cost_per_million
       },
       usage: usage,
       pricing_unit: mp.pricing_unit,
@@ -2777,6 +2784,10 @@ defmodule TokengateWeb.ProxyController do
       "latency_ms" => latency_ms,
       "ttft_ms" => Keyword.get(extra, :ttft_ms),
       "streaming" => streaming,
+      # Durable cache-hit marker: `true` only when the response came from the
+      # gateway-local cache (both the chat and the passthrough hit paths pass
+      # it; every other enqueue leaves it false).
+      "cache_hit" => Keyword.get(extra, :cache_hit, false),
       "request_type" => Keyword.get(extra, :request_type, "chat"),
       "think" => Keyword.get(extra, :think, false),
       "effort" => Keyword.get(extra, :effort),
@@ -2806,27 +2817,12 @@ defmodule TokengateWeb.ProxyController do
 
   # `Oban.insert/1`'s failure used to be discarded: on a saturated pool or a
   # downed DB the job — and with it the `request_logs` row, the webhook fan-out
-  # and the dashboard feed — vanished without a trace. It is still not fatal to
-  # the response (the client already has its answer), but every loss is logged
-  # with enough context to reconstruct the missing row. No loss counter exists
-  # in `Collector`, so the log line is the metric.
-  defp insert_log_job(job, context) do
-    case Oban.insert(job) do
-      {:ok, _job} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error(
-          "durable request log enqueue failed: #{inspect(reason)} " <>
-            "model_id=#{inspect(context[:model_id])} " <>
-            "provider_id=#{inspect(context[:provider_id])} " <>
-            "status=#{inspect(context[:status])} " <>
-            "error_reason=#{inspect(context[:error_reason])}"
-        )
-
-        :error
-    end
-  end
+  # and the dashboard feed — vanished without a trace. `WriteWorker.enqueue/2`
+  # keeps the response path silent but persists the row through a direct
+  # insert when the enqueue fails, so the accounting record is never lost
+  # (the row carries the same cost/subject; the budget was already settled, so
+  # no phantom cost appears).
+  defp insert_log_job(job, context), do: WriteWorker.enqueue(job, context)
 
   # Enqueues a durable log for a failed request, then renders the error to the
   # client. `route` is available (the request got past routing), so we capture

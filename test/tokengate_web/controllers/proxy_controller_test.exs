@@ -157,6 +157,28 @@ defmodule TokengateWeb.ProxyControllerTest do
             }
           })
 
+        # Embeddings cuyo split de cache viaja SOLO en header, como Fireworks
+        # Serverless: el body trae el `usage` plano y el header el subconjunto
+        # cacheado. Sin leer los headers el request se cobraba a tasa de input
+        # completa.
+        "cached-embeddings" in conn.path_info ->
+          payload = Jason.decode!(body)
+          count = payload["input"] |> List.wrap() |> length()
+
+          data =
+            for idx <- 0..(count - 1) do
+              %{"object" => "embedding", "index" => idx, "embedding" => [0.1, 0.2, 0.3]}
+            end
+
+          conn
+          |> put_resp_header("fireworks-cached-prompt-tokens", "80")
+          |> json(200, %{
+            "object" => "list",
+            "model" => payload["model"],
+            "data" => data,
+            "usage" => %{"prompt_tokens" => 100, "total_tokens" => 100}
+          })
+
         "embeddings" in conn.path_info ->
           payload = Jason.decode!(body)
           count = payload["input"] |> List.wrap() |> length()
@@ -2888,6 +2910,49 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.status_code == 200
   end
 
+  test "embeddings: a cache split reported only in headers prices cached tokens at the cache rate",
+       %{
+         conn: conn
+       } do
+    %{
+      token: token,
+      model: model,
+      member: member,
+      model_provider: model_provider
+    } =
+      proxy_fixture(%{credit_units: 100, path_overrides: %{"embeddings" => "/cached-embeddings"}})
+
+    update_alias_type(model, "embedding")
+
+    {:ok, _} =
+      Providers.update_model_provider(model_provider, %{
+        input_cost_per_million: "1.00",
+        cache_cost_per_million: "0.10",
+        output_cost_per_million: "0.00"
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/embeddings", %{"model" => model.name, "input" => ["hola", "wey"]})
+
+    assert json_response(conn, 200)
+
+    # 80 de los 100 tokens de prompt cotizan a la tasa de cache:
+    # (100 - 80) × $1/M + 80 × $0.10/M = 0.000028.
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000028"]
+    assert %{consumed_micro: 28} = Budgets.limit_spend({:user, member.user_id})
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == "embedding"
+    assert log.prompt_tokens == 100
+    assert log.cache_read_tokens == 80
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000028"))
+    assert log.cache_hit == false
+  end
+
   test "embeddings: a 400 falls back to the next provider without punishing it", %{conn: conn} do
     u = unique()
     %{token: token, model: model} = proxy_fixture()
@@ -3853,6 +3918,10 @@ defmodule TokengateWeb.ProxyControllerTest do
       hit = Enum.find(rows, &(&1.prompt_tokens == 0))
       assert hit.status_code == 200
       assert hit.streaming == false
+      # Durable marker: the cache hit is the ONLY row flagged; the request
+      # that filled the cache (and paid the upstream) is not.
+      assert hit.cache_hit == true
+      assert Enum.find(rows, &(&1.id != hit.id)).cache_hit == false
       assert hit.completion_tokens == 0
       assert hit.credit_topup_id == nil
       assert Decimal.equal?(hit.provider_cost_usd, Decimal.new(0))

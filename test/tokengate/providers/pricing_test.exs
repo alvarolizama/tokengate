@@ -44,6 +44,16 @@ defmodule Tokengate.Providers.PricingTest do
     end
   end
 
+  describe "rate_suffix/1" do
+    test "el sufijo sigue al divisor: 1M, 1K, o unidad suelta" do
+      assert Pricing.rate_suffix("per_1m_tokens") == "1M"
+      assert Pricing.rate_suffix("per_1k_tokens") == "1K"
+      assert Pricing.rate_suffix("per_1k_characters") == "1K"
+      assert Pricing.rate_suffix("per_image") == "unit"
+      assert Pricing.rate_suffix(nil) == "unit"
+    end
+  end
+
   describe "default_unit_for_type/1" do
     test "cada tipo de media arranca en su unidad real, no en tokens" do
       assert Pricing.default_unit_for_type("image") == "per_image"
@@ -168,6 +178,31 @@ defmodule Tokengate.Providers.PricingTest do
         })
 
       assert Ecto.Changeset.get_change(changeset, :unit_cost) == Decimal.new("0.0400")
+    end
+
+    test "cache_write_cost_per_million es opcional y se castera como Decimal" do
+      changeset =
+        ModelProvider.changeset(%ModelProvider{}, %{
+          model_id: Ecto.UUID.generate(),
+          credential_id: Ecto.UUID.generate(),
+          provider_model: "x",
+          enabled: true,
+          cache_write_cost_per_million: "0.175"
+        })
+
+      assert Ecto.Changeset.get_change(changeset, :cache_write_cost_per_million) ==
+               Decimal.new("0.175")
+
+      # Ausente → nil: la fórmula histórica (sin término de escritura).
+      changeset =
+        ModelProvider.changeset(%ModelProvider{}, %{
+          model_id: Ecto.UUID.generate(),
+          credential_id: Ecto.UUID.generate(),
+          provider_model: "x",
+          enabled: true
+        })
+
+      refute changeset.changes[:cache_write_cost_per_million]
     end
   end
 end

@@ -16,7 +16,9 @@ defmodule Tokengate.Proxy.UsageNormalizer do
   rate: `(prompt − cached) × input + cached × cache + completion × output`.
   `cache_creation_tokens` mirrors `prompt_tokens_details.cache_write_tokens`
   when the provider reports it (OpenRouter, explicit-caching upstreams);
-  0 otherwise.
+  0 otherwise. It is a DISTINCT counter, not a subset of `prompt_tokens`:
+  `CostCalculator` bills it additively at the lane's optional
+  `cache_write_cost_per_million`, never by subtracting it from the prompt.
 
   Only `:openai` (OpenAI-compatible APIs) is supported. Streaming: the final
   chunk carries `usage` when the request sets
@@ -54,8 +56,8 @@ defmodule Tokengate.Proxy.UsageNormalizer do
     cached = cached_tokens(usage)
     # OpenRouter (and some explicit-caching providers) report cache WRITES
     # separately — `cache_write_tokens`. Anthropic-style upstreams bill
-    # writes at a premium (25–100%), so persisting them keeps cost
-    # accounting honest even though the calculator doesn't price them yet.
+    # writes at a premium (25–100%), so persisting them lets the calculator
+    # charge them when the lane declares `cache_write_cost_per_million`.
     cache_write = get_in_int(usage, ["prompt_tokens_details", "cache_write_tokens"])
 
     %{
