@@ -400,27 +400,45 @@ defmodule Tokengate.Providers.ModelProvider do
   # form submits seconds; we multiply by 1000 to populate ms. If the user
   # submitted nil for both (no sticky override), we leave nil — StickyTracker
   # then falls back to its 15-min default.
+  #
+  # The submitted field WINS, even when it is empty: an operator who clears
+  # "TTL sticky" is asking for NULL (back to the config default), and deriving
+  # the value from the row's ms resurrected the old TTL silently.
   defp sync_sticky_ttl_fields(changeset) do
     seconds = get_field(changeset, :sticky_ttl_seconds)
     ms = get_field(changeset, :sticky_ttl_ms)
 
-    case {seconds, ms} do
-      {nil, ms} when not is_nil(ms) ->
-        changeset
-        |> put_change(:sticky_ttl_seconds, div(ms, 1000))
-        |> force_change(:sticky_ttl_ms, ms)
+    case param_submitted?(changeset, :sticky_ttl_seconds) do
+      :not_submitted ->
+        # Programmatic write: derive the seconds from the stored ms so both
+        # mirrors stay coherent.
+        case {seconds, ms} do
+          {nil, ms} when not is_nil(ms) ->
+            changeset
+            |> put_change(:sticky_ttl_seconds, div(ms, 1000))
+            |> force_change(:sticky_ttl_ms, ms)
 
-      {seconds, _} when not is_nil(seconds) ->
-        ms_value = seconds * 1000
+          {seconds, _} when not is_nil(seconds) ->
+            ms_value = seconds * 1000
+
+            changeset
+            |> put_change(:sticky_ttl_ms, ms_value)
+            |> force_change(:sticky_ttl_seconds, seconds)
+
+          _ ->
+            changeset
+            |> put_change(:sticky_ttl_ms, nil)
+            |> put_change(:sticky_ttl_seconds, nil)
+        end
+
+      _submitted ->
+        # The form submitted the field: it owns the value, including "empty" =
+        # NULL (back to the config default).
+        ms_value = if is_nil(seconds), do: nil, else: seconds * 1000
 
         changeset
         |> put_change(:sticky_ttl_ms, ms_value)
         |> force_change(:sticky_ttl_seconds, seconds)
-
-      _ ->
-        changeset
-        |> put_change(:sticky_ttl_ms, nil)
-        |> put_change(:sticky_ttl_seconds, nil)
     end
   end
 end

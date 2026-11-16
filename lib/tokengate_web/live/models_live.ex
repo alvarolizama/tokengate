@@ -416,6 +416,10 @@ defmodule TokengateWeb.ModelsLive do
         |> assign(:wizard_credential_id, nil)
         |> assign(:wizard_credential_label, nil)
         |> assign(:wizard_models, [])
+        # A fresh alta starts with no listing state: the error and the spinner
+        # of the previous one must not survive the type picker.
+        |> assign(:wizard_models_error, nil)
+        |> assign(:wizard_models_loading, false)
         |> load_wizard_providers(type)
 
       {:noreply, socket}
@@ -434,6 +438,11 @@ defmodule TokengateWeb.ModelsLive do
      |> assign(:form, nil)
      |> assign(:editing_model_id, nil)
      |> assign(:model_form_picked_type, nil)
+     # The listing state belongs to the wizard session that is being abandoned:
+     # leaving it behind showed its error/spinner on the next alta.
+     |> assign(:wizard_models, [])
+     |> assign(:wizard_models_error, nil)
+     |> assign(:wizard_models_loading, false)
      |> assign(:type_picker_open, true)}
   end
 
@@ -504,10 +513,15 @@ defmodule TokengateWeb.ModelsLive do
      |> assign_form_picked_type()}
   end
 
+  # Any step of the wizard is a valid target: the template moves back to
+  # `provider` / `credential`, and the details step's "Change" lands on
+  # `credential`. A step outside the wizard is a no-op instead of a crash.
   def handle_event("wizard_back", %{"step" => step}, socket)
-      when step in ~w(provider model) do
+      when step in ~w(provider credential model) do
     {:noreply, assign(socket, :wizard_step, step)}
   end
+
+  def handle_event("wizard_back", _params, socket), do: {:noreply, socket}
 
   def handle_event("wizard_search_providers", params, socket) do
     {:noreply, assign(socket, :wizard_provider_search, query_param(params))}
@@ -781,6 +795,10 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:provider_form_pricing_unit, unit)
        |> assign(:credential_form, nil)
        |> assign(:provider_models, [])
+       # A fresh modal has no fetch in flight: the flag of the previous session
+       # otherwise shows a spinner (and hides the suggestions) forever.
+       |> assign(:provider_models_loading, false)
+       |> assign(:provider_model_search, "")
        |> build_provider_choices(model_id)
        |> assign(:provider_credentials, nil)
        |> assign_credential_choices()}
@@ -847,12 +865,23 @@ defmodule TokengateWeb.ModelsLive do
 
   # Back to step 1: the provider picker opens again and the credential list goes
   # back to every active key until the next provider is chosen.
+  #
+  # Everything the discarded provider left behind goes with it: the key it had
+  # selected (in the form AND in the assign the async guard reads), its
+  # catalogue and the in-flight flag. Otherwise a late response still matched
+  # the guard and painted that catalogue in a form with no provider.
   def handle_event("clear_provider_choice", _params, socket) do
     {:noreply,
      socket
      |> assign(:provider_form_provider_key, nil)
+     |> assign(:provider_form_credential_id, nil)
+     |> assign(:provider_form_is_fireworks, false)
      |> assign(:provider_credentials, nil)
      |> assign(:credential_form, nil)
+     |> assign(:provider_models, [])
+     |> assign(:provider_models_loading, false)
+     |> assign(:provider_model_search, "")
+     |> clear_form_credential()
      |> filter_provider_choices("")
      |> assign_credential_choices()}
   end
@@ -1002,14 +1031,25 @@ defmodule TokengateWeb.ModelsLive do
         )
 
       # The credential list is narrowed to the row's own provider, so editing an
-      # assignment shows the keys that can actually serve it.
+      # assignment shows the keys that can actually serve it. The row's own key
+      # is kept in the list even when it is not `active`: without it the select
+      # could not represent the stored credential and the save failed on the
+      # required field.
+      lane_credential = credential_for_lane(socket, ap.credential_id)
+
       provider_credentials =
-        case Enum.find(
-               socket.assigns[:credentials_for_select] || [],
-               &(&1.id == ap.credential_id)
-             ) do
-          %{provider_id: provider_id} -> credentials_of(socket, provider_id)
-          _ -> []
+        case lane_credential do
+          %{provider_id: provider_id} ->
+            credentials = credentials_of(socket, provider_id)
+
+            if Enum.any?(credentials, &(&1.id == lane_credential.id)) do
+              credentials
+            else
+              credentials ++ [lane_credential]
+            end
+
+          _ ->
+            []
         end
 
       {:noreply,
@@ -1519,7 +1559,11 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:wizard_models_loading, true)
       |> assign(:wizard_models_error, nil)
     else
-      assign(socket, :wizard_models_loading, false)
+      # Sin credencial no hay petición: el estado de la anterior no puede
+      # sobrevivir (ni el error ni el spinner) — sería el de otra sesión.
+      socket
+      |> assign(:wizard_models_loading, false)
+      |> assign(:wizard_models_error, nil)
     end
   end
 
@@ -1601,36 +1645,47 @@ defmodule TokengateWeb.ModelsLive do
   #
   # La unidad de precio del lane nace con la del TIPO del modelo, para que el
   # operador no tenga que acordarse de cambiarla.
+  #
+  # Devuelve `:ok` o `{:error, reason}`: el llamador necesita saber POR QUÉ no
+  # hubo lane para poder decirlo — antes el `:error` se descartaba y el flash
+  # anunciaba una alta completa.
   defp create_wizard_lane(socket, model) do
-    with credential_id when is_binary(credential_id) <- socket.assigns[:wizard_credential_id],
-         provider_model when is_binary(provider_model) <- socket.assigns[:wizard_provider_model] do
-      unit = Pricing.default_unit_for_type(model.model_type || "llm")
+    credential_id = socket.assigns[:wizard_credential_id]
+    provider_model = socket.assigns[:wizard_provider_model]
 
-      attrs =
-        %{
-          model_id: model.id,
-          credential_id: credential_id,
-          provider_model: provider_model,
-          priority: 1,
-          enabled: true,
-          pricing_unit: unit
-        }
+    cond do
+      not is_binary(credential_id) ->
+        {:error, :no_credential}
 
-      case Providers.create_model_provider(attrs) do
-        {:ok, ap} ->
-          audit(socket, "model_provider.create", "model_provider", ap.id, %{
-            "model_id" => model.id,
-            "provider_model" => provider_model,
-            "via" => "wizard"
-          })
+      not is_binary(provider_model) or String.trim(provider_model) == "" ->
+        {:error, :no_provider_model}
 
-          :ok
+      true ->
+        unit = Pricing.default_unit_for_type(model.model_type || "llm")
 
-        {:error, _changeset} ->
-          :error
-      end
-    else
-      _ -> :error
+        attrs =
+          %{
+            model_id: model.id,
+            credential_id: credential_id,
+            provider_model: provider_model,
+            priority: 1,
+            enabled: true,
+            pricing_unit: unit
+          }
+
+        case Providers.create_model_provider(attrs) do
+          {:ok, ap} ->
+            audit(socket, "model_provider.create", "model_provider", ap.id, %{
+              "model_id" => model.id,
+              "provider_model" => provider_model,
+              "via" => "wizard"
+            })
+
+            :ok
+
+          {:error, _changeset} ->
+            {:error, :invalid_lane}
+        end
     end
   end
 
@@ -1658,18 +1713,8 @@ defmodule TokengateWeb.ModelsLive do
       {:ok, model} ->
         audit(socket, "model.create", "model", model.id, %{"name" => model.name})
 
-        lane? = create_wizard_lane(socket, model) == :ok
-
-        message =
-          if lane? do
-            gettext("Model created with its first provider assignment.")
-          else
-            gettext("Model created.")
-          end
-
         {:noreply,
-         socket
-         |> put_flash(:info, message)
+         put_lane_result_flash(socket, create_wizard_lane(socket, model))
          |> assign(:form, nil)
          |> assign(:editing_model_id, nil)
          |> reset_wizard()
@@ -1714,6 +1759,34 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   ## Private helpers — model_provider save ---------------------------------
+
+  # El resultado del lane decide el flash: un alta que eligió proveedor prometió
+  # una asignación, así que su fallo es un error que dice el motivo — nunca un
+  # "Model created." que deje creer que el modelo ya se sirve.
+  defp put_lane_result_flash(socket, :ok),
+    do: put_flash(socket, :info, gettext("Model created with its first provider assignment."))
+
+  # "Create by hand" no prometió lane: ahí el modelo solo es el resultado
+  # esperado (el modal de edición es donde se añade la key).
+  defp put_lane_result_flash(socket, {:error, reason}) do
+    if is_nil(socket.assigns[:wizard_provider_key]) do
+      put_flash(socket, :info, gettext("Model created."))
+    else
+      put_flash(socket, :error, lane_error_message(reason))
+    end
+  end
+
+  defp lane_error_message(:no_credential),
+    do:
+      gettext(
+        "Model created without a provider assignment: no API key was selected for this provider."
+      )
+
+  defp lane_error_message(:no_provider_model),
+    do: gettext("Model created without a provider assignment: the provider model id is empty.")
+
+  defp lane_error_message(_reason),
+    do: gettext("Model created without a provider assignment: the assignment could not be saved.")
 
   # Search events arrive from inputs inside the provider form: create-mode
   # pickers carry %{"value"}, while the named edit-mode ones arrive nested
@@ -1813,18 +1886,19 @@ defmodule TokengateWeb.ModelsLive do
     if credential_id == assigns[:provider_form_credential_id] do
       case result do
         {:ok, models} ->
+          # `provider_model_search` is NOT reset: it is the filter the operator
+          # typed into `provider_model`, not a piece of the listing state.
           {:noreply,
            socket
            |> assign(:provider_models, models)
-           |> assign(:provider_models_loading, false)
-           |> assign(:provider_model_search, "")}
+           |> assign(:provider_models_loading, false)}
 
         {:error, _reason} ->
+          # Same: the typed filter survives the failed listing.
           {:noreply,
            socket
            |> assign(:provider_models, [])
            |> assign(:provider_models_loading, false)
-           |> assign(:provider_model_search, "")
            |> put_flash(:error, gettext("Could not load the provider models."))}
       end
     else
@@ -1999,6 +2073,9 @@ defmodule TokengateWeb.ModelsLive do
          |> put_flash(:info, msg)
          |> assign(:provider_form, nil)
          |> assign(:editing_ap_id, nil)
+         # The modal is closing: nothing is in flight anymore, so the spinner
+         # must not leak into the next one.
+         |> assign(:provider_models_loading, false)
          |> load_models()}
 
       {:error, changeset} ->
@@ -2037,6 +2114,8 @@ defmodule TokengateWeb.ModelsLive do
          |> put_flash(:info, gettext("Provider updated."))
          |> assign(:provider_form, nil)
          |> assign(:editing_ap_id, nil)
+         # Same as the create path: closing the modal ends any listing state.
+         |> assign(:provider_models_loading, false)
          |> load_models()}
 
       {:error, changeset} ->
@@ -2274,17 +2353,19 @@ defmodule TokengateWeb.ModelsLive do
 
   # Which providers the modal offers: every active one. El espejo de modelos de
   # models.dev se retiró, así que no hay ofertas que acoten la lista; el tipo
-  # elegido filtra por capability (ver `filter_choices_by_capability/2`).
-  defp build_provider_choices(socket, _model_id) do
+  # del MODELO DESTINO filtra por capability (ver
+  # `filter_choices_by_capability/2`).
+  defp build_provider_choices(socket, model_id) do
     choices = all_active_providers()
 
-    # El tipo elegido en el paso 0 acota además por capability declarada: solo
-    # proveedores que sirven ese servicio aparecen. Un tipo no elegido (edición
-    # de un row existente) no filtra — el comportamiento previo se conserva.
+    # El tipo sale del modelo al que se le añade el lane, NUNCA del tipo que el
+    # operador eligió en el wizard del alta: ese assign se quedaba pegado tras
+    # guardar y acotaba el picker de cualquier otro modelo (ocultaba
+    # proveedores válidos y vaciaba la lista).
     choices =
-      case socket.assigns[:model_form_picked_type] do
-        nil -> choices
-        type -> filter_choices_by_capability(choices, type)
+      case Providers.get_model(model_id) do
+        %Model{model_type: type} -> filter_choices_by_capability(choices, type || "llm")
+        _ -> choices
       end
 
     socket
@@ -2340,19 +2421,48 @@ defmodule TokengateWeb.ModelsLive do
     |> assign(:provider_choices_results, results)
   end
 
+  # The provider of the modal is the one that OWNS the selected API key: every
+  # credential belongs to exactly one provider. Resolving it against
+  # `provider_choices` (active providers, filtered by the model's type) made the
+  # chip show a provider that "New API key" then claimed was not picked.
   defp selected_provider(socket) do
-    case socket.assigns[:provider_form_provider_key] do
-      nil ->
-        nil
+    credentials =
+      List.wrap(socket.assigns[:provider_credentials]) ++
+        List.wrap(socket.assigns[:credentials_for_select])
 
-      ref ->
-        socket.assigns[:provider_choices]
-        |> List.wrap()
-        |> Enum.find(&(&1.provider && provider_ref(&1.provider) == ref))
-        |> case do
-          %{provider: provider} -> provider
-          _ -> nil
+    case socket.assigns[:provider_form_credential_id] do
+      nil ->
+        provider_by_ref(
+          socket.assigns[:provider_choices],
+          credentials,
+          socket.assigns[:provider_form_provider_key]
+        )
+
+      credential_id ->
+        case Enum.find(credentials, &(&1.id == credential_id)) do
+          %{provider: provider} ->
+            provider
+
+          _ ->
+            provider_by_ref(
+              socket.assigns[:provider_choices],
+              credentials,
+              socket.assigns[:provider_form_provider_key]
+            )
         end
+    end
+  end
+
+  # The form's own `credential_id` must go too when the provider choice is
+  # discarded: the select would otherwise keep the old key with no provider.
+  defp clear_form_credential(socket) do
+    case socket.assigns[:provider_form] do
+      nil ->
+        socket
+
+      form ->
+        changeset = Ecto.Changeset.put_change(form.source, :credential_id, nil)
+        assign(socket, :provider_form, to_form(changeset, as: :model_provider))
     end
   end
 
@@ -2380,13 +2490,31 @@ defmodule TokengateWeb.ModelsLive do
   defp provider_key_of_credential(_socket, nil), do: nil
 
   defp provider_key_of_credential(socket, credential_id) do
-    case Enum.find(socket.assigns[:credentials_for_select] || [], &(&1.id == credential_id)) do
+    case credential_for_lane(socket, credential_id) do
       # Ref, no key: un custom no tiene key de catálogo y sin ref el chip del
       # modal lo daría por no elegido.
       %{provider: provider} -> provider_ref(provider)
       _ -> nil
     end
   end
+
+  # The row's own credential, even when it is NOT `active`: a key that went
+  # disabled/error still owns its lane, so editing it must resolve its provider
+  # and keep it selectable instead of showing an empty modal.
+  defp credential_for_lane(socket, credential_id) when is_binary(credential_id) do
+    case Enum.find(socket.assigns[:credentials_for_select] || [], &(&1.id == credential_id)) do
+      nil ->
+        case Repo.get(Tokengate.Providers.Credential, credential_id) do
+          nil -> nil
+          credential -> Repo.preload(credential, :provider)
+        end
+
+      credential ->
+        credential
+    end
+  end
+
+  defp credential_for_lane(_socket, _credential_id), do: nil
 
   # One place where picking a provider (or creating its key) turns into modal
   # state: the form's credential, the provider key, the credential list narrowed
@@ -3221,7 +3349,14 @@ defmodule TokengateWeb.ModelsLive do
                       <label class="label" for="wizard-credential">
                         {gettext("Credential (API key)")}
                       </label>
-                      <form id="wizard-credential-form" phx-change="wizard_pick_credential">
+                      <%!-- phx-submit: sin él, Enter en el select resuelve en un
+                           submit NATIVO (recarga /catalog/models) y tira el
+                           wizard entero. --%>
+                      <form
+                        id="wizard-credential-form"
+                        phx-change="wizard_pick_credential"
+                        phx-submit="wizard_pick_credential"
+                      >
                         <select
                           id="wizard-credential"
                           name="credential_id"
@@ -3481,7 +3616,13 @@ defmodule TokengateWeb.ModelsLive do
                       <label class="label" for="wizard-provider-model">
                         {gettext("Model id at the provider")}
                       </label>
-                      <form id="wizard-provider-model-form" phx-change="wizard_pick_provider_model">
+                      <%!-- phx-submit: Enter en el id resuelve en un submit NATIVO
+                           sin él (recarga y se pierde el wizard). --%>
+                      <form
+                        id="wizard-provider-model-form"
+                        phx-change="wizard_pick_provider_model"
+                        phx-submit="wizard_pick_provider_model"
+                      >
                         <input
                           type="text"
                           id="wizard-provider-model"
