@@ -804,7 +804,10 @@ defmodule TokengateWeb.ModelsLive do
   # catalogue for the suggestion list.
   def handle_event("select_provider", %{"key" => provider_key}, socket) do
     if socket.assigns.is_admin and socket.assigns.provider_form do
-      case Enum.find(socket.assigns.provider_choices, &(&1.provider.key == provider_key)) do
+      case Enum.find(
+             socket.assigns.provider_choices,
+             &(&1.provider && provider_ref(&1.provider) == provider_key)
+           ) do
         nil ->
           {:noreply, put_flash(socket, :error, gettext("Unknown provider."))}
 
@@ -1416,10 +1419,10 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   @doc """
-  La referencia con la que el wizard identifica un proveedor: su `key` (el
-  vínculo con el catálogo) o, para un custom que no tiene, su `id`.
+  La referencia con la que la UI identifica un proveedor: su `key` (el vínculo
+  con el catálogo) o, para un custom que no tiene, su `id`.
   """
-  def wizard_provider_ref(provider), do: provider.key || provider.id
+  def provider_ref(provider), do: provider.key || provider.id
 
   @doc "Etiqueta de una credencial en el select del wizard: alias (sufijo de la key)."
   def credential_label(credential) do
@@ -1474,12 +1477,12 @@ defmodule TokengateWeb.ModelsLive do
     end)
   end
 
-  defp provider_label_for(socket, provider_ref) do
+  defp provider_label_for(socket, ref) do
     case Enum.find(List.wrap(socket.assigns[:wizard_providers]), fn provider ->
-           wizard_provider_ref(provider) == provider_ref
+           provider_ref(provider) == ref
          end) do
       %{name: name} when is_binary(name) -> name
-      _ -> provider_ref
+      _ -> ref
     end
   end
 
@@ -2105,32 +2108,52 @@ defmodule TokengateWeb.ModelsLive do
     |> binary_part(0, 8)
   end
 
-  @doc "Display name of a provider in the modal's choice list (id as fallback)."
-  def provider_label(choices, provider_key) do
-    choices
-    |> List.wrap()
-    |> Enum.find(&(&1.provider.key == provider_key))
-    |> case do
-      %{provider: provider} -> provider.name
-      _ -> provider_key
+  @doc "Display name of a provider in the modal's choice list (ref as fallback)."
+  def provider_label(choices, provider_ref_key) do
+    case provider_by_ref(choices, [], provider_ref_key) do
+      %{name: name} -> name
+      _ -> provider_ref_key
     end
   end
 
   @doc """
   Nombre del proveedor elegido en el modal. Sale de la lista de ofertas del
-  modelo; una key de un proveedor que no sirve este modelo no entra a esa lista,
+  modelo; un ref de un proveedor que no sirve este modelo no entra a esa lista,
   así que se resuelve por la credencial (el proveedor siempre es conocido: es
   quien emitió la key).
   """
-  def provider_chip_name(choices, credentials, provider_key) do
-    case Enum.find(List.wrap(choices), &(&1.provider.key == provider_key)) do
-      %{provider: provider} ->
-        provider.name
+  def provider_chip_name(choices, credentials, provider_ref_key) do
+    case provider_by_ref(choices, credentials, provider_ref_key) do
+      %{name: name} when is_binary(name) -> name
+      _ -> provider_ref_key
+    end
+  end
 
+  @doc """
+  La key de catálogo que se muestra junto al nombre del chip: `nil` para un
+  custom — su id no es material de exhibición.
+  """
+  def provider_key_label(choices, credentials, provider_ref_key) do
+    case provider_by_ref(choices, credentials, provider_ref_key) do
+      %{key: key} when is_binary(key) -> key
+      _ -> nil
+    end
+  end
+
+  # Resuelve un ref (`provider_ref/1`) contra la lista de ofertas del modelo y,
+  # en su defecto, contra las credenciales cargadas (cada una trae su proveedor).
+  defp provider_by_ref(choices, credentials, provider_ref_key) do
+    with %{provider: provider} <-
+           Enum.find(
+             List.wrap(choices),
+             &(&1.provider && provider_ref(&1.provider) == provider_ref_key)
+           ) do
+      provider
+    else
       _ ->
-        case Enum.find(List.wrap(credentials), &(&1.provider.key == provider_key)) do
-          %{provider: %{name: name}} when is_binary(name) -> name
-          _ -> provider_key
+        case Enum.find(List.wrap(credentials), &(provider_ref(&1.provider) == provider_ref_key)) do
+          nil -> nil
+          credential -> credential.provider
         end
     end
   end
@@ -2322,10 +2345,10 @@ defmodule TokengateWeb.ModelsLive do
       nil ->
         nil
 
-      key ->
+      ref ->
         socket.assigns[:provider_choices]
         |> List.wrap()
-        |> Enum.find(&(&1.provider.key == key))
+        |> Enum.find(&(&1.provider && provider_ref(&1.provider) == ref))
         |> case do
           %{provider: provider} -> provider
           _ -> nil
@@ -2358,7 +2381,9 @@ defmodule TokengateWeb.ModelsLive do
 
   defp provider_key_of_credential(socket, credential_id) do
     case Enum.find(socket.assigns[:credentials_for_select] || [], &(&1.id == credential_id)) do
-      %{provider: %{key: key}} -> key
+      # Ref, no key: un custom no tiene key de catálogo y sin ref el chip del
+      # modal lo daría por no elegido.
+      %{provider: provider} -> provider_ref(provider)
       _ -> nil
     end
   end
@@ -2371,7 +2396,7 @@ defmodule TokengateWeb.ModelsLive do
     socket =
       socket
       |> assign(:provider_form, to_form(changeset, as: :model_provider))
-      |> assign(:provider_form_provider_key, provider.key)
+      |> assign(:provider_form_provider_key, provider_ref(provider))
       |> assign(:provider_form_credential_id, credential_id)
       |> assign(:provider_form_is_fireworks, provider.key == "fireworks-ai")
       |> assign(:provider_credentials, credentials)
@@ -2404,7 +2429,7 @@ defmodule TokengateWeb.ModelsLive do
 
         socket
         |> assign(:provider_form, to_form(changeset, as: :model_provider))
-        |> assign(:provider_form_provider_key, provider.key)
+        |> assign(:provider_form_provider_key, provider_ref(provider))
         |> assign(:provider_form_credential_id, credential_id)
         |> assign(:provider_form_is_fireworks, provider.key == "fireworks-ai")
         |> assign(:provider_credentials, credentials)
@@ -3109,8 +3134,8 @@ defmodule TokengateWeb.ModelsLive do
                     :for={p <- wizard_provider_results(@wizard_providers, @wizard_provider_search)}
                     type="button"
                     phx-click="wizard_pick_provider"
-                    phx-value-key={wizard_provider_ref(p)}
-                    id={"wizard-provider-#{dom_key(wizard_provider_ref(p))}"}
+                    phx-value-key={provider_ref(p)}
+                    id={"wizard-provider-#{dom_key(provider_ref(p))}"}
                     class="w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0 flex items-center gap-2"
                   >
                     <img
@@ -3732,8 +3757,21 @@ defmodule TokengateWeb.ModelsLive do
                           @provider_credentials,
                           @provider_form_provider_key
                         )}
-                        <span class="text-xs text-base-content/50 font-mono ml-1">
-                          {@provider_form_provider_key}
+                        <span
+                          :if={
+                            provider_key_label(
+                              @provider_choices,
+                              @provider_credentials,
+                              @provider_form_provider_key
+                            )
+                          }
+                          class="text-xs text-base-content/50 font-mono ml-1"
+                        >
+                          {provider_key_label(
+                            @provider_choices,
+                            @provider_credentials,
+                            @provider_form_provider_key
+                          )}
                         </span>
                       </span>
                       <button
@@ -3790,8 +3828,8 @@ defmodule TokengateWeb.ModelsLive do
                         :for={choice <- @provider_choices_results}
                         type="button"
                         phx-click="select_provider"
-                        phx-value-key={choice.provider.key}
-                        id={"provider-row-#{dom_key(choice.provider.key)}"}
+                        phx-value-key={provider_ref(choice.provider)}
+                        id={"provider-row-#{dom_key(provider_ref(choice.provider))}"}
                         class="w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0 flex items-center gap-2"
                       >
                         <img

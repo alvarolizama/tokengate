@@ -545,6 +545,99 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert html =~ "claude-3-opus"
   end
 
+  # Regresión del bug reportado: un proveedor CUSTOM no tiene key de catálogo,
+  # así que el botón del picker del modal mandaba `phx-value-key` nil — HEEx
+  # omite el atributo, el evento llegaba sin "key" y `select_provider` moría con
+  # FunctionClauseError llevándose el LiveView. La referencia ahora es
+  # `provider_ref/1` (key || id), la misma convención del wizard del alta.
+  test "elegir un proveedor custom en el modal de API key selecciona y asigna", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider(%{name: "Mi gateway"})
+    model_record = create_model()
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-custom",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+    # El picker muestra la primera página alfabética; el operador (y el test)
+    # encuentra al custom por el buscador.
+    view |> element("#provider-search") |> render_change(%{"q" => provider.name})
+
+    # El click en la fila del custom (su ref es el id) ya no rompe: el chip del
+    # proveedor elegido aparece con su nombre.
+    view |> element("#provider-row-#{ModelsLive.dom_key(provider.id)}") |> render_click()
+
+    html = render(view)
+    assert has_element?(view, "#selected-provider")
+    assert html =~ "Mi gateway"
+
+    html =
+      view
+      |> form("#model-provider-form", %{
+        model_provider: %{
+          credential_id: credential.id,
+          provider_model: "mi-modelo",
+          priority: 1,
+          enabled: true
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Proveedor asignado"
+
+    ap =
+      Repo.one!(
+        from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model_record.id
+      )
+
+    assert ap.credential_id == credential.id
+  end
+
+  # El "New API key" inline depende de `selected_provider/1`, que también
+  # resolvía por key de catálogo: para un custom devolvía nil y el guard
+  # rechazaba con «Pick the provider the API key belongs to first.» aunque el
+  # proveedor ya estuviera elegido.
+  test "crear una API key inline para un proveedor custom la deja seleccionada", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    model_record = create_model()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-ap-#{model_record.id}") |> render_click()
+    view |> element("#provider-search") |> render_change(%{"q" => provider.name})
+    view |> element("#provider-row-#{ModelsLive.dom_key(provider.id)}") |> render_click()
+
+    view |> element("#new-credential-inline") |> render_click()
+
+    html =
+      view
+      |> form("#inline-credential", %{
+        credential: %{name: "prod", api_key_encrypted: "sk-inline-#{unique()}"}
+      })
+      |> render_submit()
+
+    assert html =~ "API key creada y seleccionada"
+
+    credential =
+      Repo.one!(from c in Tokengate.Providers.Credential, where: c.provider_id == ^provider.id)
+
+    assert credential.name == "prod"
+
+    # La key recién creada queda seleccionada en el form del lane.
+    assert view |> element("#model_provider_credential_id") |> render() =~
+             "selected"
+  end
+
   # La unidad de precio la decide el TIPO del modelo: un lane de imagen no se
   # cobra por tokens, así que el modal abre en «por imagen» y ofrece `unit_cost`
   # en vez de los tres campos por millón — que sin unidad quedaban en $0 salvo
