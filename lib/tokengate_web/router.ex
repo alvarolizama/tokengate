@@ -197,6 +197,7 @@ defmodule TokengateWeb.Router do
       # a /admin/* responde 404.
       # Catálogo — qué se sirve y a qué costo.
       live "/catalog/providers", ProvidersLive
+      live "/catalog/providers/:id/keys", ProviderKeysLive
       live "/catalog/models", ModelsLive
       live "/catalog/labs", LabsLive
       # Acceso — quién puede usar qué.

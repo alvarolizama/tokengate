@@ -113,19 +113,22 @@ defmodule TokengateWeb.ProvidersLiveTest do
     refute has_element?(view, "#providers-empty")
   end
 
-  # El grid de 2 columnas se pina por clases: ExUnit no puede medir el layout.
-  # La paridad de alturas por fila y el 2-por-fila real se midieron en el
-  # navegador (1512/1280/1100/1024 → 2 por fila; 900 → 1 por fila).
-  test "la lista de proveedores es un grid de dos columnas", %{conn: conn} do
-    create_provider(%{name: "grid-prov-a-#{unique()}"})
-    create_provider(%{name: "grid-prov-b-#{unique()}"})
+  # La lista es una TABLA: una fila por proveedor, y las API keys se gestionan
+  # en su propia página (/catalog/providers/:id/keys), no embebidas por fila.
+  test "la lista de proveedores es una tabla con una fila por proveedor", %{conn: conn} do
+    provider = create_provider(%{name: "table-prov-#{unique()}"})
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live_providers(conn)
 
-    assert has_element?(view, "#providers.grid.gap-3.lg\\:grid-cols-2")
-    refute has_element?(view, "#providers.space-y-3")
+    assert has_element?(view, "table#providers")
+    assert has_element?(view, "table#providers tbody tr#providers-#{provider.id}")
+
+    # Ya no hay grid de cards ni panel de credenciales dentro de la fila.
+    refute has_element?(view, "#providers.grid")
+    refute has_element?(view, "#credentials-panel-#{provider.id}")
+    refute has_element?(view, "#credential-form")
   end
 
   # El chip del logo es claro a propósito: los logos de models.dev usan
@@ -434,69 +437,41 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert has_element?(view, "#edit-#{provider.id}")
   end
 
-  ## Credential management -------------------------------------------------
+  ## API keys (own page) ---------------------------------------------------
 
-  test "admin manages credentials for a provider", %{conn: conn} do
+  # La gestión de keys ya no vive aquí: cada fila de la tabla lleva a
+  # /catalog/providers/:id/keys, que es donde se dan de alta y se editan.
+  test "cada fila lleva a la pagina de API keys del proveedor", %{conn: conn} do
     provider = create_provider()
+    empty_provider = create_provider()
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live_providers(conn)
 
-    # Credentials panel is always open
-    assert has_element?(view, "#credentials-panel-#{provider.id}")
+    assert has_element?(
+             view,
+             "a#provider-keys-#{provider.id}[href='/catalog/providers/#{provider.id}/keys']"
+           )
 
-    # Create a credential
-    view |> element("#new-credential-#{provider.id}") |> render_click()
-    assert has_element?(view, "#credential-form")
+    # La tabla cuenta las keys del proveedor, incluidas las que están en error.
+    {:ok, _cred} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "Producción",
+        api_key_encrypted: "sk-table",
+        status: "error"
+      })
 
-    html =
-      view
-      |> form("#credential-form",
-        credential: %{
-          provider_id: provider.id,
-          name: "Producción",
-          api_key_encrypted: "sk-tes...abcd"
-        }
-      )
-      |> render_submit()
+    {:ok, view, _html} = live_providers(recycle(conn))
 
-    assert html =~ "Credencial creada."
-    assert html =~ "Producción"
-    assert html =~ "••••••abcd"
+    assert has_element?(
+             view,
+             "a#provider-keys-#{provider.id}[href='/catalog/providers/#{provider.id}/keys']",
+             "1"
+           )
 
-    [cred] = Providers.list_credentials_for_provider(provider.id)
-
-    # Edit the credential — cambiar el alias y dejar API key vacío
-    view |> element("#edit-credential-#{cred.id}") |> render_click()
-    assert has_element?(view, "#credential-form")
-
-    html =
-      view
-      |> form("#credential-form",
-        credential: %{
-          name: "Staging",
-          api_key_encrypted: ""
-        }
-      )
-      |> render_submit()
-
-    assert html =~ "Credencial actualizada."
-    assert html =~ "Staging"
-
-    # Verificar que el API key NO se perdió
-    [updated] = Providers.list_credentials_for_provider(provider.id)
-    assert updated.api_key_encrypted == "sk-tes...abcd"
-    assert updated.name == "Staging"
-
-    # Toggle it off
-    html = view |> element("#toggle-credential-btn-#{cred.id}") |> render_click()
-    assert html =~ "desactivada"
-
-    # Delete it
-    html = view |> element("#delete-credential-#{cred.id}") |> render_click()
-    assert html =~ "Credencial eliminada."
-    refute has_element?(view, "#credential-#{cred.id}")
+    assert has_element?(view, "#provider-keys-#{empty_provider.id}", "0")
   end
 
   ## Builtin (catalog) providers ------------------------------------------------
@@ -546,17 +521,22 @@ defmodule TokengateWeb.ProvidersLiveTest do
     refute has_element?(view, "#catalog-row-fireworks-ai .badge")
     refute render(view) =~ "sin declarar"
 
-    # Activating a provider opens the credential modal pre-assigned to it.
+    # Activating a provider IS attaching its first key, and keys live on their
+    # own page: the click navigates there with the alta modal already open.
     view |> render_change("search_catalog", %{"query" => "fireworks"})
-    view |> element("#activate-catalog-fireworks-ai") |> render_click()
-
-    refute has_element?(view, "#catalog-modal")
-    assert has_element?(view, "#credential-form")
 
     provider = Tokengate.Repo.get_by!(Providers.Provider, key: "fireworks-ai")
 
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view |> element("#activate-catalog-fireworks-ai") |> render_click()
+
+    assert to == "/catalog/providers/#{provider.id}/keys?new=1"
+
+    {:ok, keys_view, _html} = live(conn, to)
+    assert has_element?(keys_view, "#credential-form")
+
     assert has_element?(
-             view,
+             keys_view,
              "#credential-form input[name='credential[provider_id]'][value='#{provider.id}']"
            )
   end
@@ -734,19 +714,6 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert has_element?(view, "#provider-form")
     refute has_element?(view, "#provider-form input[name='provider[name]'][disabled]")
     refute has_element?(view, "#provider-form input[name='provider[base_url]'][disabled]")
-  end
-
-  test "credential button is labeled 'API key' to distinguish from activating providers", %{
-    conn: conn
-  } do
-    provider = create_provider()
-    %{user: admin, password: password} = register_admin()
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live_providers(conn)
-
-    assert has_element?(view, "#new-credential-#{provider.id}")
-    assert render(view) =~ "API key"
   end
 
   ## Capacidades (per-service paths) ---------------------------------------

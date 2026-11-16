@@ -5602,3 +5602,39 @@ msgstr "El modelo se creó sin asignación de proveedor: no se pudo guardar la a
 #, elixir-autogen, elixir-format
 msgid "Model created without a provider assignment: the provider model id is empty."
 msgstr "El modelo se creó sin asignación de proveedor: el id del modelo en el proveedor está vacío."
+
+#, elixir-autogen, elixir-format
+msgid "Documentation"
+msgstr "Documentación"
+
+#, elixir-autogen, elixir-format
+msgid "Health"
+msgstr "Salud"
+
+#, elixir-autogen, elixir-format
+msgid "Inherited limits"
+msgstr "Límites heredados"
+
+#, elixir-autogen, elixir-format
+msgid "Keys whose circuit breaker is open"
+msgstr "Claves con el circuit breaker abierto"
+
+#, elixir-autogen, elixir-format
+msgid "Manage the API keys of this provider"
+msgstr "Gestionar las API keys de este proveedor"
+
+#, elixir-autogen, elixir-format
+msgid "Requests in flight across this provider's keys"
+msgstr "Peticiones en vuelo de todas las claves de este proveedor"
+
+#, elixir-autogen, elixir-format
+msgid "This provider has no API keys yet."
+msgstr "Este proveedor todavía no tiene API keys."
+
+#, elixir-autogen, elixir-format
+msgid "active / in error"
+msgstr "activas / en error"
+
+#, elixir-autogen, elixir-format
+msgid "%{count} in error"
+msgstr "%{count} en error"

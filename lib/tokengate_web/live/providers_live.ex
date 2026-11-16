@@ -1,6 +1,12 @@
 defmodule TokengateWeb.ProvidersLive do
   @moduledoc """
-  Admin CRUD for providers + per-provider credential management.
+  Admin CRUD for providers — the operator's catalog table.
+
+  One row per provider: identity, status, key counters, model count, the limits
+  every key inherits, and the live health of its keys (in-flight + open
+  breakers). The API keys themselves live on their own page,
+  `TokengateWeb.ProviderKeysLive` (`/catalog/providers/:id/keys`); activating a
+  catalog provider navigates there with the alta modal open.
 
   The provider owns the operational limits (`max_rpm`, `max_concurrent`,
   `max_concurrent_per_user`, `receive_timeout_ms`) and every credential of
@@ -37,6 +43,10 @@ defmodule TokengateWeb.ProvidersLive do
   # Everything else stays alphabetical by name.
   @recommended_provider_keys ~w(openrouter runinfra fireworks-ai)
 
+  # Baseline counters for a provider with no credentials yet: the batched
+  # aggregation starts from this shape, so the template never sees a missing key.
+  @no_credentials %{ids: [], keys: 0, active: 0, errored: 0}
+
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
@@ -50,8 +60,6 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:page_title, gettext("Providers") <> " · Tokengate")
       |> assign(:form, nil)
       |> assign(:editing_provider_id, nil)
-      |> assign(:credential_form, nil)
-      |> assign(:editing_credential_id, nil)
       |> assign(:catalog_modal_open, false)
       |> assign(:catalog_query, "")
       |> assign(:editing_provider_builtin?, false)
@@ -89,67 +97,69 @@ defmodule TokengateWeb.ProvidersLive do
   defp translate_reason(reason), do: TokengateWeb.Gettext.translate(reason)
 
   defp load_providers(socket) do
+    # Every provider in one query. The per-row numbers (keys, models, breaker,
+    # in-flight) come from the batched lookups below — never from a query
+    # inside the template loop. Builtin primero, custom al final (`false`
+    # ordena antes que `true` en Postgres) y, dentro de cada grupo, por nombre.
     providers =
       from(p in Provider,
-        left_join: c in assoc(p, :credentials),
-        preload: [credentials: c],
-        # Only providers in use: those with at least one credential.
-        # Seeded builtins without API keys stay invisible until a
-        # credential attaches to them.
-        where: not is_nil(c.id) or p.source == "custom",
-        # Builtin primero, custom al final (`false` ordena antes que `true` en
-        # Postgres) y, dentro de cada grupo, por nombre. La lista ya no se
-        # filtra por origen: se muestra entera.
         order_by: [asc: p.source == "custom", asc: p.name]
       )
       |> Repo.all()
 
-    # Count model_providers per provider for display
-    credential_ids =
-      providers
-      |> Enum.flat_map(& &1.credentials)
-      |> Enum.map(& &1.id)
+    # One sweep over every credential: the per-provider counters and the live
+    # breaker/in-flight lookups all read from this map.
+    credential_stats =
+      from(c in Credential, select: {c.provider_id, c.id, c.status})
+      |> Repo.all()
+      |> Enum.reduce(%{}, fn {provider_id, cred_id, status}, acc ->
+        entry = Map.get(acc, provider_id, @no_credentials)
 
-    model_counts =
-      if credential_ids == [] do
-        %{}
-      else
-        from(mp in ModelProvider,
-          where: mp.credential_id in ^credential_ids,
-          group_by: mp.credential_id,
-          select: {mp.credential_id, count(mp.id)}
-        )
-        |> Repo.all()
-        |> Enum.into(%{})
-      end
+        entry = %{
+          ids: [cred_id | entry.ids],
+          keys: entry.keys + 1,
+          active: entry.active + if(status == "active", do: 1, else: 0),
+          errored: entry.errored + if(status == "error", do: 1, else: 0)
+        }
 
-    # Map credential counts to provider counts
-    provider_model_counts =
-      Enum.reduce(providers, %{}, fn provider, acc ->
-        count =
-          provider.credentials
-          |> Enum.map(&Map.get(model_counts, &1.id, 0))
-          |> Enum.sum()
-
-        Map.put(acc, provider.id, count)
+        Map.put(acc, provider_id, entry)
       end)
 
-    # Fetch circuit breaker status for every credential in one Registry sweep
+    # Only providers in use: those with at least one credential. Seeded
+    # builtins without API keys stay invisible until a credential attaches to
+    # them — the "Add provider" picker is the way in.
+    providers =
+      Enum.filter(providers, fn provider ->
+        credential_stats(provider.id, credential_stats).keys > 0 or provider.source == "custom"
+      end)
+
+    # model_providers hang off the credential, so one join answers the count
+    # for every provider at once.
+    provider_model_counts =
+      from(mp in ModelProvider,
+        join: c in assoc(mp, :credential),
+        group_by: c.provider_id,
+        select: {c.provider_id, count(mp.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    # Circuit breaker state for every credential in one Registry sweep
     # (instead of one lookup + GenServer call per credential). Unknown
     # credentials simply don't appear — the template must default to :closed.
-    alias Tokengate.Routing.CircuitBreakerManager
-
     breaker_statuses =
-      CircuitBreakerManager.status_all()
+      Tokengate.Routing.CircuitBreakerManager.status_all()
       |> then(fn all ->
-        providers
-        |> Enum.flat_map(& &1.credentials)
-        |> Map.new(fn cred -> {cred.id, Map.get(all, cred.id, :closed)} end)
+        for {_provider_id, stats} <- credential_stats,
+            id <- stats.ids,
+            into: %{},
+            do: {id, Map.get(all, id, :closed)}
       end)
 
     socket
     |> assign(:providers, providers)
     |> assign(:providers_empty?, providers == [])
+    |> assign(:credential_stats, credential_stats)
     |> assign(:provider_model_counts, provider_model_counts)
     |> assign(:breaker_statuses, breaker_statuses)
     |> load_catalog()
@@ -272,9 +282,9 @@ defmodule TokengateWeb.ProvidersLive do
     {:noreply, filter_catalog(socket, params["query"] || "")}
   end
 
-  # Attaching an API key IS what activates a catalog provider: the credential
-  # modal opens with the provider already assigned. Builtin rows are
-  # materialized at boot, so the row exists before its first key.
+  # Attaching an API key IS what activates a catalog provider, and keys live on
+  # their own page: jump to it with the alta modal already open. Builtin rows
+  # are materialized at boot, so the row exists before its first key.
   def handle_event("activate_catalog_provider", %{"key" => key}, socket) do
     entry = Enum.find(socket.assigns.catalog_entries, &(&1.key == key))
 
@@ -293,17 +303,8 @@ defmodule TokengateWeb.ProvidersLive do
              )}
 
           provider ->
-            changeset =
-              Providers.change_credential(%Credential{
-                provider_id: provider.id,
-                status: "active"
-              })
-
             {:noreply,
-             socket
-             |> assign(:catalog_modal_open, false)
-             |> assign(:credential_form, to_form(changeset, as: :credential))
-             |> assign(:editing_credential_id, nil)}
+             push_navigate(socket, to: ~p"/catalog/providers/#{provider.id}/keys?new=1")}
         end
     end
   end
@@ -432,181 +433,6 @@ defmodule TokengateWeb.ProvidersLive do
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Could not update the provider."))}
-    end
-  end
-
-  ## Events — credential management ----------------------------------------
-
-  def handle_event("new_credential", %{"provider_id" => provider_id}, socket) do
-    changeset =
-      Providers.change_credential(%Credential{provider_id: provider_id, status: "active"})
-
-    {:noreply,
-     socket
-     |> assign(:credential_form, to_form(changeset, as: :credential))
-     |> assign(:editing_credential_id, nil)}
-  end
-
-  def handle_event("edit_credential", %{"id" => cred_id}, socket) do
-    cred = Providers.get_credential!(cred_id)
-
-    changeset =
-      cred
-      |> Providers.change_credential()
-
-    {:noreply,
-     socket
-     |> assign(:credential_form, to_form(changeset, as: :credential))
-     |> assign(:editing_credential_id, cred.id)}
-  end
-
-  def handle_event("cancel_credential", _params, socket) do
-    {:noreply, socket |> assign(:credential_form, nil) |> assign(:editing_credential_id, nil)}
-  end
-
-  def handle_event("save_credential", %{"credential" => cred_params}, socket) do
-    editing_id = socket.assigns[:editing_credential_id]
-
-    if editing_id do
-      cred = Providers.get_credential!(editing_id)
-
-      # Si el api_key viene vacío, evitamos sobrescribir — lo removemos
-      cred_params =
-        if cred_params["api_key_encrypted"] in [nil, ""] do
-          Map.drop(cred_params, ["api_key_encrypted"])
-        else
-          cred_params
-        end
-
-      case Providers.update_credential(cred, cred_params) do
-        {:ok, _cred} ->
-          audit(socket, "credential.update", "credential", cred.id, %{
-            "provider_id" => cred.provider_id,
-            "name" => cred.name,
-            "key_rotated" => Map.has_key?(cred_params, "api_key_encrypted")
-          })
-
-          {:noreply,
-           socket
-           |> put_flash(:info, "Credencial actualizada.")
-           |> assign(:credential_form, nil)
-           |> assign(:editing_credential_id, nil)
-           |> load_providers()}
-
-        {:error, changeset} ->
-          {:noreply, assign(socket, :credential_form, to_form(changeset, as: :credential))}
-      end
-    else
-      case Providers.create_credential(cred_params) do
-        {:ok, cred} ->
-          audit(socket, "credential.create", "credential", cred.id, %{
-            "provider_id" => cred.provider_id,
-            "name" => cred.name
-          })
-
-          {:noreply,
-           socket
-           |> put_flash(:info, "Credencial creada.")
-           |> assign(:credential_form, nil)
-           |> assign(:editing_credential_id, nil)
-           |> load_providers()}
-
-        {:error, changeset} ->
-          {:noreply, assign(socket, :credential_form, to_form(changeset, as: :credential))}
-      end
-    end
-  end
-
-  def handle_event("toggle_credential", %{"id" => cred_id}, socket) do
-    cred = Providers.get_credential!(cred_id)
-
-    # Credentials in "error" state cannot be toggled — they must be reactivated.
-    if cred.status == "error" do
-      {:noreply,
-       put_flash(socket, :error, gettext("This credential is in error. Use Reactivate."))}
-    else
-      new_status = if cred.status == "active", do: "disabled", else: "active"
-
-      case Providers.update_credential(cred, %{status: new_status}) do
-        {:ok, _} ->
-          audit(socket, "credential.toggle_status", "credential", cred.id, %{
-            "provider_id" => cred.provider_id,
-            "name" => cred.name,
-            "status" => new_status
-          })
-
-          {:noreply,
-           socket
-           |> put_flash(
-             :info,
-             "Credencial #{if(new_status == "active", do: "activada", else: "desactivada")}."
-           )
-           |> load_providers()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not update the credential."))}
-      end
-    end
-  end
-
-  def handle_event("reactivate_credential", %{"id" => cred_id}, socket) do
-    cred = Providers.get_credential!(cred_id)
-
-    if cred.status == "error" do
-      case Providers.reactivate_credential(cred) do
-        {:ok, _} ->
-          audit(socket, "credential.reactivate", "credential", cred.id, %{
-            "provider_id" => cred.provider_id,
-            "name" => cred.name
-          })
-
-          {:noreply,
-           socket
-           |> put_flash(:info, "Credencial reactivada.")
-           |> load_providers()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not reactivate the credential."))}
-      end
-    else
-      {:noreply,
-       put_flash(socket, :error, gettext("Only credentials in error can be reactivated."))}
-    end
-  end
-
-  def handle_event("reset_breaker", %{"id" => cred_id}, socket) do
-    cred = Providers.get_credential!(cred_id)
-
-    Tokengate.Routing.CircuitBreakerManager.reset(cred.id)
-
-    audit(socket, "credential.breaker_reset", "credential", cred.id, %{
-      "provider_id" => cred.provider_id,
-      "name" => cred.name
-    })
-
-    {:noreply,
-     socket
-     |> put_flash(:info, "Circuit breaker reseteado.")
-     |> load_providers()}
-  end
-
-  def handle_event("delete_credential", %{"id" => cred_id}, socket) do
-    cred = Providers.get_credential!(cred_id)
-
-    case Providers.delete_credential(cred) do
-      {:ok, _} ->
-        audit(socket, "credential.delete", "credential", cred.id, %{
-          "provider_id" => cred.provider_id,
-          "name" => cred.name
-        })
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Credencial eliminada.")
-         |> load_providers()}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Could not delete the credential."))}
     end
   end
 
@@ -843,9 +669,22 @@ defmodule TokengateWeb.ProvidersLive do
 
   ## Helpers ---------------------------------------------------------------
 
-  @doc "Credentials for a provider (from preloaded map)."
-  def credentials_for(%{credentials: creds}), do: creds
-  def credentials_for(_), do: []
+  @doc "Key counters of one provider (from the batched stats map)."
+  def credential_stats(provider_id, stats), do: Map.get(stats, provider_id, @no_credentials)
+
+  @doc """
+  Health of one provider, aggregated over its keys: how many of its circuit
+  breakers are open (or half-open) and how many upstream requests are in flight
+  right now. Both come from live in-memory state, not from a query.
+  """
+  def provider_health(provider_id, stats, breaker_statuses, inflight) do
+    ids = credential_stats(provider_id, stats).ids
+
+    %{
+      open: Enum.count(ids, &(Map.get(breaker_statuses, &1, :closed) in [:open, :half_open])),
+      inflight: Enum.reduce(ids, 0, fn id, acc -> Map.get(inflight, id, 0) + acc end)
+    }
+  end
 
   @doc "How many capabilities this provider overrides — the badge on its button."
   def path_override_count(provider), do: map_size(ProviderPaths.overrides(provider))
@@ -885,18 +724,6 @@ defmodule TokengateWeb.ProvidersLive do
     if is_nil(provider.receive_timeout_ms), do: "#{ms} ms (global)", else: "#{ms} ms"
   end
 
-  @doc "Mask an api key for display: show only the last 4 chars."
-  def mask_key(nil), do: "—"
-  def mask_key(""), do: "—"
-  def mask_key(key) when byte_size(key) <= 4, do: "****"
-
-  def mask_key(key) do
-    len = String.length(key)
-
-    String.slice(key, len - 4, 4)
-    |> then(&"••••••#{&1}")
-  end
-
   @doc "Format a decimal for display."
   def fmt_dec(nil), do: "—"
   def fmt_dec(%Decimal{} = d), do: Decimal.to_string(d)
@@ -908,27 +735,6 @@ defmodule TokengateWeb.ProvidersLive do
   def fmt_dt(%DateTime{} = dt, timezone) do
     TokengateWeb.TimezoneHelper.format_datetime_iso(dt, timezone)
   end
-
-  @doc "Human-readable label for circuit breaker state."
-  def breaker_label(:closed), do: gettext("Closed")
-  def breaker_label(:open), do: gettext("Open")
-  def breaker_label(:half_open), do: "Half-Open"
-  def breaker_label(_), do: "—"
-
-  @doc """
-  Row highlight class for credentials that need attention: error status,
-  open/half-open circuit breaker (red), or manually disabled (muted).
-  """
-  def credential_row_class(%Credential{status: "error"}, _breaker),
-    do: "bg-error/10 hover:bg-error/20"
-
-  def credential_row_class(_cred, breaker) when breaker in [:open, :half_open],
-    do: "bg-error/10 hover:bg-error/20"
-
-  def credential_row_class(%Credential{status: "disabled"}, _breaker),
-    do: "bg-warning/10 hover:bg-warning/20"
-
-  def credential_row_class(_cred, _breaker), do: nil
 
   ## Render ----------------------------------------------------------------
 
@@ -1246,55 +1052,6 @@ defmodule TokengateWeb.ProvidersLive do
           </div>
         </div>
 
-        <%!-- Credential form (create / edit) — modal --%>
-        <div :if={@credential_form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_credential" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-2xl">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">
-                {if @editing_credential_id,
-                  do: gettext("Edit credential"),
-                  else: gettext("New credential")}
-              </h2>
-              <.form for={@credential_form} id="credential-form" phx-submit="save_credential">
-                <.input field={@credential_form[:provider_id]} type="hidden" />
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
-                  <.input
-                    field={@credential_form[:name]}
-                    type="text"
-                    label="Alias"
-                    placeholder={gettext("Production")}
-                    hint={gettext("Name to identify this credential.")}
-                  />
-                  <.input
-                    field={@credential_form[:api_key_encrypted]}
-                    type="password"
-                    label={"#{gettext("API key")}#{if @editing_credential_id, do: gettext(" (leave empty = unchanged)"), else: ""}"}
-                    placeholder={
-                      if @editing_credential_id,
-                        do: gettext("sk-... (leave empty to keep)"),
-                        else: "sk-..."
-                    }
-                    hint={
-                      if @editing_credential_id,
-                        do: gettext("Only if you want to change it."),
-                        else: gettext("The token the provider gives you (sk-...).")
-                    }
-                  />
-                </div>
-                <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
-                  <button type="button" phx-click="cancel_credential" class="btn btn-ghost btn-sm">
-                    {gettext("Cancel")}
-                  </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-credential-btn">
-                    {(@editing_credential_id && gettext("Update")) || gettext("Save")}
-                  </button>
-                </div>
-              </.form>
-            </div>
-          </div>
-        </div>
-
         <%!-- Capacidades modal: one path per service. Empty inherits — the
              catalog code path when the builtin declares one, else the generic
              adapter default; anything typed overrides it. --%>
@@ -1361,21 +1118,32 @@ defmodule TokengateWeb.ProvidersLive do
           <p>{gettext("No providers yet.")}</p>
         </div>
 
-        <%!-- Una sola lista, sin tabs: builtin primero y custom al final
-             (lo fija el `order_by` de `load_providers/1`). --%>
-        <div id="providers" class="grid gap-3 lg:grid-cols-2">
-          <div
-            :for={provider <- @providers}
-            id={"providers-#{provider.id}"}
-            class="card bg-base-100 border border-base-300 shadow-sm"
-          >
-            <div class="card-body p-4">
-              <div class="flex items-start justify-between gap-4">
-                <div>
+        <%!-- Una sola lista en TABLA, sin tabs: builtin primero y custom al
+             final (lo fija el `order_by` de `load_providers/1`). Las API keys
+             no viven aquí: cada fila lleva a /catalog/providers/:id/keys. --%>
+        <div
+          :if={@providers != []}
+          class="card bg-base-100 border border-base-300 shadow-sm overflow-x-auto"
+        >
+          <table class="table table-sm" id="providers">
+            <thead>
+              <tr>
+                <th>{gettext("Provider")}</th>
+                <th>{gettext("Status")}</th>
+                <th>{gettext("Keys")}</th>
+                <th>{gettext("Models")}</th>
+                <th>{gettext("Limits")}</th>
+                <th>{gettext("Health")}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={provider <- @providers} id={"providers-#{provider.id}"}>
+                <td>
                   <div class="flex items-center gap-2">
                     <%!-- Chip claro fijo: los logos del catálogo usan
                          fill="currentColor" y dentro de un <img> eso resuelve a
-                         negro — sobre el card oscuro (tema dim) quedaban
+                         negro — sobre el tema oscuro (dim) quedaban
                          invisibles. El icono genérico (proveedor sin logo del
                          catálogo, o sea los customs) se pinta oscuro para el
                          mismo chip. --%>
@@ -1393,245 +1161,179 @@ defmodule TokengateWeb.ProvidersLive do
                         class={["w-4 h-4 text-neutral-600", provider.logo_url && "hidden"]}
                       />
                     </span>
-                    <h3 class="font-semibold text-base-content">{provider.name}</h3>
-
-                    <span class={[
-                      "badge badge-sm",
-                      if(provider.status == "active", do: "badge-success", else: "badge-ghost")
-                    ]}>
-                      {if provider.status == "active",
-                        do: gettext("Active"),
-                        else: gettext("Disabled")}
-                    </span>
-
-                    <a
-                      :if={provider.doc_url}
-                      href={provider.doc_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="link link-hover text-xs text-base-content/50"
-                      id={"provider-docs-#{provider.id}"}
-                    >
-                      <.icon name="hero-arrow-top-right-on-square" class="w-3 h-3" /> {gettext("Docs")}
-                    </a>
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-2">
+                        <span class="font-medium truncate">{provider.name}</span>
+                        <code :if={provider.key} class="text-[10px] text-base-content/40 truncate">
+                          {provider.key}
+                        </code>
+                        <a
+                          :if={provider.doc_url}
+                          href={provider.doc_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="link link-hover text-base-content/50 shrink-0"
+                          id={"provider-docs-#{provider.id}"}
+                          title={gettext("Documentation")}
+                        >
+                          <.icon name="hero-arrow-top-right-on-square" class="w-3 h-3" />
+                        </a>
+                      </div>
+                      <p class="text-xs text-base-content/50 font-mono truncate max-w-[22rem]">
+                        {provider.base_url}
+                      </p>
+                    </div>
                   </div>
-                  <p class="text-xs text-base-content/50 mt-1 font-mono">{provider.base_url}</p>
-                  <p class="text-xs text-base-content/50 mt-0.5">
-                    {gettext("%{count} credentials", count: length(credentials_for(provider)))}
+                </td>
+                <td>
+                  <span class={[
+                    "badge badge-sm",
+                    if(provider.status == "active", do: "badge-success", else: "badge-ghost")
+                  ]}>
+                    {if provider.status == "active",
+                      do: gettext("Active"),
+                      else: gettext("Disabled")}
+                  </span>
+                </td>
+                <td>
+                  <% stats = credential_stats(provider.id, @credential_stats) %>
+                  <.link
+                    navigate={~p"/catalog/providers/#{provider.id}/keys"}
+                    class="link link-hover whitespace-nowrap inline-flex items-center gap-1"
+                    id={"provider-keys-#{provider.id}"}
+                    title={gettext("Manage the API keys of this provider")}
+                  >
+                    <.icon name="hero-key" class="w-3 h-3" /> {stats.keys}
+                  </.link>
+                  <%!-- Only the exception gets a line of its own: a healthy
+                       provider reads as a single number. --%>
+                  <p :if={stats.errored > 0} class="text-[11px] text-error font-semibold">
+                    {gettext("%{count} in error", count: stats.errored)}
                   </p>
-
-                  <%!-- Provider-level limits: everything below this line (every
-                       key of this provider) inherits them. --%>
+                </td>
+                <td>
+                  <span class="badge badge-ghost badge-sm">
+                    {model_count(provider.id, @provider_model_counts)}
+                  </span>
+                </td>
+                <%!-- Provider-level limits: every key of this provider inherits
+                     them; they are edited here, never per key. --%>
+                <td>
                   <div
-                    class="mt-2 flex flex-wrap items-center gap-1.5"
+                    class="text-[11px] leading-snug text-base-content/60 whitespace-nowrap"
                     id={"provider-limits-#{provider.id}"}
                   >
-                    <span class="text-[10px] uppercase tracking-wide text-base-content/40">{gettext(
-                      "Limits"
-                    )}</span>
-                    <span class="badge badge-ghost badge-sm" title={gettext("Requests per minute")}>
-                      RPM {provider.max_rpm || "∞"}
+                    <div>
+                      RPM {provider.max_rpm || "∞"} · Conc. {provider.max_concurrent || "∞"}
+                    </div>
+                    <div>
+                      {gettext("Conc./user")} {provider.max_concurrent_per_user || "∞"} · {timeout_label(
+                        provider
+                      )}
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <% health =
+                    provider_health(
+                      provider.id,
+                      @credential_stats,
+                      @breaker_statuses,
+                      @credential_inflight
+                    ) %>
+                  <div class="flex items-center gap-1.5">
+                    <span
+                      class={[
+                        "badge badge-sm gap-1",
+                        if(health.inflight > 0, do: "badge-primary", else: "badge-ghost")
+                      ]}
+                      title={gettext("Requests in flight across this provider's keys")}
+                      id={"provider-inflight-#{provider.id}"}
+                    >
+                      <.icon name="hero-bolt" class="w-3 h-3" /> {health.inflight}
                     </span>
                     <span
-                      class="badge badge-ghost badge-sm"
-                      title={gettext("Provider max concurrency")}
+                      :if={health.open > 0}
+                      class="badge badge-sm badge-error gap-1"
+                      title={gettext("Keys whose circuit breaker is open")}
+                      id={"provider-breaker-#{provider.id}"}
                     >
-                      Conc. {provider.max_concurrent || "∞"}
-                    </span>
-                    <span
-                      class="badge badge-ghost badge-sm"
-                      title={gettext("Max concurrency per user")}
-                    >
-                      {gettext("Conc./user")} {provider.max_concurrent_per_user || "∞"}
-                    </span>
-                    <span
-                      class="badge badge-ghost badge-sm font-mono"
-                      title={gettext("Receive timeout")}
-                    >
-                      {timeout_label(provider)}
+                      <.icon name="hero-exclamation-triangle" class="w-3 h-3" /> {health.open}
                     </span>
                   </div>
-                </div>
-                <div class="flex gap-2 items-center">
-                  <button
-                    phx-click="toggle_provider"
-                    phx-value-id={provider.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"toggle-provider-#{provider.id}"}
-                  >
-                    {if provider.status == "active", do: gettext("Disable"), else: gettext("Enable")}
-                  </button>
-                  <%!-- Capacidades: the per-service path overrides (base_url +
-                       path). Available on builtins too — paths are operational,
-                       not catalog identity. The badge counts the overridden
-                       services. --%>
-                  <button
-                    phx-click="edit_paths"
-                    phx-value-id={provider.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"paths-#{provider.id}"}
-                    title={gettext("Configure the path of each capability (base_url + path)")}
-                  >
-                    <.icon name="hero-adjustments-horizontal" class="w-4 h-4" /> {gettext(
-                      "Capabilities"
-                    )}
-                    <span
-                      :if={path_override_count(provider) > 0}
-                      class="badge badge-xs badge-primary"
+                </td>
+                <td class="text-right whitespace-nowrap">
+                  <div class="flex items-center justify-end gap-0.5">
+                    <button
+                      phx-click="toggle_provider"
+                      phx-value-id={provider.id}
+                      class="btn btn-sm btn-ghost px-2"
+                      id={"toggle-provider-#{provider.id}"}
+                      title={
+                        if provider.status == "active",
+                          do: gettext("Disable"),
+                          else: gettext("Enable")
+                      }
+                      aria-label={
+                        if provider.status == "active",
+                          do: gettext("Disable"),
+                          else: gettext("Enable")
+                      }
                     >
-                      {path_override_count(provider)}
-                    </span>
-                  </button>
-                  <%!-- Builtins are editable too, but ONLY for their limits: the
-                       form renders the catalog identity read-only and the
-                       changeset drops any change to it. --%>
-                  <button
-                    phx-click="edit_provider"
-                    phx-value-id={provider.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"edit-#{provider.id}"}
-                  >
-                    <.icon name="hero-pencil-square" class="w-4 h-4" /> {gettext("Edit")}
-                  </button>
-                  <button
-                    phx-click="delete_provider"
-                    phx-value-id={provider.id}
-                    data-confirm={gettext("Delete this provider?")}
-                    class="btn btn-sm btn-ghost text-error"
-                    id={"delete-#{provider.id}"}
-                  >
-                    <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Delete")}
-                  </button>
-                </div>
-              </div>
-
-              <%!-- Credentials panel — always open --%>
-              <div
-                class="mt-3 pt-3 border-t border-base-300"
-                id={"credentials-panel-#{provider.id}"}
-              >
-                <div class="flex items-center justify-between mb-2">
-                  <h4 class="text-sm font-semibold">{gettext("Credentials")}</h4>
-                  <button
-                    phx-click="new_credential"
-                    phx-value-provider_id={provider.id}
-                    class="btn btn-xs btn-ghost"
-                    id={"new-credential-#{provider.id}"}
-                    title={gettext("Add an API key to this provider")}
-                  >
-                    <.icon name="hero-plus" class="w-3 h-3" /> {gettext("API key")}
-                  </button>
-                </div>
-
-                <div class="overflow-x-auto">
-                  <table class="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>{gettext("Alias")}</th>
-                        <th>{gettext("Key")}</th>
-                        <th>{gettext("In flight")}</th>
-                        <th>{gettext("Breaker")}</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        :for={cred <- credentials_for(provider)}
-                        id={"credential-#{cred.id}"}
-                        class={
-                          credential_row_class(cred, Map.get(@breaker_statuses, cred.id, :closed))
-                        }
+                      <.icon
+                        name={if provider.status == "active", do: "hero-pause", else: "hero-play"}
+                        class="w-4 h-4"
+                      />
+                    </button>
+                    <%!-- Capacidades: the per-service path overrides (base_url +
+                         path). Available on builtins too — paths are operational,
+                         not catalog identity. The badge counts the overridden
+                         services. --%>
+                    <button
+                      phx-click="edit_paths"
+                      phx-value-id={provider.id}
+                      class="btn btn-sm btn-ghost px-2"
+                      id={"paths-#{provider.id}"}
+                      title={gettext("Configure the path of each capability (base_url + path)")}
+                      aria-label={gettext("Capabilities")}
+                    >
+                      <.icon name="hero-adjustments-horizontal" class="w-4 h-4" />
+                      <span
+                        :if={path_override_count(provider) > 0}
+                        class="badge badge-xs badge-primary"
                       >
-                        <td>
-                          {cred.name || "—"}
-                        </td>
-                        <td>
-                          <code class="text-sm font-mono">{mask_key(cred.api_key_encrypted)}</code>
-                        </td>
-                        <td>
-                          <% inflight = Map.get(@credential_inflight, cred.id, 0) %>
-                          <span class={[
-                            "badge badge-sm",
-                            if(inflight > 0, do: "badge-primary", else: "badge-ghost")
-                          ]}>
-                            {inflight}
-                          </span>
-                        </td>
-                        <td>
-                          <% breaker = Map.get(@breaker_statuses, cred.id, :closed) %>
-                          <div class="flex items-center gap-2">
-                            <span class={[
-                              "badge badge-sm",
-                              breaker == :closed && "badge-success",
-                              breaker == :open && "badge-error",
-                              breaker == :half_open && "badge-warning"
-                            ]}>
-                              {breaker_label(breaker)}
-                            </span>
-                            <button
-                              :if={breaker != :closed}
-                              phx-click="reset_breaker"
-                              phx-value-id={cred.id}
-                              class="btn btn-xs btn-ghost"
-                              id={"reset-breaker-#{cred.id}"}
-                            >
-                              <.icon name="hero-arrow-path" class="w-3 h-3" /> Reset
-                            </button>
-                          </div>
-                        </td>
-                        <td class="text-right">
-                          <%= if cred.status == "error" do %>
-                            <button
-                              phx-click="reactivate_credential"
-                              phx-value-id={cred.id}
-                              class="btn btn-xs btn-ghost btn-warning"
-                              id={"reactivate-credential-#{cred.id}"}
-                            >
-                              <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Reactivate")}
-                            </button>
-                          <% else %>
-                            <button
-                              phx-click="toggle_credential"
-                              phx-value-id={cred.id}
-                              class="btn btn-xs btn-ghost"
-                              id={"toggle-credential-btn-#{cred.id}"}
-                              title={
-                                if cred.status == "active",
-                                  do: gettext("Disable"),
-                                  else: gettext("Enable")
-                              }
-                            >
-                              <.icon
-                                name={if cred.status == "active", do: "hero-pause", else: "hero-play"}
-                                class="w-3 h-3"
-                              />
-                            </button>
-                          <% end %>
-                          <button
-                            phx-click="edit_credential"
-                            phx-value-id={cred.id}
-                            class="btn btn-xs btn-ghost"
-                            id={"edit-credential-#{cred.id}"}
-                          >
-                            <.icon name="hero-pencil-square" class="w-3 h-3" /> {gettext("Edit")}
-                          </button>
-                          <button
-                            phx-click="delete_credential"
-                            phx-value-id={cred.id}
-                            data-confirm={gettext("Delete this credential?")}
-                            class="btn btn-xs btn-ghost text-error"
-                            id={"delete-credential-#{cred.id}"}
-                          >
-                            {gettext("Delete")}
-                          </button>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
+                        {path_override_count(provider)}
+                      </span>
+                    </button>
+                    <%!-- Builtins are editable too, but ONLY for their limits: the
+                         form renders the catalog identity read-only and the
+                         changeset drops any change to it. --%>
+                    <button
+                      phx-click="edit_provider"
+                      phx-value-id={provider.id}
+                      class="btn btn-sm btn-ghost px-2"
+                      id={"edit-#{provider.id}"}
+                      title={gettext("Edit")}
+                      aria-label={gettext("Edit")}
+                    >
+                      <.icon name="hero-pencil-square" class="w-4 h-4" />
+                    </button>
+                    <button
+                      phx-click="delete_provider"
+                      phx-value-id={provider.id}
+                      data-confirm={gettext("Delete this provider?")}
+                      class="btn btn-sm btn-ghost px-2 text-error"
+                      id={"delete-#{provider.id}"}
+                      title={gettext("Delete")}
+                      aria-label={gettext("Delete")}
+                    >
+                      <.icon name="hero-trash" class="w-4 h-4" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </Layouts.dashboard>
