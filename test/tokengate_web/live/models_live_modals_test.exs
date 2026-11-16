@@ -352,7 +352,10 @@ defmodule TokengateWeb.ModelsLiveModalsTest do
     llm_model = create_model(%{name: "llm-p4-#{unique()}", model_type: "llm"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    # El alta del modelo vive en el listado; el modal de lane, en la página del
+    # modelo. El test cruza las dos pantallas, así que monta las dos vistas.
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{llm_model.id}")
+    {:ok, index, _html} = live(recycle(conn), ~p"/catalog/models")
 
     # A) Antes del wizard, el picker del lane ofrece Fireworks.
     view |> element("#new-ap-#{llm_model.id}") |> render_click()
@@ -360,18 +363,18 @@ defmodule TokengateWeb.ModelsLiveModalsTest do
     assert has_element?(view, "#provider-row-#{ModelsLive.dom_key(fireworks.key)}")
     render_click(view, "cancel_model_provider", %{})
 
-    # B) El operador crea un modelo de IMAGEN con el wizard.
-    view |> element("#new-model-btn") |> render_click()
-    view |> element("#pick-type-image") |> render_click()
-    view |> element("#wizard-custom") |> render_click()
+    # B) El operador crea un modelo de IMAGEN con el wizard (en el listado).
+    index |> element("#new-model-btn") |> render_click()
+    index |> element("#pick-type-image") |> render_click()
+    index |> element("#wizard-custom") |> render_click()
 
     image_html =
-      view
+      index
       |> form("#model-form", %{model: %{name: "img-p4-#{unique()}", context_window: 4_000}})
       |> render_submit()
 
     assert image_html =~ "Modelo creado"
-    assert lv_assigns(view).model_form_picked_type == "image"
+    assert lv_assigns(index).model_form_picked_type == "image"
 
     # C) Mismo modal de lane, mismo modelo llm: Fireworks sigue en el picker.
     view |> element("#new-ap-#{llm_model.id}") |> render_click()
@@ -394,10 +397,9 @@ defmodule TokengateWeb.ModelsLiveModalsTest do
     hanging = create_provider(%{name: "Hang P5", base_url: "http://192.0.2.1:81"})
     credential = create_credential(hanging)
     m1 = create_model(%{name: "m1-p5-#{unique()}"})
-    m2 = create_model(%{name: "m2-p5-#{unique()}"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{m1.id}")
 
     # Abrir: no hay fetch en vuelo.
     view |> element("#new-ap-#{m1.id}") |> render_click()
@@ -435,7 +437,7 @@ defmodule TokengateWeb.ModelsLiveModalsTest do
     refute lv_assigns(view).provider_models_loading
 
     # Y el modal siguiente arranca limpio.
-    view |> element("#new-ap-#{m2.id}") |> render_click()
+    view |> element("#new-ap-#{m1.id}") |> render_click()
     refute lv_assigns(view).provider_models_loading
   end
 
@@ -449,7 +451,7 @@ defmodule TokengateWeb.ModelsLiveModalsTest do
     model = create_model(%{name: "m-p7-#{unique()}"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
 
     view |> element("#new-ap-#{model.id}") |> render_click()
     view |> element("#provider-search") |> render_change(%{"q" => hanging.name})
@@ -488,7 +490,7 @@ defmodule TokengateWeb.ModelsLiveModalsTest do
     model = create_model(%{name: "m-p10-#{unique()}"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
 
     view |> element("#new-ap-#{model.id}") |> render_click()
     view |> element("#provider-search") |> render_change(%{"q" => hanging.name})
@@ -531,7 +533,7 @@ defmodule TokengateWeb.ModelsLiveModalsTest do
     model = create_model(%{name: "m-p11-#{unique()}"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
 
     view |> element("#new-ap-#{model.id}") |> render_click()
 
@@ -567,7 +569,7 @@ defmodule TokengateWeb.ModelsLiveModalsTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
 
     view |> element("#edit-ap-#{ap.id}") |> render_click()
 
@@ -606,7 +608,7 @@ defmodule TokengateWeb.ModelsLiveModalsTest do
     {:ok, _} = Providers.update_credential(credential, %{status: "error"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
 
     view |> element("#edit-ap-#{ap.id}") |> render_click()
 

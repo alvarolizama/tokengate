@@ -479,7 +479,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     conn = login(conn, admin, password)
 
-    {:ok, _view, html} = live(conn, ~p"/catalog/models")
+    {:ok, _view, html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     # The provider table lives inside the model's collapsible card, but the
     # rows are in the rendered DOM regardless (the collapse is client-side).
@@ -520,7 +520,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     # The new_model_provider button is inline in each model card
     assert has_element?(view, "#new-ap-#{model_record.id}")
@@ -563,7 +563,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
@@ -611,7 +611,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     model_record = create_model()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     view |> element("#new-ap-#{model_record.id}") |> render_click()
     view |> element("#provider-search") |> render_change(%{"q" => provider.name})
@@ -655,7 +655,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{image_model.id}")
 
     view |> element("#new-ap-#{image_model.id}") |> render_click()
 
@@ -679,7 +679,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{chat_model.id}")
 
     view |> element("#new-ap-#{chat_model.id}") |> render_click()
 
@@ -702,7 +702,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{chat_model.id}")
 
     view |> element("#new-ap-#{chat_model.id}") |> render_click()
 
@@ -731,7 +731,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{image_model.id}")
 
     view |> element("#new-ap-#{image_model.id}") |> render_click()
 
@@ -800,7 +800,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     view |> element("#edit-ap-#{or_ap.id}") |> render_click()
     assert has_element?(view, "#model_provider_cache_write_cost_per_million")
@@ -824,7 +824,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
@@ -958,7 +958,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     # Form input is in seconds; the column is stored in ms.
@@ -993,7 +993,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     model_record = create_model()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     # Selecting the fireworks credential reveals the priority checkbox.
@@ -1055,7 +1055,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     view |> element("#edit-ap-#{mp.id}") |> render_click()
 
@@ -1122,7 +1122,7 @@ defmodule TokengateWeb.ModelsLiveTest do
         })
 
       conn = login(conn, admin, password)
-      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
       view |> element("#new-ap-#{model_record.id}") |> render_click()
 
       # Selecting the fireworks credential flips the form.
@@ -1153,7 +1153,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     html =
@@ -1188,7 +1188,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     html =
@@ -1232,7 +1232,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
     view |> element("#edit-ap-#{ap.id}") |> render_click()
 
     # Form should be open with 300 (seconds) pre-filled, not 300_000.
@@ -1252,7 +1252,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     ap3 = create_model_provider(model_record, provider, %{priority: 3})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     # Drag ap3 to the top
     render_hook(view, "reorder_providers", %{
@@ -1275,7 +1275,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     ap_b = create_model_provider(model_b, provider, %{priority: 7})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_b.id}")
 
     render_hook(view, "reorder_providers", %{
       "model_id" => model_a.id,
@@ -1312,7 +1312,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     html = render(view)
 
@@ -1326,7 +1326,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     ap = create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     view |> element("#toggle-ap-#{ap.id}") |> render_click()
 
@@ -1362,7 +1362,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     view |> element("#edit-ap-#{ap.id}") |> render_click()
 
@@ -1450,7 +1450,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     view |> element("#edit-ap-#{ap.id}") |> render_click()
 
@@ -1498,7 +1498,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     {:ok, tm_b} = Accounts.create_group_member(%{group_id: group.id, user_id: other.id})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     # Multi-select flow: pick the member scope, accumulate two members,
@@ -1563,7 +1563,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     view |> element("#edit-ap-#{ap.id}") |> render_click()
 
@@ -1606,7 +1606,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     {:ok, _} = Providers.update_credential(credential, %{status: "disabled"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     html = render(view)
 
@@ -1629,7 +1629,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     ap = create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     html = render(view)
     assert html =~ ap.provider_model
@@ -1809,17 +1809,24 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   # -- Collapsed providers section ------------------------------------------
 
-  test "providers section is collapsed by default", %{conn: conn} do
+  # El listado ya no embebe la tabla de lanes en un acordeón: la fila cuenta
+  # las keys y lleva a la página del modelo, que es donde se editan.
+  test "el listado no embebe las lanes: la fila lleva a la página del modelo", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
     model_record = create_model()
     create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, _view, html} = live(conn, ~p"/catalog/models")
+    {:ok, view, html} = live(conn, ~p"/catalog/models")
 
-    assert html =~ ~s(id="model-providers-#{model_record.id}")
-    assert html =~ ~s(style="display: none")
+    assert has_element?(
+             view,
+             "a#model-keys-#{model_record.id}[href='/catalog/models/#{model_record.id}']"
+           )
+
+    refute html =~ ~s(id="model-providers-#{model_record.id}")
+    refute has_element?(view, "#ap-sortable-#{model_record.id}")
   end
 
   # -- Provider catalogue follows the model's own type -----------------------
@@ -1955,7 +1962,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       model_record = create_model(%{name: "nano"})
       conn = login(conn, admin, password)
 
-      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
       view |> element("#new-ap-#{model_record.id}") |> render_click()
       # La lista de proveedores es la de TODOS los activos (el espejo de models.dev
       # se retiró): el buscador es como el operador llega al suyo.
@@ -1994,7 +2001,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       model_record = create_model(%{name: "nano-key"})
       conn = login(conn, admin, password)
 
-      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
       view |> element("#new-ap-#{model_record.id}") |> render_click()
 
       # Nothing picked yet: no provider chip, and the key list is open.
@@ -2038,7 +2045,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       model_record = create_model(%{name: "nano-typed"})
       conn = login(conn, admin, password)
 
-      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
       view |> element("#new-ap-#{model_record.id}") |> render_click()
 
       typed = %{
@@ -2072,7 +2079,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       conn = login(conn, admin, password)
 
-      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
       view |> element("#new-ap-#{model_record.id}") |> render_click()
       # La lista de proveedores es la de TODOS los activos (el espejo de models.dev
       # se retiró): el buscador es como el operador llega al suyo.
@@ -2112,7 +2119,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       model_record = create_model(%{name: "nano4"})
       conn = login(conn, admin, password)
 
-      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
       view |> element("#new-ap-#{model_record.id}") |> render_click()
       # La lista de proveedores es la de TODOS los activos (el espejo de models.dev
       # se retiró): el buscador es como el operador llega al suyo.
@@ -2151,7 +2158,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       model_record = create_model(%{name: "by-hand"})
       conn = login(conn, admin, password)
 
-      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
       view |> element("#new-ap-#{model_record.id}") |> render_click()
 
       assert has_element?(view, "#provider-search")
@@ -2458,7 +2465,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model_record.id}")
 
     # La etiqueta lleva el proveedor que posee la key…
     assert has_element?(view, "#ap-provider-#{lane.id}", "Acme Cloud Owner")
@@ -2469,7 +2476,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert row =~ "1234"
   end
 
-  test "cambiar un lane desde el modal de edición abre el modal del lane", %{conn: conn} do
+  test "cambiar un lane desde el modal del modelo navega a su página", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_keyed_provider("acme-lane2", %{name: "Acme Cloud 2"})
     model_record = create_model(%{name: "con-lane-2"})
@@ -2483,12 +2490,15 @@ defmodule TokengateWeb.ModelsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/catalog/models")
     view |> element("#edit-model-#{model_record.id}") |> render_click()
 
-    # El "Change" del lane cierra el modal del modelo y abre el del lane, que es
-    # donde viven el proveedor, la key y el id del upstream.
-    view |> element("#model-lane-change-#{lane.id}") |> render_click()
+    # El "Change" del lane ya no abre un modal encima del modal: cierra el del
+    # modelo navegando a la página del modelo con el modal del lane abierto.
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view |> element("#model-lane-change-#{lane.id}") |> render_click()
 
-    refute has_element?(view, "#model-form")
-    assert has_element?(view, "#model-provider-form")
+    assert to == "/catalog/models/#{model_record.id}?edit=#{lane.id}"
+
+    {:ok, lane_view, _html} = live(conn, to)
+    assert has_element?(lane_view, "#model-provider-form")
   end
 
   # Un proveedor con UNA sola API key no deja nada que elegir: se preselecciona
@@ -2656,7 +2666,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     end
 
     test "alta con scope group/member sin selección: flash de error y cero filas", ctx do
-      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models/#{ctx.model_record.id}")
       view |> element("#new-ap-#{ctx.model_record.id}") |> render_click()
 
       submit = fn ->
@@ -2700,7 +2710,7 @@ defmodule TokengateWeb.ModelsLiveTest do
           enabled: true
         })
 
-      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models/#{ctx.model_record.id}")
       view |> element("#edit-ap-#{ap.id}") |> render_click()
       view |> render_click("change_scope", %{"scope" => "member"})
 
@@ -2738,7 +2748,7 @@ defmodule TokengateWeb.ModelsLiveTest do
           exclusive_to_group_id: group.id
         })
 
-      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models/#{ctx.model_record.id}")
       view |> element("#edit-ap-#{ap.id}") |> render_click()
 
       view
@@ -2761,7 +2771,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     # llegan con `editing_ap_id` nil. Sin catch-all eso era un
     # FunctionClauseError y el LiveView se perdía.
     test "submit con id de edición stale tras Cancelar: no-op, sin crash", ctx do
-      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models")
+      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models/#{ctx.model_record.id}")
       view |> element("#new-ap-#{ctx.model_record.id}") |> render_click()
       view |> render_click("cancel_model_provider")
 

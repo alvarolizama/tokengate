@@ -5638,3 +5638,19 @@ msgstr "activas / en error"
 #, elixir-autogen, elixir-format
 msgid "%{count} in error"
 msgstr "%{count} en error"
+
+#, elixir-autogen, elixir-format
+msgid "Guard Rails"
+msgstr "Guard Rails"
+
+#, elixir-autogen, elixir-format
+msgid "Manage the API keys that serve this model"
+msgstr "Gestionar las API keys que sirven a este modelo"
+
+#, elixir-autogen, elixir-format
+msgid "Price"
+msgstr "Precio"
+
+#, elixir-autogen, elixir-format
+msgid "mixed units"
+msgstr "unidades mixtas"

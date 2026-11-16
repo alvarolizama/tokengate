@@ -199,6 +199,7 @@ defmodule TokengateWeb.Router do
       live "/catalog/providers", ProvidersLive
       live "/catalog/providers/:id/keys", ProviderKeysLive
       live "/catalog/models", ModelsLive
+      live "/catalog/models/:id", ModelProvidersLive
       live "/catalog/labs", LabsLive
       # Acceso — quién puede usar qué.
       live "/access/users", UsersLive
