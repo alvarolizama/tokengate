@@ -114,6 +114,15 @@ defmodule Tokengate.Providers.ServiceModels do
       {~r/whisper|transcri/i, "stt"},
       {~r/kokoro|tts/i, "tts"},
       {~r/flux|qwen-image|image/i, "image"}
+    ],
+    # Helmcode sirve el MISMO stack de modelos abiertos que NaN (whisper,
+    # kokoro, flux-2-klein) en su propio host, así que hereda las mismas
+    # familias: el tipo sale del id y ningún modelo de chat casa con ellas
+    # (`deepseek-v4-flash`, `qwen3.6`, `gemma4`).
+    "helmcode" => [
+      {~r/whisper|transcri/i, "stt"},
+      {~r/kokoro|tts/i, "tts"},
+      {~r/flux|qwen-image|image/i, "image"}
     ]
   }
 
@@ -188,6 +197,15 @@ defmodule Tokengate.Providers.ServiceModels do
       "stt" => ~w(whisper),
       "tts" => ~w(kokoro),
       "image" => ~w(flux-2-klein qwen-image-2.1),
+      "embedding" => ~w(qwen3-embedding)
+    },
+    # Helmcode: los ids que publica su documentación (2026-11-17), sin
+    # variantes con fecha. `rerank` NO está aquí: el gateway no tiene esa
+    # superficie.
+    "helmcode" => %{
+      "stt" => ~w(whisper),
+      "tts" => ~w(kokoro),
+      "image" => ~w(flux-2-klein),
       "embedding" => ~w(qwen3-embedding)
     },
     # Alibaba Token Plan: el plan sirve un SUBCONJUNTO de Model Studio, así que

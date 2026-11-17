@@ -152,6 +152,30 @@ defmodule Tokengate.Providers.ServiceModelsTest do
     end
   end
 
+  describe "classify/2 — Helmcode" do
+    # Mismo stack de modelos abiertos que NaN (`whisper`, `kokoro`,
+    # `flux-2-klein`) en otro host: el tipo sale de la familia del id.
+    test "las familias de media clasifican y los de chat no" do
+      assert ServiceModels.classify("helmcode", "whisper") == "stt"
+      assert ServiceModels.classify("helmcode", "kokoro") == "tts"
+      assert ServiceModels.classify("helmcode", "flux-2-klein") == "image"
+
+      assert ServiceModels.classify("helmcode", "deepseek-v4-flash") == nil
+      assert ServiceModels.classify("helmcode", "qwen3.6") == nil
+      assert ServiceModels.classify("helmcode", "gemma4") == nil
+    end
+
+    test "la semilla es lo que su docs/models publica" do
+      assert ServiceModels.known_ids("helmcode", "stt") == ~w(whisper)
+      assert ServiceModels.known_ids("helmcode", "tts") == ~w(kokoro)
+      assert ServiceModels.known_ids("helmcode", "image") == ~w(flux-2-klein)
+      assert ServiceModels.known_ids("helmcode", "embedding") == ~w(qwen3-embedding)
+
+      # `rerank` (Qwen3-Reranker-8B) queda fuera: el gateway no lo sirve.
+      assert ServiceModels.known_ids("helmcode", "rerank") == []
+    end
+  end
+
   describe "classify/2 — Alibaba Token Plan" do
     # El plan sirve un SUBCONJUNTO de Model Studio, con las mismas familias de
     # id: comparte los patrones de `alibaba` vía `@shared_surfaces`, pero su

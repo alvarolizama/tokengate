@@ -235,7 +235,7 @@ defmodule Tokengate.Providers.CatalogTest do
 
     test "code_providers/0 carries the fields the mirror stores" do
       providers = Catalog.code_providers()
-      assert length(providers) == 1
+      assert length(providers) == 2
 
       # TypeSafe: Jev / System One. models.dev no lo publica; fila de código.
       # `logo_url` es nil a PROPÓSITO: sin favicon usable, el render cae al
@@ -248,8 +248,21 @@ defmodule Tokengate.Providers.CatalogTest do
       assert ts.logo_url == nil
       assert ts.status == "active"
 
+      # Helmcode: la misma plataforma OpenAI-compatible de media que NaN, en su
+      # propio host. models.dev tampoco la publica, así que su fila entera vive
+      # en código y el dialecto viene del customization (no hay npm).
+      assert %{key: "helmcode"} = hc = find_code_provider(providers, "helmcode")
+
+      assert hc.name == "Helmcode"
+      assert hc.base_url == "https://api.helmcode.com/v1"
+      assert hc.doc_url == "https://helmcode.com/docs/api"
+      assert hc.logo_url == "https://helmcode.com/favicon.ico"
+      assert hc.status == "active"
+      assert Catalog.dialect(hc) == {:ok, "openai"}
+      assert Catalog.capabilities("helmcode") == ~w(llm embedding stt tts image)
+
       # Y la key es consultable para que el refresh no la barra a stale.
-      assert Catalog.code_provider_keys() == ["typesafe"]
+      assert Catalog.code_provider_keys() == ["helmcode", "typesafe"]
     end
 
     defp find_code_provider(providers, key), do: Enum.find(providers, &(&1.key == key))

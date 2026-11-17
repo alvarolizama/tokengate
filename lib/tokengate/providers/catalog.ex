@@ -281,6 +281,19 @@ defmodule Tokengate.Providers.Catalog do
     "evroc" => %{capabilities: ~w(llm embedding stt)},
     "fastrouter" => %{capabilities: ~w(llm image)},
     "greenpt" => %{capabilities: ~w(llm stt)},
+    # Helmcode (helmcode.com): OpenAI-compatible media platform — whisper,
+    # kokoro, flux-2-klein, qwen3-embedding — served on the GENERIC paths
+    # (`/audio/transcriptions`, `/audio/speech`, `/images/generations`,
+    # `/embeddings`), so no `:paths` override is needed. models.dev does not
+    # publish it, so the rest of its row lives in `@code_providers`; here only
+    # the capabilities and the dialect (there is no npm package to derive
+    # either from). Reasoning is the SCALAR `reasoning_effort`
+    # (low/medium/high/max) like NaN, which is the same platform.
+    "helmcode" => %{
+      capabilities: ~w(llm embedding stt tts image),
+      dialect: "openai",
+      reasoning_dialect: :scalar
+    },
     "huggingface" => %{capabilities: ~w(llm embedding)},
     "inference" => %{capabilities: ~w(llm embedding)},
     "inferx" => %{capabilities: ~w(llm embedding)},
@@ -381,6 +394,21 @@ defmodule Tokengate.Providers.Catalog do
       doc_url: "https://docs.typesafe.ai",
       logo_url: nil,
       env: ["TYPESAFE_API_KEY"],
+      npm: nil
+    },
+    # Helmcode (helmcode.com): OpenAI-compatible, EU-hosted, one key for chat +
+    # retrieval + speech. models.dev does not publish it either, so the whole
+    # row lives here. Base URL and surface verified against
+    # https://helmcode.com/docs/api (2026-11-17): `/v1/chat/completions`,
+    # `/v1/models`, `/v1/embeddings`, `/v1/audio/transcriptions`,
+    # `/v1/audio/speech`, `/v1/images/generations`. Its `rerank` model has no
+    # gateway surface, so it is not declared.
+    "helmcode" => %{
+      name: "Helmcode",
+      base_url: "https://api.helmcode.com/v1",
+      doc_url: "https://helmcode.com/docs/api",
+      logo_url: "https://helmcode.com/favicon.ico",
+      env: ["HELMCODE_API_KEY"],
       npm: nil
     }
   }
