@@ -82,7 +82,7 @@ defmodule TokengateWeb.Endpoint do
   # proxy must forward it byte-for-byte. JSON bodies are left for
   # `Plug.Parsers` below.
   # El proxy público se autentica ANTES de que se lea el body: `MediaBodyParser`
-  # captura hasta 10 MB en memoria y corre antes del router, así que un request
+  # captura hasta 50 MB en memoria y corre antes del router, así que un request
   # sin credencial podía empujar ese peso y además disparar una query (los fallos
   # de auth no se cachean). El 401 sale aquí, con el mismo shape que `ApiAuth`.
   plug TokengateWeb.Plugs.ProxyPreAuth, prefixes: ["/v1/"]

@@ -4,9 +4,9 @@ defmodule TokengateWeb.Plugs.ProxyPreAuth do
   lea el body.
 
   `MediaBodyParser` corre en el endpoint, antes del router, y captura hasta
-  10 MB del cuerpo en memoria; con el `read_length` actual eso ocurre para
+  50 MB del cuerpo en memoria; con el `read_length` actual eso ocurre para
   cualquier método con cuerpo bajo `/v1`, tenga o no credencial. Sin este plug,
-  cualquiera en Internet puede empujar cuerpos de 10 MB sin presentar token, y
+  cualquiera en Internet puede empujar cuerpos de 50 MB sin presentar token, y
   cada token inválido además dispara una query a Postgres (el cache de auth no
   cachea los fallos a propósito).
 

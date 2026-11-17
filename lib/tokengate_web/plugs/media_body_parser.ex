@@ -31,9 +31,14 @@ defmodule TokengateWeb.Plugs.MediaBodyParser do
 
   @behaviour Plug
 
-  # Same cap as the endpoint's `Plug.Parsers`; kept here because this plug
-  # reads the body before that plug ever sees it.
-  @max_body_bytes 10_000_000
+  # Cap of the RAW body this plug accepts. The audio upstreams document 25 MB
+  # (Helmcode, NaN) and the base64 form of the same clip is ~1.37× bigger, so
+  # 50 MB leaves room for one 25 MB upload either way. It is NOT the endpoint's
+  # `Plug.Parsers` limit: JSON/urlencoded bodies are still parsed there under its
+  # own cap — this one governs the bodies captured here (multipart, urlencoded
+  # and any other non-JSON under `/v1/`). The cost is memory: the bytes are held
+  # once per in-flight request, because the passthrough needs the whole binary.
+  @max_body_bytes 50_000_000
   @multipart_subtypes ~w(form-data mixed)
 
   @raw_body_key :tokengate_raw_body

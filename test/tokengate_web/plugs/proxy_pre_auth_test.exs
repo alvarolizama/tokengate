@@ -1,6 +1,6 @@
 defmodule TokengateWeb.Plugs.ProxyPreAuthTest do
   @moduledoc """
-  Hallazgo Alto 5 de la auditoría: el endpoint leía hasta 10 MB del cuerpo de
+  Hallazgo Alto 5 de la auditoría: el endpoint leía hasta 50 MB del cuerpo de
   `/v1` antes de autenticar, y cada token inválido costaba una query (el cache
   de auth no cachea fallos). El guard corta el request sin credencial antes de
   `read_body/2`, con el mismo shape de error que `ApiAuth`.
