@@ -3190,6 +3190,8 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> authed_conn(token)
       |> post(~p"/v1/audio/transcriptions", %{"model" => model.name, "input" => "audio"})
 
+    # The body gate runs AFTER routing: an llm model answers the routing error it
+    # always did, not a body error.
     assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
   end
 
@@ -3226,12 +3228,22 @@ defmodule TokengateWeb.ProxyControllerTest do
   # Capacidades modal uses (not with the route's name).
 
   test "POST /v1/audio/transcriptions lands on base_url + /audio/transcriptions", %{conn: conn} do
+    %{token: token, model: model, member: member} = proxy_fixture(%{model_type: "stt"})
+    body = multipart_body(model.name)
+
     conn =
-      assert_service_route(conn, "/v1/audio/transcriptions", "/audio/transcriptions", "stt", %{
-        "input" => "audio"
-      })
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", body)
 
     assert json_body(conn)["text"] == "hola mundo"
+    assert_receive {:provider_request_path, "/audio/transcriptions"}
+    assert_receive {:provider_raw_body, ^body, _headers}
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == "stt"
   end
 
   test "POST /v1/audio/speech lands on base_url + /audio/speech", %{conn: conn} do
@@ -3544,7 +3556,11 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/audio/transcriptions", %{"model" => model.name, "input" => "un audio largo"})
+      |> post(~p"/v1/audio/transcriptions", %{
+        "model" => model.name,
+        "input" => "un audio largo",
+        "file" => Base.encode64(<<"OggS", 0, 2, 0, 0>>)
+      })
 
     assert json_response(conn, 200)
     assert get_resp_header(conn, "x-tokengate-cost") == ["0"]
@@ -3645,6 +3661,114 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert json_response(conn, 200)
     assert get_resp_header(conn, "x-tokengate-cache") == []
     assert_receive {:provider_raw_body, ^second, _headers}
+  end
+
+  # A client that sends the audio as JSON + base64 (or as a text field) used to
+  # reach the upstream as `application/json` and come back 422 `body.file` — a
+  # schema error that names nothing. The gateway rebuilds a canonical multipart
+  # before the call (see `Tokengate.Proxy.AudioMultipart`).
+  test "a JSON body with base64 audio reaches the upstream as multipart", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "stt"})
+    audio = <<"OggS", 0, 2, 0, 0, 0, 0, 0, 0>>
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "application/json")
+      |> post(
+        ~p"/v1/audio/transcriptions",
+        Jason.encode!(%{
+          "model" => model.name,
+          "language" => "es",
+          "file" => Base.encode64(audio)
+        })
+      )
+
+    assert json_response(conn, 200)["text"] == "hola mundo"
+    assert_receive {:provider_raw_body, raw, headers}
+
+    assert {"content-type", "multipart/form-data; boundary=" <> _} =
+             List.keyfind(headers, "content-type", 0)
+
+    assert raw =~ ~s(name="file"; filename="audio.ogg")
+    assert raw =~ ~s(name="language")
+    assert :binary.match(raw, audio) != :nomatch
+  end
+
+  test "a multipart file part without a filename is rebuilt with one", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "stt"})
+    audio = <<"OggS", 0, 2, 0, 0>>
+
+    body =
+      IO.iodata_to_binary([
+        "--",
+        @boundary,
+        "\r\n",
+        ~s(content-disposition: form-data; name="model"\r\n\r\n),
+        "#{model.name}\r\n",
+        "--",
+        @boundary,
+        "\r\n",
+        ~s(content-disposition: form-data; name="file"\r\n),
+        "content-type: audio/ogg\r\n\r\n",
+        audio,
+        "\r\n",
+        "--",
+        @boundary,
+        "--\r\n"
+      ])
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", body)
+
+    assert json_response(conn, 200)["text"] == "hola mundo"
+    assert_receive {:provider_raw_body, raw, _headers}
+    assert raw =~ ~s(name="file"; filename="audio.ogg")
+    assert :binary.match(raw, audio) != :nomatch
+  end
+
+  test "a transcription body with no audio is a local 400, never an upstream call", %{conn: conn} do
+    %{token: token, model: model, member: member} = proxy_fixture(%{model_type: "stt"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "application/json")
+      |> post(~p"/v1/audio/transcriptions", Jason.encode!(%{"model" => model.name}))
+
+    assert %{"error" => %{"code" => "missing_audio"}} = json_response(conn, 400)
+    refute_receive {:provider_raw_body, _raw, _headers}, 100
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.status_code == 400
+    assert log.error_reason == "missing_audio"
+  end
+
+  # The gate is dialect-aware: DashScope takes the audio as a JSON field
+  # (`audio_url`), so a body with no bytes is NOT a multipart problem — the
+  # adapter below it owns the translation.
+  test "a dashscope transcription with audio_url is not judged by the multipart gate", %{
+    conn: conn
+  } do
+    %{token: token, model: model, provider: provider} = proxy_fixture(%{model_type: "stt"})
+    {:ok, _provider} = Providers.update_provider(provider, %{dialect: "dashscope"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "application/json")
+      |> post(
+        ~p"/v1/audio/transcriptions",
+        Jason.encode!(%{"model" => model.name, "audio_url" => "https://example.test/a.mp3"})
+      )
+
+    assert conn.status == 200
+    assert_receive {:provider_request_path, "/chat/completions"}
   end
 
   test "a binary upstream response reaches the client with its content-type", %{conn: conn} do

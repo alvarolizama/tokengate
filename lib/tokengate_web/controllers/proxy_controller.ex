@@ -72,6 +72,7 @@ defmodule TokengateWeb.ProxyController do
   alias Tokengate.Providers.{Credential, Provider, ProviderLimits}
 
   alias Tokengate.Proxy.{
+    AudioMultipart,
     CostCalculator,
     DecisionsTranslator,
     OpenAIAdapter,
@@ -248,20 +249,58 @@ defmodule TokengateWeb.ProxyController do
   defp service_passthrough(conn, service) do
     payload = conn.body_params
 
-    # The raw capture (multipart bodies, for one) travels to the adapter: the
-    # upstream must receive the client's exact bytes and content-type, never
-    # a re-encoded JSON version of the parsed fields. Nil for JSON requests.
-    raw_body = conn.private[MediaBodyParser.raw_body_key()]
-    raw_content_type = conn.private[MediaBodyParser.raw_content_type_key()]
-
     simple_proxy(
       conn,
       payload,
       Atom.to_string(service),
-      &adapter_service(&1, &2, &3, &4, service, raw_body, raw_content_type),
-      service
+      &adapter_service(&1, &2, &3, &4, service),
+      service,
+      on_route: &canonical_upload(&1, service, &2)
     )
   end
+
+  # The audio gate runs AFTER routing on purpose: a request for a model this key
+  # cannot reach has to answer the error it always did (404 model_not_found, 429
+  # rate_limited, 400 model_type_mismatch) — and only a request that would really
+  # reach an audio-body adapter is judged. The dialect decides: DashScope and the
+  # Alibaba Token Plan take the audio as a JSON field (`audio_url`, `url`), so
+  # their bodies are never touched. See `Tokengate.Proxy.AudioMultipart`.
+  defp canonical_upload(conn, :stt, route) do
+    provider = route.model_provider.credential.provider
+    raw_body = conn.private[MediaBodyParser.raw_body_key()]
+    raw_content_type = conn.private[MediaBodyParser.raw_content_type_key()]
+
+    if AudioMultipart.multipart_upload?(provider.dialect) do
+      case AudioMultipart.canonicalize(raw_body, raw_content_type, conn.body_params) do
+        {:ok, body, content_type, :unchanged} ->
+          {:ok, conn, media_opts(body, content_type)}
+
+        {:ok, body, content_type, :rebuilt} ->
+          {:ok, conn, media_opts(body, content_type)}
+
+        {:error, message} ->
+          {:error, {:missing_audio, message}}
+      end
+    else
+      {:ok, conn, media_opts(raw_body, raw_content_type)}
+    end
+  end
+
+  defp canonical_upload(conn, _service, _route) do
+    {:ok, conn,
+     media_opts(
+       conn.private[MediaBodyParser.raw_body_key()],
+       conn.private[MediaBodyParser.raw_content_type_key()]
+     )}
+  end
+
+  # The raw capture travels to the adapter through the route opts so a retry or a
+  # fallback resends the same bytes; a JSON request carries none and is encoded
+  # as always.
+  defp media_opts(nil, _content_type), do: []
+
+  defp media_opts(body, content_type) when is_binary(body),
+    do: [raw_body: body, content_type: content_type]
 
   # POST /v1/decisions — the public decisions surface, in the OpenAI
   # Decisions shape (`input` + ordered questions with predicate/choice/
@@ -294,19 +333,10 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # The service through the dialect adapter of the routed provider: the
-  # adapter owns the URL (base_url + the path `ProviderPaths` resolves). A
-  # captured raw body is forwarded byte-for-byte with the client's own
-  # content-type (see `TokengateWeb.Plugs.MediaBodyParser`).
-  defp adapter_service(provider, credential, payload, opts, service, raw_body, raw_content_type) do
-    opts =
-      case raw_body do
-        raw when is_binary(raw) ->
-          Keyword.merge(opts, raw_body: raw, content_type: raw_content_type)
-
-        _ ->
-          opts
-      end
-
+  # adapter owns the URL (base_url + the path `ProviderPaths` resolves) and the
+  # body it receives in `opts[:raw_body]` travels byte-for-byte, with the
+  # client's own content-type (see `TokengateWeb.Plugs.MediaBodyParser`).
+  defp adapter_service(provider, credential, payload, opts, service) do
     ProviderAdapter.dispatch(provider).service_post(provider, credential, service, payload, opts)
   end
 
@@ -315,7 +345,7 @@ defmodule TokengateWeb.ProxyController do
   # budget check, inflight registry, fallback matrix and cost accounting as
   # chat — minus the chat-only payload transforms (guard rails, prompt
   # optimizer, reasoning).
-  defp simple_proxy(conn, payload, capability, adapter_fun, kind) do
+  defp simple_proxy(conn, payload, capability, adapter_fun, kind, opts \\ []) do
     # Same stable idempotency key as the chat path — shared by every
     # upstream attempt of this request.
     conn = assign(conn, :idempotency_key, Ecto.UUID.generate())
@@ -338,16 +368,37 @@ defmodule TokengateWeb.ProxyController do
                capability: capability
              ) do
           {:ok, route, hold} ->
-            inflight = register_inflight(conn, member, payload, route)
+            case prepare_body(conn, route, opts) do
+              {:ok, conn, media_opts} ->
+                inflight = register_inflight(conn, member, payload, route)
 
-            try do
-              execute_simple(conn, route, payload, member, @max_attempts, [], adapter_fun, kind,
-                capability: capability
-              )
-            after
-              settle_budget(member, hold)
-              Tokengate.Logs.Inflight.finish_request(inflight.id)
-              release_credential_limits(route.credential, key_id)
+                try do
+                  execute_simple(
+                    conn,
+                    route,
+                    payload,
+                    member,
+                    @max_attempts,
+                    [],
+                    adapter_fun,
+                    kind,
+                    [capability: capability] ++ media_opts
+                  )
+                after
+                  settle_budget(member, hold)
+                  Tokengate.Logs.Inflight.finish_request(inflight.id)
+                  release_credential_limits(route.credential, key_id)
+                end
+
+              {:error, error} ->
+                # The route is already picked (and its hold taken): release both
+                # before answering, so a body rejected here costs nothing.
+                settle_budget(member, hold)
+                release_credential_limits(route.credential, key_id)
+
+                log_and_render_proxy_error(conn, route, member, error,
+                  latency_ms: elapsed(request_start)
+                )
             end
 
           {:error, error} ->
@@ -366,6 +417,17 @@ defmodule TokengateWeb.ProxyController do
 
   defp require_input(%{"input" => input}) when is_binary(input) or is_list(input), do: :ok
   defp require_input(_), do: {:error, {:invalid_request, "input is required (string or array)"}}
+
+  # Optional seam that runs AFTER the route is picked and BEFORE any upstream
+  # call: it returns the request opts the adapter needs (the media body) or a
+  # local error. Rejecting here means no attempt was spent and the error is
+  # logged with the provider/model the route resolved.
+  defp prepare_body(conn, route, opts) do
+    case Keyword.get(opts, :on_route) do
+      fun when is_function(fun, 2) -> fun.(conn, route)
+      _ -> {:ok, conn, []}
+    end
+  end
 
   # Non-streaming execution with the same fallback matrix as chat's
   # execute/6: auth errors disable the credential, other 4xx surface
@@ -413,13 +475,13 @@ defmodule TokengateWeb.ProxyController do
     # Gateway-local response cache: identical non-streaming requests hit
     # the local ETS copy instead of paying upstream again.
     #
-    # A request with a captured raw body (a multipart audio upload — where
-    # the payload's own fields are `MediaFile` metadata) is never cached:
-    # its cache key would be built from a payload that does not carry the
-    # bytes, so two different uploads would hash EQUAL and the second would
-    # get the first one's answer.
+    # A request carrying a raw body (a multipart audio upload — where the
+    # payload's own fields are `MediaFile` metadata, or a body rebuilt from
+    # base64) is never cached: its cache key would be built from a payload that
+    # does not carry the bytes, so two different uploads would hash EQUAL and the
+    # second would get the first one's answer.
     cache_key =
-      if conn.private[MediaBodyParser.raw_body_key()] do
+      if Keyword.get(route_opts, :raw_body) do
         nil
       else
         ResponseCache.cache_key(conn.assigns.api_key_hash, route.model_responded, payload)
@@ -433,10 +495,15 @@ defmodule TokengateWeb.ProxyController do
            }) do
       receive_timeout = receive_timeout(route.credential)
 
-      case adapter_fun.(provider, route.credential, payload,
-             receive_timeout: receive_timeout,
-             forwarded_headers: extract_forwarded_headers(conn, route)
-           ) do
+      # The media body travels in the route opts: a fallback or a same-key retry
+      # resends the same bytes instead of losing them.
+      adapter_opts =
+        [
+          receive_timeout: receive_timeout,
+          forwarded_headers: extract_forwarded_headers(conn, route)
+        ] ++ Keyword.take(route_opts, [:raw_body, :content_type])
+
+      case adapter_fun.(provider, route.credential, payload, adapter_opts) do
         {:ok, body, latency_ms, resp_headers} ->
           Router.record_outcome(route, :success, latency_ms: latency_ms)
           cache_store(cache_key, body)
@@ -3090,6 +3157,12 @@ defmodule TokengateWeb.ProxyController do
 
   defp error_details({:invalid_request, msg}),
     do: {400, "invalid_request_error", "invalid_request", msg}
+
+  # The transcription surface could not recover audio from the body: a local
+  # rejection (no upstream call), named so the client knows what to send and the
+  # log row says `missing_audio` instead of a generic invalid request.
+  defp error_details({:missing_audio, msg}),
+    do: {400, "invalid_request_error", "missing_audio", msg}
 
   defp error_details({:rate_limited, retry_ms}),
     do: {429, "rate_limit_error", "rate_limited", "Rate limit exceeded, retry in #{retry_ms}ms"}
