@@ -6,7 +6,7 @@ defmodule Mix.Tasks.Tokengate.Rollup.Backfill do
   source of truth). The period KPIs of Resumen (`/stats/overview`) and the
   dashboard read it through `Tokengate.Metrics.StatsQueries`, so a rollup that
   disagrees with the raw numbers makes those two pages disagree with `/stats`
-  (En vivo) and `/budget/global` — both of which read `request_logs` crudo.
+  (En vivo), which reads `request_logs` crudo.
 
       mix tokengate.rollup.backfill                              # últimos 90 días
       mix tokengate.rollup.backfill --days 7

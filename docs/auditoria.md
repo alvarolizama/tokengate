@@ -27,7 +27,7 @@ Infra ya existente en `lib/tokengate/auditing/`:
 - `Tokengate.Auditing.audit/5` y `list_audit_logs/1` (filtros por user/entidad/
   acción, tope 100, **sin rango de fechas ni paginación**).
 - Cobertura real: **~19 acciones en 6 sitios** (`users_live`, `services_live`,
-  `providers_live`, `dashboard_live`, `global_cap_live`, `maintenance_live`,
+  `providers_live`, `dashboard_live`, `maintenance_live`,
   `session_controller`).
 - **Sin auditar en absoluto**: `ModelsLive`, `LabsLive`, `GroupsLive`,
   `GroupMembersLive`, `TopupsLive`, `ObservabilityLive`, alta/baja de
@@ -68,9 +68,7 @@ papeles, porque el "quién" es distinto en cada uno.
 | `impersonate.start` / `impersonate.stop` | ✅ |
 | `api_key.create` / `api_key.revoke` en su nombre | ✅ |
 | `group_member.add` / `group_member.remove` (asignarlo a un perfil de límites) | ➕ |
-| `exemption.add` / `exemption.remove` (exención de tope diario) | ➕ |
 | `topup.create` / `topup.update` / `topup.toggle_status` / `topup.revoke` (crédito extra) | ➕ |
-| `budget.update_global_daily_cap` (afecta a todos) | ✅ |
 
 ---
 
@@ -164,13 +162,6 @@ modal, paginar, elegir en un picker, cambiar de tab) **no se auditan**.
 | `save_topup` (create/update) | `topup.create` / `topup.update` ➕ |
 | `toggle_topup_status` | `topup.toggle_status` ➕ |
 | `revoke_topup` | `topup.revoke` ➕ |
-
-### Presupuesto → Tope diario global (`global_cap_live.ex`)
-| Handler | Acción audit |
-|---|---|
-| `save_global_cap` | `budget.update_global_daily_cap` ✅ |
-| `add_global_exemption` | `exemption.add` ➕ |
-| `remove_global_exemption` | `exemption.remove` ➕ |
 
 ### Operaciones → Observabilidad (`observability_live.ex`)
 | Handler | Acción audit |
@@ -294,7 +285,7 @@ LiveView en `live_session :admin` (`UserAuth.require_admin`).
    cierra el bloque de autenticación.
 4. **Cobertura de escritura admin**: el inventario exhaustivo de arriba
    (`providers_live`, `models_live`, `labs_live`, `services_live`,
-   `groups_live`, `group_members_live`, `topups_live`, `global_cap_live`,
+   `groups_live`, `group_members_live`, `topups_live`,
    `observability_live`) + arreglar el diff de `user.update`.
 5. **Retención**: worker de particiones de `audit_logs`.
 6. **Visor** `/operations/audit` + export.

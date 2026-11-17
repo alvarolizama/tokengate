@@ -22,9 +22,9 @@
 #   * ~11k `request_logs` repartidos por hora local de cada sujeto, con
 #     streaming, thinking, caché, fallbacks, errores de gate y de proveedor.
 #   * Rollup horario (`request_metrics_hourly`) reconstruido para el rango.
-#   * Presupuesto: techo mensual por perfil/servicio, límite propio de Sofía,
-#     top-ups (activo, agotado, vencido) y exenciones del tope global.
-#   * Webhooks de observabilidad, lab custom, audit logs del mes y cap global.
+#   * Presupuesto: techo mensual por perfil/servicio, límite propio de Sofía
+#     y top-ups (activo, agotado, vencido).
+#   * Webhooks de observabilidad, lab custom y audit logs del mes.
 #
 # Al terminar imprime un resumen y las API keys demo para pegarle al proxy.
 
@@ -36,9 +36,7 @@ defmodule Tokengate.DemoSeeds do
   alias Tokengate.Accounts
   alias Tokengate.Accounts.{ApiKey, Group, GroupMember, Service, User}
   alias Tokengate.Auditing.AuditLog
-  alias Tokengate.Budgets.{Exemption, Exemptions}
   alias Tokengate.Credits.{Topup, Topups}
-  alias Tokengate.GlobalSettings
   alias Tokengate.Logs
   alias Tokengate.Logs.{PartitionWorker, RequestLog}
   alias Tokengate.Metrics.RequestMetricsHourly
@@ -261,14 +259,6 @@ defmodule Tokengate.DemoSeeds do
         :count
       )
 
-    {exemptions, _} =
-      from(e in Exemption,
-        where:
-          e.user_id in ^demo_user_ids or e.group_id in ^demo_group_ids or
-            e.service_id in ^demo_service_ids
-      )
-      |> Repo.delete_all()
-
     # Los webhooks demo son globales: no cuelgan de ninguna sub, así que la
     # limpieza los borra por nombre y no por grupo.
     {destinations, _} =
@@ -325,7 +315,7 @@ defmodule Tokengate.DemoSeeds do
     from(l in Providers.Lab, where: l.key == ^@custom_lab_key) |> Repo.delete_all()
 
     IO.puts(
-      "· wipe: #{logs} logs · #{rollup} buckets · #{audit} audit · #{exemptions} exenciones · " <>
+      "· wipe: #{logs} logs · #{rollup} buckets · #{audit} audit · " <>
         "#{destinations} webhooks · #{users} usuarios · #{groups} grupos · #{services} servicios · " <>
         "#{memberships} membresías · #{topups} top-ups · #{models} modelos · #{credentials} credenciales · " <>
         "#{model_providers + extras + group_models + service_models} enlaces"
@@ -373,9 +363,9 @@ defmodule Tokengate.DemoSeeds do
         max_concurrent: 32,
         max_concurrent_per_user: 8,
         receive_timeout_ms: 90_000,
-        # El reranker vive en otro host: path absoluto (tier 1 del modal
-        # Capacidades) para ejercitar los overrides del operador.
-        path_overrides: %{"rerank" => "http://reranker.internal:8080/v1/rerank"}
+        # El motor de transcripción vive en otro host: URL absoluta (tier 1
+        # del modal Capacidades) para ejercitar los overrides del operador.
+        path_overrides: %{"stt" => "http://asr.internal:8080/v1/audio/transcriptions"}
       },
       %{
         name: "VLLM Cluster",
@@ -774,10 +764,11 @@ defmodule Tokengate.DemoSeeds do
       )
 
     if admin do
-      case Repo.one(
-             from gm in GroupMember,
-               where: gm.user_id == ^admin.id and gm.group_id == ^platform_group.id
-           ) do
+      # Un usuario pertenece a un solo grupo (`group_members_user_id_unique_index`):
+      # el admin real puede venir ya colocado — en el grupo demo de una corrida
+      # anterior o en el suyo propio. En ese caso se reusa su membresía en vez de
+      # intentar insertar una segunda, que siempre violaría el índice.
+      case Repo.one(from gm in GroupMember, where: gm.user_id == ^admin.id) do
         nil ->
           {:ok, member} =
             Accounts.create_group_member(%{user_id: admin.id, group_id: platform_group.id})
@@ -804,7 +795,7 @@ defmodule Tokengate.DemoSeeds do
           %{
             member: member,
             user: admin,
-            group: platform_group,
+            group: Repo.get!(Group, member.group_id),
             profile: :regular,
             token: nil,
             key_prefix: prefix || "tg-demo"
@@ -1060,36 +1051,7 @@ defmodule Tokengate.DemoSeeds do
   end
 
   defp seed_misc(org) do
-    # Tope global diario (kill-switch): con margen para que el tráfico de hoy
-    # no bloquee requests reales durante las pruebas.
-    {:ok, _} = GlobalSettings.update(%{daily_max_spend_usd: price(50)})
-
-    marta = find_member(org, "marta")
     batch = Enum.find(org.services, &(&1.service.name == "batch-reports"))
-
-    {:ok, _} =
-      Exemptions.add(%{
-        scope: "global_daily",
-        subject_type: "user",
-        user_id: marta.user.id,
-        note: "On-call de plataforma: su tráfico no debe tocar el kill-switch"
-      })
-
-    {:ok, _} =
-      Exemptions.add(%{
-        scope: "global_daily",
-        subject_type: "group",
-        group_id: org.groups.data_lab.id,
-        note: "Grupo de investigación: exento durante el trimestre"
-      })
-
-    {:ok, _} =
-      Exemptions.add(%{
-        scope: "global_daily",
-        subject_type: "service",
-        service_id: batch.service.id,
-        note: "Reportes nocturnos de dirección"
-      })
 
     # Supervisores de servicios (vista read-only /services/supervised).
     docs_rag = Enum.find(org.services, &(&1.service.name == "docs-rag"))
@@ -1175,7 +1137,6 @@ defmodule Tokengate.DemoSeeds do
     actions = [
       {"user.create", "user", "Alta de miembro", 29},
       {"credential.create", "credential", "Credencial de Z.AI (prod)", 28},
-      {"budget.update_global_daily_cap", "global_settings", "Tope diario 40 → 50 USD", 26},
       {"credential.update", "credential", "Rotación de la credencial de OpenRouter", 24},
       {"user.update", "user", "Cambio de zona horaria de Ana", 22},
       {"provider.update", "provider", "Límites RPM del proveedor interno", 21},
@@ -1187,7 +1148,6 @@ defmodule Tokengate.DemoSeeds do
       {"settings.reset_sticky_sessions", "sticky_sessions", "Reset de sesiones sticky", 15},
       {"model.update", "model", "Precios de mercado de gemini-3-pro", 14},
       {"user.reset_password", "user", "Reset de contraseña de Hugo", 12},
-      {"budget.update_global_daily_cap", "global_settings", "Tope diario 30 → 40 USD", 11},
       {"impersonate.start", "user", "Impersonación para soporte", 10},
       {"impersonate.stop", "user", "Fin de impersonación", 10},
       {"credential.toggle_status", "credential", "Credencial de Z.AI overflow deshabilitada", 9},
@@ -1197,8 +1157,6 @@ defmodule Tokengate.DemoSeeds do
       {"credential.create", "credential", "Credencial de Moonshot AI (prod)", 5},
       {"settings.reset_logs", "request_logs", "Purga de logs de prueba", 4},
       {"user.delete", "user", "Baja de cuenta temporal", 3},
-      {"budget.update_global_daily_cap", "global_settings", "Tope diario de 50 USD confirmado",
-       2},
       {"credential.update", "credential", "Rotación de la credencial de Fireworks", 1}
     ]
 
@@ -1977,7 +1935,6 @@ defmodule Tokengate.DemoSeeds do
     · /operations/monitoring     → #{summary.request_count} logs con filtros de agente / estado / streaming / error
     · /budget/profiles           → perfiles de límites: techos, un ilimitado (Data Lab) y uno agotado (Contractors)
     · /budget/topups             → top-up activo (Ana, docs-rag), agotado (Luis) y vencido (Iván, archivado)
-    · /budget/global             → tope diario global + exenciones
     · /calculator                → real vs estimado por modelo (hay logs con costo $0 para el backfill)
     · /catalog/providers         → 2 proveedores custom, credencial en error y credencial deshabilitada
     · /budget/profiles/:id       → membresías, extras, suspensión de Bruno y servicios supervisados

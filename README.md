@@ -125,9 +125,6 @@ The public surface is exactly these seven routes:
   or expired. Live in `/budget/topups`.
 - **Draining order** — the monthly limit is spent first; once exhausted (or on a
   zero/absent limit) the top-up that **expires soonest** is drained.
-- **Global daily kill-switch** — instance-wide per-UTC-day USD cap
-  (`/budget/global`); once total spend reaches it, all proxy requests are rejected
-  until 00:00 UTC. Users, limit profiles and services can be exempted.
 - **Cost tracking** — the provider-reported usage cost is the single cost dimension,
   recorded per request and returned to the client: in the `X-Tokengate-Cost` header
   (LiteLLM upstreams via `x-litellm-response-cost`) and, on chat, in the
@@ -155,7 +152,6 @@ The public surface is exactly these seven routes:
 | `/access/users` | User CRUD, suspend/activate, impersonation, per-user stats and spend limits |
 | `/budget/profiles` (+ `/:id/members`) | Limit profiles — monthly cap, unlimited flag, membership, per-member RPM/concurrency extras and model grants |
 | `/budget/topups` | One-shot top-ups per user/service: consumed vs granted, deactivate/reactivate, revoke, archived when drained/expired |
-| `/budget/global` | Global daily cap kill-switch + exemptions |
 | `/services/supervised` (+ `/:service_id`) | Read-only view for service supervisors — the same analytics as the service stats page (KPIs, models, per-API-key table, period selector), no role grants it; access comes from a live `service_supervisors` row (removing the row revokes it) |
 | `/operations/monitoring` | Live request log, filters, in-flight requests, CSV export (`/stats/export?type=logs`) |
 | `/operations/audit` | Admin audit log — actor (+ impersonator), action, entity, IP, redacted change set; filters, pagination, CSV export (`/operations/audit/export`) |
@@ -474,7 +470,7 @@ docker run -p 4000:4000 --env-file .env tokengate
 
 The period KPIs of **Resumen** (`/stats/overview`) and the **dashboard** answer from the
 hourly rollup (`request_metrics_hourly`) for everything older than the fresh 3-hour tail,
-which is read from `request_logs` crudo. `/stats` (En vivo) and `/budget/global` read
+which is read from `request_logs` crudo. `/stats` (En vivo) reads
 `request_logs` only — so if the two groups ever disagree, the rollup is the one that is
 wrong. The `RollupWorker` only re-aggregates the last 3 hours, so a rollup written by a
 buggy version stays wrong until it is rebuilt:

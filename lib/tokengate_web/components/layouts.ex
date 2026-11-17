@@ -384,10 +384,9 @@ defmodule TokengateWeb.Layouts do
 
             <.nav_group label={gettext("Budget")} id="sidebar-section-budget">
               <%!-- Los perfiles de límites son el sujeto del que cada usuario
-                   hereda su techo de gasto; los top-ups son crédito extra de un
-                   solo uso, y el tope diario global es el kill-switch que corta
-                   TODO el gateway (con sus exclusiones). Por eso la sección es
-                   Presupuesto, no Acceso ni Operaciones. --%>
+                   hereda su techo de gasto, y los top-ups son crédito extra de
+                   un solo uso. Por eso la sección es Presupuesto, no Acceso
+                   ni Operaciones. --%>
               <.nav_link
                 label={gettext("Limit profiles")}
                 icon="hero-user-group"
@@ -399,12 +398,6 @@ defmodule TokengateWeb.Layouts do
                 icon="hero-arrow-up-circle"
                 path={~p"/budget/topups"}
                 active={active_path?(@current_path, ~p"/budget/topups")}
-              />
-              <.nav_link
-                label={gettext("Global daily cap")}
-                icon="hero-globe-americas"
-                path={~p"/budget/global"}
-                active={active_path?(@current_path, ~p"/budget/global")}
               />
             </.nav_group>
 

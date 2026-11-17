@@ -1008,7 +1008,7 @@ defmodule TokengateWeb.StatsHelpers do
       <% %{unlimited?: true} -> %>
         <span
           class="badge badge-sm badge-success badge-outline"
-          title={gettext("Marked unlimited: only the global daily cap applies")}
+          title={gettext("Marked unlimited: no monthly ceiling")}
         >
           {gettext("Unlimited")}
         </span>

@@ -1,8 +1,8 @@
 defmodule Tokengate.Budgets.ManagerTest do
   @moduledoc """
   Tests for Tokengate.Budgets.Manager — the ETS micro-USD spend cache with the
-  two budget layers (monthly per subject + global daily kill-switch) enforced
-  through a reserve → settle primitive, with lazy DB load.
+  monthly per-subject limit (plus the credits spend plan) enforced through a
+  reserve → settle primitive, with lazy DB load.
 
   `async: false` because the ETS table `:tokengate_budgets` is a named
   (singleton) table; concurrent tests would clobber each other's counters.
@@ -14,7 +14,6 @@ defmodule Tokengate.Budgets.ManagerTest do
   use Oban.Testing, repo: Tokengate.Repo
   alias Tokengate.Budgets.Manager
   alias Tokengate.Accounts
-  alias Tokengate.Budgets.Exemptions
   alias Tokengate.Credits
   alias Tokengate.Logs
 
@@ -92,17 +91,14 @@ defmodule Tokengate.Budgets.ManagerTest do
   # Simulates the post-request half of a completed request: settle a zero hold
   # to the given cost. Equivalent to the old `record_spend/2` accumulation
   # (minus the transient hold), used where tests just need spend on the books.
-  defp record(subject_id, cost_usd, opts \\ []) do
+  defp record(subject_id, cost_usd) do
     today = Date.utc_today()
 
     hold = %{
       monthly_micro: 0,
-      global_micro: 0,
-      exempt_global?: Keyword.get(opts, :exempt_global?, false),
       # Stamps de período, iguales a los de los holds reales: el guard de
       # settle/release compara contra el ESTADO del contador, no el reloj.
-      period: {today.year, today.month},
-      global_period: today
+      period: {today.year, today.month}
     }
 
     Manager.settle(subject_id, hold, cost_usd)
@@ -124,52 +120,37 @@ defmodule Tokengate.Budgets.ManagerTest do
   defp run_concurrent_reserve(plan, requested_usd) do
     1..10
     |> Task.async_stream(
-      fn _i -> Manager.reserve_plan(plan, nil, requested_usd, false) end,
+      fn _i -> Manager.reserve_plan(plan, requested_usd) end,
       max_concurrency: 10
     )
     |> Enum.map(fn {:ok, result} -> result end)
   end
 
   # ---------------------------------------------------------------------------
-  # Setup — reuse app-tree Manager if running, else start_supervised!; clear the
-  # global daily counter so each test starts from its own DB truth.
+  # Setup — reuse app-tree Manager if running, else start_supervised!.
   # ---------------------------------------------------------------------------
 
   setup do
     pid = Process.whereis(Manager) || start_supervised!(Manager)
     _ = :sys.get_state(pid)
-    :ets.delete(@table, {:global, :daily})
-    # The table is a singleton shared across tests; a leftover debounce mark
-    # would make the NEXT test's `insert_new` fail and silently skip the
-    # enqueue (spurious assert_enqueued failures).
-    :ets.delete(@table, {:sync_pending, :global})
     :ok
   end
 
   # ---------------------------------------------------------------------------
-  # reserve/5 — two-layer hold
+  # reserve/3 — monthly hold
   # ---------------------------------------------------------------------------
 
-  describe "reserve/5 — two-layer hold" do
-    test "under both caps returns a hold and holds on monthly + global" do
+  describe "reserve/3 — monthly hold" do
+    test "under the cap returns a hold and holds on the monthly counter" do
       {tm, _} = group_member_fixture()
 
       assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1000.00"),
-                 Decimal.new("20.00"),
-                 false
-               )
+               Manager.reserve(tm.id, Decimal.new("100.00"), Decimal.new("20.00"))
 
       assert hold.monthly_micro == 20_000_000
-      assert hold.global_micro == 20_000_000
-      refute hold.exempt_global?
 
-      # The counters read the held amount.
+      # The counter reads the held amount.
       assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("20.00"))
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("20.00"))
     end
 
     test "rejects when the subject monthly cap is already exhausted" do
@@ -177,50 +158,14 @@ defmodule Tokengate.Budgets.ManagerTest do
       record(tm.id, Decimal.new("100.00"))
 
       assert {:error, {:budget_exceeded, %{layer: :subject}}} =
-               Manager.reserve(tm.id, Decimal.new("100.00"), nil, Decimal.new("5.00"), false)
+               Manager.reserve(tm.id, Decimal.new("100.00"), Decimal.new("5.00"))
     end
 
-    test "rejects when the global cap is exhausted and rolls back the monthly hold" do
-      {tm, _} = group_member_fixture()
-      record(tm.id, Decimal.new("50.00"))
-      before = Manager.spend(tm.id).monthly_usd
-
-      assert {:error, {:budget_exceeded, %{layer: :global}}} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("50.00"),
-                 Decimal.new("5.00"),
-                 false
-               )
-
-      # Layer 1 rolled back — the rejected reservation left no trace.
-      assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, before)
-    end
-
-    test "nil monthly budget and nil global cap never reject" do
+    test "nil monthly budget never rejects" do
       {tm, _} = group_member_fixture()
 
-      assert {:ok, hold} = Manager.reserve(tm.id, nil, nil, Decimal.new("999.00"), false)
+      assert {:ok, hold} = Manager.reserve(tm.id, nil, Decimal.new("999.00"))
       assert hold.monthly_micro == 0
-      assert hold.global_micro == 0
-    end
-
-    test "exempt_global? skips the global hold" do
-      {tm, _} = group_member_fixture()
-
-      assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1.00"),
-                 Decimal.new("5.00"),
-                 true
-               )
-
-      assert hold.exempt_global?
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("0"))
-      assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("5.00"))
     end
 
     test "concurrent reservations cannot jointly exceed the cap" do
@@ -231,7 +176,7 @@ defmodule Tokengate.Budgets.ManagerTest do
       # holds the whole cap; every subsequent one sees an exhausted subject.
       results =
         for _ <- 1..50 do
-          Manager.reserve(tm.id, budget, nil, Decimal.new("1.00"), false)
+          Manager.reserve(tm.id, budget, Decimal.new("1.00"))
         end
 
       assert Enum.count(results, &match?({:ok, _}, &1)) == 1
@@ -244,71 +189,39 @@ defmodule Tokengate.Budgets.ManagerTest do
   # ---------------------------------------------------------------------------
 
   describe "settle/3" do
-    test "swaps the hold for the real cost on both layers + daily display" do
+    test "swaps the hold for the real cost on the monthly + daily display" do
       {tm, _} = group_member_fixture()
 
       assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1000.00"),
-                 Decimal.new("20.00"),
-                 false
-               )
+               Manager.reserve(tm.id, Decimal.new("100.00"), Decimal.new("20.00"))
 
       assert :ok = Manager.settle(tm.id, hold, Decimal.new("0.50"))
 
       assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("0.50"))
       assert Decimal.equal?(Manager.spend(tm.id).daily_usd, Decimal.new("0.50"))
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("0.50"))
     end
 
     test "nil actual cost releases the hold fully" do
       {tm, _} = group_member_fixture()
 
       assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1000.00"),
-                 Decimal.new("20.00"),
-                 false
-               )
+               Manager.reserve(tm.id, Decimal.new("100.00"), Decimal.new("20.00"))
 
       assert :ok = Manager.settle(tm.id, hold, nil)
 
       assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("0"))
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("0"))
     end
 
     test "enqueues SyncWorker with subject_id" do
       {tm, _} = group_member_fixture()
 
-      assert {:ok, hold} = Manager.reserve(tm.id, nil, nil, Decimal.new("1.00"), false)
+      assert {:ok, hold} = Manager.reserve(tm.id, nil, Decimal.new("1.00"))
       assert :ok = Manager.settle(tm.id, hold, Decimal.new("1.00"))
 
       assert_enqueued(
         worker: Tokengate.Budgets.SyncWorker,
         args: %{"subject_id" => tm.id}
       )
-    end
-
-    test "an exempt hold never touches the global counter" do
-      {tm, _} = group_member_fixture()
-
-      assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1000.00"),
-                 Decimal.new("5.00"),
-                 true
-               )
-
-      assert :ok = Manager.settle(tm.id, hold, Decimal.new("2.00"))
-
-      assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("2.00"))
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("0"))
     end
   end
 
@@ -321,18 +234,11 @@ defmodule Tokengate.Budgets.ManagerTest do
       {tm, _} = group_member_fixture()
 
       assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1000.00"),
-                 Decimal.new("5.00"),
-                 false
-               )
+               Manager.reserve(tm.id, Decimal.new("100.00"), Decimal.new("5.00"))
 
       assert :ok = Manager.release(tm.id, hold)
 
       assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("0"))
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("0"))
     end
   end
 
@@ -409,14 +315,14 @@ defmodule Tokengate.Budgets.ManagerTest do
       # No settle call — reserve should lazy-load the $90. With a $100 cap, a
       # $10 hold is allowed (spend $90 < cap $100).
       assert {:ok, hold} =
-               Manager.reserve(tm.id, Decimal.new("100.00"), nil, Decimal.new("10.00"), false)
+               Manager.reserve(tm.id, Decimal.new("100.00"), Decimal.new("10.00"))
 
       assert hold.monthly_micro == 10_000_000
 
       # The counter now reads $100 ($90 loaded + $10 held) → the next hold is
       # rejected.
       assert {:error, {:budget_exceeded, %{layer: :subject}}} =
-               Manager.reserve(tm.id, Decimal.new("100.00"), nil, Decimal.new("1.00"), false)
+               Manager.reserve(tm.id, Decimal.new("100.00"), Decimal.new("1.00"))
     end
 
     test "settle on top of lazy-loaded DB total accumulates correctly" do
@@ -514,7 +420,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
       log_spend(tm.id, "10.00")
 
-      assert {:ok, hold} = Manager.reserve(tm.id, nil, nil, Decimal.new("1.00"), false)
+      assert {:ok, hold} = Manager.reserve(tm.id, nil, Decimal.new("1.00"))
       assert :ok = Manager.settle(tm.id, hold, Decimal.new("5.00"))
 
       assert_enqueued(worker: Tokengate.Budgets.SyncWorker)
@@ -721,7 +627,7 @@ defmodule Tokengate.Budgets.ManagerTest do
       plan = Credits.plan(member)
 
       # Hold en vuelo: 1.00 retenidos contra el contador del límite.
-      assert {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("1.00"), false)
+      assert {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("1.00"))
       assert hold.kind == :limit
 
       # El reset mensual borra {:limit, subject} EN PLENO VUELO.
@@ -758,7 +664,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
       plan = Credits.plan(member)
 
-      assert {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("1.00"), false)
+      assert {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("1.00"))
       assert hold.kind == :topup
 
       # El reset mensual NO toca los bolsines; el settle tardío del top-up
@@ -796,192 +702,6 @@ defmodule Tokengate.Budgets.ManagerTest do
     after
       :ets.delete(:tokengate_credits, {:limit, {:user, "tu1"}})
       :ets.delete(:tokengate_credits, {:topup, "tt1"})
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Global daily counter — accumulation, lazy DB load and exemptions
-  # ---------------------------------------------------------------------------
-
-  describe "global daily counter" do
-    test "settled spend accumulates global daily spend" do
-      {tm1, _} = group_member_fixture()
-      {tm2, _} = group_member_fixture()
-
-      assert :ok = record(tm1.id, Decimal.new("10.00"))
-      assert :ok = record(tm2.id, Decimal.new("20.00"))
-
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("30.00"))
-    end
-
-    test "lazy-loads today's total spend from request_logs on first touch" do
-      {tm, _group} = group_member_fixture()
-
-      log_spend(tm.id, "4.00")
-      log_spend(tm.id, "6.00")
-
-      :ets.delete(@table, {:global, :daily})
-
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("10.00"))
-    end
-
-    test "yesterday's logs don't count (UTC day rollover)" do
-      {tm, _group} = group_member_fixture()
-
-      yesterday = Date.add(Date.utc_today(), -1)
-      log_spend(tm.id, "8.00", inserted_at: DateTime.new!(yesterday, ~T[23:59:59], "Etc/UTC"))
-
-      :ets.delete(@table, {:global, :daily})
-
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("0"))
-    end
-
-    test "set_global_from_db resets the counter" do
-      {tm, _} = group_member_fixture()
-
-      assert :ok = record(tm.id, Decimal.new("5.00"))
-      assert :ok = Manager.set_global_from_db(2_000_000)
-
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("2.00"))
-    end
-
-    test "a global-exempt subject never bumps the global counter" do
-      {tm, _} = group_member_fixture()
-
-      {:ok, _} =
-        Exemptions.add(%{
-          "scope" => "global_daily",
-          "subject_type" => "user",
-          "user_id" => tm.user_id
-        })
-
-      assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1000.00"),
-                 Decimal.new("5.00"),
-                 true
-               )
-
-      assert :ok = Manager.settle(tm.id, hold, Decimal.new("5.00"))
-
-      # Own counter still bumps; the global counter does not.
-      assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("5.00"))
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("0"))
-    end
-
-    test "a non-exempt subject bumps the global counter" do
-      {tm, _} = group_member_fixture()
-
-      assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1000.00"),
-                 Decimal.new("5.00"),
-                 false
-               )
-
-      assert :ok = Manager.settle(tm.id, hold, Decimal.new("5.00"))
-
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("5.00"))
-    end
-  end
-
-  describe "global reconciliation" do
-    test "load_global_from_db sums the whole instance without a subject filter" do
-      {tm1, _} = group_member_fixture()
-      {tm2, _} = group_member_fixture()
-
-      log_spend(tm1.id, "7.00")
-      log_spend(tm2.id, "3.00")
-
-      micro = Manager.load_global_from_db(Manager.utc_day_start())
-
-      assert micro == 10_000_000
-    end
-
-    test "load_global_from_db ignores a stale subject filter (the :global trap)" do
-      {tm, _} = group_member_fixture()
-      log_spend(tm.id, "4.00")
-
-      # Passing :global to load_from_db/2 does NOT return 0 — it raises: the
-      # filter casts an atom against a binary_id column. That is exactly why
-      # the reconciler needs its own subject-less loader.
-      assert_raise Ecto.Query.CastError, fn ->
-        Manager.load_from_db(:global, Manager.utc_day_start())
-      end
-
-      assert Manager.load_global_from_db(Manager.utc_day_start()) == 4_000_000
-    end
-
-    test "a settled request enqueues the global reconciler exactly once" do
-      {tm, _} = group_member_fixture()
-
-      assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1000.00"),
-                 Decimal.new("5.00"),
-                 false
-               )
-
-      assert :ok = Manager.settle(tm.id, hold, Decimal.new("5.00"))
-
-      assert_enqueued(worker: Tokengate.Budgets.GlobalSyncWorker)
-    end
-
-    test "an exempt-global subject does NOT enqueue the global reconciler" do
-      {tm, _} = group_member_fixture()
-
-      assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1000.00"),
-                 Decimal.new("5.00"),
-                 true
-               )
-
-      assert :ok = Manager.settle(tm.id, hold, Decimal.new("5.00"))
-
-      refute_enqueued(worker: Tokengate.Budgets.GlobalSyncWorker)
-    end
-
-    test "the reconciler resets phantom holds to the real DB spend" do
-      {tm, _} = group_member_fixture()
-
-      # Real spend is $5, but a crashed request left a $20 ceiling on the
-      # counter (the falso-402 scenario).
-      log_spend(tm.id, "5.00")
-      :ets.insert(@table, {{:global, :daily}, 25_000_000, true, Date.utc_today()})
-
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("25.00"))
-
-      assert :ok = perform_job(Tokengate.Budgets.GlobalSyncWorker, %{})
-
-      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("5.00"))
-    end
-
-    test "the reconciler clears its debounce mark so the next settle re-enqueues" do
-      assert :ok = perform_job(Tokengate.Budgets.GlobalSyncWorker, %{})
-
-      {tm, _} = group_member_fixture()
-
-      assert {:ok, hold} =
-               Manager.reserve(
-                 tm.id,
-                 Decimal.new("100.00"),
-                 Decimal.new("1000.00"),
-                 Decimal.new("5.00"),
-                 false
-               )
-
-      assert :ok = Manager.settle(tm.id, hold, Decimal.new("5.00"))
-
-      assert_enqueued(worker: Tokengate.Budgets.GlobalSyncWorker)
     end
   end
 end

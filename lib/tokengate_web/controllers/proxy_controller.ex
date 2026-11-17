@@ -64,9 +64,7 @@ defmodule TokengateWeb.ProxyController do
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Budgets.Manager, as: Budgets
-  alias Tokengate.Budgets.Exemptions
   alias Tokengate.Accounts.GroupMember
-  alias Tokengate.GlobalSettings
   alias Tokengate.Limits.Manager, as: Limits
   alias Tokengate.Logs.WriteWorker
   alias Tokengate.Metrics.Collector
@@ -1083,34 +1081,10 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  # Budget-exemption subject for this request. Services authenticate as
-  # virtual GroupMembers (service_name set, user/group nil) — see
-  # ApiAuth.service_to_virtual_member/1. Group members check their own user
-  # row AND their group's exemptions.
-  defp budget_subject(%GroupMember{service_name: name} = member) when not is_nil(name),
-    do: %{type: "service", id: member.id}
-
-  defp budget_subject(%GroupMember{} = member), do: %{type: "user", id: member.user_id}
-
-  defp group_subject(%GroupMember{service_name: nil} = member),
-    do: %{type: "group", id: member.group_id}
-
-  defp group_subject(_service_member), do: nil
-
-  defp exemption_subjects(member) do
-    %{subject: budget_subject(member), group: group_subject(member)}
-  end
-
-  defp exempt_from?(scope, member) do
-    subjects = exemption_subjects(member)
-    Exemptions.exempt?(scope, subjects.subject, subjects.group)
-  end
-
-  # Reserves budget for the request on both layers (monthly per subject +
-  # global daily kill-switch). Returns `{:ok, hold}` with `%{monthly_micro,
-  # global_micro, exempt_global?}`, settled — or released, if the request
-  # produced no cost — in the caller's `after` via `settle_budget/2`. Every
-  # provider goes through this gate; there is no billing-surface exemption.
+  # Reserves budget for the request against the subject's spend plan. Returns
+  # `{:ok, hold}`, settled — or released, if the request produced no cost — in
+  # the caller's `after` via `settle_budget/2`. Every provider goes through
+  # this gate; there is no billing-surface exemption.
   defp reserve_budget(member, limits, _route) do
     reserve_credit_budget(member, limits)
   end
@@ -1121,19 +1095,8 @@ defmodule TokengateWeb.ProxyController do
   # the durable log can persist it.
   defp reserve_credit_budget(member, limits) do
     plan = limits.credit_plan || Tokengate.Credits.plan(member)
-    daily_cap = GlobalSettings.get_daily_cap()
 
-    # `exempt_from?` only exempts the GLOBAL DAILY cap (layer 2); with no cap
-    # configured (`nil` = unlimited) `hold_counter/3` returns `{:ok, 0}` and the
-    # flag is irrelevant — so the exemption lookup (a cache hit, but still a
-    # per-request call into another context) is skipped entirely.
-    result =
-      Budgets.reserve_plan(
-        plan,
-        daily_cap,
-        max_request_cost_usd(),
-        daily_cap != nil and exempt_from?("global_daily", member)
-      )
+    result = Budgets.reserve_plan(plan, max_request_cost_usd())
 
     case result do
       {:ok, hold} ->
@@ -1168,8 +1131,7 @@ defmodule TokengateWeb.ProxyController do
   #
   # This value is HELD per in-flight request and settled to the real cost
   # afterwards, so it is multiplied by the concurrency level against the
-  # global daily cap: an oversized ceiling trips the kill-switch on traffic
-  # alone. Keep it close to a realistic request cost.
+  # subject's monthly limit. Keep it close to a realistic request cost.
   defp max_request_cost_usd do
     raw =
       :tokengate
@@ -3138,15 +3100,12 @@ defmodule TokengateWeb.ProxyController do
   defp error_details({:cascade_exhausted, _other}),
     do: {503, "service_unavailable", "cascade_exhausted", "All provider candidates were rejected"}
 
-  defp error_details({:budget_exceeded, %{layer: :global}}),
-    do: {402, "billing_error", "budget_exceeded", "Global daily spending cap reached"}
-
   defp error_details({:budget_exceeded, %{layer: :subject}}),
     do: {402, "billing_error", "budget_exceeded", "Monthly spend limit exceeded"}
 
   # «Sin crédito»: no hay límite mensual (ni propio ni del perfil de límites), no está
   # marcado ilimitado y no hay top-ups vigentes. Copy propio — NO comparte el
-  # mensaje del tope global ni el del límite agotado.
+  # mensaje del límite agotado.
   defp error_details({:budget_exceeded, %{layer: :no_credit}}),
     do:
       {402, "billing_error", "no_credit",

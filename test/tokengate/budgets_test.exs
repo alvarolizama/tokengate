@@ -71,27 +71,6 @@ defmodule Tokengate.BudgetsTest do
       })
   end
 
-  # Simulates a completed request (zero-hold settle) so tests can put spend on
-  # the books without going through the full reserve → settle dance.
-
-  # Durable spend row in request_logs — what display queries read now.
-  defp record_log(member, cost_usd, inserted_at \\ nil) do
-    {:ok, _} =
-      Logs.log_request(%{
-        group_member_id: member.id,
-        subject_type: "user",
-        model_requested: "test-model",
-        agent_type: "api",
-        status_code: 200,
-        prompt_tokens: 10,
-        completion_tokens: 5,
-        provider_cost_usd: cost_usd,
-        latency_ms: 100,
-        streaming: false,
-        inserted_at: inserted_at || DateTime.utc_now() |> DateTime.truncate(:second)
-      })
-  end
-
   # Gasto asentado contra un TOP-UP concreto (el proxy lo persiste en
   # `request_logs.credit_topup_id`). No cuenta contra el límite del sujeto.
   defp record_topup_log(member, topup, cost) do
@@ -251,7 +230,7 @@ defmodule Tokengate.BudgetsTest do
       assert_in_delta budget.monthly_pct, 100.0, 0.01
     end
 
-    test "unlimited_spend pasa con cap global: sin pct y sin agotar" do
+    test "unlimited_spend: sin pct y sin agotar" do
       user = user_fixture()
       group = group_fixture(%{"unlimited_spend" => true})
       member = member_fixture(group, user)
@@ -679,88 +658,6 @@ defmodule Tokengate.BudgetsTest do
 
     test "list_member_budgets(tz) con 0 miembros no revienta" do
       assert Budgets.spend_by_member_ids([], "America/Mexico_City") == %{daily: %{}, monthly: %{}}
-    end
-  end
-
-  describe "global_daily_budget_summary/0" do
-    # El contador global vive en ETS (tabla pública del árbol de la app):
-    # se limpia como en manager_test para que cada test siembre desde su
-    # propia DB.
-    setup do
-      :ets.delete(:tokengate_budgets, {:global, :daily})
-      :ok
-    end
-
-    test "sin cap configurado: nil en cap y pct, sin badge de estado" do
-      {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => nil})
-
-      summary = Budgets.global_daily_budget_summary()
-
-      assert summary.daily_cap_usd == nil
-      assert summary.daily_pct == nil
-      assert summary.exempt_count == 0
-      assert Decimal.eq?(summary.daily_spend_usd, Decimal.new(0))
-    end
-
-    test "con cap: pct refleja el gasto real de la DB (request_logs), no el contador ETS" do
-      {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "100.00"})
-      member = member_fixture()
-      record_log(member, Decimal.new("25.00"))
-      # Hold en vuelo en el contador ETS: NO debe reflejarse en el display.
-      # El sujeto es ilimitado ⇒ solo se toca el cap global.
-      plan = %{subject: {:user, "cap-test"}, limit_usd: nil, unlimited?: true, topups: []}
-      {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("100.00"), Decimal.new("20.00"), false)
-
-      summary = Budgets.global_daily_budget_summary()
-
-      # El spend del card es gasto real desde la DB, no el contador con holds.
-      refute Decimal.eq?(summary.daily_spend_usd, Manager.global_daily_spend())
-      assert Decimal.eq?(summary.daily_spend_usd, Decimal.new("25.00"))
-      assert Decimal.eq?(summary.daily_cap_usd, Decimal.new("100.00"))
-      assert summary.daily_pct == 25.0
-
-      :ok = Manager.release_credits(hold)
-    end
-
-    test "cuenta las exenciones global_daily aunque no afecten el contador" do
-      {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "50.00"})
-      user = user_fixture()
-
-      {:ok, _} =
-        Tokengate.Budgets.Exemptions.add(%{
-          "scope" => "global_daily",
-          "subject_type" => "user",
-          "user_id" => user.id
-        })
-
-      # Sujeto exento: su gasto no toca el contador global…
-      member = member_fixture(nil, user)
-      record_log(member, Decimal.new("10.00"))
-
-      summary = Budgets.global_daily_budget_summary()
-
-      # …pero la exención sí aparece en el conteo del card, y su gasto real
-      # (que el proxy no cuenta) SÍ entra al gasto mostrado.
-      assert summary.exempt_count == 1
-      assert Decimal.eq?(summary.daily_spend_usd, Decimal.new("10.00"))
-    end
-
-    test "gasto del día UTC: ignora logs de días anteriores" do
-      {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "100.00"})
-      member = member_fixture()
-
-      yesterday =
-        DateTime.utc_now() |> DateTime.add(-1, :day) |> DateTime.truncate(:second)
-
-      record_log(member, Decimal.new("5.00"), yesterday)
-      record_log(member, Decimal.new("25.00"))
-
-      # La ventana del tope es la del kill-switch (día UTC): el log de ayer no
-      # entra, y no hay forma de pedir otra ventana.
-      assert Decimal.eq?(
-               Budgets.global_daily_budget_summary().daily_spend_usd,
-               Decimal.new("25.00")
-             )
     end
   end
 end

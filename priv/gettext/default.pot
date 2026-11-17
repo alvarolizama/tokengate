@@ -21,8 +21,8 @@ msgstr ""
 msgid "Actions"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:726
-#: lib/tokengate_web/components/layouts.ex:741
+#: lib/tokengate_web/components/layouts.ex:719
+#: lib/tokengate_web/components/layouts.ex:734
 #, elixir-autogen, elixir-format
 msgid "Attempting to reconnect"
 msgstr ""
@@ -61,12 +61,12 @@ msgstr ""
 msgid "No monthly budget"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:733
+#: lib/tokengate_web/components/layouts.ex:726
 #, elixir-autogen, elixir-format
 msgid "Something went wrong!"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:718
+#: lib/tokengate_web/components/layouts.ex:711
 #, elixir-autogen, elixir-format
 msgid "We can't find the internet"
 msgstr ""
@@ -76,7 +76,7 @@ msgstr ""
 msgid "close"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:392
+#: lib/tokengate_web/components/layouts.ex:391
 #: lib/tokengate_web/live/groups_live.ex:39
 #: lib/tokengate_web/live/groups_live.ex:311
 #: lib/tokengate_web/live/stats/groups.ex:62
@@ -101,7 +101,7 @@ msgstr ""
 msgid "Administrator"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:419
+#: lib/tokengate_web/components/layouts.ex:412
 #, elixir-autogen, elixir-format
 msgid "Audit"
 msgstr ""
@@ -132,13 +132,6 @@ msgstr ""
 msgid "Dashboard"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:404
-#: lib/tokengate_web/live/global_cap_live.ex:37
-#: lib/tokengate_web/live/stats/live.ex:58
-#, elixir-autogen, elixir-format
-msgid "Global daily cap"
-msgstr ""
-
 #: lib/tokengate_web/components/layouts.ex:347
 #: lib/tokengate_web/live/labs_live.ex:39
 #: lib/tokengate_web/live/labs_live.ex:203
@@ -146,14 +139,14 @@ msgstr ""
 msgid "Labs"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:650
+#: lib/tokengate_web/components/layouts.ex:643
 #, elixir-autogen, elixir-format
 msgid "Language"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:437
-#: lib/tokengate_web/live/maintenance_live.ex:31
-#: lib/tokengate_web/live/maintenance_live.ex:186
+#: lib/tokengate_web/components/layouts.ex:430
+#: lib/tokengate_web/live/maintenance_live.ex:32
+#: lib/tokengate_web/live/maintenance_live.ex:187
 #, elixir-autogen, elixir-format
 msgid "Maintenance"
 msgstr ""
@@ -172,18 +165,18 @@ msgstr ""
 msgid "Models"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:413
+#: lib/tokengate_web/components/layouts.ex:406
 #, elixir-autogen, elixir-format
 msgid "Monitoring"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:425
+#: lib/tokengate_web/components/layouts.ex:418
 #: lib/tokengate_web/live/observability_live.ex:22
 #, elixir-autogen, elixir-format
 msgid "Observability"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:411
+#: lib/tokengate_web/components/layouts.ex:404
 #, elixir-autogen, elixir-format
 msgid "Operations"
 msgstr ""
@@ -208,7 +201,7 @@ msgstr ""
 msgid "Services"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:567
+#: lib/tokengate_web/components/layouts.ex:560
 #, elixir-autogen, elixir-format
 msgid "Sign out?"
 msgstr ""
@@ -227,18 +220,17 @@ msgstr ""
 msgid "Supervised services"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:604
+#: lib/tokengate_web/components/layouts.ex:597
 #, elixir-autogen, elixir-format
 msgid "Timezone"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:398
+#: lib/tokengate_web/components/layouts.ex:397
 #, elixir-autogen, elixir-format
 msgid "Top-ups"
 msgstr ""
 
 #: lib/tokengate_web/live/dashboard_live.html.heex:449
-#: lib/tokengate_web/live/global_cap_live.ex:237
 #: lib/tokengate_web/live/monitoring_live.ex:960
 #: lib/tokengate_web/live/monitoring_live.ex:1060
 #: lib/tokengate_web/live/monitoring_live.ex:1118
@@ -341,8 +333,8 @@ msgstr ""
 #: lib/tokengate_web/components/keys_panel.ex:158
 #: lib/tokengate_web/live/group_members_live.ex:550
 #: lib/tokengate_web/live/labs_live.ex:376
-#: lib/tokengate_web/live/maintenance_live.ex:363
-#: lib/tokengate_web/live/maintenance_live.ex:399
+#: lib/tokengate_web/live/maintenance_live.ex:364
+#: lib/tokengate_web/live/maintenance_live.ex:400
 #: lib/tokengate_web/live/model_providers_live.ex:2469
 #: lib/tokengate_web/live/model_providers_live.ex:2523
 #: lib/tokengate_web/live/models_live.ex:1433
@@ -697,7 +689,7 @@ msgid "Receive timeout"
 msgstr ""
 
 #: lib/tokengate_web/live/provider_keys_live.ex:401
-#: lib/tokengate_web/live/stats/live.ex:220
+#: lib/tokengate_web/live/stats/live.ex:181
 #, elixir-autogen, elixir-format
 msgid "Requests per minute"
 msgstr ""
@@ -870,7 +862,7 @@ msgstr ""
 msgid "A user can have several active keys, each with its own label."
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:552
+#: lib/tokengate_web/components/layouts.ex:545
 #: lib/tokengate_web/components/service_stats_body.ex:227
 #: lib/tokengate_web/live/provider_keys_live.ex:43
 #: lib/tokengate_web/live/provider_keys_live.ex:372
@@ -1457,7 +1449,6 @@ msgid "Search by name or limit profile…"
 msgstr ""
 
 #: lib/tokengate_web/components/service_stats_body.ex:167
-#: lib/tokengate_web/live/global_cap_live.ex:243
 #: lib/tokengate_web/live/monitoring_live.ex:960
 #: lib/tokengate_web/live/monitoring_live.ex:1115
 #: lib/tokengate_web/live/monitoring_live.ex:1155
@@ -1639,8 +1630,8 @@ msgstr ""
 #: lib/tokengate_web/components/service_stats_body.ex:112
 #: lib/tokengate_web/components/service_stats_body.ex:237
 #: lib/tokengate_web/components/service_stats_body.ex:298
-#: lib/tokengate_web/kpi_helpers.ex:207
-#: lib/tokengate_web/kpi_helpers.ex:245
+#: lib/tokengate_web/kpi_helpers.ex:206
+#: lib/tokengate_web/kpi_helpers.ex:241
 #: lib/tokengate_web/live/dashboard_live.ex:857
 #: lib/tokengate_web/live/dashboard_live.html.heex:397
 #: lib/tokengate_web/live/dashboard_live.html.heex:451
@@ -2038,7 +2029,6 @@ msgstr ""
 
 #: lib/tokengate_web/live/dashboard_live.html.heex:448
 #: lib/tokengate_web/live/dashboard_live.html.heex:495
-#: lib/tokengate_web/live/global_cap_live.ex:240
 #: lib/tokengate_web/live/model_providers_live.ex:1411
 #: lib/tokengate_web/live/model_providers_live.ex:2012
 #: lib/tokengate_web/live/monitoring_live.ex:954
@@ -2847,7 +2837,7 @@ msgstr ""
 msgid "Not configured"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:431
+#: lib/tokengate_web/components/layouts.ex:424
 #: lib/tokengate_web/live/notifications_live.ex:34
 #: lib/tokengate_web/live/notifications_live.ex:346
 #, elixir-autogen, elixir-format
@@ -3081,8 +3071,8 @@ msgstr ""
 msgid "Models it serves"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/index.ex:203
-#: lib/tokengate_web/live/stats/index.ex:258
+#: lib/tokengate_web/live/stats/index.ex:194
+#: lib/tokengate_web/live/stats/index.ex:249
 #: lib/tokengate_web/live/stats/provider.ex:228
 #: lib/tokengate_web/live/stats/provider.ex:325
 #: lib/tokengate_web/live/stats/provider.ex:415
@@ -3599,8 +3589,6 @@ msgstr ""
 msgid "Time to first token — streaming only"
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:234
-#: lib/tokengate_web/live/global_cap_live.ex:277
 #: lib/tokengate_web/live/models_live.ex:1239
 #: lib/tokengate_web/live/monitoring_live.ex:1059
 #: lib/tokengate_web/live/observability_live.ex:299
@@ -3620,207 +3608,207 @@ msgstr ""
 msgid "Yes"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:390
+#: lib/tokengate_web/live/maintenance_live.ex:391
 #, elixir-autogen, elixir-format
 msgid "API key to provider assignments."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:154
+#: lib/tokengate_web/live/maintenance_live.ex:155
 #, elixir-autogen, elixir-format
 msgid "Catalog refresh queued."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:196
+#: lib/tokengate_web/live/maintenance_live.ex:197
 #, elixir-autogen, elixir-format
 msgid "Caution zone"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:157
+#: lib/tokengate_web/live/maintenance_live.ex:158
 #, elixir-autogen, elixir-format
 msgid "Could not queue the refresh."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:304
+#: lib/tokengate_web/live/maintenance_live.ex:305
 #, elixir-autogen, elixir-format
 msgid "Danger zone"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:209
+#: lib/tokengate_web/live/maintenance_live.ex:210
 #, elixir-autogen, elixir-format
 msgid "Deletes every sticky API key → provider assignment."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:211
+#: lib/tokengate_web/live/maintenance_live.ex:212
 #, elixir-autogen, elixir-format
 msgid "It does not touch models, providers or API keys."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:251
+#: lib/tokengate_web/live/maintenance_live.ex:252
 #, elixir-autogen, elixir-format
 msgid "Last attempt failed:"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:246
+#: lib/tokengate_web/live/maintenance_live.ex:247
 #, elixir-autogen, elixir-format
 msgid "Last update:"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:188
+#: lib/tokengate_web/live/maintenance_live.ex:189
 #, elixir-autogen, elixir-format
 msgid "Manage advanced settings and destructive actions."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:395
+#: lib/tokengate_web/live/maintenance_live.ex:396
 #, elixir-autogen, elixir-format
 msgid "Models, providers and API keys are not affected."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:168
+#: lib/tokengate_web/live/maintenance_live.ex:169
 #, elixir-autogen, elixir-format
 msgid "Provider catalog updated."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:279
+#: lib/tokengate_web/live/maintenance_live.ex:280
 #, elixir-autogen, elixir-format
 msgid "Providers:"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:294
+#: lib/tokengate_web/live/maintenance_live.ex:295
 #, elixir-autogen, elixir-format
 msgid "Refresh now"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:293
+#: lib/tokengate_web/live/maintenance_live.ex:294
 #, elixir-autogen, elixir-format
 msgid "Refreshing…"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:199
+#: lib/tokengate_web/live/maintenance_live.ex:200
 #, elixir-autogen, elixir-format
 msgid "Repeatable or reversible actions: they do not erase data permanently."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:223
+#: lib/tokengate_web/live/maintenance_live.ex:224
 #, elixir-autogen, elixir-format
 msgid "Reset stickies"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:207
+#: lib/tokengate_web/live/maintenance_live.ex:208
 #, elixir-autogen, elixir-format
 msgid "Reset sticky sessions"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:384
+#: lib/tokengate_web/live/maintenance_live.ex:385
 #, elixir-autogen, elixir-format
 msgid "Reset sticky sessions?"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:200
+#: lib/tokengate_web/live/maintenance_live.ex:201
 #, elixir-autogen, elixir-format
 msgid "Review the scope of each one before running it."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:307
+#: lib/tokengate_web/live/maintenance_live.ex:308
 #, elixir-autogen, elixir-format
 msgid "The actions in this section are irreversible. Use them with caution."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:391
+#: lib/tokengate_web/live/maintenance_live.ex:392
 #, elixir-autogen, elixir-format
 msgid "The next requests will be re-routed from scratch,"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:210
+#: lib/tokengate_web/live/maintenance_live.ex:211
 #, elixir-autogen, elixir-format
 msgid "The next requests will be re-routed from scratch."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:212
+#: lib/tokengate_web/live/maintenance_live.ex:213
 #, elixir-autogen, elixir-format
 msgid "There are currently"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:354
+#: lib/tokengate_web/live/maintenance_live.ex:355
 #, elixir-autogen, elixir-format
 msgid "They cannot be recovered."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:389
+#: lib/tokengate_web/live/maintenance_live.ex:390
 #, elixir-autogen, elixir-format
 msgid "This deletes"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:407
+#: lib/tokengate_web/live/maintenance_live.ex:408
 #, elixir-autogen, elixir-format
 msgid "Yes, reset stickies"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:214
+#: lib/tokengate_web/live/maintenance_live.ex:215
 #, elixir-autogen, elixir-format
 msgid "active entries."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:280
+#: lib/tokengate_web/live/maintenance_live.ex:281
 #, elixir-autogen, elixir-format
 msgid "active,"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:390
+#: lib/tokengate_web/live/maintenance_live.ex:391
 #, elixir-autogen, elixir-format
 msgid "all"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:263
+#: lib/tokengate_web/live/maintenance_live.ex:264
 #, elixir-autogen, elixir-format
 msgid "and has"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:263
+#: lib/tokengate_web/live/maintenance_live.ex:264
 #, elixir-autogen, elixir-format
 msgid "changed its base URL"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:273
+#: lib/tokengate_web/live/maintenance_live.ex:274
 #, elixir-autogen, elixir-format
 msgid "credential(s) in use (nothing has been deleted)."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:267
+#: lib/tokengate_web/live/maintenance_live.ex:268
 #, elixir-autogen, elixir-format
 msgid "credential(s) in use."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:242
+#: lib/tokengate_web/live/maintenance_live.ex:243
 #, elixir-autogen, elixir-format
 msgid "custom providers, and deletes nothing: what is no longer upstream is marked as stale."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:239
+#: lib/tokengate_web/live/maintenance_live.ex:240
 #, elixir-autogen, elixir-format
 msgid "docs and logo of the builtins. It does not touch credentials, own models, routing or"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:234
+#: lib/tokengate_web/live/maintenance_live.ex:235
 #, elixir-autogen, elixir-format
 msgid "models.dev catalog"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:271
+#: lib/tokengate_web/live/maintenance_live.ex:272
 #, elixir-autogen, elixir-format
 msgid "no longer appears in models.dev and has"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:350
+#: lib/tokengate_web/live/maintenance_live.ex:351
 #, elixir-autogen, elixir-format
 msgid "permanently"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:281
+#: lib/tokengate_web/live/maintenance_live.ex:282
 #, elixir-autogen, elixir-format
 msgid "stale · Labs:"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:392
+#: lib/tokengate_web/live/maintenance_live.ex:393
 #, elixir-autogen, elixir-format
 msgid "without preserving the cache affinity."
 msgstr ""
@@ -3964,7 +3952,7 @@ msgstr ""
 msgid "no provider"
 msgstr ""
 
-#: lib/tokengate_web/kpi_helpers.ex:320
+#: lib/tokengate_web/kpi_helpers.ex:312
 #, elixir-autogen, elixir-format
 msgid "Avg TPS"
 msgstr ""
@@ -3974,12 +3962,12 @@ msgstr ""
 msgid "Cost (5d)"
 msgstr ""
 
-#: lib/tokengate_web/kpi_helpers.ex:206
+#: lib/tokengate_web/kpi_helpers.ex:205
 #, elixir-autogen, elixir-format
 msgid "Cost (UTC month)"
 msgstr ""
 
-#: lib/tokengate_web/kpi_helpers.ex:205
+#: lib/tokengate_web/kpi_helpers.ex:204
 #, elixir-autogen, elixir-format
 msgid "Cost (UTC)"
 msgstr ""
@@ -4037,7 +4025,8 @@ msgstr ""
 msgid "Output tokens (5d)"
 msgstr ""
 
-#: lib/tokengate_web/kpi_helpers.ex:252
+#: lib/tokengate_web/kpi_helpers.ex:248
+#: lib/tokengate_web/live/stats/live.ex:83
 #, elixir-autogen, elixir-format
 msgid "Reported by the provider"
 msgstr ""
@@ -4052,13 +4041,7 @@ msgstr ""
 msgid "Top models (5d)"
 msgstr ""
 
-#: lib/tokengate_web/kpi_helpers.ex:210
-#: lib/tokengate_web/live/stats/live.ex:116
-#, elixir-autogen, elixir-format
-msgid "UTC day spend (00:00–24:00 UTC) — the window that resets the global cap"
-msgstr ""
-
-#: lib/tokengate_web/kpi_helpers.ex:214
+#: lib/tokengate_web/kpi_helpers.ex:213
 #, elixir-autogen, elixir-format
 msgid "UTC month spend (from day 1 at 00:00 UTC) — the window that resets the monthly cap"
 msgstr ""
@@ -4079,150 +4062,135 @@ msgstr ""
 msgid "memberships"
 msgstr ""
 
-#: lib/tokengate_web/kpi_helpers.ex:280
+#: lib/tokengate_web/kpi_helpers.ex:272
 #, elixir-autogen, elixir-format
 msgid "vs previous period"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:525
+#: lib/tokengate_web/live/stats/live.ex:486
 #, elixir-autogen, elixir-format
 msgid " (recovered by fallback)"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:468
+#: lib/tokengate_web/live/stats/live.ex:429
 #, elixir-autogen, elixir-format
 msgid "%{count} req/min"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:471
-#: lib/tokengate_web/live/stats/live.ex:496
+#: lib/tokengate_web/live/stats/live.ex:432
+#: lib/tokengate_web/live/stats/live.ex:457
 #, elixir-autogen, elixir-format
 msgid "%{count} tok/min"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:446
+#: lib/tokengate_web/live/stats/live.ex:407
 #, elixir-autogen, elixir-format
 msgid "%{dt} · $%{cost}"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:461
+#: lib/tokengate_web/live/stats/live.ex:422
 #, elixir-autogen, elixir-format
 msgid "%{dt} · %{count} req"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:453
+#: lib/tokengate_web/live/stats/live.ex:414
 #, elixir-autogen, elixir-format
 msgid "%{dt} · %{input} in / %{output} out"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:85
-#, elixir-autogen, elixir-format
-msgid "%{hours} hours and %{minutes} minutes left until the cap resets"
-msgstr ""
-
-#: lib/tokengate_web/live/stats/live.ex:131
+#: lib/tokengate_web/live/stats/live.ex:92
 #, elixir-autogen, elixir-format
 msgid "%{input} in / %{output} out"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:238
+#: lib/tokengate_web/live/stats/live.ex:199
 #, elixir-autogen, elixir-format
 msgid "Cost per minute"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:83
-#, elixir-autogen, elixir-format
-msgid "Hours and minutes left until the cap resets (00:00 UTC)"
-msgstr ""
-
-#: lib/tokengate_web/live/stats/live.ex:164
+#: lib/tokengate_web/live/stats/live.ex:125
 #, elixir-autogen, elixir-format
 msgid "Latency of today's requests — average and p95"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:182
+#: lib/tokengate_web/live/stats/live.ex:143
 #, elixir-autogen, elixir-format
 msgid "Requests / min"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:185
+#: lib/tokengate_web/live/stats/live.ex:146
 #, elixir-autogen, elixir-format
 msgid "Rolling 5-minute window"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:521
+#: lib/tokengate_web/live/stats/live.ex:482
 #, elixir-autogen, elixir-format
 msgid "The provider answered %{provider}; the client received %{client}"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:259
+#: lib/tokengate_web/live/stats/live.ex:220
 #, elixir-autogen, elixir-format
 msgid "Today by hour · by provider"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:113
+#: lib/tokengate_web/live/stats/live.ex:77
 #, elixir-autogen, elixir-format
 msgid "Today · cost (UTC)"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:161
+#: lib/tokengate_web/live/stats/live.ex:122
 #, elixir-autogen, elixir-format
 msgid "Today · requests"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:127
+#: lib/tokengate_web/live/stats/live.ex:88
 #, elixir-autogen, elixir-format
 msgid "Today · tokens"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:229
+#: lib/tokengate_web/live/stats/live.ex:190
 #, elixir-autogen, elixir-format
 msgid "Tokens per minute"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:66
-#, elixir-autogen, elixir-format
-msgid "Users, limit profiles or services exempt from the global daily cap"
-msgstr ""
-
-#: lib/tokengate_web/live/stats/live.ex:402
+#: lib/tokengate_web/live/stats/live.ex:363
 #, elixir-autogen, elixir-format
 msgid "avg"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:397
+#: lib/tokengate_web/live/stats/live.ex:358
 #, elixir-autogen, elixir-format
 msgid "avg: mean per minute of the whole window (minutes without traffic count as 0) · peak: busiest minute"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/index.ex:295
-#: lib/tokengate_web/live/stats/live.ex:266
+#: lib/tokengate_web/live/stats/index.ex:286
+#: lib/tokengate_web/live/stats/live.ex:227
 #, elixir-autogen, elixir-format
 msgid "no traffic in the UTC day yet"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:431
+#: lib/tokengate_web/live/stats/live.ex:392
 #, elixir-autogen, elixir-format
 msgid "no traffic in the last hour"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:434
+#: lib/tokengate_web/live/stats/live.ex:395
 #, elixir-autogen, elixir-format
 msgid "now"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:402
+#: lib/tokengate_web/live/stats/live.ex:363
 #, elixir-autogen, elixir-format
 msgid "peak"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/live.ex:208
+#: lib/tokengate_web/live/stats/live.ex:169
 #, elixir-autogen, elixir-format
 msgid "requests in flight right now"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/index.ex:284
-#: lib/tokengate_web/live/stats/live.ex:261
+#: lib/tokengate_web/live/stats/index.ex:275
+#: lib/tokengate_web/live/stats/live.ex:222
 #, elixir-autogen, elixir-format
 msgid "stacked bars · 1 bar = 1 hour of the UTC day · color = provider · current hour marked"
 msgstr ""
@@ -4277,7 +4245,7 @@ msgstr ""
 msgid "Cost reported by the provider for the period"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/index.ex:280
+#: lib/tokengate_web/live/stats/index.ex:271
 #, elixir-autogen, elixir-format
 msgid "Daily usage by hour"
 msgstr ""
@@ -4322,11 +4290,6 @@ msgstr ""
 msgid "Limit profile members"
 msgstr ""
 
-#: lib/tokengate_web/stats_helpers.ex:1011
-#, elixir-autogen, elixir-format
-msgid "Marked unlimited: only the global daily cap applies"
-msgstr ""
-
 #: lib/tokengate_web/live/model_providers_live.ex:34
 #: lib/tokengate_web/live/stats/model.ex:55
 #, elixir-autogen, elixir-format
@@ -4338,9 +4301,9 @@ msgstr ""
 msgid "Models used"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/index.ex:76
-#: lib/tokengate_web/live/stats/index.ex:108
-#: lib/tokengate_web/live/stats/index.ex:139
+#: lib/tokengate_web/live/stats/index.ex:67
+#: lib/tokengate_web/live/stats/index.ex:99
+#: lib/tokengate_web/live/stats/index.ex:130
 #, elixir-autogen, elixir-format
 msgid "No data"
 msgstr ""
@@ -4355,17 +4318,17 @@ msgstr ""
 msgid "No monthly budget: it only spends against its top-ups (single-use credit)"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/index.ex:58
+#: lib/tokengate_web/live/stats/index.ex:49
 #, elixir-autogen, elixir-format
 msgid "Peak concurrency"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/index.ex:87
+#: lib/tokengate_web/live/stats/index.ex:78
 #, elixir-autogen, elixir-format
 msgid "Peak hours"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/index.ex:118
+#: lib/tokengate_web/live/stats/index.ex:109
 #, elixir-autogen, elixir-format
 msgid "Peak minutes"
 msgstr ""
@@ -4415,12 +4378,12 @@ msgstr ""
 msgid "Unlimited"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/index.ex:296
+#: lib/tokengate_web/live/stats/index.ex:287
 #, elixir-autogen, elixir-format
 msgid "no data in the period"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/index.ex:288
+#: lib/tokengate_web/live/stats/index.ex:279
 #, elixir-autogen, elixir-format
 msgid "stacked bars · 1 bar = 1 hour of the day · color = provider · hour in your local time · period aggregate"
 msgstr ""
@@ -4428,11 +4391,6 @@ msgstr ""
 #: lib/tokengate_web/live/stats/groups.ex:75
 #, elixir-autogen, elixir-format
 msgid "· some member without a budget"
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:192
-#, elixir-autogen, elixir-format
-msgid ", UTC day"
 msgstr ""
 
 #: lib/tokengate_web/topup_helpers.ex:108
@@ -4455,24 +4413,9 @@ msgstr ""
 msgid "60 days"
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:219
-#, elixir-autogen, elixir-format
-msgid "Cap exclusions"
-msgstr ""
-
 #: lib/tokengate_web/live/groups_live.ex:362
 #, elixir-autogen, elixir-format
 msgid "Concurrency per member. Each member can have an extra on top of this value."
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:393
-#, elixir-autogen, elixir-format
-msgid "Could not add the exemption."
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:396
-#, elixir-autogen, elixir-format
-msgid "Could not add the exemption:"
 msgstr ""
 
 #: lib/tokengate_web/controllers/oauth_controller.ex:55
@@ -4515,11 +4458,6 @@ msgstr ""
 msgid "Delete limit profile? This action cannot be undone."
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:158
-#, elixir-autogen, elixir-format
-msgid "E.g. 50.00 — everything is cut off when the total spend of the day reaches this amount."
-msgstr ""
-
 #: lib/tokengate_web/live/groups_live.ex:347
 #, elixir-autogen, elixir-format
 msgid "Edit limit profile"
@@ -4530,34 +4468,9 @@ msgstr ""
 msgid "Edit top-up"
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:196
-#, elixir-autogen, elixir-format
-msgid "Enforcement counter:"
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:268
-#, elixir-autogen, elixir-format
-msgid "Exclude"
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:104
-#, elixir-autogen, elixir-format
-msgid "Exemption added."
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:117
-#, elixir-autogen, elixir-format
-msgid "Exemption removed."
-msgstr ""
-
 #: lib/tokengate_web/live/topups_live.html.heex:153
 #, elixir-autogen, elixir-format
 msgid "Expiration"
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:71
-#, elixir-autogen, elixir-format
-msgid "Global daily cap updated."
 msgstr ""
 
 #: lib/tokengate_web/controllers/oauth_controller.ex:30
@@ -4571,19 +4484,9 @@ msgstr ""
 msgid "Identifying name of the limit profile."
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:202
-#, elixir-autogen, elixir-format
-msgid "If it does not go down in a few minutes, it is drift: the"
-msgstr ""
-
 #: lib/tokengate_web/controllers/session_controller.ex:86
 #, elixir-autogen, elixir-format
 msgid "Invalid credentials."
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:206
-#, elixir-autogen, elixir-format
-msgid "It syncs against the DB on the fly."
 msgstr ""
 
 #: lib/tokengate_web/live/groups_live.ex:253
@@ -4606,11 +4509,6 @@ msgstr ""
 msgid "Limit profile updated."
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:258
-#, elixir-autogen, elixir-format
-msgid "Limit profile…"
-msgstr ""
-
 #: lib/tokengate_web/live/groups_live.ex:476
 #, elixir-autogen, elixir-format
 msgid "Manage the limit profile models"
@@ -4621,11 +4519,6 @@ msgstr ""
 msgid "Manage the limit profiles: cap, top-ups and models"
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:146
-#, elixir-autogen, elixir-format
-msgid "Maximum total spend cap per day (UTC), adding up all subjects."
-msgstr ""
-
 #: lib/tokengate_web/live/groups_live.ex:346
 #, elixir-autogen, elixir-format
 msgid "New limit profile"
@@ -4634,11 +4527,6 @@ msgstr ""
 #: lib/tokengate_web/live/topups_live.html.heex:61
 #, elixir-autogen, elixir-format
 msgid "New top-up"
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:313
-#, elixir-autogen, elixir-format
-msgid "No exclusions — every subject counts toward the global cap."
 msgstr ""
 
 #: lib/tokengate_web/topup_helpers.ex:107
@@ -4654,26 +4542,6 @@ msgstr ""
 #: lib/tokengate_web/live/topups_live.html.heex:184
 #, elixir-autogen, elixir-format
 msgid "Owner"
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:89
-#, elixir-autogen, elixir-format
-msgid "Pick a subject type."
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:92
-#, elixir-autogen, elixir-format
-msgid "Pick who to exclude."
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:192
-#, elixir-autogen, elixir-format
-msgid "Real spend from"
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:295
-#, elixir-autogen, elixir-format
-msgid "Remove exemption"
 msgstr ""
 
 #: lib/tokengate_web/live/groups_live.ex:371
@@ -4701,11 +4569,6 @@ msgstr ""
 msgid "Service:"
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:259
-#, elixir-autogen, elixir-format
-msgid "Service…"
-msgstr ""
-
 #: lib/tokengate_web/controllers/session_controller.ex:42
 #: lib/tokengate_web/controllers/session_controller.ex:89
 #, elixir-autogen, elixir-format
@@ -4727,30 +4590,9 @@ msgstr ""
 msgid "Signed out."
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:135
-#, elixir-autogen, elixir-format
-msgid "Spend cap per UTC day for all subjects, and who is exempt"
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:172
-#, elixir-autogen, elixir-format
-msgid "Spent today (total)"
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:248
-#: lib/tokengate_web/live/global_cap_live.ex:276
-#, elixir-autogen, elixir-format
-msgid "Subject"
-msgstr ""
-
 #: lib/tokengate_web/controllers/session_controller.ex:165
 #, elixir-autogen, elixir-format
 msgid "The root administrator cannot be impersonated."
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:222
-#, elixir-autogen, elixir-format
-msgid "The spend of these subjects does not count toward the global cap (it still"
 msgstr ""
 
 #: lib/tokengate_web/live/topups_live.ex:267
@@ -4773,29 +4615,14 @@ msgstr ""
 msgid "Top-up saved."
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:156
-#, elixir-autogen, elixir-format
-msgid "USD per day"
-msgstr ""
-
 #: lib/tokengate_web/live/topups_live.ex:366
 #, elixir-autogen, elixir-format
 msgid "User:"
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:255
-#, elixir-autogen, elixir-format
-msgid "User…"
-msgstr ""
-
 #: lib/tokengate_web/controllers/oauth_controller.ex:46
 #, elixir-autogen, elixir-format
 msgid "Validation error. Try again."
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:147
-#, elixir-autogen, elixir-format
-msgid "When it is reached, every new request is rejected with 402 until the next"
 msgstr ""
 
 #: lib/tokengate_web/controllers/session_controller.ex:135
@@ -4835,16 +4662,6 @@ msgstr ""
 msgid "Your domain is not authorized. Contact an administrator."
 msgstr ""
 
-#: lib/tokengate_web/live/global_cap_live.ex:223
-#, elixir-autogen, elixir-format
-msgid "counts toward their own monthly budget or top-up)."
-msgstr ""
-
-#: lib/tokengate_web/live/global_cap_live.ex:204
-#, elixir-autogen, elixir-format
-msgid "reconciles it against the DB."
-msgstr ""
-
 #: lib/tokengate_web/topup_helpers.ex:55
 #, elixir-autogen, elixir-format
 msgid "user"
@@ -4871,42 +4688,42 @@ msgstr ""
 msgid "on Fireworks (prefix matching, cached tokens at a discount). TokenGate keeps conversations sticky via the x-session-affinity header and logs the cached tokens — no configuration required."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:350
+#: lib/tokengate_web/live/maintenance_live.ex:351
 #, elixir-autogen, elixir-format
 msgid "Deletes"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:333
+#: lib/tokengate_web/live/maintenance_live.ex:334
 #, elixir-autogen, elixir-format
 msgid "Full reset"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:322
+#: lib/tokengate_web/live/maintenance_live.ex:323
 #, elixir-autogen, elixir-format
 msgid "Keeps users, services, API keys, limit profiles, models with deployments and providers with credentials."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:316
+#: lib/tokengate_web/live/maintenance_live.ex:317
 #, elixir-autogen, elixir-format
 msgid "Leave everything at zero"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:347
+#: lib/tokengate_web/live/maintenance_live.ex:348
 #, elixir-autogen, elixir-format
 msgid "Leave everything at zero?"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:357
+#: lib/tokengate_web/live/maintenance_live.ex:358
 #, elixir-autogen, elixir-format
 msgid "Users, services, API keys, limit profiles, models with deployments and providers with credentials are kept."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:371
+#: lib/tokengate_web/live/maintenance_live.ex:372
 #, elixir-autogen, elixir-format
 msgid "Yes, leave everything at zero"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:351
+#: lib/tokengate_web/live/maintenance_live.ex:352
 #, elixir-autogen, elixir-format
 msgid "all usage history (logs, hourly metrics, budget counters, sticky routes) AND catalog records with no deployment: models without deployments and providers without credentials."
 msgstr ""
@@ -5030,7 +4847,7 @@ msgstr ""
 msgid "API keys of %{name}"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:539
+#: lib/tokengate_web/components/layouts.ex:532
 #, elixir-autogen, elixir-format
 msgid "Account menu"
 msgstr ""
@@ -5050,7 +4867,7 @@ msgstr ""
 msgid "Limit profiles of %{name}"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:571
+#: lib/tokengate_web/components/layouts.ex:564
 #, elixir-autogen, elixir-format
 msgid "Log out"
 msgstr ""
@@ -5060,7 +4877,7 @@ msgstr ""
 msgid "Menu"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:545
+#: lib/tokengate_web/components/layouts.ex:538
 #, elixir-autogen, elixir-format
 msgid "Profile"
 msgstr ""
@@ -5081,7 +4898,7 @@ msgstr ""
 msgid "Welcome. Your admin account is ready."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:319
+#: lib/tokengate_web/live/maintenance_live.ex:320
 #, elixir-autogen, elixir-format
 msgid "Deletes all usage history (logs, hourly metrics, budget counters and sticky routes), plus catalog records with no deployment: models without deployments and providers without credentials or deployments."
 msgstr ""
@@ -5122,7 +4939,7 @@ msgstr ""
 msgid "provider"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:236
+#: lib/tokengate_web/live/maintenance_live.ex:237
 #, elixir-autogen, elixir-format
 msgid "Downloads the catalog again (providers and labs) and updates name, base URL,"
 msgstr ""
@@ -5630,4 +5447,15 @@ msgstr ""
 #: lib/tokengate_web/live/models_live.ex:1328
 #, elixir-autogen, elixir-format
 msgid "mixed units"
+msgstr ""
+
+#: lib/tokengate_web/stats_helpers.ex:1011
+#, elixir-autogen, elixir-format
+msgid "Marked unlimited: no monthly ceiling"
+msgstr ""
+
+#: lib/tokengate_web/kpi_helpers.ex:209
+#: lib/tokengate_web/live/stats/live.ex:80
+#, elixir-autogen, elixir-format
+msgid "UTC day spend (00:00–24:00 UTC)"
 msgstr ""

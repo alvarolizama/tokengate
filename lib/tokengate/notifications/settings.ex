@@ -1,6 +1,7 @@
 defmodule Tokengate.Notifications.Settings do
   @moduledoc """
-  Ajustes singleton del bot de Telegram (patrón `Tokengate.GlobalSettings`).
+  Ajustes singleton del bot de Telegram (una única fila, igual que los demás
+  ajustes de instancia).
 
   Una única fila `id = 1`:
 

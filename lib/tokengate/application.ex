@@ -56,8 +56,8 @@ defmodule Tokengate.Application do
       Tokengate.Metrics.Supervisor,
       Tokengate.Logs.Inflight,
       Tokengate.Accounts.ApiKeyCache,
-      # Generic hot-path ETS cache (exemption sets, observability destinations).
-      # Owns its table; see Tokengate.Cache.
+      # Generic hot-path ETS cache (observability destinations, other small
+      # hot-path sets). Owns its table; see Tokengate.Cache.
       Tokengate.Cache,
       # Cross-node propagation of cache invalidations over the PubSub above.
       # The caches are per-node ETS; a write on one node must drop the same

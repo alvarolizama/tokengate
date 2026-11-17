@@ -7,8 +7,9 @@ defmodule TokengateWeb.MaintenanceLive do
       catalog records and sticky routes)
     * Reset sticky sessions
 
-  El **tope diario global** y sus exclusiones NO viven aquí: son una palanca de
-  presupuesto y se mudaron a `/budget/global` (`TokengateWeb.GlobalCapLive`).
+  El **presupuesto mensual** de cada sujeto y sus top-ups viven en la sección
+  Presupuesto (`/budget/profiles`, `/budget/topups`); esta página solo muestra
+  el gasto del día y las acciones de limpieza.
   """
 
   use TokengateWeb, :live_view

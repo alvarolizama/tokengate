@@ -9,10 +9,10 @@ defmodule Tokengate.SinLimiteProbeTest do
 
     * `plan/1`         → `limit_usd`, `unlimited?`
     * `summary/2`      → `has_path?` (¿queda algún camino de gasto?)
-    * `reserve_plan/4` → `{:ok, hold}` o `{:error, {:budget_exceeded, %{layer:}}}`
+    * `reserve_plan/2` → `{:ok, hold}` o `{:error, {:budget_exceeded, %{layer:}}}`
 
   `layer: :no_credit` = bloqueado de verdad (402); `:subject` = el límite era
-  0/agotado y tampoco hay top-up; `:global` = cap global diario.
+  0/agotado y tampoco hay top-up.
   """
 
   use Tokengate.DataCase, async: false
@@ -125,10 +125,7 @@ defmodule Tokengate.SinLimiteProbeTest do
     summary = Credits.summary(plan.subject, plan)
 
     :ets.delete_all_objects(:tokengate_credits)
-    libre = describe(Manager.reserve_plan(plan, nil, @cost, false))
-
-    :ets.delete_all_objects(:tokengate_credits)
-    topado = describe(Manager.reserve_plan(plan, Decimal.new("0"), @cost, false))
+    libre = describe(Manager.reserve_plan(plan, @cost))
 
     IO.puts(
       "#{String.pad_trailing(label, 42)} " <>
@@ -136,7 +133,7 @@ defmodule Tokengate.SinLimiteProbeTest do
         "unlimited?=#{String.pad_trailing(to_string(plan.unlimited?), 5)} " <>
         "topups=#{length(plan.topups)} " <>
         "has_path?=#{String.pad_trailing(to_string(summary.has_path?), 5)} " <>
-        "→ cap global nil: #{String.pad_trailing(libre, 12)} · cap global 0: #{topado}"
+        "→ #{libre}"
     )
   end
 
@@ -237,23 +234,20 @@ defmodule Tokengate.SinLimiteProbeTest do
     assert Credits.summary(plan.subject, plan).has_path? == false
 
     assert {:error, {:budget_exceeded, %{layer: :no_credit}}} =
-             Manager.reserve_plan(plan, nil, @cost, false)
+             Manager.reserve_plan(plan, @cost)
 
     # 2. El mismo usuario con top-up: hay crédito. «Solo top-ups» = camino sí.
     topup_user(user, "10.00")
     plan = plan_without_sub(user)
     assert Credits.summary(plan.subject, plan).has_path?
-    assert {:ok, %{kind: :topup}} = Manager.reserve_plan(plan, nil, @cost, false)
+    assert {:ok, %{kind: :topup}} = Manager.reserve_plan(plan, @cost)
 
-    # 3. Ilimitado NO es «sin techo»: el cap global diario lo sigue topando.
+    # 3. Ilimitado no retiene nada: el hold es `:no_credit` y el request pasa.
     member = member_fixture(group_fixture(%{"unlimited_spend" => true}), user_fixture())
     plan = Credits.plan(member)
 
     assert plan.unlimited?
-    assert {:ok, _} = Manager.reserve_plan(plan, nil, @cost, false)
-
-    assert {:error, {:budget_exceeded, %{layer: :global}}} =
-             Manager.reserve_plan(plan, Decimal.new("0"), @cost, false)
+    assert {:ok, %{kind: :no_credit, subject_micro: 0}} = Manager.reserve_plan(plan, @cost)
 
     # 4. «Límite 0» no es ilimitado ni es «sin límite»: es CERO.
     m = member_fixture(group_fixture(%{"monthly_spend_limit_usd" => "0"}), user_fixture())
@@ -263,7 +257,7 @@ defmodule Tokengate.SinLimiteProbeTest do
     refute plan.unlimited?
 
     assert {:error, {:budget_exceeded, %{layer: :subject}}} =
-             Manager.reserve_plan(plan, nil, @cost, false)
+             Manager.reserve_plan(plan, @cost)
 
     # 5. Un servicio sin límite se comporta igual que un usuario sin sub:
     #    nil ⇒ solo top-ups.
@@ -272,11 +266,11 @@ defmodule Tokengate.SinLimiteProbeTest do
     assert plan.limit_usd == nil
 
     assert {:error, {:budget_exceeded, %{layer: :no_credit}}} =
-             Manager.reserve_plan(plan, nil, @cost, false)
+             Manager.reserve_plan(plan, @cost)
 
     topup_service(service, "10.00")
     plan = Credits.plan(service)
-    assert {:ok, %{kind: :topup}} = Manager.reserve_plan(plan, nil, @cost, false)
+    assert {:ok, %{kind: :topup}} = Manager.reserve_plan(plan, @cost)
 
     # 6. Un `%GroupMember{}` sin perfil de límites también resuelve (la resolución del
     #    motor es user primero; lo que falta es la membresía para autenticar).

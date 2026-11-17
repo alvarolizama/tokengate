@@ -5,10 +5,11 @@ defmodule Tokengate.CacheInvalidation do
   Every cache in this app lives in a **per-node** ETS table
   (`Tokengate.Accounts.ApiKeyCache`, `Tokengate.Cache`,
   `Tokengate.Routing.Cache`). A write handled on node A invalidated only A's
-  table: the other nodes kept serving the old auth entry / exemption set /
-  routing snapshot until their TTL expired (60s for auth and routing, 45s for
-  exemptions). With more than one node behind the load balancer a revoked key
-  or a changed limit stayed live on the *other* node for that window — the
+  table: the other nodes kept serving the old auth entry / destinations list /
+  routing snapshot until their TTL expired (60s for auth and routing, 20s for
+  the observability destinations). With more than one node behind the load
+  balancer a revoked key or a changed limit stayed live on the *other* node
+  for that window — the
   same staleness contract as a single node, but multiplied by the node count
   and invisible to the operator who made the change.
 

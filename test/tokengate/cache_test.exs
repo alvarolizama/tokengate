@@ -1,8 +1,7 @@
 defmodule Tokengate.CacheTest do
   @moduledoc """
   Single-flight behavior of `Tokengate.Cache.fetch/3` — the generic ETS cache
-  behind the exemption set and the observability destinations (both read on
-  every proxied request).
+  behind the observability destinations (read once per request log).
 
   `async: false`: the table is a named singleton shared by the whole VM.
   """

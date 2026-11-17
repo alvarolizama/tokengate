@@ -2,9 +2,8 @@ defmodule TokengateWeb.StatsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-  alias Tokengate.{Accounts, Budgets, Logs, Periods, Providers}
+  alias Tokengate.{Accounts, Logs, Periods, Providers}
   alias Tokengate.Logs.Inflight
-  alias Tokengate.Budgets.Manager
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -493,7 +492,7 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#model-breakdown-row-1", "$0.005")
 
     # Con "Hoy" el perfil horario mide el día UTC en curso — la misma ventana
-    # que los KPI y el tope —, con la hora actual marcada: las horas ya
+    # que los KPI —, con la hora actual marcada: las horas ya
     # completadas son las que traen tráfico y las que faltan quedan atenuadas.
     assert has_element?(view, "#hour-distribution")
     hour = DateTime.utc_now().hour
@@ -805,7 +804,7 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
 
     # 23:00 del día UTC anterior → fuera de "Hoy", que mide el día UTC
-    # (la misma ventana que resetea el tope global), no el día local.
+    # (la ventana del día calendario), no el día local.
     utc_start = Periods.start_of_day_utc("Etc/UTC")
     group_with_log(%{cost: "0.005", inserted_at: DateTime.add(utc_start, -3600, :second)})
 
@@ -878,7 +877,7 @@ defmodule TokengateWeb.StatsLiveTest do
     refute has_element?(overview, "#live-status")
   end
 
-  test "En vivo: el KPI de costo declara el día UTC y el reinicio", %{conn: conn} do
+  test "En vivo: el KPI de costo declara el día UTC, sin reinicio", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
     conn = login(conn, admin, password)
@@ -886,87 +885,34 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/stats")
 
     # El número mide el día UTC (Periods.period_bounds), así que el KPI lo
-    # declara y anuncia cuánto falta para el reinicio, con el reloj del usuario
-    # como referencia secundaria.
+    # declara. Ya no hay tope diario: no hay reinicio que anunciar.
     assert has_element?(view, "#live-today-cost", "Hoy · costo (UTC)")
-    assert has_element?(view, "#live-today-cost", "Reinicia en")
-    assert has_element?(view, "#live-today-cost", "en tu hora local")
+    refute has_element?(view, "#live-today-cost", "Reinicia en")
+    refute has_element?(view, "#live-today-cost", "en tu hora local")
   end
 
-  test "En vivo + Resumen + Mantenimiento ignoran los holds en vuelo", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    conn = login(conn, admin, password)
-
-    # El contador global vive en ETS (tabla pública del árbol de la app): se
-    # limpia para que el test siembre desde su propia DB, como en budgets_test.
-    :ets.delete(:tokengate_budgets, {:global, :daily})
-
-    group_with_log(%{cost: "25.00"})
-
-    # Hold en vuelo: el proxy reserva $20 contra el tope ANTES de que el
-    # request termine y su costo quede escrito en request_logs.
-    {:ok, hold} =
-      Manager.reserve(
-        nil,
-        Decimal.new("100.00"),
-        Decimal.new("1000.00"),
-        Decimal.new("20.00"),
-        false
-      )
-
-    # El "gasto real reportado" = agregado de request_logs del día UTC.
-    real =
-      Logs.cost_summary(%{from: Periods.start_of_day_utc("Etc/UTC")})
-      |> Map.fetch!(:total_cost_usd)
-
-    assert Decimal.eq?(real, Decimal.new("25.00"))
-
-    {:ok, view, _html} = live(conn, ~p"/stats")
-    assigns = :sys.get_state(view.pid).socket.assigns
-
-    # Ninguna de las dos cifras visibles del tab En vivo lleva el hold (45.00):
-    # son el gasto liquidado.
-    assert Decimal.eq?(assigns.org_budget.daily_spend_usd, real)
-    assert Decimal.eq?(assigns.today_metrics.cost_usd, real)
-
-    # El Resumen bebe de la misma fuente; el tab no lo cambia.
-    {:ok, overview, _html} = live(conn, ~p"/stats/overview")
-    wait_stats_loaded(overview)
-    ov = :sys.get_state(overview.pid).socket.assigns
-
-    assert Decimal.eq?(ov.metrics.cost_usd, real)
-
-    # El hold SÍ está en el contador de enforcement: eso prueba que existía y
-    # que el cálculo mostrado lo ignora.
-    assert Decimal.gt?(Manager.global_daily_spend(), real)
-
-    :ok = Manager.release(nil, hold)
-  end
-
-  test "Resumen: el KPI de costo declara UTC y el reinicio solo en el período hoy",
-       %{conn: conn} do
+  test "Resumen: el KPI de costo declara la ventana UTC, sin reinicio", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/stats/overview")
     wait_stats_loaded(view)
 
-    # Con "Hoy" el KPI declara la ventana UTC y el countdown — igual que
-    # En vivo, porque las dos páginas miden lo mismo.
+    # Con "Hoy" el KPI declara la ventana UTC del día, igual que En vivo.
     assert has_element?(view, "#kpi-cost", "Costo (UTC)")
-    assert has_element?(view, "#kpi-cost", "Reinicia en")
-    assert has_element?(view, "#kpi-cost", "en tu hora local")
 
-    # En una ventana más larga no hay reinicio diario que anunciar: vuelve al
-    # label corto y sin línea de countdown.
+    # El tope diario global se retiró: ninguna ventana anuncia un reinicio.
+    refute has_element?(view, "#kpi-cost", "Reinicia en")
+
+    # En una ventana más larga vuelve al label corto.
     view |> element("#period-30d") |> render_click()
     wait_stats_loaded(view)
 
     assert has_element?(view, "#kpi-cost", "Costo")
     refute has_element?(view, "#kpi-cost", "Reinicia en")
 
-    # "Este mes" también mide una ventana UTC (la del tope mensual), así que el
-    # label lo declara — pero sin countdown: el reinicio diario no aplica.
+    # "Este mes" mide la ventana UTC del techo mensual (capa 1, intacta), así
+    # que el label lo declara.
     view |> element("#period-month") |> render_click()
     wait_stats_loaded(view)
 
@@ -1032,25 +978,30 @@ defmodule TokengateWeb.StatsLiveTest do
     assert html =~ utc_kpi_cost
   end
 
-  test "En vivo: el pie del tope diario declara el día UTC, no el local", %{conn: conn} do
+  test "En vivo: el card de gasto declara el día UTC, no el local", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/stats")
 
-    # El card mide el día UTC (la ventana del kill-switch, la misma que
-    # Mantenimiento), así que el pie no puede nombrar la zona del usuario como
-    # si el número midiera su día local: la barra y el countdown tienen que
-    # apuntar a la misma ventana.
+    # El card mide el día UTC (la misma ventana que Mantenimiento), así que su
+    # texto no puede nombrar la zona del usuario como si el número midiera su
+    # día local.
     assert has_element?(view, "#live-org-budget", "Gasto del día UTC")
     refute has_element?(view, "#live-org-budget", "día local")
 
-    # La hora local sigue ahí, pero como referencia del reloj del usuario.
-    assert has_element?(view, "#live-org-budget", "en tu hora local")
+    # Sin tope diario: ni barra, ni %, ni exentos, ni countdown en el card.
+    refute has_element?(view, "#live-org-budget-exempt")
+    refute has_element?(view, "#live-budget-reset-countdown")
+    refute has_element?(view, "#live-budget-reset-at")
+
+    # El número queda como dato simple: el gasto del día, sin límite a la vista.
+    assert has_element?(view, "#live-org-budget-spend")
+    refute has_element?(view, "#live-org-budget", "en tu hora local")
   end
 
-  test "En vivo: el tope diario mide el día UTC, la misma ventana que Mantenimiento",
+  test "En vivo: el card de gasto mide el día UTC, la misma ventana que Mantenimiento",
        %{conn: conn} do
     tz = "America/Merida"
 
@@ -1058,14 +1009,11 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, admin} = Accounts.update_user_timezone(admin, tz)
     conn = login(conn, admin, password)
 
-    {:ok, _} = Tokengate.GlobalSettings.update(%{daily_max_spend_usd: Decimal.new("2.0000")})
-
     # Un log en un instante que cae dentro de UNA sola de las dos ventanas
-    # "hoy" (la UTC del kill-switch o la local del usuario): así el gasto del
-    # día UTC y el del día local difieren por construcción, sin importar a qué
-    # hora corra el test. Este es el bug que trajo el comentario: el card
-    # sumaba el día local del usuario mientras la barra y el countdown apuntan
-    # a la ventana UTC.
+    # "hoy" (la UTC o la local del usuario): así el gasto del día UTC y el del
+    # día local difieren por construcción, sin importar a qué hora corra el
+    # test. Este es el bug que trajo el comentario: el card sumaba el día
+    # local del usuario mientras el resto de la página mide el día UTC.
     utc_start = Periods.start_of_day_utc("Etc/UTC")
     local_start = Periods.start_of_day_utc(tz)
 
@@ -1083,9 +1031,12 @@ defmodule TokengateWeb.StatsLiveTest do
     assigns = :sys.get_state(view.pid).socket.assigns
     card_spend = assigns.org_budget.daily_spend_usd
 
-    # El card reporta la ventana del kill-switch: coincide con el resumen del
-    # día UTC (lo que muestra Mantenimiento) y difiere del día local.
-    assert Decimal.equal?(card_spend, Budgets.global_daily_budget_summary().daily_spend_usd)
+    # El card reporta la ventana del día UTC (lo que muestra Mantenimiento) y
+    # difiere del día local.
+    assert Decimal.equal?(
+             card_spend,
+             Logs.cost_summary(%{from: utc_start}).total_cost_usd
+           )
 
     refute Decimal.equal?(card_spend, Logs.today_summary(tz).cost_usd)
 
@@ -1094,65 +1045,13 @@ defmodule TokengateWeb.StatsLiveTest do
     assert Decimal.equal?(card_spend, esperado)
 
     # El Resumen mide la misma ventana: su KPI de costo (período "hoy" = día
-    # UTC) tiene que dar el mismo número que el card de En vivo, aunque el
-    # card del tope ya no viva ahí. Si los dos caminos divergen, este assert
-    # lo caza.
+    # UTC) tiene que dar el mismo número que el card de En vivo. Si los dos
+    # caminos divergen, este assert lo caza.
     {:ok, overview, _html} = live(conn, ~p"/stats/overview")
     wait_stats_loaded(overview)
 
     ov = :sys.get_state(overview.pid).socket.assigns
     assert Decimal.equal?(ov.metrics.cost_usd, card_spend)
-  end
-
-  test "En vivo: el pie muestra cuánto falta para el reinicio y a qué hora local cae",
-       %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    # America/Merida = UTC-6, así que 00:00 UTC es 18:00 del día anterior local.
-    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Merida")
-    conn = login(conn, admin, password)
-
-    {:ok, view, _html} = live(conn, ~p"/stats")
-
-    # El contador está presente, en formato H:MM + unidad "h".
-    assert has_element?(view, "#live-budget-reset-countdown")
-
-    texto = view |> element("#live-budget-reset-countdown") |> render()
-    assert texto =~ ~r/\d{1,2}/
-    assert texto =~ ~r/\d{2}/
-    assert texto =~ ">h</span>"
-
-    # Y el instante del reinicio, expresado en la zona elegida (no en UTC).
-    assert has_element?(view, "#live-budget-reset-at", "18:00 en tu hora local")
-  end
-
-  test "En vivo: cambiar la zona horaria mueve la hora local del reinicio", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    conn = login(conn, admin, password)
-
-    {:ok, view, _html} = live(conn, ~p"/stats")
-
-    # UTC → el reinicio cae a las 00:00 locales.
-    assert has_element?(view, "#live-budget-reset-at", "00:00 en tu hora local")
-
-    # +2 fijo (sin DST — Madrid cambia de offset con la temporada y el test
-    # mentiría cada invierno): África/Johannesburgo es UTC+2 todo el año.
-    render_change(view, "set-timezone", %{"timezone" => "Africa/Johannesburg"})
-    assert has_element?(view, "#live-budget-reset-at", "02:00 en tu hora local")
-  end
-
-  test "En vivo: el contador del reinicio también vive en el Resumen", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Merida")
-    conn = login(conn, admin, password)
-
-    {:ok, view, _html} = live(conn, ~p"/stats/overview")
-    wait_stats_loaded(view)
-
-    # El Resumen ya no repite el card del tope (vive en En vivo): el countdown
-    # queda en la sub-línea del KPI de costo, que es además la que declara la
-    # ventana UTC.
-    assert has_element?(view, "#kpi-cost", "Reinicia en")
-    assert has_element?(view, "#kpi-cost", "18:00 en tu hora local")
   end
 
   test "Resumen: un logs:new sólo recalcula los contadores, no los agregados", %{conn: conn} do
@@ -1179,57 +1078,6 @@ defmodule TokengateWeb.StatsLiveTest do
     assert despues.model_provider_stacked == antes.model_provider_stacked
     assert despues.busiest_minutes == antes.busiest_minutes
     assert despues.peak_concurrency == antes.peak_concurrency
-  end
-
-  test "En vivo: el contador se recalcula en el tick de reloj, sin tráfico", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    conn = login(conn, admin, password)
-
-    {:ok, view, _html} = live(conn, ~p"/stats")
-
-    antes = get_in(:sys.get_state(view.pid).socket.assigns, [:budget_reset_hours])
-
-    # :clock_tick no toca la DB ni depende de `logs:new`: es el reloj de la
-    # página. Debe reemplazar los asigns por el tiempo restante real.
-    send(view.pid, :clock_tick)
-    _ = :sys.get_state(view.pid)
-
-    assigns = :sys.get_state(view.pid).socket.assigns
-    assert assigns.budget_reset_hours =~ ~r/^\d{1,2}$/
-    assert assigns.budget_reset_minutes =~ ~r/^\d{2}$/
-    assert Process.alive?(view.pid)
-
-    # Coincide con el tiempo real hasta el próximo 00:00 UTC (tolerancia 1 min).
-    h = String.to_integer(assigns.budget_reset_hours)
-    m = String.to_integer(assigns.budget_reset_minutes)
-
-    esperado =
-      Tokengate.Periods.next_utc_day_start()
-      |> DateTime.diff(DateTime.utc_now(), :second)
-      |> div(60)
-
-    assert_in_delta esperado, h * 60 + m, 1
-    assert antes =~ ~r/^\d{1,2}$/
-  end
-
-  test "En vivo: el contador declara la unidad (horas) y separa el ':'", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    conn = login(conn, admin, password)
-
-    {:ok, view, _html} = live(conn, ~p"/stats")
-
-    # La unidad va explícita para que "21:02" no se lea como mm:ss.
-    assert has_element?(view, "#live-budget-reset-countdown", "h")
-
-    # El ":" es su propio elemento (parpadea) y el valor lleva un aria-label
-    # con las unidades habladas (el ":" decorativo queda oculto).
-    assert has_element?(view, "#live-budget-reset-countdown span.reset-colon")
-    assert has_element?(view, "#live-budget-reset-countdown[aria-label]")
-    assert has_element?(view, "#live-budget-reset-countdown span[aria-hidden='true']")
-
-    html = view |> element("#live-budget-reset-countdown") |> render()
-    assert html =~ "reset-colon"
-    assert html =~ ">h</span>"
   end
 
   test "En vivo: las tres gráficas por minuto se renderizan juntas y siempre", %{conn: conn} do
@@ -1398,7 +1246,7 @@ defmodule TokengateWeb.StatsLiveTest do
     conn = login(conn, admin, password)
 
     # 23:00 del día UTC anterior → fuera de "Hoy", que mide el día UTC (la
-    # misma ventana que reinicia el tope global), no el día local.
+    # ventana del día calendario), no el día local.
     utc_start = Periods.start_of_day_utc("Etc/UTC")
     group_with_log(%{cost: "0.005", inserted_at: DateTime.add(utc_start, -3600, :second)})
 

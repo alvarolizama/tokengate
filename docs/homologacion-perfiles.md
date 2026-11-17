@@ -154,6 +154,10 @@ hizo **este mismo ejercicio** (teams→groups) y dejó resuelto cada caso difíc
    UPDATE budget_exemptions SET subject_type = 'limit_profile'
    WHERE subject_type = 'group';
    ```
+   > **Nota (posterior):** `budget_exemptions` ya **no existe** — la dropeó la
+   > migración que retiró el tope diario global junto con `global_settings`. Los
+   > pasos 3, 4 y 5 de esta sección describen la homologación histórica de
+   > `groups → limit_profiles` y solo aplican si se reejecuta aquel análisis.
 4. **Recrear los 2 índices únicos parciales** de `budget_exemptions`, porque el
    valor viejo queda **dentro del predicado** del índice: un rename de tabla no
    lo actualiza y el índice deja de matchear filas.

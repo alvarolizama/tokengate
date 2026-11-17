@@ -179,14 +179,6 @@ ok.("access · presupuestos por servicio", "#{length(service_budgets)} filas")
 group_budgets = Budgets.list_group_budgets("America/Merida")
 ok.("budget · presupuestos por perfil", "#{length(group_budgets)} filas")
 
-global = Budgets.global_daily_budget_summary()
-
-ok.(
-  "budget · tope global",
-  "$#{Decimal.round(global.daily_spend_usd, 2)} de $#{global.daily_cap_usd} " <>
-    "(#{global.exempt_count} exenciones)"
-)
-
 # Crédito: límite efectivo + top-ups del sujeto (lo que resuelve el proxy).
 credits = Enum.map(members, &Credits.summary({:user, &1.user_id}, Credits.user_limit(&1)))
 with_path = Enum.count(credits, & &1.has_path?)
@@ -249,7 +241,13 @@ destinations = Tokengate.Observability.list_all_destinations()
 ok.("observabilidad · webhooks", Enum.map_join(destinations, ", ", & &1.name))
 
 demo_group = Enum.find(Accounts.list_groups(), &(&1.name == "Platform Crew"))
-platform_member = Enum.find(members, &(&1.group_id == demo_group.id))
+
+platform_member =
+  demo_group.id
+  |> Accounts.list_group_members_for_group()
+  |> hd()
+  |> then(&Accounts.get_group_member!(&1.id, :with_assoc))
+
 accessible = Providers.list_accessible_models(platform_member)
 
 ok.(

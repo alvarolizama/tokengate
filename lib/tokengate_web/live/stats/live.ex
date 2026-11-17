@@ -35,67 +35,31 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   attr :day_by_hour, :any, required: true
   attr :last_sync_at, :any, required: true
   attr :timezone, :any, required: true
-  attr :budget_reset_hours, :any, required: true
-  attr :budget_reset_minutes, :any, required: true
-  attr :budget_reset_at, :any, required: true
   attr :stats_loading, :any, required: true
   attr :streams, :any, required: true
 
   def live(assigns) do
     ~H"""
     <div class="space-y-6">
-      <%!-- Tope diario global — gasto real del día UTC (misma fuente y misma
-           ventana que Mantenimiento) vs kill-switch diario, que resetea a las
-           00:00 UTC. Día UTC y no local: si el número midiera el día local, la
-           barra y el countdown apuntarían a ventanas distintas. Sin contador
-           ETS: ese incluye holds en vuelo y oscila con el tráfico en curso. --%>
+      <%!-- Gasto real del día UTC — datum simple, sin techo: mide la ventana
+           del día calendario UTC (00:00–24:00), la misma que Mantenimiento.
+           Día UTC y no local: si el número midiera el día local, no cuadraría
+           con el KPI de costo de abajo. Sin contador ETS: ese incluye holds en
+           vuelo y oscila con el tráfico en curso. --%>
       <%= if @org_budget do %>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-org-budget">
           <div class="card-body p-5">
-            <div class="flex items-center justify-between flex-wrap gap-2">
-              <div class="flex items-center gap-2">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  {gettext("Global daily cap")}
-                </span>
-                <Stats.budget_badge pct={@org_budget.daily_pct} />
-              </div>
-              <span
-                :if={@org_budget.exempt_count > 0}
-                class="badge badge-sm badge-ghost"
-                id="live-org-budget-exempt"
-                title={gettext("Users, limit profiles or services exempt from the global daily cap")}
-              >
-                {@org_budget.exempt_count} exentos
-              </span>
-            </div>
-            <div class="mt-2">
-              <Stats.budget_bar
-                spend={@org_budget.daily_spend_usd}
-                limit={@org_budget.daily_cap_usd}
-                pct={@org_budget.daily_pct}
-              />
-            </div>
+            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+              Gasto del día UTC
+            </span>
+            <p
+              class="mt-2 text-2xl font-bold text-base-content tabular-nums"
+              id="live-org-budget-spend"
+            >
+              ${Stats.format_decimal(@org_budget.daily_spend_usd)}
+            </p>
             <p class="text-xs text-base-content/40 mt-1">
-              Gasto del día UTC · todos los sujetos · reinicia en
-              <span
-                class="font-mono tabular-nums text-base-content/60 whitespace-nowrap"
-                id="live-budget-reset-countdown"
-                title={gettext("Hours and minutes left until the cap resets (00:00 UTC)")}
-                aria-label={
-                  gettext(
-                    "%{hours} hours and %{minutes} minutes left until the cap resets",
-                    hours: @budget_reset_hours,
-                    minutes: @budget_reset_minutes
-                  )
-                }
-              >
-                <span aria-hidden="true">
-                  {@budget_reset_hours}<span class="reset-colon">:</span>{@budget_reset_minutes}<span class="text-base-content/40">h</span>
-                </span>
-              </span>
-              <span id="live-budget-reset-at">
-                ({Stats.format_time(@budget_reset_at, @timezone)} en tu hora local)
-              </span>
+              todos los sujetos · ventana 00:00–24:00 UTC
             </p>
           </div>
         </div>
@@ -113,13 +77,10 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           label={gettext("Today · cost (UTC)")}
           icon="hero-currency-dollar"
           accent="accent"
-          title={gettext("UTC day spend (00:00–24:00 UTC) — the window that resets the global cap")}
+          title={gettext("UTC day spend (00:00–24:00 UTC)")}
         >
           ${Stats.format_decimal(@today_metrics.cost_usd)}
-          <:sub>
-            Reinicia en {@budget_reset_hours}h {@budget_reset_minutes}m
-            ({Stats.format_time(@budget_reset_at, @timezone)} en tu hora local)
-          </:sub>
+          <:sub>{gettext("Reported by the provider")}</:sub>
         </.kpi_card>
 
         <.kpi_card

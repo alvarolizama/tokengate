@@ -103,11 +103,11 @@ servicio.
 
 ### «Ilimitado» tampoco es «sin techo»
 
-Medido: con el cap global diario en `0`, un sujeto `unlimited_spend` **sí**
-recibe `402 :global` (capa 2 del modelo, `GlobalSettings.daily_max_spend_usd`,
-`lib/tokengate/global_settings.ex:6-13`). La única forma de saltarlo es una
-**exención** (`budget_exemptions`, por usuario o por grupo:
-`Budgets.Exemptions.exempt?/3`, `lib/tokengate/budgets/exemptions.ex:34-41`).
+`unlimited_spend` significa **pasar sin retener nada**: `pick_layer/1` devuelve
+`:unlimited` y `reserve_plan/2` responde `{:ok, %{kind: :no_credit, subject_micro: 0}}`.
+El único límite de gasto es el mensual del sujeto (propio o heredado del perfil de
+límites) más los top-ups. `nil` no es «ilimitado»: sin techo y sin top-ups responde
+`402 :no_credit`; `0` responde `402 :subject`.
 
 ### ⚠️ Defecto medido: `has_path?` marca «bloqueado» a quien sí puede gastar
 

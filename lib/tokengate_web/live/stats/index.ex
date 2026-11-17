@@ -19,29 +19,20 @@ defmodule TokengateWeb.StatsLive.Index do
   attr :model_provider_stacked, :any, required: true
   attr :period, :any, required: true
   attr :timezone, :any, required: true
-  attr :budget_reset_hours, :any, required: true
-  attr :budget_reset_minutes, :any, required: true
-  attr :budget_reset_at, :any, required: true
   attr :current_user, :any, required: true
 
   def index(assigns) do
     ~H"""
     <div class="space-y-6">
-      <%!-- El card del tope diario global ya NO vive acá: mide el kill-switch
-           (día UTC) y su casa es En vivo (`live-org-budget`). Con el período
-           "hoy" era el mismo card con la misma query repetido en las dos
-           pestañas; con ventanas más largas duplicaba el costo del KPI de
-           costo, que ya mide el gasto del período. --%>
+      <%!-- El card del gasto del día UTC vive en En vivo (`live-org-budget`): mide
+           el día calendario UTC, la ventana de los KPI con período "hoy".
+           Repetirlo acá duplicaba la query con ventanas más largas. --%>
 
-      <%!-- KPI cards — con período "Hoy" el costo mide el día UTC y declara
-           cuánto falta para el reinicio del tope, igual que En vivo. --%>
+      <%!-- KPI cards — con período "Hoy" el costo mide el día UTC. --%>
       <.kpi_cards
         metrics={@metrics}
         deltas={@metrics[:deltas]}
         period={@period}
-        reset_hours={@budget_reset_hours}
-        reset_minutes={@budget_reset_minutes}
-        reset_at={@budget_reset_at}
         timezone={@timezone}
       />
 

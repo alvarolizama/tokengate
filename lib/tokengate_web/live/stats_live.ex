@@ -29,8 +29,6 @@ defmodule TokengateWeb.StatsLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Budgets
-  alias Tokengate.Budgets.Exemptions
-  alias Tokengate.GlobalSettings
   alias Tokengate.Logs
   alias Tokengate.Logs.Inflight
   alias Tokengate.Metrics.DashboardCache
@@ -104,7 +102,6 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:shown_counts, %{})
       |> assign(:reload_scheduled, false)
       |> assign(:pulse_scheduled, false)
-      |> assign_budget_reset()
       |> assign(empty_data_assigns())
 
     socket =
@@ -121,7 +118,6 @@ defmodule TokengateWeb.StatsLive do
       # Realtime pulse for the "En vivo" tab (broadcast per proxied request
       # by Metrics.Collector) + periodic tick so the page ages gracefully.
       Phoenix.PubSub.subscribe(Tokengate.PubSub, "metrics:updated")
-      schedule_clock_tick()
       send(self(), :live_tick)
     end
 
@@ -521,18 +517,6 @@ defmodule TokengateWeb.StatsLive do
     end
   end
 
-  # Minute-aligned clock tick for the budget-reset countdown. The countdown
-  # is the only thing on /stats that has to move with zero traffic (the
-  # "En vivo" 3s tick and the Resumen's `logs:new` reload both stall when the
-  # proxy is idle), and it only changes once a minute, so we wake on the
-  # minute boundary instead of polling. Re-assigning an unchanged value is a
-  # no-op in `assign/3`, so this costs a re-render only when the label
-  # actually changes (or on the midnight rollover).
-  def handle_info(:clock_tick, socket) do
-    schedule_clock_tick()
-    {:noreply, assign_budget_reset(socket)}
-  end
-
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # Pure orchestration: no socket, no assigns — everything runs off plain
@@ -731,13 +715,12 @@ defmodule TokengateWeb.StatsLive do
         # agregados caros (percentile_cont, sweep de concurrencia) en cada
         # recarga del broadcast `logs:new`, que re-lanza el bundle completo.
         #
-        # Tampoco carga el tope diario global: ese card mide el kill-switch y
-        # vive en En vivo (`live-org-budget`), la pestaña que declaró esa
-        # responsabilidad; con período "hoy" era el mismo card duplicado con
-        # la misma query.
+        # Tampoco carga el card del gasto del día UTC: ese card vive en En vivo
+        # (`live-org-budget`); con período "hoy" era el mismo card duplicado
+        # con la misma query.
         # Con el período "Hoy" la gráfica de perfil horario mide el día UTC en
-        # curso — la misma ventana que los KPI y el tope — y sale del agregado
-        # del día (ver hour_usage_tasks/2), no del perfil del período.
+        # curso — la misma ventana que los KPI — y sale del agregado del día
+        # (ver hour_usage_tasks/2), no del perfil del período.
         index_admin_tasks(admin?, opts) ++
           hour_usage_tasks(params, opts) ++
           [
@@ -1074,33 +1057,6 @@ defmodule TokengateWeb.StatsLive do
 
   ## "En vivo" data ---------------------------------------------------------
 
-  # Countdown to the global kill-switch reset, split into hours/minutes so the
-  # template can render the `:` as its own blinking element. Minute-granular,
-  # so a per-minute wall-clock tick almost always reassigns identical values
-  # and `assign/3` no-ops — the diff goes out only when the label actually
-  # changes, not on every tick.
-  #
-  # The countdown is a plain duration (timezone-independent); `reset_at` is the
-  # same instant, which the label renders in the selected zone so the user
-  # reads the reset on their own clock.
-  defp assign_budget_reset(socket) do
-    reset_at = Periods.next_utc_day_start(Periods.now_utc())
-    {hours, minutes} = Stats.countdown_parts(reset_at)
-
-    socket
-    |> assign(:budget_reset_hours, hours)
-    |> assign(:budget_reset_minutes, minutes)
-    |> assign(:budget_reset_at, reset_at)
-  end
-
-  # Wakes just after the wall-clock minute turns, so the countdown label is
-  # never more than a second stale. Skew between the BEAM and the browser
-  # clock would otherwise drift the label off the minute boundary.
-  defp schedule_clock_tick do
-    ms = 60_000 - rem(System.system_time(:millisecond), 60_000)
-    Process.send_after(self(), :clock_tick, ms)
-  end
-
   # Coalesce: un :reload_pulse pendiente absorbe todos los `logs:new` que
   # lleguen mientras tanto (flag por visor, cadencia la del tab).
   defp schedule_pulse_refresh(socket) do
@@ -1150,21 +1106,10 @@ defmodule TokengateWeb.StatsLive do
         live = Logs.today_live_bundle()
 
         # Gasto real del día UTC — el mismo número que muestra Mantenimiento
-        # — más cap y exentos del kill-switch. Día UTC y no local: el cap
-        # resetea a las 00:00 UTC, así que barra, % y countdown tienen que
-        # medir la misma ventana. Nada de contador ETS (holds). El spend ya
-        # salió del scan del día (cost_usd del bundle): antes este card
-        # re-escaneaba la misma partición vía
-        # Budgets.global_daily_budget_summary/0.
-        spend = live.today.cost_usd
-        cap = GlobalSettings.get_daily_cap()
-
-        org_budget = %{
-          daily_spend_usd: spend,
-          daily_cap_usd: cap,
-          daily_pct: daily_pct(spend, cap),
-          exempt_count: Exemptions.count_for_scope("global_daily")
-        }
+        # y que el card de arriba. Día UTC y no local: el KPI de costo y el
+        # histórico del día se leen sobre la misma ventana. Nada de contador
+        # ETS (holds): el spend sale del scan del día (`cost_usd` del bundle).
+        org_budget = %{daily_spend_usd: live.today.cost_usd}
 
         %{
           today_metrics: live.today,
@@ -1205,20 +1150,6 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:inflight_count, Inflight.count())
     |> assign(:day_by_hour, bundle.day_by_hour)
     |> assign(:last_sync_at, DateTime.utc_now())
-  end
-
-  # Misma fórmula que el `pct/2` privado de Budgets: % del cap redondeado a
-  # 1 decimal; nil sin cap o con cap 0.
-  defp daily_pct(_spend, nil), do: nil
-
-  defp daily_pct(spend, cap) do
-    if Decimal.compare(cap, Decimal.new(0)) == :gt do
-      spend
-      |> Decimal.div(cap)
-      |> Decimal.mult(Decimal.new(100))
-      |> Decimal.to_float()
-      |> Float.round(1)
-    end
   end
 
   # Per-series maxima for the three "En vivo" bar charts. All three read the

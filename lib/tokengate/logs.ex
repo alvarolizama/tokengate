@@ -898,9 +898,9 @@ defmodule Tokengate.Logs do
 
   Before this bundle the live tab scanned the day partition three times
   per refresh: the flat summary (`today_summary/1`), the hour profile
-  (`today_usage_by_hour_provider/0`) and the budget spend
-  (`Budgets.global_daily_budget_summary/0`). One grouped pass now feeds
-  all three consumers: sums of sums are exact, and the flat avg latency is
+  (`today_usage_by_hour_provider/0`) and a second spend scan for the
+  budget card. One grouped pass now feeds all the consumers: sums of sums
+  are exact, and the flat avg latency is
   `SUM(latency_ms) / COUNT(latency_ms)` — exactly `AVG`'s NULL-skipping
   semantics. The p95 is NOT derivable from grouped rows, so it lives in
   `today_p95_latency_ms/1` with its own (long) TTL.

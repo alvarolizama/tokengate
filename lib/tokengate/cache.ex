@@ -8,8 +8,6 @@ defmodule Tokengate.Cache do
   generic because several hot paths share the shape but not the key space;
   keys are tagged tuples so a table scan never confuses two datasets:
 
-    * `{:exemptions, scope}` — the `Tokengate.Budgets.Exemptions` set of
-      exempt subjects for a scope (read on every proxied request).
     * `{:observability_destinations, :all}` — the output of
       `Tokengate.Observability.list_all_destinations/0` (read once per
       request log).
@@ -41,7 +39,7 @@ defmodule Tokengate.Cache do
 
   The table is VM-global and outlives the Ecto sandbox rollback, so
   `Tokengate.DataCase` flushes it on every setup — same treatment as
-  `DashboardCache` and `GlobalSettings`' `:persistent_term`.
+  `DashboardCache`.
   """
 
   use GenServer
@@ -52,7 +50,7 @@ defmodule Tokengate.Cache do
   @poll_interval_ms 5
 
   # …and never block longer than this. Cache entries here are cheap
-  # hot-path reads (exemptions, observability destinations): a duplicate
+  # hot-path reads (observability destinations, other small sets): a duplicate
   # computation beats stalling a proxied request behind a slow holder.
   @max_wait_ms 200
 

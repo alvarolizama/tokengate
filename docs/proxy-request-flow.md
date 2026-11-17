@@ -55,9 +55,9 @@ flowchart TD
     G3 --> G4{"pasa?"}
     G4 -->|"saturada / rate limited"| BACK["excluir credencial<br/>(sleep acotado a 2s si 429)<br/>reintentar cascada"]
     BACK --> ROUTE
-    G4 -->|"sí"| BUD["reserve_credit_budget<br/>hold de max_request_cost_usd = 1 USD<br/>+ kill-switch global diario"]
+    G4 -->|"sí"| BUD["reserve_credit_budget<br/>hold de max_request_cost_usd = 1 USD<br/>límite del sujeto + top-ups"]
     BUD --> BUD2{"hold concedido?"}
-    BUD2 -->|"no"| E402["402 budget_exceeded<br/>global | subject | credit"]
+    BUD2 -->|"no"| E402["402 budget_exceeded<br/>subject | no_credit"]
     BUD2 -->|"sí"| INF["register_inflight<br/>visible como Pending en /logs"]
 
     INF --> K{"endpoint y stream?"}

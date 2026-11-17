@@ -519,16 +519,6 @@ defmodule TokengateWeb.ProxyControllerTest do
     |> Repo.update!()
   end
 
-  # Puts spend on a subject's books (zero-hold settle) so budget-gate tests can
-  # start from an already-spent state.
-  defp record(subject_id, cost_usd) do
-    Budgets.settle(
-      subject_id,
-      %{monthly_micro: 0, global_micro: 0, exempt_global?: false},
-      cost_usd
-    )
-  end
-
   ## Auth ######################################################################
 
   test "401 without token", %{conn: conn} do
@@ -658,29 +648,6 @@ defmodule TokengateWeb.ProxyControllerTest do
     # A zero-credit group subscription: the member's only grant has no room, so
     # the next request is rejected before being dispatched.
     %{token: token, model: model} = proxy_fixture(%{credit_units: 0})
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model.name))
-
-    assert %{"error" => %{"code" => "budget_exceeded", "type" => "billing_error"}} =
-             json_response(conn, 402)
-  end
-
-  test "402 when the global daily kill-switch is reached", %{conn: conn} do
-    %{token: token, model: model, member: member} = proxy_fixture()
-
-    # Calienta el cache de `:persistent_term` con un tope benigno: si el
-    # `update/2` de abajo no invalidara, `get_daily_cap/0` seguiría sirviendo
-    # 100 y este request pasaría en vez de 402.
-    {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "100.00"})
-    assert Decimal.equal?(Tokengate.GlobalSettings.get_daily_cap(), Decimal.new("100.00"))
-
-    # Arm the org-wide kill-switch and put spend on the books for today so the
-    # global counter is at the cap.
-    {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "0.01"})
-    record(member.id, Decimal.new("0.01"))
 
     conn =
       conn
@@ -3679,23 +3646,6 @@ defmodule TokengateWeb.ProxyControllerTest do
 
       assert log.credit_topup_id == topup.id
       assert %{consumed_micro: 150} = Budgets.topup_spend(topup.id)
-    end
-
-    test "el 402 del cap global NO comparte copy con el del sujeto", %{conn: conn} do
-      %{token: token, model: model, member: member} = proxy_fixture(%{unlimited: true})
-      {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "0.000001"})
-
-      # The cap does NOT reject the first request off a clean counter: the hold
-      # covers one request over the remaining headroom (hold_counter). Put
-      # spend on the books BEFORE the request, like the kill-switch test does —
-      # without this the test only passed on ETS leakage from it (seed order).
-      record(member.id, Decimal.new("0.01"))
-
-      conn = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", chat_body(model.name))
-
-      body = json_response(conn, 402)
-      assert body["error"]["message"] =~ "Global"
-      refute body["error"]["message"] =~ "No spending path"
     end
   end
 

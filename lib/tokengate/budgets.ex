@@ -14,9 +14,7 @@ defmodule Tokengate.Budgets do
   import Ecto.Query
   alias Tokengate.{Accounts, Repo}
   alias Tokengate.Accounts.GroupMember
-  alias Tokengate.Budgets.{Exemptions, Manager}
-  alias Tokengate.GlobalSettings
-  alias Tokengate.Logs
+  alias Tokengate.Budgets.Manager
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.RequestMetricsHourly
   alias Tokengate.Periods
@@ -164,57 +162,6 @@ defmodule Tokengate.Budgets do
           unlimited?: boolean(),
           remaining_topup_usd: Decimal.t()
         }
-
-  @doc """
-  Org-wide global daily cap summary — the honest replacement for the old
-  monthly budget rollup: the monthly limit belongs to each subject (never to
-  the org), and the only org-wide spend guard is the
-  **global daily cap** (`GlobalSettings.daily_max_spend_usd`, kill-switch
-  layer 2, UTC day).
-
-  The spend is real spend from `request_logs` (via `Logs.cost_summary/1`)
-  over `from` (default: start of the current UTC day), NOT the live ETS
-  enforcement counter — that one includes in-flight `$max_request_cost_usd`
-  holds and drifts on crashes, so it "breathes" (jumps $20 per in-flight
-  request, drops on settle) and must never back a display number. It still
-  backs enforcement itself (`Budgets.Manager`) and the maintenance screen.
-
-  Exempted subjects (`global_daily` exemptions) skip the kill-switch layer
-  in the proxy but their spend IS included here — the card reports real
-  money spent — they are listed separately as `exempt_count`.
-
-  `nil` cap means unlimited (no kill-switch configured).
-
-  La ventana es siempre la del tope (día UTC): no acepta un `from` arbitrario
-  porque cualquier otro rango haría que la barra y el % compararan un gasto
-  contra un cap que mide otro período.
-  """
-  @spec global_daily_budget_summary() :: %{
-          daily_spend_usd: Decimal.t(),
-          daily_cap_usd: Decimal.t() | nil,
-          daily_pct: float() | nil,
-          exempt_count: non_neg_integer()
-        }
-  def global_daily_budget_summary do
-    spend =
-      %{from: Manager.utc_day_start()}
-      |> Logs.cost_summary()
-      |> Map.get(:total_cost_usd, Decimal.new(0))
-
-    %{
-      daily_spend_usd: spend,
-      daily_cap_usd: GlobalSettings.get_daily_cap(),
-      daily_pct: nil,
-      exempt_count: Exemptions.count_for_scope("global_daily")
-    }
-    |> put_daily_pct()
-  end
-
-  defp put_daily_pct(%{daily_cap_usd: nil} = summary), do: summary
-
-  defp put_daily_pct(%{daily_spend_usd: spend, daily_cap_usd: cap} = summary) do
-    %{summary | daily_pct: pct(spend, cap)}
-  end
 
   @doc "Lists only the member budgets that hit a daily or monthly limit."
   @spec list_exhausted_member_budgets() :: [member_budget()]

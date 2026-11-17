@@ -28,7 +28,6 @@ defmodule TokengateWeb.KpiHelpers do
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Periods
-  alias TokengateWeb.StatsHelpers, as: Stats
 
   @doc """
   Assigns the 4-card KPI metrics for a calendar `period` ("today", "7d",
@@ -207,7 +206,7 @@ defmodule TokengateWeb.KpiHelpers do
   defp cost_label(_), do: gettext("Cost")
 
   defp cost_title("today"),
-    do: gettext("UTC day spend (00:00–24:00 UTC) — the window that resets the global cap")
+    do: gettext("UTC day spend (00:00–24:00 UTC)")
 
   defp cost_title("month"),
     do:
@@ -224,22 +223,19 @@ defmodule TokengateWeb.KpiHelpers do
   attr :cost_window, :string,
     default: "cap",
     doc:
-      "\"cap\" declara la ventana UTC del tope (label + contador de reinicio) en el KPI de costo; \"period\" muestra solo el gasto del período, uniforme con el resto de la fila"
+      "\"cap\" declara la ventana UTC del presupuesto (label + tooltip) en el KPI de costo; \"period\" muestra solo el gasto del período, uniforme con el resto de la fila"
 
-  attr :reset_hours, :any, default: nil, doc: "horas restantes hasta el reinicio del tope"
-  attr :reset_minutes, :any, default: nil
-  attr :reset_at, :any, default: nil, doc: "instante del reinicio (00:00 UTC)"
   attr :timezone, :any, default: "Etc/UTC", doc: "zona del usuario, solo para mostrar la hora"
 
   def kpi_cards(assigns) do
     ~H"""
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
       <%!-- El KPI de costo sigue el contrato del contenedor (`cost_window`):
-           con "cap" declara la ventana UTC en que resetean los topes
-           (día/mes, ver Periods.period_bounds) — la MISMA que el kill-switch
-           y Mantenimiento — y anuncia el reinicio; con "period" muestra solo
-           el gasto del período seleccionado, uniforme con el resto de la
-           fila. Los períodos rolling (7d/30d) y last_month no tienen tope. --%>
+           con "cap" declara la ventana UTC de los presupuestos (día/mes, ver
+           Periods.period_bounds) — la misma que Mantenimiento; con "period"
+           muestra solo el gasto del período seleccionado, uniforme con el
+           resto de la fila. Los períodos rolling (7d/30d) y last_month no
+           tienen ventana UTC declarada. --%>
       <.kpi_card
         id="kpi-cost"
         label={if(@cost_window == "cap", do: cost_label(@period), else: gettext("Cost"))}
@@ -256,10 +252,6 @@ defmodule TokengateWeb.KpiHelpers do
           >
             {delta_arrow(@deltas[:cost_usd])} {abs_float(@deltas[:cost_usd])}%
           </span>
-        </:sub>
-        <:sub :if={@cost_window == "cap" and @period == "today"}>
-          Reinicia en {@reset_hours}h {@reset_minutes}m
-          ({Stats.format_time(@reset_at, @timezone)} en tu hora local)
         </:sub>
       </.kpi_card>
 

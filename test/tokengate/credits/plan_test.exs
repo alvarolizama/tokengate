@@ -187,7 +187,7 @@ defmodule Tokengate.Credits.PlanTest do
       member = member_fixture(group, user_fixture())
       plan = Credits.plan(member)
 
-      assert {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("5"), false)
+      assert {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("5"))
       assert hold.kind == :no_credit
 
       :ok = Manager.release_credits(hold)
@@ -198,7 +198,7 @@ defmodule Tokengate.Credits.PlanTest do
       member = member_fixture(group, user_fixture())
       plan = Credits.plan(member)
 
-      assert {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("4"), false)
+      assert {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("4"))
       assert hold.kind == :limit
       assert hold.subject == {:user, member.user_id}
 
@@ -211,7 +211,7 @@ defmodule Tokengate.Credits.PlanTest do
       plan = Credits.plan(member)
 
       assert {:error, {:budget_exceeded, %{layer: :subject}}} =
-               Manager.reserve_plan(plan, nil, Decimal.new("1"), false)
+               Manager.reserve_plan(plan, Decimal.new("1"))
     end
 
     test "sin límite, sin ilimitado y sin top-ups: 402 con capa :no_credit" do
@@ -220,7 +220,7 @@ defmodule Tokengate.Credits.PlanTest do
       plan = Credits.plan(member)
 
       assert {:error, {:budget_exceeded, %{layer: :no_credit}}} =
-               Manager.reserve_plan(plan, nil, Decimal.new("1"), false)
+               Manager.reserve_plan(plan, Decimal.new("1"))
     end
 
     test "límite agotado y top-up vigente: drena el top-up" do
@@ -236,7 +236,7 @@ defmodule Tokengate.Credits.PlanTest do
 
       plan = Credits.plan(member)
 
-      assert {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("2"), false)
+      assert {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("2"))
       assert hold.kind == :topup
 
       :ok = Manager.settle_credits(hold, Decimal.new("1.5"))
@@ -252,7 +252,7 @@ defmodule Tokengate.Credits.PlanTest do
       plan = Credits.plan(member)
 
       assert {:error, {:budget_exceeded, %{layer: :subject}}} =
-               Manager.reserve_plan(plan, nil, Decimal.new("1"), false)
+               Manager.reserve_plan(plan, Decimal.new("1"))
     end
   end
 
@@ -368,7 +368,7 @@ defmodule Tokengate.Credits.PlanTest do
 
       plan = Credits.plan(service)
 
-      assert {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("3"), false)
+      assert {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("3"))
       assert hold.kind == :topup
 
       :ok = Manager.release_credits(hold)
@@ -448,7 +448,7 @@ defmodule Tokengate.Credits.PlanTest do
         {{:limit, plan.subject}, 10_000_000, nil, {2000, 1}, true, nil, true}
       )
 
-      assert {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("1"), false)
+      assert {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("1"))
       assert hold.kind == :limit
       assert Manager.limit_spend(plan.subject).consumed_micro < 10_000_000
 
@@ -467,7 +467,7 @@ defmodule Tokengate.Credits.PlanTest do
       )
 
       assert {:error, {:budget_exceeded, %{layer: :subject}}} =
-               Manager.reserve_plan(plan, nil, Decimal.new("1"), false)
+               Manager.reserve_plan(plan, Decimal.new("1"))
     end
 
     test "reset_monthly_counters borra el contador del límite pero no los bolsines de top-up" do
@@ -506,7 +506,7 @@ defmodule Tokengate.Credits.PlanTest do
         {key, 9_500_000, nil, {today.year, today.month}, true, nil, true}
       )
 
-      {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("1.00"), false)
+      {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("1.00"))
       assert hold.subject_micro == 1_000_000
 
       :ok = Manager.settle_credits(hold, Decimal.new("0.30"))
@@ -524,27 +524,8 @@ defmodule Tokengate.Credits.PlanTest do
         {key, 9_500_000, nil, {today.year, today.month}, true, nil, true}
       )
 
-      {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("1.00"), false)
+      {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("1.00"))
       :ok = Manager.release_credits(hold)
-
-      assert :ets.lookup_element(:tokengate_credits, key, 2) == 9_500_000
-    end
-
-    test "rollback cuando el cap global rechaza no toca el gasto acumulado", %{plan: plan} do
-      key = {:limit, plan.subject}
-      today = Date.utc_today()
-
-      :ets.insert(
-        :tokengate_credits,
-        {key, 9_500_000, nil, {today.year, today.month}, true, nil, true}
-      )
-
-      # Cap global en $0.01 con contador global ya agotado ⇒ rechazo tras el
-      # bump del sujeto (camino del rollback).
-      :ets.insert(:tokengate_budgets, {{:global, :daily}, 1_000_000, true, Date.utc_today()})
-
-      assert {:error, {:budget_exceeded, %{layer: :global}}} =
-               Manager.reserve_plan(plan, Decimal.new("0.01"), Decimal.new("1.00"), false)
 
       assert :ets.lookup_element(:tokengate_credits, key, 2) == 9_500_000
     end

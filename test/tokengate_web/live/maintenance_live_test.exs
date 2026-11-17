@@ -223,20 +223,12 @@ defmodule TokengateWeb.SettingsLiveTest do
     end
   end
 
-  # El tope diario global es una palanca de presupuesto y se mudó a
-  # /budget/global (`global_cap_live_test.exs`): aquí solo queda el pin de que
-  # NO se renderiza en esta página.
-  describe "tope diario global — ya no vive aquí" do
-    test "la página no renderiza la tarjeta del tope ni sus exclusiones", %{conn: conn} do
+  describe "zonas de la página" do
+    test "renderiza el refresco de catálogo y las zonas de peligro", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
       conn = login(conn, admin, pass)
       {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
-      refute has_element?(view, "#global-cap-card")
-      refute has_element?(view, "#global-cap-form")
-      refute has_element?(view, "#global-exemption-form")
-
-      # Las zonas que sí son de esta página siguen ahí, en orden.
       html = render(view)
       assert has_element?(view, "#catalog-refresh-card")
       assert has_element?(view, "#danger-zone-card", "Zona de peligro")

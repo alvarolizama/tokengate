@@ -2,13 +2,13 @@ defmodule Tokengate.Budgets.Manager do
   @moduledoc """
   ETS-backed micro-USD spend cache for budget enforcement.
 
-  Two budget layers, one reserve primitive:
+  One budget layer, one reserve primitive:
 
-  - **Layer 1 — monthly per subject** (`{subject_id, :monthly}`): the member's
-    or service's effective monthly budget (group default + extra). `nil` =
+  - **Monthly per subject** (`{subject_id, :monthly}`): the member's or
+    service's effective monthly budget (group default + extra). `nil` =
     unlimited.
-  - **Layer 2 — global daily kill-switch** (`{:global, :daily}`): the org-wide
-    daily cap. `nil` = off.
+  - **Spend plan** (credits): the subject's monthly limit plus its top-ups,
+    reserved through `reserve_plan/2`.
 
   ## Table
 
@@ -17,8 +17,7 @@ defmodule Tokengate.Budgets.Manager do
 
       {key, amount_micro, loaded_from_db?, period_stamp}
 
-    - `key` — `{subject_id, :monthly}`, `{subject_id, :daily}` (display only)
-      or `{:global, :daily}` (position 1).
+    - `key` — `{subject_id, :monthly}` or `{subject_id, :daily}` (display).
     - `amount_micro` — integer micro-USD, the counter element (position 2),
       updated atomically via `:ets.update_counter/4`.
     - `loaded_from_db?` — boolean (position 3); `true` once seeded from DB.
@@ -28,23 +27,23 @@ defmodule Tokengate.Budgets.Manager do
   ## Enforcement model: reserve → settle
 
   The durable truth is `request_logs`; this ETS cache is a hot replica. A
-  request **reserves** (holds) an amount on both layers before it executes and
-  **settles** the hold to the real cost when it finishes. Holding before the
-  cost is known is what stops N concurrent requests from jointly blowing past
-  a cap: each request holds its share first (see `reserve/5`).
+  request **reserves** (holds) an amount before it executes and **settles**
+  the hold to the real cost when it finishes. Holding before the cost is
+  known is what stops N concurrent requests from jointly blowing past a cap:
+  each request holds its share first (see `reserve/3`).
 
   ## API summary
 
-    * `reserve/5` — pre-flight hold on both layers (rejects if exhausted).
+    * `reserve/3` — pre-flight hold on the subject's monthly cap (rejects if
+      exhausted).
     * `settle/3` — swap the hold for the real cost after the request.
     * `release/2` — release a hold when the request never settled (error path).
     * `spend/1` — read-back of current daily/monthly spend in USD (display).
-    * `global_daily_spend/0` — read-back of the org daily spend (display).
-    * `set_from_db/3` / `set_global_from_db/1` — `Budgets.SyncWorker` drift reset.
+    * `set_from_db/2` — `Budgets.SyncWorker` drift reset.
     * `reset_monthly_counters/0` — `Budgets.ResetWorker` monthly reset.
     * `seed/3` / `load_from_db/2` — lazy-load helpers.
 
-  `nil` budget/cap means unlimited for that layer.
+  `nil` budget means unlimited for the layer.
   """
 
   use GenServer
@@ -54,41 +53,32 @@ defmodule Tokengate.Budgets.Manager do
   @table :tokengate_budgets
   @credits_table :tokengate_credits
   @micro 1_000_000
-  @global_key {:global, :daily}
 
   # ---------------------------------------------------------------------------
   # Public API — enforcement
   # ---------------------------------------------------------------------------
 
   @doc """
-  Reserves budget for an in-flight request on both layers.
-
-  Holds `requested_cost_usd` against the subject's monthly counter (layer 1,
-  cap = `monthly_budget_usd`) and the global daily counter (layer 2, cap =
-  `global_cap_usd`). Rejects when either layer is already exhausted, so N
-  concurrent requests cannot jointly blow past a cap.
+  Reserves budget for an in-flight request against the subject's monthly
+  counter (cap = `monthly_budget_usd`). Rejects when the layer is already
+  exhausted, so N concurrent requests cannot jointly blow past the cap.
 
   Optimistic and atomic: `:ets.update_counter/4` bumps first and returns the
   new value, so the "already exhausted" decision needs no lock. The held
-  amount may transiently push a counter above its cap; `settle/3` corrects it.
+  amount may transiently push the counter above its cap; `settle/3` corrects it.
 
   `monthly_budget_usd == nil` (unlimited) holds nothing and never rejects.
-  `exempt_global?` skips layer 2 entirely (a `global_daily` exemption).
 
-  Returns `{:ok, hold}` or
-  `{:error, {:budget_exceeded, %{layer: :subject | :global}}}`.
+  Returns `{:ok, hold}` or `{:error, {:budget_exceeded, %{layer: :subject}}}`.
   """
   @spec reserve(
           subject_id :: term(),
           monthly_budget_usd :: Decimal.t() | nil,
-          global_cap_usd :: Decimal.t() | nil,
-          requested_cost_usd :: Decimal.t() | nil,
-          exempt_global? :: boolean()
+          requested_cost_usd :: Decimal.t() | nil
         ) ::
-          {:ok, map()} | {:error, {:budget_exceeded, %{layer: :subject | :global}}}
-  def reserve(subject_id, monthly_budget_usd, global_cap_usd, requested_cost_usd, exempt_global?) do
+          {:ok, map()} | {:error, {:budget_exceeded, %{layer: :subject}}}
+  def reserve(subject_id, monthly_budget_usd, requested_cost_usd) do
     ensure_loaded(subject_id, :monthly)
-    ensure_loaded_global()
 
     requested = to_micro(requested_cost_usd)
 
@@ -97,55 +87,29 @@ defmodule Tokengate.Budgets.Manager do
         {:error, {:budget_exceeded, %{layer: :subject}}}
 
       {:ok, held_monthly} ->
-        if exempt_global? do
-          {:ok,
-           %{
-             monthly_micro: held_monthly,
-             global_micro: 0,
-             exempt_global?: true,
-             period: current_period_stamp(:monthly),
-             global_period: Date.utc_today()
-           }}
-        else
-          case hold_counter(@global_key, requested, global_cap_usd) do
-            {:ok, held_global} ->
-              {:ok,
-               %{
-                 monthly_micro: held_monthly,
-                 global_micro: held_global,
-                 exempt_global?: false,
-                 period: current_period_stamp(:monthly),
-                 global_period: Date.utc_today()
-               }}
-
-            {:error, :exhausted} ->
-              # Roll layer 1 back so the two layers stay consistent.
-              bump_counter({subject_id, :monthly}, -held_monthly)
-              {:error, {:budget_exceeded, %{layer: :global}}}
-          end
-        end
+        {:ok,
+         %{
+           monthly_micro: held_monthly,
+           period: current_period_stamp(:monthly)
+         }}
     end
   end
 
   @doc """
   Swaps a hold for the real cost once the request finished.
 
-  Layer 1 and (unless the hold was global-exempt) layer 2 both move from the
-  held amount to `actual_cost_usd`. The subject's daily counter (display only,
-  never a cap) is bumped by the real cost.
+  The monthly counter moves from the held amount to `actual_cost_usd`. The
+  subject's daily counter (display only, never a cap) is bumped by the real
+  cost.
   """
   @spec settle(subject_id :: term(), hold :: map(), actual_cost_usd :: Decimal.t() | nil) :: :ok
-  def settle(
-        subject_id,
-        %{monthly_micro: held_monthly, global_micro: held_global} = hold,
-        actual_cost_usd
-      ) do
+  def settle(subject_id, %{monthly_micro: held_monthly}, actual_cost_usd) do
     ensure_loaded(subject_id, :daily)
     ensure_loaded(subject_id, :monthly)
 
     actual = to_micro(actual_cost_usd)
 
-    # Legado de dos capas, SIN guard por estado: el `ensure_loaded/2` de arriba
+    # Legado de una capa, SIN guard por estado: el `ensure_loaded/2` de arriba
     # re-siembra una entrada evictada por un reset ANTES de que un guard pueda
     # verla (el `{:seed, ...}` del GenServer inserta incondicionalmente), así
     # que un guard aquí sería inerte — vería "viva y del mismo ciclo" lo que
@@ -154,12 +118,7 @@ defmodule Tokengate.Budgets.Manager do
     bump_counter({subject_id, :monthly}, actual - held_monthly)
     bump_counter({subject_id, :daily}, actual)
 
-    unless hold.exempt_global? do
-      bump_counter(@global_key, actual - held_global)
-    end
-
     maybe_enqueue_sync(subject_id)
-    unless hold.exempt_global?, do: maybe_enqueue_global_sync()
 
     :ok
   end
@@ -170,23 +129,14 @@ defmodule Tokengate.Budgets.Manager do
   or `release/2` must be called per hold.
   """
   @spec release(subject_id :: term(), hold :: map()) :: :ok
-  def release(subject_id, %{monthly_micro: held_monthly, global_micro: held_global} = hold) do
+  def release(subject_id, %{monthly_micro: held_monthly} = hold) do
     period = Map.get(hold, :period, current_period_stamp(:monthly))
-    global_period = Map.get(hold, :global_period, Date.utc_today())
 
     # El refund no resucita una entrada evictada por un reset (quedaría
     # negativa y bloquearía el re-seed): solo devuelve el delta a la entrada
     # viva de su ciclo.
     if monthly_counter_live?(subject_id, period) do
       bump_counter({subject_id, :monthly}, -held_monthly)
-    end
-
-    unless hold.exempt_global? do
-      # Estricto (a diferencia del settle): un refund sobre entrada ausente
-      # crearía el contador en negativo y envenenaría el día completo.
-      if global_counter_live?(global_period, true) do
-        bump_counter(@global_key, -held_global)
-      end
     end
 
     :ok
@@ -198,7 +148,7 @@ defmodule Tokengate.Budgets.Manager do
 
   @doc """
   Holds `requested_cost_usd` against the subject's **spend plan** (monthly
-  limit first, then the top-up that expires soonest), then the global daily cap.
+  limit first, then the top-up that expires soonest).
 
   `plan` es lo que resuelve `Credits.plan/1`:
 
@@ -209,34 +159,31 @@ defmodule Tokengate.Budgets.Manager do
 
   Orden de intento (una sola función, documentado aquí):
 
-    1. `unlimited?` ⇒ no hay tope de sujeto: solo cap global.
+    1. `unlimited?` ⇒ no hay tope de sujeto: el hold no retiene nada.
     2. límite con remanente ⇒ se descuenta del límite.
     3. límite agotado (o `0`, o `nil`) y hay top-ups vigentes ⇒ drena el que
        **expira antes**.
     4. sin límite (`nil`) y sin ilimitado ni top-ups ⇒ **402** (`:no_credit`).
 
   Devuelve `{:ok, hold}` (para `settle_credits/2` / `release_credits/1`) o
-  `{:error, {:budget_exceeded, %{layer: :subject | :no_credit | :global}}}`.
+  `{:error, {:budget_exceeded, %{layer: :subject | :no_credit}}}`.
   El hold dice **qué se debitó**: `:limit` o `{:topup, id}`.
   """
-  @spec reserve_plan(Tokengate.Credits.plan(), Decimal.t() | nil, Decimal.t() | nil, boolean()) ::
-          {:ok, map()}
-          | {:error, {:budget_exceeded, %{layer: :subject | :no_credit | :global}}}
-  def reserve_plan(plan, global_cap_usd, requested_cost_usd, exempt_global?) do
-    ensure_loaded_global()
-
+  @spec reserve_plan(Tokengate.Credits.plan(), Decimal.t() | nil) ::
+          {:ok, map()} | {:error, {:budget_exceeded, %{layer: :subject | :no_credit}}}
+  def reserve_plan(plan, requested_cost_usd) do
     requested = to_micro(requested_cost_usd)
 
     result =
       case pick_layer(plan) do
         :unlimited ->
-          hold_global_only(global_cap_usd, requested, exempt_global?)
+          {:ok, no_credit_hold()}
 
         {:limit, _subject} ->
-          hold_limit(plan, global_cap_usd, requested, exempt_global?)
+          hold_limit(plan, requested)
 
         {:topup, topup} ->
-          hold_topup(plan, topup, global_cap_usd, requested, exempt_global?)
+          hold_topup(plan, topup, requested)
 
         :no_credit ->
           {:error, {:budget_exceeded, %{layer: :no_credit}}}
@@ -261,7 +208,6 @@ defmodule Tokengate.Budgets.Manager do
   def settle_credits(%{kind: kind} = hold, actual_cost_usd) do
     actual = to_micro(actual_cost_usd)
     period = Map.get(hold, :period, current_period_stamp(:monthly))
-    global_period = Map.get(hold, :global_period, Date.utc_today())
 
     case kind do
       # Guard por ESTADO del contador (no reloj): la absorción (`actual −
@@ -281,14 +227,6 @@ defmodule Tokengate.Budgets.Manager do
 
       :no_credit ->
         :ok
-    end
-
-    unless hold.exempt_global? do
-      if global_counter_live?(global_period, true) do
-        bump_counter(@global_key, actual - hold.global_micro)
-      end
-
-      maybe_enqueue_global_sync()
     end
 
     # Reconciliación del contador del límite/top-up: sin esto, un drift del
@@ -359,7 +297,6 @@ defmodule Tokengate.Budgets.Manager do
   @spec release_credits(map()) :: :ok
   def release_credits(%{kind: kind} = hold) do
     period = Map.get(hold, :period, current_period_stamp(:monthly))
-    global_period = Map.get(hold, :global_period, Date.utc_today())
 
     if kind in [:limit, :topup] do
       # Mismo guard que el settle: el refund de un `:limit` no resucita una
@@ -369,12 +306,6 @@ defmodule Tokengate.Budgets.Manager do
 
       if refund? do
         bump_credit(hold.grant_key, -hold.subject_micro)
-      end
-    end
-
-    unless hold.exempt_global? do
-      if global_counter_live?(global_period, true) do
-        bump_counter(@global_key, -hold.global_micro)
       end
     end
 
@@ -446,7 +377,7 @@ defmodule Tokengate.Budgets.Manager do
   # sigue pasando (es un hold; el settle lo corrige) pero bloquea al
   # siguiente concurrente. En rechazo: rollback del delta y caída a top-ups
   # con la misma capa de rechazo que dicta `limit_exhausted/1`.
-  defp hold_limit(plan, global_cap_usd, requested, exempt_global?) do
+  defp hold_limit(plan, requested) do
     subject = plan.subject
     key = limit_key(subject)
     ensure_limit_loaded(subject)
@@ -458,19 +389,17 @@ defmodule Tokengate.Budgets.Manager do
 
       case topups_only(plan, :subject) do
         {:topup, topup} ->
-          hold_topup(plan, topup, global_cap_usd, requested, exempt_global?)
+          hold_topup(plan, topup, requested)
 
         :subject ->
           {:error, {:budget_exceeded, %{layer: :subject}}}
       end
     else
-      hold_global_after_credit(
-        %{kind: :limit, grant_key: key, subject: subject, limit_usd: plan.limit_usd},
-        requested,
-        global_cap_usd,
-        requested,
-        exempt_global?
-      )
+      {:ok,
+       credit_hold(
+         %{kind: :limit, grant_key: key, subject: subject, limit_usd: plan.limit_usd},
+         requested
+       )}
     end
   end
 
@@ -479,7 +408,7 @@ defmodule Tokengate.Budgets.Manager do
   # = `:subject` si el plan tenía límite, `:no_credit` si no). Sin loop: tras
   # el rollback el bolsín queda en/sobre su amount, así que
   # `topup_has_room?/1` lo excluye naturalmente de la re-elección.
-  defp hold_topup(plan, topup, global_cap_usd, requested, exempt_global?) do
+  defp hold_topup(plan, topup, requested) do
     key = topup_key(topup)
     ensure_topup_loaded(topup)
 
@@ -491,50 +420,23 @@ defmodule Tokengate.Budgets.Manager do
 
       case topups_only(plan, fallback) do
         {:topup, next} ->
-          hold_topup(plan, next, global_cap_usd, requested, exempt_global?)
+          hold_topup(plan, next, requested)
 
         layer when layer in [:subject, :no_credit] ->
           {:error, {:budget_exceeded, %{layer: layer}}}
       end
     else
-      hold_global_after_credit(
-        %{kind: :topup, grant_key: key, topup: topup},
-        requested,
-        global_cap_usd,
-        requested,
-        exempt_global?
-      )
+      {:ok, credit_hold(%{kind: :topup, grant_key: key, topup: topup}, requested)}
     end
   end
 
-  # `held_micro` = delta retenido del sujeto (lo que hay que devolver si el
-  # cap global rechaza). El rollback resta SOLO ese delta; antes restaba el
-  # total nuevo del contador y lo vaciaba a 0.
-  defp hold_global_after_credit(partial, held_micro, global_cap_usd, requested, exempt_global?) do
-    if exempt_global? do
-      {:ok, credit_hold(partial, held_micro, 0, true)}
-    else
-      case hold_counter(@global_key, requested, global_cap_usd) do
-        {:ok, held_global} ->
-          {:ok, credit_hold(partial, held_micro, held_global, false)}
-
-        {:error, :exhausted} ->
-          bump_credit(partial.grant_key, -held_micro)
-          {:error, {:budget_exceeded, %{layer: :global}}}
-      end
-    end
-  end
-
-  defp credit_hold(partial, held, held_global, exempt_global?) do
+  defp credit_hold(partial, held) do
     Map.merge(partial, %{
       subject_micro: held,
-      global_micro: held_global,
-      exempt_global?: exempt_global?,
       # Stamps de período capturados AL RESERVAR: el guard de settle/release
       # compara contra el ESTADO del contador (entrada viva + mismo ciclo),
       # no contra el reloj (que no se mueve en un reset).
-      period: current_period_stamp(:monthly),
-      global_period: Date.utc_today()
+      period: current_period_stamp(:monthly)
     })
   end
 
@@ -544,13 +446,6 @@ defmodule Tokengate.Budgets.Manager do
 
   defp notify_rejection(plan, result) do
     case result do
-      {:error, {:budget_exceeded, %{layer: :global}}} ->
-        Tokengate.Notifications.emit(:global_daily_cap_reached, %{
-          entity_type: "global_settings",
-          entity_id: "global",
-          target_label: "global"
-        })
-
       {:error, {:budget_exceeded, %{layer: layer}}} when layer in [:subject, :no_credit] ->
         event = if layer == :no_credit, do: :no_credit, else: :subject_limit_reached
 
@@ -675,30 +570,17 @@ defmodule Tokengate.Budgets.Manager do
     end
   end
 
-  # Layer-2-only hold (no subject gate): unlimited subjects and limit-less
-  # subjects with no top-ups never touch a subject counter.
-  defp hold_global_only(global_cap_usd, requested, exempt_global?) do
-    if exempt_global? do
-      {:ok, no_credit_hold(0, true)}
-    else
-      case hold_counter(@global_key, requested, global_cap_usd) do
-        {:ok, held_global} -> {:ok, no_credit_hold(held_global, false)}
-        {:error, :exhausted} -> {:error, {:budget_exceeded, %{layer: :global}}}
-      end
-    end
-  end
-
-  defp no_credit_hold(held_global, exempt_global?) do
+  # Pass-through hold: unlimited subjects have no subject gate to charge, so
+  # the hold covers only `:no_credit` (nothing is retained) and the request
+  # proceeds.
+  defp no_credit_hold do
     %{
       kind: :no_credit,
       grant_key: nil,
       subject: nil,
       topup: nil,
       subject_micro: 0,
-      global_micro: held_global,
-      exempt_global?: exempt_global?,
-      period: current_period_stamp(:monthly),
-      global_period: Date.utc_today()
+      period: current_period_stamp(:monthly)
     }
   end
 
@@ -733,25 +615,9 @@ defmodule Tokengate.Budgets.Manager do
     :ets.lookup_element(@credits_table, key, 4, :missing) == period
   end
 
-  # Guard mensual del camino de dos capas (@table, pos 4 = {y, m} guardado).
+  # Guard mensual del camino legacy (@table, pos 4 = {y, m} guardado).
   defp monthly_counter_live?(subject_id, period) do
     :ets.lookup_element(@table, {subject_id, :monthly}, 4, :missing) == period
-  end
-
-  # Guard del contador global (@table, pos 4 = día guardado). `skip_on_missing?`
-  # distingue caminos: el de créditos (settle_credits/release_credits/release/2)
-  # salta si la entrada falta — el re-seed global es el dueño de la verdad y un
-  # refund sobre entrada ausente crearía el contador en negativo; el settle/3
-  # legacy conserva el comportamiento de siempre con holds legacy (entrada
-  # ausente ⇒ el bump la crea en 0).
-  defp global_counter_live?(global_period, skip_on_missing?) do
-    case :ets.lookup(@table, @global_key) do
-      [] ->
-        not skip_on_missing?
-
-      [{@global_key, _micro, _loaded?, stored_day}] ->
-        stored_day == global_period
-    end
   end
 
   @doc """
@@ -774,44 +640,16 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   # ---------------------------------------------------------------------------
-  # Global daily counter (display)
+  # UTC day boundary (display)
   # ---------------------------------------------------------------------------
 
   @doc """
-  Start of the current UTC day as a `DateTime.t()` — the kill-switch day
-  boundary (`GlobalSettings.daily_max_spend_usd` resets at 00:00 UTC).
-  Shared by the Manager seed and display callers so both agree on the
-  window.
+  Start of the current UTC day as a `DateTime.t()`.
+
+  Shared by the daily seed and display callers so both agree on the window.
   """
   @spec utc_day_start() :: DateTime.t()
   def utc_day_start, do: period_start(:daily)
-
-  @doc """
-  Returns the total daily spend across every member and credential (UTC day)
-  in USD as a Decimal. Lazy-loads from the DB on first touch or day rollover.
-
-  NOTE (display): this is the raw enforcement counter — while requests are
-  in flight it includes the `$max_request_cost_usd` holds reserved by
-  `reserve_credits/4` and not yet settled, so the value "breathes" with
-  concurrent traffic. Use for enforcement, not for spend dashboards: both
-  `/stats` and the maintenance screen display real spend from `request_logs`
-  (`Budgets.global_daily_budget_summary/0`); maintenance additionally shows
-  this counter as a drift reference when the two disagree.
-  """
-  @spec global_daily_spend() :: Decimal.t()
-  def global_daily_spend do
-    ensure_loaded_global()
-    from_micro(read_counter(@global_key))
-  end
-
-  @doc """
-  Resets the global daily ETS counter to the micro-USD value recomputed
-  from the DB by `Budgets.SyncWorker`.
-  """
-  @spec set_global_from_db(integer()) :: :ok
-  def set_global_from_db(daily_micro) do
-    GenServer.call(__MODULE__, {:set_global_from_db, daily_micro})
-  end
 
   @doc """
   Resets the monthly ETS counter for `subject_id` to the given micro-USD value,
@@ -865,35 +703,15 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   @doc """
-  Real spend of the **whole instance** (every member and service) over
-  `from`, as integer micro-USD — the durable counterpart of the global daily
-  counter.
-
-  Unlike `load_from_db/2` this applies NO subject filter, so it is the right
-  seed source for `{:global, :daily}`. Passing `:global` to `load_from_db/2`
-  instead raises `Ecto.Query.CastError` (it casts an atom against the binary_id
-  `group_member_id` column), so the global path needs its own loader.
-
-  Intended to be called from the caller process (not the GenServer) to keep
-  DB I/O out of the singleton, then handed to `set_global_from_db/1`.
-  """
-  @spec load_global_from_db(from :: DateTime.t()) :: integer()
-  def load_global_from_db(from) do
-    summary = Tokengate.Logs.cost_summary(%{from: from})
-    to_micro(summary.total_cost_usd)
-  end
-
-  @doc """
   Deletes every spend counter from the ETS table: monthly AND daily, per
-  subject and global. Used by the maintenance reset (`Logs.truncate_request_logs/0`)
+  subject. Used by the maintenance reset (`Logs.truncate_request_logs/0`)
   and by `Budgets.ResetWorker` on cycle boundaries. The next
-  `reserve/5` or `spend/1` for each subject lazy-loads from DB, which
+  `reserve/3` or `spend/1` for each subject lazy-loads from DB, which
   effectively starts each counter at 0.
   """
   @spec reset_monthly_counters() :: integer()
   def reset_monthly_counters do
-    # Every entry of the spend table: {subject, :monthly}, {subject, :daily}
-    # and the global {:global, :daily} kill-switch counter.
+    # Every entry of the spend table: {subject, :monthly} and {subject, :daily}.
     spend =
       :ets.select_delete(@table, [
         {{{:_, :monthly}, :_, :_, :_}, [], [true]},
@@ -976,18 +794,6 @@ defmodule Tokengate.Budgets.Manager do
       {{subject_id, :monthly}, monthly_micro, true, current_period_stamp(:monthly)}
     )
 
-    {:reply, :ok, state}
-  end
-
-  @impl true
-  def handle_call({:set_global_from_db, daily_micro}, _from, state) do
-    :ets.insert(@table, {@global_key, daily_micro, true, current_period_stamp(:daily)})
-    {:reply, :ok, state}
-  end
-
-  @impl true
-  def handle_call({:seed_global, micro}, _from, state) do
-    :ets.insert(@table, {@global_key, micro, true, current_period_stamp(:daily)})
     {:reply, :ok, state}
   end
 
@@ -1094,35 +900,6 @@ defmodule Tokengate.Budgets.Manager do
   defp stale?(:daily, stored_day, today), do: stored_day != today
 
   defp stale?(:monthly, {y, m}, {ty, tm}), do: y != ty or m != tm
-
-  # Ensures the global daily entry exists and is current. Same lazy-load pattern
-  # as per-subject entries but keyed by @global_key. Degrades gracefully if the
-  # ETS table doesn't exist yet (hot-reload).
-  defp ensure_loaded_global do
-    case :ets.whereis(@table) do
-      :undefined ->
-        :ok
-
-      _ ->
-        case :ets.lookup(@table, @global_key) do
-          [] ->
-            seed_global_from_db()
-
-          [{@global_key, _micro, _loaded?, stored_day}] ->
-            if stored_day != Date.utc_today() do
-              seed_global_from_db()
-            end
-        end
-    end
-  rescue
-    ArgumentError -> :ok
-  end
-
-  defp seed_global_from_db do
-    from = period_start(:daily)
-    micro = load_global_from_db(from)
-    GenServer.call(__MODULE__, {:seed_global, micro})
-  end
 
   defp seed_from_db(subject_id, period) do
     from = period_start(period)
@@ -1243,29 +1020,6 @@ defmodule Tokengate.Budgets.Manager do
         |> Oban.insert()
     end
 
-    :ok
-  end
-
-  # Debounced enqueue of the GLOBAL counter reconciler. Same pattern as
-  # `maybe_enqueue_sync/1`, with a fixed marker key (the job carries no args).
-  # Without this the global kill-switch counter only ever moves by hold/settle
-  # and keeps phantom ceilings from crashed requests for the whole UTC day.
-  defp maybe_enqueue_global_sync do
-    key = {:sync_pending, :global}
-
-    if :ets.insert_new(@table, {key, true}) do
-      _ =
-        %{}
-        |> Tokengate.Budgets.GlobalSyncWorker.new()
-        |> Oban.insert()
-    end
-
-    :ok
-  end
-
-  @doc false
-  def clear_global_sync_pending do
-    :ets.delete(@table, {:sync_pending, :global})
     :ok
   end
 

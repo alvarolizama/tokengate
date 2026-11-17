@@ -251,23 +251,6 @@ CREATE TABLE public.audit_logs_default (
 
 
 --
--- Name: budget_exemptions; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.budget_exemptions (
-    id uuid NOT NULL,
-    scope character varying(255) NOT NULL,
-    subject_type character varying(255) NOT NULL,
-    user_id uuid,
-    group_id uuid,
-    service_id uuid,
-    note character varying(255),
-    inserted_at timestamp(0) without time zone NOT NULL,
-    updated_at timestamp(0) without time zone NOT NULL
-);
-
-
---
 -- Name: catalog_providers; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -326,18 +309,6 @@ CREATE TABLE public.credit_topups (
     inserted_at timestamp(0) without time zone NOT NULL,
     updated_at timestamp(0) without time zone NOT NULL,
     CONSTRAINT credit_topups_exactly_one_subject CHECK (((((user_id IS NOT NULL))::integer + ((service_id IS NOT NULL))::integer) = 1))
-);
-
-
---
--- Name: global_settings; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.global_settings (
-    id integer DEFAULT 1 NOT NULL,
-    daily_max_spend_usd numeric,
-    inserted_at timestamp(0) without time zone NOT NULL,
-    updated_at timestamp(0) without time zone NOT NULL
 );
 
 
@@ -1869,14 +1840,6 @@ ALTER TABLE ONLY public.audit_logs_default
 
 
 --
--- Name: budget_exemptions budget_exemptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.budget_exemptions
-    ADD CONSTRAINT budget_exemptions_pkey PRIMARY KEY (id);
-
-
---
 -- Name: catalog_providers catalog_providers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1898,14 +1861,6 @@ ALTER TABLE ONLY public.catalog_sync_state
 
 ALTER TABLE ONLY public.credit_topups
     ADD CONSTRAINT credit_topups_pkey PRIMARY KEY (id);
-
-
---
--- Name: global_settings global_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.global_settings
-    ADD CONSTRAINT global_settings_pkey PRIMARY KEY (id);
 
 
 --
@@ -2516,34 +2471,6 @@ CREATE INDEX audit_logs_default_inserted_at_id_idx ON public.audit_logs_default 
 --
 
 CREATE INDEX audit_logs_default_user_id_idx ON public.audit_logs_default USING btree (user_id);
-
-
---
--- Name: budget_exemptions_global_daily_group_unique; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX budget_exemptions_global_daily_group_unique ON public.budget_exemptions USING btree (group_id) WHERE (((scope)::text = 'global_daily'::text) AND ((subject_type)::text = 'group'::text) AND (group_id IS NOT NULL));
-
-
---
--- Name: budget_exemptions_global_daily_service_unique; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX budget_exemptions_global_daily_service_unique ON public.budget_exemptions USING btree (service_id) WHERE (((scope)::text = 'global_daily'::text) AND ((subject_type)::text = 'service'::text) AND (service_id IS NOT NULL));
-
-
---
--- Name: budget_exemptions_global_daily_user_unique; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX budget_exemptions_global_daily_user_unique ON public.budget_exemptions USING btree (user_id) WHERE (((scope)::text = 'global_daily'::text) AND ((subject_type)::text = 'user'::text) AND (user_id IS NOT NULL));
-
-
---
--- Name: budget_exemptions_scope_index; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX budget_exemptions_scope_index ON public.budget_exemptions USING btree (scope);
 
 
 --
@@ -7175,30 +7102,6 @@ ALTER TABLE ONLY public.api_keys
 
 ALTER TABLE public.audit_logs
     ADD CONSTRAINT audit_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
-
-
---
--- Name: budget_exemptions budget_exemptions_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.budget_exemptions
-    ADD CONSTRAINT budget_exemptions_group_id_fkey FOREIGN KEY (group_id) REFERENCES public.groups(id) ON DELETE CASCADE;
-
-
---
--- Name: budget_exemptions budget_exemptions_service_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.budget_exemptions
-    ADD CONSTRAINT budget_exemptions_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id) ON DELETE CASCADE;
-
-
---
--- Name: budget_exemptions budget_exemptions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.budget_exemptions
-    ADD CONSTRAINT budget_exemptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --

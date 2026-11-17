@@ -159,9 +159,6 @@
             day_by_hour={@day_by_hour}
             last_sync_at={@last_sync_at}
             timezone={@timezone}
-            budget_reset_hours={@budget_reset_hours}
-            budget_reset_minutes={@budget_reset_minutes}
-            budget_reset_at={@budget_reset_at}
             stats_loading={@stats_loading}
             streams={@streams}
           />
@@ -175,9 +172,6 @@
             model_provider_stacked={@model_provider_stacked}
             period={@period}
             timezone={@timezone}
-            budget_reset_hours={@budget_reset_hours}
-            budget_reset_minutes={@budget_reset_minutes}
-            budget_reset_at={@budget_reset_at}
             current_user={@current_user}
           />
         <% @live_action == :providers -> %>

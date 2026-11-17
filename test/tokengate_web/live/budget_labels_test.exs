@@ -124,7 +124,7 @@ defmodule TokengateWeb.BudgetLabelsTest do
 
     # 4. Ilimitado (y el badge dice de qué cap protege: no es «sin techo»).
     assert unlimited_html =~ "Ilimitado"
-    assert unlimited_html =~ "cap global"
+    assert unlimited_html =~ "sin techo mensual"
   end
 
   test "un top-up da crédito aunque no haya presupuesto mensual", %{conn: conn} do
@@ -160,9 +160,8 @@ defmodule TokengateWeb.BudgetLabelsTest do
     # Los enlaces de la sección, con su prefijo de URL.
     assert has_element?(view, "#sidebar-link-budget-profiles[href=\"/budget/profiles\"]")
     assert has_element?(view, "#sidebar-link-budget-topups[href=\"/budget/topups\"]")
-    # El tope diario global se mudó de Mantenimiento a Presupuesto.
-    assert has_element?(view, "#sidebar-link-budget-global[href=\"/budget/global\"]")
-    assert has_element?(view, "#sidebar-link-budget-global", "Tope diario global")
+    # La palanca del tope diario global se retiró: ya no hay entrada ni ruta.
+    refute has_element?(view, "#sidebar-link-budget-global")
 
     # El drill-down deja el padre encendido.
     profile = group_fixture(%{})

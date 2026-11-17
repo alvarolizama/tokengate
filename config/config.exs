@@ -85,9 +85,6 @@ config :tokengate, Oban,
     {Oban.Plugins.Cron,
      crontab: [
        {"0 0 1 * *", Tokengate.Budgets.ResetWorker},
-       # Global daily kill-switch counter: reconcile against request_logs so
-       # phantom holds from crashed requests can't reject the rest of the day.
-       {"*/5 * * * *", Tokengate.Budgets.GlobalSyncWorker},
        # Daily request_logs partition maintenance: create upcoming daily
        # partitions, backfill stray days out of the default partition, drop
        # partitions past retention. (fixes.md C1)

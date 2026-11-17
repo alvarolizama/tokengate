@@ -51,16 +51,14 @@ defmodule Tokengate.CacheInvalidationTest do
     end
 
     test "generic cache: a local invalidation drops only the named key" do
-      Cache.fetch({:exemptions, "daily"}, 60_000, fn -> MapSet.new([{:user_id, "u1"}]) end)
-      Cache.fetch({:exemptions, "monthly"}, 60_000, fn -> MapSet.new([{:user_id, "u2"}]) end)
+      Cache.fetch({:cache_test, "a"}, 60_000, fn -> [:a] end)
+      Cache.fetch({:cache_test, "b"}, 60_000, fn -> [:b] end)
 
-      :ok = Cache.invalidate({:exemptions, "daily"})
+      :ok = Cache.invalidate({:cache_test, "a"})
 
       recomputed = fn -> :recomputed end
-      assert Cache.fetch({:exemptions, "daily"}, 60_000, recomputed) == :recomputed
-
-      assert Cache.fetch({:exemptions, "monthly"}, 60_000, recomputed)
-             |> MapSet.member?({:user_id, "u2"})
+      assert Cache.fetch({:cache_test, "a"}, 60_000, recomputed) == :recomputed
+      assert Cache.fetch({:cache_test, "b"}, 60_000, recomputed) == [:b]
     end
 
     test "routing: accessible-model invalidation honours the wildcard scope" do
@@ -90,9 +88,9 @@ defmodule Tokengate.CacheInvalidationTest do
       assert [] = :ets.lookup(ApiKeyCache.table(), hash)
     end
 
-    test "an invalidation broadcast from another node drops the local exemption set" do
-      key = {:exemptions, "remote-#{System.unique_integer([:positive])}"}
-      Cache.fetch(key, 60_000, fn -> MapSet.new([{:group_id, "g"}]) end)
+    test "an invalidation broadcast from another node drops the local generic cache entry" do
+      key = {:cache_test, "remote-#{System.unique_integer([:positive])}"}
+      Cache.fetch(key, 60_000, fn -> [:cached] end)
 
       deliver_remote(:cache, {:invalidate, key})
 
