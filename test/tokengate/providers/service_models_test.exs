@@ -94,6 +94,103 @@ defmodule Tokengate.Providers.ServiceModelsTest do
     end
   end
 
+  describe "classify/2 — NaN families" do
+    # El catálogo REAL de api.nan.builders/v1/models (20 ids, verificado contra
+    # la API). Esa respuesta trae un campo `mode`, pero el listado del gateway
+    # sólo extrae ids, así que lo que ata cada id a su tipo es el patrón del
+    # proveedor: este mapa es el contrato.
+    test "cada id del catálogo cae en su tipo" do
+      catalogue = %{
+        "whisper" => "stt",
+        "kokoro" => "tts",
+        "flux-2-klein" => "image",
+        "qwen-image-2.1" => "image",
+        "qwen3-embedding" => "embedding",
+        # Los trece de chat: ninguno casa con los patrones de media.
+        "glm5.3" => "llm",
+        "glm5.3-flash" => "llm",
+        "deepseek-v4-flash" => "llm",
+        "deepseek-v4-pro" => "llm",
+        "qwen3.8-flash" => "llm",
+        "qwen3.8-max" => "llm",
+        "qwen3.6" => "llm",
+        "qwen4-max" => "llm",
+        "kimi-k3.1-pro" => "llm",
+        "hy4" => "llm",
+        "hy4-flash" => "llm",
+        "gemma4" => "llm",
+        "mimo-v2.6-flash" => "llm"
+      }
+
+      for {id, type} <- catalogue do
+        assert ServiceModels.type_of("nan", id) == type,
+               "nan/#{id} debería ser #{type}, fue #{inspect(ServiceModels.type_of("nan", id))}"
+      end
+    end
+
+    test "un chat omnimodal NO es tts: la entrada de audio no es el endpoint de voz" do
+      assert ServiceModels.classify("nan", "mimo-v2.6-flash") == nil
+    end
+
+    test "un id sin superficie conocida no se inventa un tipo" do
+      # `minimax-h3` viene en /models sin `mode`, no está en la doc del
+      # proveedor y con la key del operador responde 403: no hay nada que
+      # clasificar más allá del hint del id.
+      assert ServiceModels.type_of("nan", "minimax-h3") == "llm"
+    end
+
+    test "la semilla es exactamente lo que el proveedor publica" do
+      assert ServiceModels.known_ids("nan", "stt") == ~w(whisper)
+      assert ServiceModels.known_ids("nan", "tts") == ~w(kokoro)
+      assert ServiceModels.known_ids("nan", "image") == ~w(flux-2-klein qwen-image-2.1)
+      assert ServiceModels.known_ids("nan", "embedding") == ~w(qwen3-embedding)
+
+      # `rerank` no se siembra: el gateway no tiene esa superficie (`rerank`
+      # se retiró por completo en 887a1a9), y sembrarlo ofrecería un tipo que
+      # ninguna ruta sirve.
+      assert ServiceModels.known_ids("nan", "rerank") == []
+    end
+  end
+
+  describe "classify/2 — Alibaba Token Plan" do
+    # El plan sirve un SUBCONJUNTO de Model Studio, con las mismas familias de
+    # id: comparte los patrones de `alibaba` vía `@shared_surfaces`, pero su
+    # semilla es propia.
+    test "las familias de Model Studio clasifican igual" do
+      assert ServiceModels.classify("alibaba-token-plan", "qwen-audio-3.0-asr-flash") == "stt"
+      assert ServiceModels.classify("alibaba-token-plan", "qwen-audio-3.0-tts-plus") == "tts"
+      assert ServiceModels.classify("alibaba-token-plan", "qwen-image-3.0-pro") == "image"
+      assert ServiceModels.classify("alibaba-token-plan", "wan2.7-image-pro") == "image"
+      assert ServiceModels.classify("alibaba-token-plan-cn", "qwen-audio-3.0-tts-plus") == "tts"
+    end
+
+    test "los modelos de chat del plan no se clasifican como servicio" do
+      for id <- ~w(qwen3.7-max qwen3.8-flash qwen4-max glm-5.3 deepseek-v4.1-flash auto) do
+        assert ServiceModels.type_of("alibaba-token-plan", id) == "llm"
+      end
+    end
+
+    test "la semilla es la del PLAN, no la de DashScope entero" do
+      assert ServiceModels.known_ids("alibaba-token-plan", "stt") ==
+               ~w(qwen-audio-3.0-asr-flash)
+
+      assert ServiceModels.known_ids("alibaba-token-plan", "tts") ==
+               ~w(qwen-audio-3.0-tts-plus)
+
+      assert ServiceModels.known_ids("alibaba-token-plan", "image") ==
+               ~w(qwen-image-3.0-pro wan2.7-image wan2.7-image-pro)
+
+      # CosyVoice y los wan*-t2i están en la semilla de `alibaba` pero el plan
+      # NO los sirve: heredarlos ofrecería ids que el upstream rechaza.
+      refute "cosyvoice-v3-plus" in ServiceModels.known_ids("alibaba-token-plan", "tts")
+      refute "wan2.6-t2i" in ServiceModels.known_ids("alibaba-token-plan", "image")
+
+      # El alias de la región comparte la tabla (mismo catálogo, otro host).
+      assert ServiceModels.known_ids("alibaba-token-plan-cn", "stt") ==
+               ServiceModels.known_ids("alibaba-token-plan", "stt")
+    end
+  end
+
   describe "superficies compartidas" do
     test "alibaba-cn resuelve a la tabla de alibaba" do
       for key <- ~w(alibaba alibaba-cn) do

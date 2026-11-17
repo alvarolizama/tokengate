@@ -72,7 +72,7 @@ defmodule Tokengate.Providers.Catalog do
   OpenAI-compatible default — see `Tokengate.Providers.ProviderPaths`.
   """
 
-  @dialects ~w(openai openrouter dashscope typesafe)
+  @dialects ~w(openai openrouter dashscope token_plan typesafe)
   @sources ~w(builtin custom)
 
   # What a provider can serve. Declared in code, per provider (@customizations).
@@ -188,8 +188,27 @@ defmodule Tokengate.Providers.Catalog do
       capabilities: ~w(llm embedding image stt tts),
       dialect: "dashscope"
     },
-    "alibaba-token-plan" => %{capabilities: ~w(llm)},
-    "alibaba-token-plan-cn" => %{capabilities: ~w(llm)},
+    # Model Studio **Token Plan** (sk-sp- keys): el plan con créditos por
+    # suscripción, host propio y DOS superficies. Chat en compatible-mode
+    # (OpenAI-compatible, defaults genéricos) y los tres servicios de media en
+    # el `/api/v1` NATIVO, cada uno en su endpoint y con su cuerpo:
+    #   * image → multimodal-generation (`parameters.size` en `W*H`, respuesta
+    #     `output.choices[].message.content[].image`): compatible-mode NO tiene
+    #     `/images/generations` ahí (404).
+    #   * tts   → `/services/audio/tts/SpeechSynthesizer` (el
+    #     multimodal-generation de `dashscope` responde 400 `url error`).
+    #   * stt   → multimodal-generation con el audio como data URI y
+    #     `parameters.format` obligatorio (el chat con `input_audio` da 400).
+    # Por eso el dialecto `token_plan` tiene adaptador propio. El plan NO sirve
+    # embeddings: su `/models` no trae ninguno, así que no se declara.
+    "alibaba-token-plan" => %{
+      capabilities: ~w(llm image stt tts),
+      dialect: "token_plan"
+    },
+    "alibaba-token-plan-cn" => %{
+      capabilities: ~w(llm image stt tts),
+      dialect: "token_plan"
+    },
     "opencode" => %{capabilities: ~w(llm)},
     "opencode-go" => %{capabilities: ~w(llm)},
     # Moonshot/Kimi: `thinking` y `reasoning_effort` son MUTUAMENTE
@@ -270,7 +289,26 @@ defmodule Tokengate.Providers.Catalog do
     "kilo" => %{capabilities: ~w(llm image)},
     "llmgateway" => %{capabilities: ~w(llm stt)},
     "llmgateway-providers" => %{capabilities: ~w(llm stt)},
-    "nan" => %{capabilities: ~w(llm image)},
+    # NaN (nan.builders): cluster compartido de modelos abiertos, OpenAI-
+    # compatible bajo /v1 (models.dev ya publica su base URL y su npm).
+    # Sirve las cinco superficies con los paths GENÉRICOS, sin overrides:
+    # whisper en `/audio/transcriptions` (multipart, 25 MB), kokoro en
+    # `/audio/speech` (audio/mpeg), flux-2-klein y qwen-image-2.1 en
+    # `/images/generations`, qwen3-embedding en `/embeddings`.
+    #
+    # Su modelo `rerank` (Qwen3-Reranker-8B, `POST /rerank`) queda FUERA A
+    # PROPÓSITO: el gateway ya no tiene esa superficie (commit 887a1a9), así
+    # que declararla aquí ofrecería un tipo que ninguna ruta sirve.
+    #
+    # Reasoning: acepta el escalar `reasoning_effort` (`none`…`max`) y mapea
+    # los alias (`thinking.type`, `reasoning.enabled`, `enable_thinking`) a
+    # `none`, pero esos alias NO se mapean en `kimi-k3.1-pro` ni
+    # `deepseek-v4-pro` — normalizar todo al escalar es lo único que sirve
+    # para los trece modelos de chat.
+    "nan" => %{
+      capabilities: ~w(llm embedding stt tts image),
+      reasoning_dialect: :scalar
+    },
     "nearai" => %{capabilities: ~w(llm embedding image stt)},
     "nebius" => %{capabilities: ~w(llm embedding)},
     "novita-ai" => %{capabilities: ~w(llm embedding)},

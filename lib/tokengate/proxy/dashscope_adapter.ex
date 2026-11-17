@@ -186,16 +186,5 @@ defmodule Tokengate.Proxy.DashScopeAdapter do
   # The native services live under /api/v1 of the SAME HOST as base_url:
   # https://dashscope-intl.aliyuncs.com/compatible-mode/v1 →
   # https://dashscope-intl.aliyuncs.com/api/v1/...
-  defp native_url(provider, path) do
-    base = Map.get(provider, :base_url) || Map.get(provider, "base_url") || ""
-
-    case URI.parse(base) do
-      %URI{scheme: scheme, host: host, port: port} when is_binary(host) ->
-        port_fragment = if port in [80, 443, nil], do: "", else: ":#{port}"
-        "#{scheme}://#{host}#{port_fragment}#{path}"
-
-      _ ->
-        path
-    end
-  end
+  defp native_url(provider, path), do: Tokengate.Proxy.ProviderAdapter.origin_url(provider, path)
 end

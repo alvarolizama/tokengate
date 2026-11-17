@@ -219,6 +219,42 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   defp classify_reason(_reason), do: :connection_error
 
   @doc """
+  The provider's ORIGIN plus an absolute path: `https://host/api/v1/...`.
+
+  A provider's `base_url` carries the API base path (`…/compatible-mode/v1`),
+  and a dialect whose services live on the SAME host under a different root
+  (`/api/v1`) needs the host, not the base path. This keeps the configured
+  scheme/host/port and swaps the path.
+
+  Falls back to the path itself when `base_url` is not a URL, so a caller
+  never builds `"#{nil}/api/v1"`.
+
+      iex> Tokengate.Proxy.ProviderAdapter.origin_url(%{base_url: "https://h.example/compatible-mode/v1"}, "/api/v1/x")
+      "https://h.example/api/v1/x"
+
+      iex> Tokengate.Proxy.ProviderAdapter.origin_url(%{base_url: "http://localhost:8080/v1"}, "/api/v1/x")
+      "http://localhost:8080/api/v1/x"
+
+      iex> Tokengate.Proxy.ProviderAdapter.origin_url(%{}, "/api/v1/x")
+      "/api/v1/x"
+  """
+  @spec origin_url(map() | nil, String.t()) :: String.t()
+  def origin_url(provider, path) do
+    base =
+      Map.get(provider || %{}, :base_url) || Map.get(provider || %{}, "base_url") || ""
+
+    case URI.parse(base) do
+      %URI{scheme: scheme, host: host, port: port}
+      when is_binary(scheme) and is_binary(host) and host != "" ->
+        port_fragment = if port in [80, 443, nil], do: "", else: ":#{port}"
+        "#{scheme}://#{host}#{port_fragment}#{path}"
+
+      _ ->
+        path
+    end
+  end
+
+  @doc """
   Classifies an exception **raised** by `Finch.request/3` (as opposed to the
   `{:error, _}` it returns) into a failure reason, or `nil` when the exception
   is not Finch's and must keep propagating.
@@ -268,10 +304,12 @@ defmodule Tokengate.Proxy.ProviderAdapter do
 
   def dispatch(%{dialect: "openrouter"}), do: Tokengate.Proxy.OpenRouterAdapter
   def dispatch(%{dialect: "dashscope"}), do: Tokengate.Proxy.DashScopeAdapter
+  def dispatch(%{dialect: "token_plan"}), do: Tokengate.Proxy.TokenPlanAdapter
   def dispatch(%{dialect: "typesafe"}), do: Tokengate.Proxy.TypeSafeAdapter
   def dispatch(%{dialect: "openai"}), do: Tokengate.Proxy.OpenAIAdapter
   def dispatch(%{"dialect" => "openrouter"}), do: Tokengate.Proxy.OpenRouterAdapter
   def dispatch(%{"dialect" => "dashscope"}), do: Tokengate.Proxy.DashScopeAdapter
+  def dispatch(%{"dialect" => "token_plan"}), do: Tokengate.Proxy.TokenPlanAdapter
   def dispatch(%{"dialect" => "typesafe"}), do: Tokengate.Proxy.TypeSafeAdapter
   def dispatch(%{"dialect" => "openai"}), do: Tokengate.Proxy.OpenAIAdapter
 

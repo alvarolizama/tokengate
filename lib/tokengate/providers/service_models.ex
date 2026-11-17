@@ -54,7 +54,12 @@ defmodule Tokengate.Providers.ServiceModels do
   @media_types ~w(stt tts image)
 
   @shared_surfaces %{
-    "alibaba-cn" => "alibaba"
+    "alibaba-cn" => "alibaba",
+    # El Token Plan comparte las FAMILIAS de id de DashScope (mismos modelos,
+    # mismo host de Model Studio) pero su plan sirve un subconjunto: comparte
+    # `@patterns` y declara su propia semilla (ver `@known_ids`).
+    "alibaba-token-plan" => "alibaba",
+    "alibaba-token-plan-cn" => "alibaba"
   }
 
   # Patrones ordenados por proveedor: el PRIMERO que casa gana. El orden importa
@@ -70,6 +75,8 @@ defmodule Tokengate.Providers.ServiceModels do
   #   cosyvoice-*
   # qwen-image-*, wan*-t2i/  help/en/model-studio/image-model
   #   i2i, *-imageedit
+  # whisper, kokoro,         api.nan.builders/v1/models (`mode`) + nan.builders/docs/models
+  #   flux-*, qwen-image-*
   @patterns %{
     "alibaba" => [
       {~r/asr|paraformer/i, "stt"},
@@ -94,6 +101,19 @@ defmodule Tokengate.Providers.ServiceModels do
     # caerían a `llm` y el paso 2 no los ofrecería para el tipo `decision`.
     "typesafe" => [
       {~r/jev/i, "decision"}
+    ],
+    # NaN publica UN solo catálogo (`/models`) con un campo `mode` que el
+    # listado no lee —sólo extrae ids—, así que el tipo sale de la familia.
+    # Verificado contra api.nan.builders/v1/models: `whisper`
+    # (audio_transcription), `kokoro` (audio_speech), `flux-2-klein` y
+    # `qwen-image-2.1` (image), y NINGÚN id de chat (glm5.3, qwen3.8-flash,
+    # deepseek-v4-*, hy4*, kimi-k3.1-pro, mimo-v2.6-flash, gemma4, qwen3.6,
+    # qwen4-max) lleva esas palabras. `mimo-v2.6-flash` es omnimodal con
+    # entrada de audio y aun así es un `llm`: el patrón de tts no lo toca.
+    "nan" => [
+      {~r/whisper|transcri/i, "stt"},
+      {~r/kokoro|tts/i, "tts"},
+      {~r/flux|qwen-image|image/i, "image"}
     ]
   }
 
@@ -158,6 +178,34 @@ defmodule Tokengate.Providers.ServiceModels do
     # (sin key todavía).
     "typesafe" => %{
       "decision" => ~w(jev-latest jev-1.13.0)
+    },
+    # NaN: su `/models` sí lista las cinco superficies, así que la semilla es
+    # el suelo del paso 3 sin key. Los ids son EXACTAMENTE los que publica
+    # (no hay variantes con fecha en este proveedor) y `qwen3-embedding` entra
+    # porque el id no lleva prefijo de lab y el hint lo clasifica solo.
+    # `rerank` NO está aquí: el gateway no tiene esa superficie.
+    "nan" => %{
+      "stt" => ~w(whisper),
+      "tts" => ~w(kokoro),
+      "image" => ~w(flux-2-klein qwen-image-2.1),
+      "embedding" => ~w(qwen3-embedding)
+    },
+    # Alibaba Token Plan: el plan sirve un SUBCONJUNTO de Model Studio, así que
+    # no hereda la semilla de `alibaba` (que incluye cosyvoice, wan*-t2i y
+    # qwen3-asr, fuera del plan). Estos son los ids que su `/models` publica
+    # HOY, verificados con una key sk-sp- (22 ids, 2026-11-16).
+    # `qwen-audio-3.0-realtime-plus` se omite a propósito: es voz en tiempo
+    # real (websocket), no el `/audio/speech` del gateway.
+    "alibaba-token-plan" => %{
+      "stt" => ~w(qwen-audio-3.0-asr-flash),
+      "tts" => ~w(qwen-audio-3.0-tts-plus),
+      "image" => ~w(qwen-image-3.0-pro wan2.7-image wan2.7-image-pro)
+    },
+    # El plan de la región de China sirve el mismo catálogo en su host.
+    "alibaba-token-plan-cn" => %{
+      "stt" => ~w(qwen-audio-3.0-asr-flash),
+      "tts" => ~w(qwen-audio-3.0-tts-plus),
+      "image" => ~w(qwen-image-3.0-pro wan2.7-image wan2.7-image-pro)
     }
   }
 
@@ -233,19 +281,31 @@ defmodule Tokengate.Providers.ServiceModels do
   The verified seed ids of one type for one provider (empty when none).
 
   Seeds the picker when there is no live catalogue; never a closed vocabulary.
-  Un `provider_key` de `@shared_surfaces` resuelve a la tabla que comparte:
-  `alibaba-cn` lee la de `alibaba` (misma superficie DashScope, distinto host y
-  claves).
+  La tabla PROPIA de la key gana; si no la hay, un `provider_key` de
+  `@shared_surfaces` resuelve a la que comparte: `alibaba-cn` lee la de
+  `alibaba` (misma superficie DashScope, distinto host y claves). El Token Plan
+  es el caso en que NO puede heredarla: comparte las familias de id pero sirve
+  un subconjunto, así que declara la suya.
   """
   @spec known_ids(String.t() | nil, String.t()) :: [String.t()]
-  def known_ids(provider_key, type) when is_binary(type) do
+  def known_ids(provider_key, type) when is_binary(type) and is_binary(provider_key) do
+    # La tabla PROPIA de la key gana sobre la del alias de superficie: el Token
+    # Plan comparte las familias de id con `alibaba` pero sirve un subconjunto,
+    # así que su semilla no puede ser la de DashScope entero.
+    case Map.get(@known_ids, provider_key) do
+      %{} = by_type -> Map.get(by_type, type, [])
+      _ -> shared_known_ids(provider_key, type)
+    end
+  end
+
+  def known_ids(_provider_key, _type), do: []
+
+  defp shared_known_ids(provider_key, type) do
     case Map.get(@known_ids, surface(provider_key)) do
       %{} = by_type -> Map.get(by_type, type, [])
       _ -> []
     end
   end
-
-  def known_ids(_provider_key, _type), do: []
 
   @doc """
   Every verified seed id of one type across providers, as

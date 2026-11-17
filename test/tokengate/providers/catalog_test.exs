@@ -80,6 +80,21 @@ defmodule Tokengate.Providers.CatalogTest do
       # traducidos por el adaptador dashscope — ambos, intl y cn.
       assert Catalog.capabilities("alibaba") == ~w(llm embedding image stt tts)
       assert Catalog.capabilities("alibaba-cn") == ~w(llm embedding image stt tts)
+
+      # NaN: las cinco superficies que el gateway sirve (su `rerank` no, que
+      # la ruta /v1/rerank se retiró en 887a1a9).
+      assert Catalog.capabilities("nan") == ~w(llm embedding stt tts image)
+      assert Catalog.declares?("nan", "stt")
+      assert Catalog.declares?("nan", "tts")
+      refute Catalog.declares?("nan", "decision")
+
+      # Alibaba Token Plan: chat + los tres servicios nativos de media (sus
+      # endpoints NO son los de `dashscope`, ver TokenPlanAdapter). No sirve
+      # embeddings: su /models no trae ninguno.
+      assert Catalog.capabilities("alibaba-token-plan") == ~w(llm image stt tts)
+      assert Catalog.capabilities("alibaba-token-plan-cn") == ~w(llm image stt tts)
+      refute Catalog.declares?("alibaba-token-plan", "embedding")
+
       assert Catalog.capabilities("anthropic") == []
       assert Catalog.capabilities(nil) == []
     end
@@ -109,6 +124,12 @@ defmodule Tokengate.Providers.CatalogTest do
     end
 
     test "dialect resolves from npm, and a code customization wins over it" do
+      # El Token Plan va por su propio dialecto: su npm resuelve a `openai` y
+      # NO sirve (los servicios de media viven en un /api/v1 nativo con otras
+      # rutas y otros cuerpos). La customización tiene que ganar.
+      assert Catalog.dialect(%{key: "alibaba-token-plan", npm: "@ai-sdk/openai-compatible"}) ==
+               {:ok, "token_plan"}
+
       # Las filas nuevas del coding plan llegan del espejo con su npm: el
       # materializador pasa la fila completa, no la key suelta.
       assert Catalog.dialect(%{key: "kimi-code-plan-cn", npm: "@ai-sdk/openai-compatible"}) ==
@@ -611,6 +632,13 @@ defmodule Tokengate.Providers.CatalogTest do
       # travels untouched.
       assert Catalog.reasoning_dialect("alibaba") == :passthrough
       assert Catalog.reasoning_dialect("alibaba-cn") == :passthrough
+    end
+
+    test "nan normaliza al escalar" do
+      # NaN acepta `reasoning_effort` de `none` a `max` y mapea los alias a
+      # `none`, pero NO en kimi-k3.1-pro ni deepseek-v4-pro: el escalar es la
+      # única forma que vale para sus trece modelos de chat.
+      assert Catalog.reasoning_dialect("nan") == :scalar
     end
 
     test "providers without a dialect and unknown keys declare passthrough" do
