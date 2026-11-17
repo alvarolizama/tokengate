@@ -8,6 +8,8 @@ defmodule Tokengate.Routing.Supervisor do
       (`{api_key_hash, model_id} -> model_provider_id`).
     * `Tokengate.Routing.CredentialHealth` – ETS-backed soft health tracker
       per credential (slow-credential degradation).
+    * `Tokengate.Routing.PoolCounters` – ETS + `:atomics` counters, one per
+      pool lane, for per-request rotation inside a credential pool.
     * `Registry` (`Tokengate.Routing.CircuitBreakerRegistry`) – name registry
       for per-credential circuit breakers.
     * `Tokengate.Routing.CircuitBreakerManager` – DynamicSupervisor that
@@ -27,6 +29,7 @@ defmodule Tokengate.Routing.Supervisor do
     children = [
       {Tokengate.Routing.StickyTracker, name: Tokengate.Routing.StickyTracker},
       {Tokengate.Routing.CredentialHealth, name: Tokengate.Routing.CredentialHealth},
+      {Tokengate.Routing.PoolCounters, name: Tokengate.Routing.PoolCounters},
       {Registry, keys: :unique, name: Tokengate.Routing.CircuitBreakerRegistry},
       Tokengate.Routing.CircuitBreakerManager
     ]

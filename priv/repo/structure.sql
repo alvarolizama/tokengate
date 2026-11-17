@@ -414,7 +414,7 @@ CREATE TABLE public.model_providers (
     enabled boolean DEFAULT true NOT NULL,
     inserted_at timestamp(0) without time zone NOT NULL,
     updated_at timestamp(0) without time zone NOT NULL,
-    credential_id uuid NOT NULL,
+    credential_id uuid,
     exclusive_to_group_member_id uuid,
     exclusive_to_group_id uuid,
     sticky_ttl_ms integer,
@@ -428,6 +428,8 @@ CREATE TABLE public.model_providers (
     pricing_unit character varying(255) DEFAULT 'per_1m_tokens'::character varying NOT NULL,
     unit_cost numeric,
     cache_write_cost_per_million numeric(12,6),
+    pool_id uuid,
+    CONSTRAINT model_providers_one_source_check CHECK ((num_nonnulls(credential_id, pool_id) = 1)),
     CONSTRAINT model_providers_pricing_unit_check CHECK (((pricing_unit)::text = ANY (ARRAY['per_1m_tokens'::text, 'per_1k_tokens'::text, 'per_request'::text, 'per_image'::text, 'per_megapixel'::text, 'per_second'::text, 'per_minute'::text, 'per_1k_characters'::text])))
 );
 
@@ -7310,6 +7312,116 @@ ALTER TABLE ONLY public.services
 
 \unrestrict Uwf28LtWtZpLCmBvx1BRlPbohIeFGkNlfgxJHFSgsl83MM1RJSIhdQofRysjdkU
 
+--
+-- Name: credential_pool_members; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.credential_pool_members (
+    id uuid NOT NULL,
+    pool_id uuid NOT NULL,
+    credential_id uuid NOT NULL,
+    provider_id uuid NOT NULL,
+    inserted_at timestamp(0) without time zone NOT NULL,
+    updated_at timestamp(0) without time zone NOT NULL
+);
+
+
+--
+-- Name: credential_pools; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.credential_pools (
+    id uuid NOT NULL,
+    provider_id uuid NOT NULL,
+    name character varying(255) NOT NULL,
+    inserted_at timestamp(0) without time zone NOT NULL,
+    updated_at timestamp(0) without time zone NOT NULL
+);
+
+
+--
+-- Name: credential_pool_members credential_pool_members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.credential_pool_members
+    ADD CONSTRAINT credential_pool_members_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: credential_pools credential_pools_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.credential_pools
+    ADD CONSTRAINT credential_pools_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: credential_pool_members_pool_id_credential_id_unique_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX credential_pool_members_pool_id_credential_id_unique_index ON public.credential_pool_members USING btree (pool_id, credential_id);
+
+
+--
+-- Name: credential_pools_id_provider_id_unique_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX credential_pools_id_provider_id_unique_index ON public.credential_pools USING btree (id, provider_id);
+
+
+--
+-- Name: credential_pools_provider_id_name_unique_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX credential_pools_provider_id_name_unique_index ON public.credential_pools USING btree (provider_id, name);
+
+
+--
+-- Name: model_providers_global_pool_unique_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX model_providers_global_pool_unique_index ON public.model_providers USING btree (pool_id, model_id) WHERE ((exclusive_to_group_member_id IS NULL) AND (exclusive_to_group_id IS NULL) AND (exclusive_to_service_id IS NULL));
+
+
+--
+-- Name: provider_credentials_id_provider_id_unique_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX provider_credentials_id_provider_id_unique_index ON public.provider_credentials USING btree (id, provider_id);
+
+
+--
+-- Name: credential_pool_members credential_pool_members_credential_id_provider_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.credential_pool_members
+    ADD CONSTRAINT credential_pool_members_credential_id_provider_id_fkey FOREIGN KEY (credential_id, provider_id) REFERENCES public.provider_credentials(id, provider_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: credential_pool_members credential_pool_members_pool_id_provider_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.credential_pool_members
+    ADD CONSTRAINT credential_pool_members_pool_id_provider_id_fkey FOREIGN KEY (pool_id, provider_id) REFERENCES public.credential_pools(id, provider_id) ON DELETE CASCADE;
+
+
+--
+-- Name: credential_pools credential_pools_provider_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.credential_pools
+    ADD CONSTRAINT credential_pools_provider_id_fkey FOREIGN KEY (provider_id) REFERENCES public.providers(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: model_providers model_providers_pool_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_providers
+    ADD CONSTRAINT model_providers_pool_id_fkey FOREIGN KEY (pool_id) REFERENCES public.credential_pools(id) ON DELETE RESTRICT;
+
+
 INSERT INTO public."schema_migrations" (version) VALUES (20260725210000);
 INSERT INTO public."schema_migrations" (version) VALUES (20260725220000);
 INSERT INTO public."schema_migrations" (version) VALUES (20260725220100);
@@ -7469,3 +7581,5 @@ INSERT INTO public."schema_migrations" (version) VALUES (20261112231844);
 INSERT INTO public."schema_migrations" (version) VALUES (20261113031811);
 INSERT INTO public."schema_migrations" (version) VALUES (20261113033304);
 INSERT INTO public."schema_migrations" (version) VALUES (20261113033916);
+INSERT INTO public."schema_migrations" (version) VALUES (20261117020312);
+INSERT INTO public."schema_migrations" (version) VALUES (20261117134824);

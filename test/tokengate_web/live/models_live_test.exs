@@ -144,6 +144,30 @@ defmodule TokengateWeb.ModelsLiveTest do
     ap
   end
 
+  ## Pools ---------------------------------------------------------------
+
+  defp create_pool(provider, name) do
+    {:ok, pool} = Providers.create_pool(provider, %{name: name})
+    pool
+  end
+
+  defp add_pool_member(pool, credential) do
+    {:ok, member} = Providers.add_pool_member(pool, credential)
+    member
+  end
+
+  defp create_credential(provider, name) do
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: name,
+        api_key_encrypted: "sk-pool-#{unique()}",
+        status: "active"
+      })
+
+    credential
+  end
+
   # -- Permissions ----------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
@@ -2812,5 +2836,59 @@ defmodule TokengateWeb.ModelsLiveTest do
       assert has_element?(view, "#guard-rails-#{ctx.model_record.id}")
       refute Providers.get_model!(ctx.model_record.id).guard_rails == "late-edit"
     end
+  end
+
+  ## Pools en el listado y en el modal -------------------------------------
+
+  test "lane_provider_count cuenta el proveedor del pool (no un nil)", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider_a = create_keyed_provider("acme-pool-a", %{name: "Acme Pool A"})
+    provider_b = create_keyed_provider("acme-pool-b", %{name: "Acme Pool B"})
+    model_record = create_model(%{name: "con-pool"})
+
+    # Un lane de una key del proveedor A …
+    _lane_a = create_model_provider(model_record, provider_a)
+
+    # … y un lane montado en un pool del proveedor B: no tiene credential_id.
+    pool = create_pool(provider_b, "Pool del índice")
+    add_pool_member(pool, create_credential(provider_b, "Key del pool"))
+
+    {:ok, pool_lane} =
+      Providers.create_model_provider(%{
+        model_id: model_record.id,
+        pool_id: pool.id,
+        provider_model: "acme/pool",
+        priority: 3,
+        enabled: true
+      })
+
+    lanes = Providers.list_all_model_providers(model_record.id)
+    assert ModelsLive.lane_count(%{model_providers: lanes}) == 2
+    assert ModelsLive.lane_provider_count(%{model_providers: lanes}) == 2
+
+    # El conteo lee el pool PRECARGADO (el struct crudo del create no lo trae).
+    loaded_pool_lane = Enum.find(lanes, &(&1.id == pool_lane.id))
+    assert ModelsLive.lane_pool_member_count(loaded_pool_lane) == 1
+    assert ModelsLive.lane_pool_member_count(pool_lane) == 0
+
+    # La guarda que evita el colapso: dos lanes de pool de proveedores distintos
+    # son DOS. Mapeando `credential_id` a secas ambos serían `nil` y contarían 1.
+    assert ModelsLive.lane_provider_count(%{
+             model_providers: [
+               %{credential_id: nil, pool: %{provider_id: "p1"}},
+               %{credential_id: nil, pool: %{provider_id: "p2"}}
+             ]
+           }) == 2
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#edit-model-#{model_record.id}") |> render_click()
+
+    # El modal de edición identifica el lane por su pool y su conteo, sin
+    # reventar por la credencial nil.
+    assert has_element?(view, "#lane-pool-name-#{pool_lane.id}", "Pool del índice")
+    assert has_element?(view, "#lane-pool-badge-#{pool_lane.id}", "1 key(s)")
+    assert has_element?(view, "#model-lane-#{pool_lane.id}")
   end
 end

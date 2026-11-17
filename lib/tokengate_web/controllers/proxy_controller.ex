@@ -840,6 +840,16 @@ defmodule TokengateWeb.ProxyController do
   # the same credential or exclude it so the router moves to the next
   # provider.
   #
+  #   * pool lane — a lane mounted on a credential pool (`pool_id`) never
+  #     retries the same key. ANY failure that triggers the fallback excludes
+  #     the member at once (`provider_retries` back to 0), because the cap of
+  #     `max(1, round(n * 0.8))` members per request (Routing.Pools) only fits
+  #     in the @max_attempts 9 budget when each member costs ONE attempt: with
+  #     up to 4 attempts per credential (3 same-key retries + the excluding
+  #     failure) the 80% cap would be unreachable for n ≥ 4. Single-key lanes
+  #     keep their per-credential retries untouched — this clause is first only
+  #     for pool lanes.
+  #
   #   * `:timeout` — the provider hung for the full receive_timeout (or the
   #     first_token_timeout in streaming). A hung provider won't recover in
   #     the milliseconds a retry takes, and each retry would cost another
@@ -865,6 +875,21 @@ defmodule TokengateWeb.ProxyController do
   #     often transient and cost almost nothing to retry, so the same
   #     provider gets up to @max_retries_per_provider attempts before being
   #     excluded.
+  # Lane de pool (ver la política arriba): CUALQUIER fallo que dispare el
+  # fallback excluye al miembro de inmediato y reinicia los reintentos por
+  # credencial. Va ANTES de todas las demás cláusulas — incluidas `:timeout` y
+  # `:bad_request` — para que un miembro cueste exactamente un intento y el
+  # tope del 80% del pool quepa en @max_attempts.
+  defp next_candidate(
+         %{model_provider: %{pool_id: pool_id}} = route,
+         exclude,
+         _provider_retries,
+         _reason
+       )
+       when not is_nil(pool_id) do
+    {[route.credential.id | exclude], 0}
+  end
+
   defp next_candidate(route, exclude, _provider_retries, :timeout) do
     {[route.credential.id | exclude], 0}
   end

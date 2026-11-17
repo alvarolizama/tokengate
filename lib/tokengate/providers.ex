@@ -21,6 +21,8 @@ defmodule Tokengate.Providers do
   alias Tokengate.Providers.{
     Provider,
     Credential,
+    CredentialPool,
+    CredentialPoolMember,
     Model,
     ModelProvider,
     ServiceModel,
@@ -172,29 +174,57 @@ defmodule Tokengate.Providers do
     end
   end
 
+  @doc """
+  Deletes a provider and every row that depends on it.
+
+  The cascade is manual because two of the FKs are RESTRICT and one of them is
+  composite. Order:
+
+    1. lanes served by the provider's own credentials **or** mounted on any of
+       its credential pools (`pool_id`) — pool lanes have a NULL `credential_id`
+       and would otherwise survive as orphans;
+    2. pool memberships, then the pools themselves (`credential_pools` →
+       `providers` is RESTRICT, and the membership → credential FK is RESTRICT
+       too, so a leftover member would block step 3);
+    3. the credentials;
+    4. the provider row.
+
+  Sticky entries that pointed at the deleted lanes are cleared after the
+  delete, so a recreated lane never inherits an old pin.
+  """
   def delete_provider(%Provider{} = provider) do
     Repo.transaction(fn ->
-      # Delete dependent records in order: model_providers → credentials
-      # → provider. Each step must succeed before the next.
       credential_ids =
         from(c in Credential, where: c.provider_id == ^provider.id, select: c.id)
         |> Repo.all()
 
-      model_provider_ids =
-        if credential_ids != [] do
-          from(mp in ModelProvider,
-            where: mp.credential_id in ^credential_ids,
-            select: mp.id
-          )
-          |> Repo.all()
-        else
-          []
-        end
+      pool_ids =
+        from(p in CredentialPool, where: p.provider_id == ^provider.id, select: p.id)
+        |> Repo.all()
 
-      if credential_ids != [] do
-        from(mp in ModelProvider, where: mp.credential_id in ^credential_ids)
+      # Collect the lane ids BEFORE deleting: the sticky tracker is keyed by
+      # them and the rows are gone by the time it runs.
+      model_provider_ids =
+        from(mp in ModelProvider,
+          where: mp.credential_id in ^credential_ids or mp.pool_id in ^pool_ids,
+          select: mp.id
+        )
+        |> Repo.all()
+
+      if model_provider_ids != [] do
+        from(mp in ModelProvider, where: mp.id in ^model_provider_ids)
+        |> Repo.delete_all()
+      end
+
+      if pool_ids != [] do
+        from(m in CredentialPoolMember, where: m.pool_id in ^pool_ids)
         |> Repo.delete_all()
 
+        from(p in CredentialPool, where: p.id in ^pool_ids)
+        |> Repo.delete_all()
+      end
+
+      if credential_ids != [] do
         from(c in Credential, where: c.provider_id == ^provider.id)
         |> Repo.delete_all()
       end
@@ -440,15 +470,28 @@ defmodule Tokengate.Providers do
     end
   end
 
-  def delete_credential(%Credential{} = credential) do
-    case Repo.delete(credential) do
-      {:ok, cred} ->
-        Tokengate.Routing.Cache.invalidate(:disabled_credentials)
-        Tokengate.Routing.Cache.invalidate_all()
-        {:ok, cred}
+  @doc """
+  Deletes a credential.
 
-      {:error, changeset} ->
-        {:error, changeset}
+  A key that lives in a credential pool is refused with
+  `{:error, :credential_in_pool}`: the membership is part of a lane's
+  credential source (the composite FK is RESTRICT), so deleting the key
+  silently would leave the pool smaller than the operator thinks. Remove it
+  from the pool first.
+  """
+  def delete_credential(%Credential{} = credential) do
+    if pool_membership?(credential.id) do
+      {:error, :credential_in_pool}
+    else
+      case Repo.delete(credential) do
+        {:ok, cred} ->
+          Tokengate.Routing.Cache.invalidate(:disabled_credentials)
+          Tokengate.Routing.Cache.invalidate_all()
+          {:ok, cred}
+
+        {:error, changeset} ->
+          {:error, changeset}
+      end
     end
   end
 
@@ -606,28 +649,34 @@ defmodule Tokengate.Providers do
 
   @doc """
   Returns enabled model_providers for a model, ordered by priority ASC
-  with NULLS LAST, preloading credential (with provider).
+  with NULLS LAST, preloading credential (with provider) and — for lanes
+  mounted on a pool — the pool with its members and each member's credential
+  and provider.
+
+  The pool preload is batched by Ecto: one query per association for the whole
+  list, never one per lane. Everything comes from this single read, so the
+  model page (and the routing cache miss) pays for it once.
   Used by the admin UI — shows all providers regardless of scope.
   """
   def list_model_providers(model_id) when is_binary(model_id) do
     from(mp in ModelProvider,
       where: mp.model_id == ^model_id and mp.enabled == true,
       order_by: [asc_nulls_last: mp.priority, asc: mp.credential_id],
-      preload: [credential: :provider]
+      preload: [credential: :provider, pool: [members: [credential: :provider]]]
     )
     |> Repo.all()
   end
 
   @doc """
   Returns ALL model_providers for a model (enabled and disabled),
-  preloading credential (with provider). Ordered by priority ASC with
-  NULLS LAST.
+  preloading credential (with provider) and the pool with its members when the
+  lane is mounted on one. Ordered by priority ASC with NULLS LAST.
   """
   def list_all_model_providers(model_id) when is_binary(model_id) do
     from(mp in ModelProvider,
       where: mp.model_id == ^model_id,
       order_by: [asc_nulls_last: mp.priority],
-      preload: [credential: :provider]
+      preload: [credential: :provider, pool: [members: [credential: :provider]]]
     )
     |> Repo.all()
   end
@@ -673,7 +722,7 @@ defmodule Tokengate.Providers do
   defp base_query(model_id) do
     from(mp in ModelProvider,
       where: mp.model_id == ^model_id and mp.enabled == true,
-      preload: [credential: :provider]
+      preload: [credential: :provider, pool: [members: [credential: :provider]]]
     )
   end
 
@@ -714,16 +763,32 @@ defmodule Tokengate.Providers do
   end
 
   @doc """
-  Checks if a credential is already assigned to any model_provider.
-  Returns the model_provider if assigned, nil otherwise.
+  Checks whether a credential is already busy: assigned to a model_provider
+  lane or sitting as a member of a credential pool. Returns the lane, the pool
+  membership, or nil when the credential is free.
+
+  Both uses matter: a lane points at the credential directly, and a pool lane
+  reaches it through `credential_pool_members` — deleting either one would
+  break a lane that is serving traffic.
   """
   def credential_in_use?(credential_id) do
-    Repo.one(
-      from(mp in ModelProvider,
-        where: mp.credential_id == ^credential_id,
-        limit: 1
-      )
-    )
+    case Repo.one(
+           from(mp in ModelProvider,
+             where: mp.credential_id == ^credential_id,
+             limit: 1
+           )
+         ) do
+      nil ->
+        Repo.one(
+          from(m in CredentialPoolMember,
+            where: m.credential_id == ^credential_id,
+            limit: 1
+          )
+        )
+
+      model_provider ->
+        model_provider
+    end
   end
 
   @doc """
@@ -829,6 +894,192 @@ defmodule Tokengate.Providers do
     |> Enum.sort_by(fn credential ->
       {String.downcase(credential.provider.name), String.downcase(credential.name || "")}
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Credential Pools
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Pools of one provider, ordered by name, with their members and each member's
+  credential (whose provider is preloaded too).
+
+  Everything comes back from ONE query with batched preloads: a query per pool
+  or per member would be an N+1 on a read that runs on every routing cache
+  miss and on every render of the model page.
+  """
+  @spec list_pools_for_provider(binary()) :: [CredentialPool.t()]
+  def list_pools_for_provider(provider_id) when is_binary(provider_id) do
+    from(p in CredentialPool,
+      where: p.provider_id == ^provider_id,
+      order_by: [asc: p.name],
+      preload: [members: [credential: :provider]]
+    )
+    |> Repo.all()
+  end
+
+  @doc "A pool by id (nil when unknown)."
+  @spec get_pool(binary()) :: CredentialPool.t() | nil
+  def get_pool(id), do: Repo.get(CredentialPool, id)
+
+  @doc "A pool by id, raising when unknown."
+  @spec get_pool!(binary()) :: CredentialPool.t()
+  def get_pool!(id), do: Repo.get!(CredentialPool, id)
+
+  @doc """
+  Creates a pool owned by `provider`.
+
+  The provider is part of the pool's identity: it is set on the struct and
+  never cast from `attrs` (the changeset does not accept `provider_id`). Only
+  `name` is editable, and it is unique within the provider — the same name in
+  another provider is a different pool.
+  """
+  @spec create_pool(Provider.t(), map()) ::
+          {:ok, CredentialPool.t()} | {:error, Ecto.Changeset.t()}
+  def create_pool(%Provider{} = provider, attrs) do
+    %CredentialPool{provider_id: provider.id}
+    |> CredentialPool.changeset(attrs)
+    |> Repo.insert()
+    |> invalidate_all_on_ok()
+  end
+
+  @doc """
+  Renames a pool.
+
+  `provider_id` is not editable here (the changeset drops it), so a rename can
+  never move a pool — and with it every member — to another provider.
+  """
+  @spec update_pool(CredentialPool.t(), map()) ::
+          {:ok, CredentialPool.t()} | {:error, Ecto.Changeset.t()}
+  def update_pool(%CredentialPool{} = pool, attrs) do
+    pool
+    |> CredentialPool.changeset(attrs)
+    |> Repo.update()
+    |> invalidate_all_on_ok()
+  end
+
+  @doc """
+  Deletes a pool that no lane mounts.
+
+  A mounted pool returns `{:error, :pool_in_use}` instead of a constraint
+  error: `model_providers.pool_id` is a RESTRICT foreign key, so letting the
+  delete reach Postgres would surface as a 500 in the UI. Members go with the
+  pool (their FK cascades).
+  """
+  @spec delete_pool(CredentialPool.t()) ::
+          {:ok, CredentialPool.t()} | {:error, :pool_in_use} | {:error, Ecto.Changeset.t()}
+  def delete_pool(%CredentialPool{} = pool) do
+    if pool_in_use?(pool.id) do
+      {:error, :pool_in_use}
+    else
+      pool
+      |> Repo.delete()
+      |> invalidate_all_on_ok()
+    end
+  end
+
+  @doc """
+  Adds a credential to a pool.
+
+  Both sides must belong to the same provider: this function fails fast with
+  `{:error, :provider_mismatch}`, and the composite FK
+  `credential_pool_members_credential_id_provider_id_fkey` repeats the check in
+  the DB for any writer that bypasses the context.
+
+  The member's `provider_id` is COPIED from the pool on the struct — the schema
+  does not cast it — so attrs cannot smuggle a different provider. Adding the
+  same credential twice returns a changeset error.
+  """
+  @spec add_pool_member(CredentialPool.t(), Credential.t()) ::
+          {:ok, CredentialPoolMember.t()}
+          | {:error, :provider_mismatch}
+          | {:error, Ecto.Changeset.t()}
+  def add_pool_member(%CredentialPool{} = pool, %Credential{} = credential) do
+    if credential.provider_id == pool.provider_id do
+      %CredentialPoolMember{pool_id: pool.id, provider_id: pool.provider_id}
+      |> CredentialPoolMember.changeset(%{pool_id: pool.id, credential_id: credential.id})
+      |> Repo.insert()
+      |> invalidate_all_on_ok()
+    else
+      {:error, :provider_mismatch}
+    end
+  end
+
+  @doc """
+  Removes a member from its pool.
+
+  The LAST member cannot be removed (`{:error, :last_member}`): an empty pool
+  is a lane with no credential to serve, which neither the router nor the UI
+  can represent. Delete the lane or the pool instead.
+  """
+  @spec remove_pool_member(CredentialPoolMember.t()) ::
+          {:ok, CredentialPoolMember.t()}
+          | {:error, :last_member}
+          | {:error, Ecto.Changeset.t()}
+  def remove_pool_member(%CredentialPoolMember{} = member) do
+    # Contar y borrar dentro de una transacción con la fila del pool bloqueada:
+    # dos requests concurrentes quitando los DOS últimos miembros no pueden
+    # dejar el pool vacío (la invariante "un pool siempre tiene miembros" es
+    # dura; un pool vacío es un lane que no sirve nada).
+    result =
+      Repo.transaction(fn ->
+        case Repo.one(
+               from p in CredentialPool,
+                 where: p.id == ^member.pool_id,
+                 select: p.id,
+                 lock: "FOR UPDATE"
+             ) do
+          nil ->
+            Repo.rollback(:last_member)
+
+          _pool_id ->
+            if member_count(member.pool_id) <= 1 do
+              Repo.rollback(:last_member)
+            else
+              case Repo.delete(member) do
+                {:ok, deleted} -> deleted
+                {:error, changeset} -> Repo.rollback(changeset)
+              end
+            end
+        end
+      end)
+
+    case result do
+      {:ok, deleted} -> invalidate_all_on_ok({:ok, deleted})
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Members of a pool, oldest first, with each credential and its provider
+  preloaded.
+  """
+  @spec list_pool_members(CredentialPool.t() | binary()) :: [CredentialPoolMember.t()]
+  def list_pool_members(%CredentialPool{id: pool_id}), do: list_pool_members(pool_id)
+
+  def list_pool_members(pool_id) when is_binary(pool_id) do
+    from(m in CredentialPoolMember,
+      where: m.pool_id == ^pool_id,
+      order_by: [asc: m.inserted_at, asc: m.id],
+      preload: [credential: :provider]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Pools that contain `credential_id` (empty when the key is not pooled).
+
+  Membership side of `delete_credential/1`'s guard.
+  """
+  @spec pools_for_credential(binary()) :: [CredentialPool.t()]
+  def pools_for_credential(credential_id) when is_binary(credential_id) do
+    from(p in CredentialPool,
+      join: m in assoc(p, :members),
+      where: m.credential_id == ^credential_id,
+      distinct: true,
+      order_by: [asc: p.name]
+    )
+    |> Repo.all()
   end
 
   # ---------------------------------------------------------------------------
@@ -1374,6 +1625,31 @@ defmodule Tokengate.Providers do
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
+
+  # A pool mounted by at least one lane cannot be deleted: `pool_id` on
+  # `model_providers` is RESTRICT.
+  defp pool_in_use?(pool_id) do
+    Repo.exists?(from(mp in ModelProvider, where: mp.pool_id == ^pool_id))
+  end
+
+  # A credential that is a member of any pool cannot be deleted: the composite
+  # membership FK is RESTRICT.
+  defp pool_membership?(credential_id) do
+    Repo.exists?(from(m in CredentialPoolMember, where: m.credential_id == ^credential_id))
+  end
+
+  defp member_count(pool_id) do
+    Repo.aggregate(from(m in CredentialPoolMember, where: m.pool_id == ^pool_id), :count)
+  end
+
+  # Every pool/membership mutation changes what the routing snapshot sees, so it
+  # invalidates the whole routing cache; errors leave the cache alone.
+  defp invalidate_all_on_ok({:ok, _} = result) do
+    Tokengate.Routing.Cache.invalidate_all()
+    result
+  end
+
+  defp invalidate_all_on_ok({:error, _} = error), do: error
 
   defp normalize_unique_error({:error, %{errors: [unique: _]}}),
     do: {:error, :already_granted}

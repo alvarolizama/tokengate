@@ -254,25 +254,68 @@ defmodule TokengateWeb.ProxyControllerTest do
           Process.sleep(5_000)
           json(conn, 500, %{"error" => %{"message" => "eventually"}})
 
+        # Un upstream que se cae UNA vez (5xx) y después contesta bien. El
+        # reintento contra la MISMA key también acabaría en 200, así que un 200
+        # servido por OTRA key del pool sólo puede venir de que la cascada
+        # excluyó al miembro que falló — y de que lo intentó una sola vez.
+        path_prefixed?(conn, "flaky") ->
+          if first_hit?(conn.request_path) do
+            json(conn, 500, %{"error" => %{"message" => "provider exploded once"}})
+          else
+            chat_ok(conn)
+          end
+
+        # Lo mismo con un 429: el rate limit también excluye al miembro de
+        # inmediato, sin reintentar la misma key.
+        path_prefixed?(conn, "ratelimited") ->
+          if first_hit?(conn.request_path) do
+            json(conn, 429, %{"error" => %{"message" => "rate limited once"}})
+          else
+            chat_ok(conn)
+          end
+
         true ->
           if payload["stream"] == true do
             stream(conn)
           else
-            json(conn, 200, %{
-              "id" => "chatcmpl-e2e",
-              "object" => "chat.completion",
-              "choices" => [
-                %{"index" => 0, "message" => %{"role" => "assistant", "content" => "qué onda"}}
-              ],
-              "usage" => %{
-                "prompt_tokens" => 20,
-                "completion_tokens" => 10,
-                "total_tokens" => 30,
-                "cost" => 0.00015
-              }
-            })
+            chat_ok(conn)
           end
       end
+    end
+
+    # Respuesta estándar de chat: la misma que recibe todo test que no pide
+    # nada especial del upstream.
+    defp chat_ok(conn) do
+      json(conn, 200, %{
+        "id" => "chatcmpl-e2e",
+        "object" => "chat.completion",
+        "choices" => [
+          %{"index" => 0, "message" => %{"role" => "assistant", "content" => "qué onda"}}
+        ],
+        "usage" => %{
+          "prompt_tokens" => 20,
+          "completion_tokens" => 10,
+          "total_tokens" => 30,
+          "cost" => 0.00015
+        }
+      })
+    end
+
+    # El primer segmento del path empieza con `prefix`. Los tests que necesitan
+    # estado propio usan un segmento único (p. ej. "flaky-1234").
+    defp path_prefixed?(conn, prefix) do
+      case conn.path_info do
+        [segment | _] -> String.starts_with?(segment, prefix)
+        [] -> false
+      end
+    end
+
+    # ¿Es la PRIMERA llamada a este path? El plug corre en el proceso de Bandit,
+    # no en el del test, así que el contador vive en `:persistent_term`.
+    defp first_hit?(path) do
+      hits = :persistent_term.get({__MODULE__, :hits, path}, 0)
+      :persistent_term.put({__MODULE__, :hits, path}, hits + 1)
+      hits == 0
     end
 
     defp stream(conn) do
@@ -481,6 +524,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       member: member,
       token: token,
       provider: provider,
+      credential: credential,
       model: model,
       model_provider: model_provider,
       # El límite mensual del perfil de límites (nil = sin límite propio): es lo que el
@@ -1141,6 +1185,149 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     down_hits = Enum.count(hits, fn payload -> payload["model"] =~ "gpt-4o-real" end)
     assert down_hits >= 2, "expected the down provider to be retried, got #{down_hits} hit(s)"
+  end
+
+  ## Cascada intra-pool y tope del 80% #########################################
+
+  # Convierte el lane de una sola key de `proxy_fixture/1` en un lane de pool:
+  # crea el pool en el provider del lane, mete su key y `:extra_members` keys
+  # nuevas, y deja el lane apuntando al pool (XOR: el lane pierde su
+  # `credential_id`). El pool hereda el `base_url` del provider del fixture.
+  defp mount_pool(%{provider: provider, model_provider: lane, credential: first}, opts) do
+    {:ok, pool} = Providers.create_pool(provider, %{name: "pool-#{unique()}"})
+    {:ok, _member} = Providers.add_pool_member(pool, first)
+
+    extra_credentials =
+      Enum.map(1..Keyword.get(opts, :extra_members, 0)//1, fn i ->
+        {:ok, credential} =
+          Providers.create_credential(%{
+            provider_id: provider.id,
+            api_key_encrypted: "sk-pool-#{i}-#{unique()}"
+          })
+
+        {:ok, _member} = Providers.add_pool_member(pool, credential)
+        credential
+      end)
+
+    {:ok, lane} = Providers.update_model_provider(lane, %{credential_id: nil, pool_id: pool.id})
+
+    %{pool: pool, lane: lane, credentials: [first | extra_credentials]}
+  end
+
+  # Las api keys que viajaron en el header Authorization, una por intento
+  # upstream y en orden: dice qué credencial sirvió cada intento.
+  defp upstream_api_keys do
+    collect_upstream_headers()
+    |> Enum.map(fn headers ->
+      Enum.find_value(headers, fn
+        {"authorization", "Bearer " <> key} -> key
+        _ -> nil
+      end)
+    end)
+  end
+
+  test "a 5xx in one pool member excludes it at once and another member serves", %{conn: conn} do
+    f = proxy_fixture(%{provider_path: "flaky-#{unique()}"})
+    %{credentials: members} = mount_pool(f, extra_members: 1)
+
+    conn =
+      conn
+      |> authed_conn(f.token)
+      |> post(~p"/v1/chat/completions", chat_body(f.model.name))
+
+    assert json_response(conn, 200)
+
+    keys = upstream_api_keys()
+
+    # Dos intentos con dos keys DISTINTAS: el miembro que devolvió el 500 quedó
+    # excluido y el siguiente intento fue a otro miembro del mismo pool.
+    assert length(keys) == 2, "esperaba 2 intentos, hubo #{length(keys)}: #{inspect(keys)}"
+    assert length(Enum.uniq(keys)) == 2
+
+    [failed_key, served_key] = keys
+    member_keys = Enum.map(members, & &1.api_key_encrypted)
+
+    assert failed_key in member_keys
+    assert served_key in member_keys
+
+    # La key fallida se intentó UNA sola vez: el miembro quedó excluido en el
+    # acto y el 200 lo sirvió el otro miembro del pool. (El caso en que la
+    # política vieja reintentaba la misma key —hasta 4 veces— lo cubre el test
+    # del pool de un solo miembro.)
+    assert Enum.count(keys, &(&1 == failed_key)) == 1
+  end
+
+  test "a failed pool member is never retried: a one-member pool falls to the next lane", %{
+    conn: conn
+  } do
+    u = unique()
+    f = proxy_fixture(%{provider_path: "flaky-#{unique()}"})
+    %{credentials: [pooled]} = mount_pool(f, extra_members: 0)
+    fallback = add_healthy_fallback(f.model, u)
+
+    conn =
+      conn
+      |> authed_conn(f.token)
+      |> post(~p"/v1/chat/completions", chat_body(f.model.name))
+
+    assert json_response(conn, 200)
+
+    # Un pool de un miembro: el tope es 1. El 500 del único miembro lo excluye
+    # y agota el grupo, así que el siguiente intento es el lane suelto. Con los
+    # reintentos por credencial de un lane de una key, la misma key se habría
+    # intentado hasta 4 veces (y el reintento habría devuelto 200 desde ELLA).
+    assert upstream_api_keys() == [pooled.api_key_encrypted, fallback.api_key_encrypted]
+  end
+
+  test "a 429 in one pool member also excludes it at once", %{conn: conn} do
+    f = proxy_fixture(%{provider_path: "ratelimited-#{unique()}"})
+    %{credentials: members} = mount_pool(f, extra_members: 1)
+
+    conn =
+      conn
+      |> authed_conn(f.token)
+      |> post(~p"/v1/chat/completions", chat_body(f.model.name))
+
+    assert json_response(conn, 200)
+
+    keys = upstream_api_keys()
+    member_keys = Enum.map(members, & &1.api_key_encrypted)
+
+    assert length(keys) == 2, "esperaba 2 intentos, hubo #{length(keys)}: #{inspect(keys)}"
+    assert length(Enum.uniq(keys)) == 2
+    assert Enum.all?(keys, fn key -> key in member_keys end)
+  end
+
+  test "a five-member pool stops at four attempts and hands over to the next lane", %{conn: conn} do
+    u = unique()
+    f = proxy_fixture(%{provider_path: "down"})
+    %{credentials: members} = mount_pool(f, extra_members: 4)
+    fallback = add_healthy_fallback(f.model, u)
+
+    conn =
+      conn
+      |> authed_conn(f.token)
+      |> post(~p"/v1/chat/completions", chat_body(f.model.name))
+
+    assert json_response(conn, 200)
+
+    keys = upstream_api_keys()
+    member_keys = Enum.map(members, & &1.api_key_encrypted)
+
+    # Exactamente cuatro miembros del pool (el 80% de cinco) y después el lane
+    # de una key en prioridad 2: cinco intentos, por debajo de los 9 del
+    # request. El quinto miembro NUNCA se intenta.
+    assert length(keys) == 5, "esperaba 5 intentos, hubo #{length(keys)}: #{inspect(keys)}"
+    assert length(keys) <= 9
+
+    {pool_attempts, [last_key]} = Enum.split(keys, 4)
+
+    assert Enum.all?(pool_attempts, &(&1 in member_keys)),
+           "el pool intentó una key ajena: #{inspect(pool_attempts)}"
+
+    assert length(Enum.uniq(pool_attempts)) == 4, "el pool repitió miembro"
+    assert last_key == fallback.api_key_encrypted
+    refute last_key in member_keys
   end
 
   ## Idempotency-Key #########################################################

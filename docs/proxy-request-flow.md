@@ -100,7 +100,8 @@ flowchart TD
     F3 --> G
     G -->|"sí"| G1["{:error, :no_providers_configured}"]
 
-    G -->|"no"| H["Filtros duros por candidato"]
+    G -->|"no"| HX["Pools.expand: cada lane con pool_id se materializa<br/>como una copia por miembro (id del lane intacto)"]
+    HX --> H["Filtros duros por candidato"]
     H --> H1["credential != nil"]
     H1 --> H2["credential.status == active"]
     H2 --> H3["credential.id ∉ set de deshabilitadas (cache 60s)"]
@@ -110,9 +111,12 @@ flowchart TD
     I -->|"sí"| I1["{:error, :no_available_provider}"]
     I -->|"no"| J["inject_exclusive_priority<br/>exclusivas pasan a priority = -1"]
 
-    J --> K["Priority.select(candidates, %{api_key_hash, model_id, available? = breaker.allow?})"]
-    K --> L["sort estable por {health, priority}<br/>0 sano, 1 degradado (lento)<br/>priority ASC NULLS LAST<br/>el billing surface NO rankea"]
-    L --> M{"sticky hit para<br/>(api_key_hash, model_id)?"}
+    J --> K["Priority.select_groups(groups, %{api_key_hash, model_id, available? = breaker.allow?, exclude_ids})"]
+    K --> K0["grupos ordenados por {health del grupo, priority, lane.id}<br/>0 sano, 1 todos degradados<br/>un grupo que ya gastó su tope (80%) queda fuera"]
+    K0 --> K1{"¿el lane elegido tiene pool_id?"}
+    K1 -->|"sí"| L["rotación por request: PoolCounters.next_start(lane.id, n)<br/>salta breaker abierto y degradados mientras quede uno sano<br/>no consulta ni escribe sticky"]
+    K1 -->|"no"| M{"sticky hit para<br/>(api_key_hash, model_id)?"}
+    L --> P
     M -->|"no"| N["elegir el primer candidato con available? = true"]
     M -->|"sí, y no degradado"| N1["devolver la pegada<br/>preserva prompt cache"]
     M -->|"sí, pero degradada"| N2["soltar el stick<br/>y elegir por salud+prioridad"]
@@ -128,6 +132,16 @@ flowchart TD
 **Salud blanda** (`Routing.CredentialHealth`): un éxito más lento que
 `ROUTING_SLOW_THRESHOLD_MS` (30s) marca la credencial como degradada durante
 `ROUTING_SLOW_PENALTY_MS` (120s). No sale de rotación: se hunde al fondo de su tier.
+
+**Pools de API keys**: un lane de `model_providers` con `pool_id` no apunta a una
+credencial: representa N keys de UN mismo provider. La expansión ocurre antes de
+los filtros (`Routing.Pools.expand/1`), cada miembro se filtra y se chequea contra
+su propio breaker, y la prioridad, `provider_model`, precio y scope siguen siendo
+del lane. El grupo se ordena por la salud agregada de sus miembros (degradado sólo
+si TODOS lo están) y la rotación es por request (`Routing.PoolCounters`, `:atomics`
+por lane), sin sticky. La cascada intenta como máximo `max(1, round(n * 0.8))`
+miembros por request y cada fallo excluye al miembro de inmediato, para que el tope
+quepa en los 9 intentos.
 
 ---
 
@@ -159,7 +173,9 @@ flowchart TD
     C1 --> C2["SIN fallback: se devuelve el 4xx upstream<br/>culpa del payload, idéntico en todo proveedor"]
 
     B -->|"5xx / 429 / connection_error"| F1["breaker: SÍ cuenta"]
-    F1 --> F2{"provider_retries < 3?"}
+    F1 --> FP{"¿lane con pool_id?"}
+    FP -->|"sí"| F4
+    FP -->|"no"| F2{"provider_retries < 3?"}
     F2 -->|"sí"| F3["retry en el MISMO proveedor<br/>provider_retries + 1"]
     F2 -->|"no"| F4["excluir credencial, provider_retries = 0"]
     F3 --> A

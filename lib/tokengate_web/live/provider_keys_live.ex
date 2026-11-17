@@ -299,6 +299,17 @@ defmodule TokengateWeb.ProviderKeysLive do
          |> put_flash(:info, "Credencial eliminada.")
          |> load_keys()}
 
+      {:error, :credential_in_pool} ->
+        # La membresía es parte de la fuente de credenciales de un lane (FK
+        # RESTRICT): borrar la key dejaría el pool más chico de lo que el
+        # operador cree. Se rechaza con mensaje, no con un 500.
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("This API key belongs to a pool. Remove it from the pool first.")
+         )}
+
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Could not delete the credential."))}
     end

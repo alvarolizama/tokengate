@@ -22,7 +22,17 @@ defmodule TokengateWeb.ModelProvidersLive do
   import TokengateWeb.ModelPicker
 
   alias Tokengate.Providers
-  alias Tokengate.Providers.{Credential, Model, ModelProvider, Pricing, Provider}
+
+  alias Tokengate.Providers.{
+    Credential,
+    CredentialPool,
+    CredentialPoolMember,
+    Model,
+    ModelProvider,
+    Pricing,
+    Provider
+  }
+
   alias Tokengate.Repo
 
   @impl true
@@ -52,6 +62,14 @@ defmodule TokengateWeb.ModelProvidersLive do
           |> assign(:provider_form_credential_id, nil)
           |> assign(:provider_form_is_fireworks, false)
           |> assign(:provider_form_pricing_unit, nil)
+          # Fuente del lane: una key (`"key"`) o un pool (`"pool"`). El modal
+          # abre siempre en el camino de siempre; el pool es un opt-in.
+          |> assign(:lane_source, "key")
+          |> assign(:lane_pool_id, nil)
+          |> assign(:lane_pool_error, nil)
+          |> assign(:lane_new_pool_open, false)
+          |> assign(:provider_pools, [])
+          |> assign(:expanded_pools, MapSet.new())
           |> assign(:provider_credentials, nil)
           |> assign(:provider_models, [])
           |> assign(:provider_models_loading, false)
@@ -116,7 +134,10 @@ defmodule TokengateWeb.ModelProvidersLive do
     lanes =
       from(ap in ModelProvider,
         where: ap.model_id == ^model.id,
-        preload: [credential: :provider],
+        # El pool entra en el MISMO preload (una query batcheada por asociación):
+        # la fila del lane necesita su nombre, su conteo de keys y sus miembros,
+        # y una query por fila sería un N+1 en cada render y en cada load_lanes.
+        preload: [credential: :provider, pool: [members: [credential: :provider]]],
         order_by: [
           asc:
             fragment(
@@ -164,6 +185,7 @@ defmodule TokengateWeb.ModelProvidersLive do
     |> assign(:provider_model_search, "")
     |> build_provider_choices(model.id)
     |> assign(:provider_credentials, nil)
+    |> reset_lane_source()
     |> assign_credential_choices()
   end
 
@@ -214,6 +236,7 @@ defmodule TokengateWeb.ModelProvidersLive do
        |> assign(:provider_model_search, "")
        |> build_provider_choices(model_id)
        |> assign(:provider_credentials, nil)
+       |> reset_lane_source()
        |> assign_credential_choices()}
     else
       {:noreply,
@@ -250,7 +273,10 @@ defmodule TokengateWeb.ModelProvidersLive do
             socket.assigns.provider_form.source
             |> Ecto.Changeset.put_change(:credential_id, credential_id)
 
-          {:noreply, apply_offer(socket, provider, credentials, changeset, credential_id)}
+          {:noreply,
+           socket
+           |> apply_offer(provider, credentials, changeset, credential_id)
+           |> reset_pool_selection()}
       end
     else
       {:noreply, socket}
@@ -296,6 +322,7 @@ defmodule TokengateWeb.ModelProvidersLive do
      |> assign(:provider_model_search, "")
      |> clear_form_credential()
      |> filter_provider_choices("")
+     |> reset_pool_selection()
      |> assign_credential_choices()}
   end
 
@@ -372,7 +399,8 @@ defmodule TokengateWeb.ModelProvidersLive do
      |> assign(:scope_group_search, "")
      |> assign(:scope_member_search, "")
      |> assign(:scope_group_open, false)
-     |> assign(:scope_member_open, false)}
+     |> assign(:scope_member_open, false)
+     |> reset_lane_source()}
   end
 
   def handle_event("edit_model_provider", %{"id" => ap_id}, socket) do
@@ -440,8 +468,12 @@ defmodule TokengateWeb.ModelProvidersLive do
       socket =
         socket
         |> assign(:provider_model_search, model_search)
+        |> maybe_switch_lane_source(ap_params)
 
       cond do
+        socket.assigns[:lane_source] == "pool" ->
+          {:noreply, pool_form_changed(socket, ap_params)}
+
         credential_id in [nil, ""] ->
           {:noreply, assign(socket, :provider_models, [])}
 
@@ -655,6 +687,47 @@ defmodule TokengateWeb.ModelProvidersLive do
     end
   end
 
+  def handle_event("delete_pool", %{"id" => pool_id}, socket) do
+    with true <- socket.assigns.is_admin,
+         {:ok, pool_id} <- Ecto.UUID.cast(pool_id),
+         %CredentialPool{} = pool <- Providers.get_pool(pool_id) do
+      case Providers.delete_pool(pool) do
+        {:ok, _pool} ->
+          audit(socket, "pool.delete", "credential_pool", pool.id, %{
+            "name" => pool.name,
+            "provider_id" => pool.provider_id
+          })
+
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Pool deleted."))
+           |> assign_lane_pools()
+           |> maybe_clear_lane_pool(pool.id)}
+
+        {:error, :pool_in_use} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             gettext("This pool is mounted on a model. Remove the lane first.")
+           )}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not delete the pool."))}
+      end
+    else
+      false ->
+        {:noreply,
+         put_flash(socket, :error, gettext("You do not have permission for this action."))}
+
+      # Id forjado, pool inexistente o payload incompleto: no-op.
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("delete_pool", _params, socket), do: {:noreply, socket}
+
   def handle_event("reorder_providers", %{"model_id" => model_id, "ids" => ids}, socket) do
     if socket.assigns.is_admin do
       valid_ids =
@@ -689,6 +762,129 @@ defmodule TokengateWeb.ModelProvidersLive do
        put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
+
+  ## Events — pools de credenciales ------------------------------------------
+
+  # Expande/colapsa el panel de miembros de un lane de pool. El estado vive en
+  # un MapSet de ids de LANE (no de pool): el panel se pinta dentro de la fila
+  # del lane y sobrevive a los `load_lanes/1` de toggle, quitar miembro y alta.
+  def handle_event("toggle_pool_members", %{"id" => lane_id}, socket) do
+    expanded = socket.assigns[:expanded_pools] || MapSet.new()
+
+    expanded =
+      if MapSet.member?(expanded, lane_id) do
+        MapSet.delete(expanded, lane_id)
+      else
+        MapSet.put(expanded, lane_id)
+      end
+
+    {:noreply, assign(socket, :expanded_pools, expanded)}
+  end
+
+  def handle_event("toggle_pool_members", _params, socket), do: {:noreply, socket}
+
+  def handle_event("toggle_new_pool", _params, socket) do
+    {:noreply, assign(socket, :lane_new_pool_open, not socket.assigns[:lane_new_pool_open])}
+  end
+
+  # Quitar un miembro es SIEMPRE a través del contexto: es quien rechaza el
+  # último (`{:error, :last_member}`) para que un pool no quede vacío. La UI no
+  # duplica esa regla; sólo traduce el rechazo a un flash en español.
+  def handle_event("remove_pool_member", %{"id" => member_id}, socket) do
+    if socket.assigns.is_admin do
+      with {:ok, member_id} <- Ecto.UUID.cast(member_id),
+           %CredentialPoolMember{} = member <- Repo.get(CredentialPoolMember, member_id) do
+        case Providers.remove_pool_member(member) do
+          {:ok, _member} ->
+            audit(socket, "pool_member.remove", "credential_pool", member.pool_id, %{
+              "credential_id" => member.credential_id
+            })
+
+            {:noreply,
+             socket
+             |> put_flash(:info, gettext("API key removed from the pool."))
+             |> load_lanes()}
+
+          {:error, :last_member} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               gettext(
+                 "A pool cannot be left without API keys. Delete the lane or the pool instead."
+               )
+             )}
+
+          {:error, _} ->
+            {:noreply,
+             put_flash(socket, :error, gettext("Could not remove the API key from the pool."))}
+        end
+      else
+        # Id forjado (no UUID / inexistente): no-op, nunca un CastError que se
+        # lleve el LiveView por delante.
+        _ -> {:noreply, socket}
+      end
+    else
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
+    end
+  end
+
+  def handle_event("remove_pool_member", _params, socket), do: {:noreply, socket}
+
+  # Agregar una key a un pool existente. El select sólo ofrece credenciales del
+  # proveedor del pool que todavía no son miembros; el contexto/DB repiten la
+  # validación (`{:error, :provider_mismatch}` y la FK compuesta).
+  def handle_event(
+        "add_pool_member",
+        %{"lane_id" => lane_id, "credential_id" => credential_id},
+        socket
+      ) do
+    with true <- socket.assigns.is_admin,
+         {:ok, lane_id} <- Ecto.UUID.cast(lane_id),
+         {:ok, credential_id} <- Ecto.UUID.cast(credential_id),
+         %ModelProvider{pool_id: pool_id} when is_binary(pool_id) <-
+           Providers.get_model_provider(lane_id),
+         %CredentialPool{} = pool <- Providers.get_pool(pool_id),
+         %Credential{} = credential <- Providers.get_credential(credential_id) do
+      case Providers.add_pool_member(pool, credential) do
+        {:ok, _member} ->
+          audit(socket, "pool_member.add", "credential_pool", pool.id, %{
+            "credential_id" => credential.id
+          })
+
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("API key added to the pool."))
+           |> load_lanes()}
+
+        {:error, :provider_mismatch} ->
+          {:noreply,
+           put_flash(socket, :error, gettext("This API key belongs to another provider."))}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             gettext("Could not add the API key: %{errors}", errors: error_messages(changeset))
+           )}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not add the API key to the pool."))}
+      end
+    else
+      false ->
+        {:noreply,
+         put_flash(socket, :error, gettext("You do not have permission for this action."))}
+
+      # Id forjado, lane sin pool o payload incompleto: no-op.
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("add_pool_member", _params, socket), do: {:noreply, socket}
 
   # Abre el modal de un lane existente. `?edit=<id>` — el "Change" del modal del
   # modelo, que vive en el índice — entra por aquí también.
@@ -734,6 +930,14 @@ defmodule TokengateWeb.ModelProvidersLive do
 
       provider_key = provider_key_of_credential(socket, ap.credential_id)
 
+      # Un lane de pool no tiene credencial propia: la fuente es el pool, con
+      # sus miembros. Se carga con `list_pool_members/1` (preload de credencial
+      # y proveedor) para resolver de ahí el proveedor del modal — el mismo
+      # criterio que `provider_key_of_credential/2` con una key.
+      lane_pool = lane_pool(ap)
+      pool_provider = lane_pool && pool_provider(lane_pool)
+      provider_key = if pool_provider, do: provider_ref(pool_provider), else: provider_key
+
       # Prefill the service_tier checkbox from the stored extra_body (the
       # raw override virtuals are no longer part of the form). The provider is
       # already identified by the row's credential; el `provider_model` y los
@@ -754,8 +958,12 @@ defmodule TokengateWeb.ModelProvidersLive do
       lane_credential = credential_for_lane(socket, ap.credential_id)
 
       provider_credentials =
-        case lane_credential do
-          %{provider_id: provider_id} ->
+        cond do
+          pool_provider ->
+            credentials_of(socket, pool_provider.id)
+
+          match?(%{provider_id: _}, lane_credential) ->
+            %{provider_id: provider_id} = lane_credential
             credentials = credentials_of(socket, provider_id)
 
             if Enum.any?(credentials, &(&1.id == lane_credential.id)) do
@@ -764,29 +972,44 @@ defmodule TokengateWeb.ModelProvidersLive do
               credentials ++ [lane_credential]
             end
 
-          _ ->
+          true ->
             []
+        end
+
+      # La lista viva del proveedor también aplica a un lane de pool: la key que
+      # se usa para pedirla es un miembro cualquiera (todos son del proveedor
+      # del pool), no la fuente del lane.
+      fetch_credential_id =
+        if lane_pool do
+          lane_pool.members |> List.wrap() |> Enum.find_value(&member_credential_id/1)
+        else
+          ap.credential_id
         end
 
       socket
       |> assign(:provider_form, to_form(changeset, as: :model_provider))
       |> assign(:editing_ap_id, ap.id)
       |> assign(:provider_form_model_id, ap.model_id)
-      |> assign(:provider_form_credential_id, ap.credential_id)
-      |> assign(:provider_form_is_fireworks, credential_is_fireworks?(ap.credential_id, socket))
+      |> assign(:provider_form_credential_id, fetch_credential_id)
+      |> assign(:provider_form_is_fireworks, pool_fireworks?(pool_provider, ap, socket))
       |> assign(:provider_form_pricing_unit, ap.pricing_unit || Pricing.default_unit())
       |> assign(:provider_form_provider_key, provider_key)
       |> assign(:provider_credentials, provider_credentials)
+      |> assign(:lane_source, if(lane_pool, do: "pool", else: "key"))
+      |> assign(:lane_pool_id, ap.pool_id)
+      |> assign(:lane_pool_error, nil)
+      |> assign(:lane_new_pool_open, false)
+      |> assign(:provider_pools, lane_pool_pools(lane_pool))
       |> assign(:credential_form, nil)
       |> assign(:current_scope, scope)
       |> assign(:current_scope_group_id, ap.exclusive_to_group_id)
       |> assign(:current_scope_member_id, ap.exclusive_to_group_member_id)
       |> assign(:scope_group_search, group_label)
       |> assign(:scope_member_search, member_label)
-      |> assign(:provider_models_loading, true)
+      |> assign(:provider_models_loading, is_binary(fetch_credential_id))
       |> build_provider_choices(ap.model_id)
       |> assign_credential_choices()
-      |> fetch_provider_models(ap.credential_id)
+      |> fetch_provider_models(fetch_credential_id)
     else
       put_flash(socket, :error, gettext("You do not have permission for this action."))
     end
@@ -951,7 +1174,16 @@ defmodule TokengateWeb.ModelProvidersLive do
          gettext("Select at least one limit profile or user for the exclusive scope.")
        )}
     else
-      insert_model_provider_targets(socket, scope, ap_params, group_ids, member_ids)
+      # El pool se resuelve (o se crea con sus miembros) ANTES de armar los
+      # targets: el `pool_id` que viaja al insert es el del pool real, no el
+      # nombre que escribió el operador.
+      case prepare_lane_source(socket, ap_params) do
+        {:ok, ap_params} ->
+          insert_model_provider_targets(socket, scope, ap_params, group_ids, member_ids)
+
+        {:error, message} ->
+          lane_source_error(socket, ap_params, message)
+      end
     end
   end
 
@@ -973,7 +1205,10 @@ defmodule TokengateWeb.ModelProvidersLive do
          gettext("Select at least one limit profile or user for the exclusive scope.")
        )}
     else
-      update_model_provider(socket, ap_id, ap_params)
+      case prepare_lane_source(socket, ap_params) do
+        {:ok, ap_params} -> update_model_provider(socket, ap_id, ap_params)
+        {:error, message} -> lane_source_error(socket, ap_params, message)
+      end
     end
   end
 
@@ -1036,6 +1271,8 @@ defmodule TokengateWeb.ModelProvidersLive do
          # The modal is closing: nothing is in flight anymore, so the spinner
          # must not leak into the next one.
          |> assign(:provider_models_loading, false)
+         |> assign(:lane_pool_error, nil)
+         |> reset_lane_source()
          |> load_lanes()}
 
       {:error, changeset} ->
@@ -1047,6 +1284,7 @@ defmodule TokengateWeb.ModelProvidersLive do
              errors: Enum.map_join(changeset.errors, ", ", fn {_f, {m, _}} -> m end)
            )
          )
+         |> assign(:lane_pool_error, lane_error_in_modal(socket, changeset))
          |> assign(:provider_form, to_form(changeset, as: :model_provider))}
     end
   end
@@ -1076,12 +1314,407 @@ defmodule TokengateWeb.ModelProvidersLive do
          |> assign(:editing_ap_id, nil)
          # Same as the create path: closing the modal ends any listing state.
          |> assign(:provider_models_loading, false)
+         |> assign(:lane_pool_error, nil)
+         |> reset_lane_source()
          |> load_lanes()}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :provider_form, to_form(changeset, as: :model_provider))}
+        {:noreply,
+         socket
+         |> assign(:lane_pool_error, lane_error_in_modal(socket, changeset))
+         |> assign(:provider_form, to_form(changeset, as: :model_provider))}
     end
   end
+
+  ## Private helpers — pools de credenciales --------------------------------
+
+  # Estado del modal en reposo: la fuente vuelve a la key y todo lo del pool se
+  # limpia. Se usa al abrir el alta, al cancelar y al guardar.
+  defp reset_lane_source(socket) do
+    socket
+    |> assign(:lane_source, "key")
+    |> assign(:lane_pool_id, nil)
+    |> assign(:lane_pool_error, nil)
+    |> assign(:lane_new_pool_open, false)
+    |> assign(:provider_pools, [])
+  end
+
+  defp lane_source_param(params, current) do
+    case Map.get(params, "source") do
+      "pool" -> "pool"
+      "key" -> "key"
+      _ -> current || "key"
+    end
+  end
+
+  # El radio de fuente del form dispara el `phx-change` del modal entero, así
+  # que el cambio de fuente se detecta ahí y no en un evento propio: lo que
+  # llega es el form completo, y los campos ya escritos se conservan.
+  #
+  # Sin form abierto no hay fuente que cambiar: un `phx-change` encolado detrás
+  # de Cancelar es un no-op, no un BadMapError.
+  defp maybe_switch_lane_source(%{assigns: %{provider_form: nil}} = socket, _ap_params),
+    do: socket
+
+  defp maybe_switch_lane_source(socket, ap_params) do
+    source = lane_source_param(ap_params, socket.assigns[:lane_source])
+
+    if source == socket.assigns[:lane_source] do
+      socket
+    else
+      switch_lane_source(socket, source, ap_params)
+    end
+  end
+
+  # Al cambiar de fuente se limpia el campo de la OTRA: en modo pool la
+  # credencial del lane sobra (el XOR la rechazaría) y en modo key el pool
+  # sobra por la misma razón.
+  defp switch_lane_source(socket, "pool", ap_params) do
+    changeset =
+      socket.assigns.provider_form.source
+      |> carry_submitted_params(ap_params)
+      |> Ecto.Changeset.put_change(:credential_id, nil)
+
+    socket
+    |> assign(:provider_form, to_form(changeset, as: :model_provider))
+    |> assign(:lane_source, "pool")
+    |> assign(:lane_pool_id, nil)
+    |> assign(:lane_pool_error, nil)
+    |> assign(:lane_new_pool_open, false)
+    |> assign_lane_pools()
+  end
+
+  defp switch_lane_source(socket, "key", ap_params) do
+    changeset =
+      socket.assigns.provider_form.source
+      |> carry_submitted_params(ap_params)
+      |> Ecto.Changeset.put_change(:pool_id, nil)
+
+    socket
+    |> assign(:provider_form, to_form(changeset, as: :model_provider))
+    |> assign(:lane_source, "key")
+    |> assign(:lane_pool_id, nil)
+    |> assign(:lane_pool_error, nil)
+    |> assign(:lane_new_pool_open, false)
+    |> assign(:provider_pools, [])
+  end
+
+  defp pool_form_changed(socket, ap_params) do
+    # Un payload parcial (sin `pool_id`) no borra la selección: el navegador
+    # manda el form completo, pero un evento suelto no tiene por qué hacerlo.
+    pool_id =
+      if Map.has_key?(ap_params, "pool_id") do
+        blank_to_nil(ap_params["pool_id"])
+      else
+        socket.assigns[:lane_pool_id]
+      end
+
+    cond do
+      is_nil(pool_id) ->
+        socket
+        |> assign(:lane_pool_id, nil)
+        |> assign(:lane_pool_error, nil)
+
+      pool_id == socket.assigns[:lane_pool_id] ->
+        socket
+
+      true ->
+        select_lane_pool(socket, pool_id, ap_params)
+    end
+  end
+
+  # Elegir un pool existente es el equivalente de elegir una key: deriva el
+  # proveedor (del propio pool), deja el chip puesto y pide la lista viva de
+  # modelos con un miembro cualquiera — todos son del mismo proveedor.
+  defp select_lane_pool(socket, pool_id, ap_params) do
+    case Enum.find(socket.assigns[:provider_pools] || [], &(&1.id == pool_id)) do
+      %CredentialPool{} = pool ->
+        changeset =
+          socket.assigns.provider_form.source
+          |> carry_submitted_params(ap_params)
+          |> Ecto.Changeset.put_change(:pool_id, pool.id)
+          |> Ecto.Changeset.put_change(:credential_id, nil)
+
+        credential = pool_first_credential(pool)
+
+        socket
+        |> assign(:provider_form, to_form(changeset, as: :model_provider))
+        |> assign(:lane_pool_id, pool.id)
+        |> assign(:lane_pool_error, nil)
+        |> ensure_pool_provider(pool)
+        |> assign(:provider_form_credential_id, credential && credential.id)
+        |> assign(:provider_models_loading, not is_nil(credential))
+        |> fetch_provider_models(credential && credential.id)
+
+      _ ->
+        socket
+    end
+  end
+
+  defp ensure_pool_provider(socket, %CredentialPool{provider_id: provider_id}) do
+    if socket.assigns[:provider_form_provider_key] do
+      socket
+    else
+      case Providers.get_provider(provider_id) do
+        %Provider{} = provider ->
+          socket
+          |> assign(:provider_form_provider_key, provider_ref(provider))
+          |> assign(:provider_form_is_fireworks, provider.key == "fireworks-ai")
+          |> assign(:provider_credentials, credentials_of(socket, provider.id))
+          |> assign_credential_choices()
+
+        _ ->
+          socket
+      end
+    end
+  end
+
+  # Cambiar de proveedor invalida la selección de pool: los pools son del
+  # proveedor, así que la lista se recarga y el pool elegido se suelta — un pool
+  # de otro proveedor no puede quedar montado por inercia.
+  defp reset_pool_selection(socket) do
+    if socket.assigns[:lane_source] == "pool" do
+      socket =
+        case socket.assigns[:provider_form] do
+          %{source: source} ->
+            changeset = Ecto.Changeset.put_change(source, :pool_id, nil)
+            assign(socket, :provider_form, to_form(changeset, as: :model_provider))
+
+          _ ->
+            socket
+        end
+
+      socket
+      |> assign(:lane_pool_id, nil)
+      |> assign(:lane_pool_error, nil)
+      |> assign(:lane_new_pool_open, false)
+      |> assign_lane_pools()
+    else
+      socket
+    end
+  end
+
+  defp assign_lane_pools(socket) do
+    pools =
+      case pool_form_provider(socket) do
+        %Provider{id: provider_id} -> Providers.list_pools_for_provider(provider_id)
+        _ -> []
+      end
+
+    assign(socket, :provider_pools, pools)
+  end
+
+  defp pool_form_provider(socket) do
+    provider_by_ref(
+      socket.assigns[:provider_choices],
+      List.wrap(socket.assigns[:provider_credentials]) ++
+        List.wrap(socket.assigns[:credentials_for_select]),
+      socket.assigns[:provider_form_provider_key]
+    )
+  end
+
+  # Traduce la fuente elegida en el modal a los attrs del lane. El pool NUEVO se
+  # crea aquí (con sus miembros) porque el lane necesita su id: el form trae un
+  # nombre y el insert necesita un UUID.
+  defp prepare_lane_source(socket, ap_params) do
+    case lane_source_param(ap_params, socket.assigns[:lane_source]) do
+      "pool" ->
+        resolve_pool_source(socket, ap_params)
+
+      _key ->
+        # Convertir un lane de pool a lane de una key LIMPIA el pool: `nil`
+        # explícito, no `Map.drop` (el changeset re-lee la fila de la DB, donde
+        # pool_id sigue puesto, y el XOR rechazaría las dos fuentes).
+        {:ok,
+         ap_params
+         |> Map.put("pool_id", nil)
+         |> Map.drop(["new_pool_name", "new_pool_member_ids"])}
+    end
+  end
+
+  defp resolve_pool_source(socket, ap_params) do
+    new_name = (ap_params["new_pool_name"] || "") |> to_string() |> String.trim()
+    member_ids = ap_params["new_pool_member_ids"] |> List.wrap() |> Enum.reject(&blank_id?/1)
+    pool_id = blank_to_nil(ap_params["pool_id"])
+
+    # La credencial propia del lane no viaja en modo pool: la fuente es el pool
+    # y el XOR del changeset rechazaría las dos.
+    ap_params = Map.put(ap_params, "credential_id", nil)
+
+    cond do
+      new_name != "" ->
+        case selected_provider(socket) do
+          %Provider{} = provider ->
+            case create_pool_with_members(provider, new_name, member_ids) do
+              {:ok, pool} -> {:ok, Map.put(ap_params, "pool_id", pool.id)}
+              {:error, message} -> {:error, message}
+            end
+
+          _ ->
+            {:error, gettext("Pick the provider the pool belongs to first.")}
+        end
+
+      is_nil(pool_id) ->
+        {:error, gettext("Pick an existing pool or create a new one.")}
+
+      true ->
+        case Enum.find(socket.assigns[:provider_pools] || [], &(&1.id == pool_id)) do
+          %CredentialPool{} -> {:ok, ap_params}
+          _ -> {:error, gettext("Pick an existing pool or create a new one.")}
+        end
+    end
+  end
+
+  defp create_pool_with_members(provider, name, member_ids) do
+    if member_ids == [] do
+      {:error, gettext("Select at least one API key for the new pool.")}
+    else
+      # Pool + membresía en una sola transacción: si una credencial forjada deja
+      # el pool vacío, o falla un insert, no queda un pool a medias con nombre
+      # ocupado que estorbe en el reintento.
+      result =
+        Repo.transaction(fn ->
+          with {:ok, pool} <- Providers.create_pool(provider, %{"name" => name}),
+               :ok <- add_members_to_pool(pool, member_ids),
+               [_ | _] <- Providers.list_pool_members(pool) do
+            pool
+          else
+            [] -> Repo.rollback(:no_members)
+            :error -> Repo.rollback(:invalid_member)
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+
+      case result do
+        {:ok, %CredentialPool{} = pool} ->
+          {:ok, pool}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error,
+           gettext("Could not create the pool: %{errors}", errors: error_messages(changeset))}
+
+        {:error, :invalid_member} ->
+          {:error, gettext("One of the selected API keys is not valid for this pool.")}
+
+        {:error, _reason} ->
+          {:error, gettext("Select at least one API key for the new pool.")}
+      end
+    end
+  end
+
+  defp add_members_to_pool(pool, member_ids) do
+    Enum.reduce_while(member_ids, :ok, fn credential_id, :ok ->
+      case add_member_to_pool(pool, credential_id) do
+        {:ok, _member} -> {:cont, :ok}
+        other -> {:halt, other}
+      end
+    end)
+  end
+
+  defp add_member_to_pool(pool, credential_id) do
+    with {:ok, credential_id} <- Ecto.UUID.cast(credential_id),
+         %Credential{} = credential <- Providers.get_credential(credential_id) do
+      Providers.add_pool_member(pool, credential)
+    else
+      _ -> :error
+    end
+  end
+
+  # El error de la fuente no cierra el modal ni pierde lo escrito: el changeset
+  # se recasta con el último envío y el mensaje va al bloque del pool, que es el
+  # único sitio visible cuando el select de la key está oculto.
+  defp lane_source_error(socket, ap_params, message) do
+    case socket.assigns[:provider_form] do
+      %{source: source} ->
+        changeset = carry_submitted_params(source, ap_params)
+
+        {:noreply,
+         socket
+         |> assign(:lane_pool_error, message)
+         |> assign(:provider_form, to_form(changeset, as: :model_provider))}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, message)}
+    end
+  end
+
+  # Al borrar el pool seleccionado en el modal, el select no puede quedarse con
+  # un id que ya no existe.
+  defp maybe_clear_lane_pool(socket, pool_id) do
+    if socket.assigns[:lane_pool_id] == pool_id do
+      assign(socket, :lane_pool_id, nil)
+    else
+      socket
+    end
+  end
+
+  # Los errores del changeset que caen en campos que el form no pinta (el XOR,
+  # la fuente faltante) se resumen en el bloque de error del modal, en AMBOS
+  # modos: en modo pool es el único aviso visible.
+  defp lane_error_in_modal(_socket, changeset) do
+    case error_messages(changeset) do
+      "" -> nil
+      errors -> gettext("Could not save: %{errors}", errors: errors)
+    end
+  end
+
+  defp error_messages(%Ecto.Changeset{errors: errors}) do
+    Enum.map_join(errors, ", ", fn {_field, {message, _opts}} -> message end)
+  end
+
+  # Un checkbox del alta de pool vuelve marcado tras un error: el último envío
+  # del form queda en los params del changeset y ahí viajan los ids elegidos.
+  defp new_pool_member_checked?(form, credential_id) do
+    case form[:new_pool_member_ids].value do
+      ids when is_list(ids) -> credential_id in ids
+      _ -> false
+    end
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value) when is_binary(value), do: value
+  defp blank_to_nil(_value), do: nil
+
+  # El pool de un lane, con sus miembros y cada credencial con su proveedor.
+  defp lane_pool(%ModelProvider{pool_id: nil}), do: nil
+
+  defp lane_pool(%ModelProvider{pool_id: pool_id}) do
+    case Providers.get_pool(pool_id) do
+      nil -> nil
+      pool -> %{pool | members: Providers.list_pool_members(pool)}
+    end
+  end
+
+  defp lane_pool_pools(nil), do: []
+
+  defp lane_pool_pools(%CredentialPool{provider_id: provider_id}),
+    do: Providers.list_pools_for_provider(provider_id)
+
+  defp pool_first_credential(%CredentialPool{members: members}) do
+    members
+    |> List.wrap()
+    |> Enum.find_value(fn
+      %{credential: %Credential{} = credential} -> credential
+      _ -> nil
+    end)
+  end
+
+  defp member_credential_id(%{credential_id: id}) when is_binary(id), do: id
+  defp member_credential_id(_member), do: nil
+
+  defp pool_provider(%CredentialPool{} = pool) do
+    case pool_first_credential(pool) do
+      %Credential{provider: %Provider{} = provider} -> provider
+      _ -> pool.provider_id && Providers.get_provider(pool.provider_id)
+    end
+  end
+
+  defp pool_fireworks?(nil, ap, socket), do: credential_is_fireworks?(ap.credential_id, socket)
+  defp pool_fireworks?(%Provider{key: key}, _ap, _socket), do: key == "fireworks-ai"
+
+  defp pool_fireworks?(_provider, ap, socket),
+    do: credential_is_fireworks?(ap.credential_id, socket)
 
   ## Helpers de presentación -------------------------------------------
 
@@ -1427,12 +2060,66 @@ defmodule TokengateWeb.ModelProvidersLive do
   def provider_name(%ModelProvider{credential: %{provider: %Provider{} = provider}}),
     do: provider.name
 
+  # Un lane de pool no tiene credencial: el proveedor es el del pool, y como el
+  # pool no lo precarga se resuelve por sus miembros (todos del mismo
+  # proveedor, la FK compuesta lo garantiza).
+  def provider_name(%ModelProvider{pool: %{members: members}}) when is_list(members),
+    do: pool_provider_name(members)
+
   def provider_name(%Credential{provider: %Provider{} = provider}), do: provider.name
 
   def provider_name(_), do: "—"
 
+  defp pool_provider_name(members) do
+    case Enum.find(members, &match?(%{credential: %{provider: %Provider{}}}, &1)) do
+      %{credential: %{provider: %Provider{name: name}}} when is_binary(name) -> name
+      _ -> "—"
+    end
+  end
+
   def credential_named?(%{name: name}) when is_binary(name) and name != "", do: true
   def credential_named?(_), do: false
+
+  ## Presentación de pools ---------------------------------------------
+
+  @doc "Cantidad de keys de un lane de pool (0 para un lane de credencial)."
+  def pool_member_count(%ModelProvider{pool: %{members: members}}) when is_list(members),
+    do: length(members)
+
+  def pool_member_count(_ap), do: 0
+
+  @doc "Etiqueta de un miembro del pool: el alias de su credencial."
+  def pool_member_label(%{credential: %Credential{} = credential}) do
+    credential.name || gettext("unnamed key")
+  end
+
+  def pool_member_label(member), do: to_string(Map.get(member, :credential_id) || "—")
+
+  def pool_member_mask(%{credential: %Credential{} = credential}),
+    do: mask_key(credential.api_key_encrypted)
+
+  def pool_member_mask(_member), do: "—"
+
+  def pool_member_active?(%{credential: %{status: "active"}}), do: true
+  def pool_member_active?(_member), do: false
+
+  @doc """
+  Credenciales del proveedor del pool que todavía no son miembros — las únicas
+  que tiene sentido ofrecer en el alta de miembro.
+  """
+  def pool_add_options(%CredentialPool{} = pool, credentials) do
+    member_ids = pool.members |> List.wrap() |> Enum.map(& &1.credential_id)
+
+    List.wrap(credentials)
+    |> Enum.filter(&(&1.provider_id == pool.provider_id))
+    |> Enum.reject(&(&1.id in member_ids))
+  end
+
+  def pool_add_options(_pool, _credentials), do: []
+
+  @doc "True cuando el panel de miembros de ese lane está expandido."
+  def pool_expanded?(expanded, lane_id),
+    do: MapSet.member?(expanded || MapSet.new(), lane_id)
 
   def enabled_badge(true), do: "badge-success"
   def enabled_badge(_), do: "badge-ghost"
@@ -1458,6 +2145,16 @@ defmodule TokengateWeb.ModelProvidersLive do
   @doc false
   def provider_active?(%{enabled: false}), do: false
 
+  # Un lane de pool está activo si al menos un miembro tiene la credencial
+  # activa: el estado del grupo se calcula de sus keys, no del atajo de
+  # credencial `nil`.
+  def provider_active?(%{pool: %{members: members}}) when is_list(members) do
+    Enum.any?(members, fn
+      %{credential: %{status: status}} when is_binary(status) -> status == "active"
+      _ -> false
+    end)
+  end
+
   def provider_active?(%{credential: nil}), do: false
 
   def provider_active?(%{credential: %{status: status}}) when is_binary(status),
@@ -1467,6 +2164,8 @@ defmodule TokengateWeb.ModelProvidersLive do
 
   def credential_status_label(%{credential: %{status: "active"}}), do: nil
   def credential_status_label(%{credential: %{status: "disabled"}}), do: "credential desactivada"
+  # El estado de un pool se ve en sus miembros, no en una credencial del lane.
+  def credential_status_label(%{pool: %{members: members}}) when is_list(members), do: nil
   def credential_status_label(%{credential: nil}), do: gettext("no credential")
   def credential_status_label(_), do: nil
 
@@ -1620,25 +2319,67 @@ defmodule TokengateWeb.ModelProvidersLive do
                         <%!-- Credential name and key suffix expose internal
                                    topology — admins only. Non-admins see just the
                                    provider name. --%>
-                        <%= if @is_admin && ap.credential do %>
-                          <span class="font-mono text-xs">
-                            {ap.credential.name || gettext("unnamed key")}
-                          </span>
-                          <span class="text-xs text-base-content/40 ml-1">
-                            {mask_key(ap.credential.api_key_encrypted)}
-                          </span>
-                          <%!-- Dueño de la key: la columna «API key» sola no
+                        <%= cond do %>
+                          <% @is_admin && ap.pool -> %>
+                            <span class="inline-flex items-center gap-1 align-middle">
+                              <.icon
+                                name="hero-rectangle-stack"
+                                class="w-3.5 h-3.5 text-base-content/40 shrink-0"
+                              />
+                              <span class="text-xs font-semibold" id={"pool-name-#{ap.id}"}>
+                                {ap.pool.name}
+                              </span>
+                              <span
+                                class="badge badge-xs badge-info font-normal"
+                                id={"pool-member-count-#{ap.id}"}
+                                title={gettext("API keys in this pool: rotation per request")}
+                              >
+                                {pool_member_count(ap)} key(s)
+                              </span>
+                              <span
+                                class="badge badge-xs badge-outline font-normal"
+                                id={"ap-provider-#{ap.id}"}
+                                title={gettext("Provider that owns this API key")}
+                              >
+                                {provider_name(ap)}
+                              </span>
+                              <button
+                                type="button"
+                                phx-click="toggle_pool_members"
+                                phx-value-id={ap.id}
+                                class="btn btn-xs btn-ghost"
+                                id={"pool-members-toggle-#{ap.id}"}
+                                title={gettext("Show the API keys in this pool")}
+                              >
+                                <.icon
+                                  name={
+                                    if pool_expanded?(@expanded_pools, ap.id),
+                                      do: "hero-chevron-up",
+                                      else: "hero-chevron-down"
+                                  }
+                                  class="w-3 h-3"
+                                />
+                              </button>
+                            </span>
+                          <% @is_admin && ap.credential -> %>
+                            <span class="font-mono text-xs">
+                              {ap.credential.name || gettext("unnamed key")}
+                            </span>
+                            <span class="text-xs text-base-content/40 ml-1">
+                              {mask_key(ap.credential.api_key_encrypted)}
+                            </span>
+                            <%!-- Dueño de la key: la columna «API key» sola no
                                      dice a qué proveedor pertenece la key que
                                      sirve a este modelo. --%>
-                          <span
-                            class="badge badge-xs badge-outline font-normal ml-1"
-                            id={"ap-provider-#{ap.id}"}
-                            title={gettext("Provider that owns this API key")}
-                          >
+                            <span
+                              class="badge badge-xs badge-outline font-normal ml-1"
+                              id={"ap-provider-#{ap.id}"}
+                              title={gettext("Provider that owns this API key")}
+                            >
+                              {provider_name(ap)}
+                            </span>
+                          <% true -> %>
                             {provider_name(ap)}
-                          </span>
-                        <% else %>
-                          {provider_name(ap)}
                         <% end %>
 
                         <span
@@ -1707,6 +2448,78 @@ defmodule TokengateWeb.ModelProvidersLive do
                           </div>
                         </td>
                       <% end %>
+                    </tr>
+                    <%!-- Miembros del pool: el pool sólo aporta keys; la fila del
+                         lane conserva prioridad, provider_model y precio. --%>
+                    <tr
+                      :if={ap.pool && pool_expanded?(@expanded_pools, ap.id)}
+                      id={"pool-members-#{ap.id}"}
+                      class="bg-base-200/40"
+                    >
+                      <td colspan={if @is_admin, do: "7", else: "5"} class="p-3">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-base-content/50 mb-2">
+                          {gettext("API keys in this pool: rotation per request")}
+                        </p>
+
+                        <div class="space-y-1">
+                          <div
+                            :for={member <- ap.pool.members}
+                            id={"pool-member-#{member.id}"}
+                            class="flex items-center gap-2"
+                          >
+                            <span class="font-mono text-xs">{pool_member_label(member)}</span>
+                            <span class="text-xs text-base-content/40">
+                              {pool_member_mask(member)}
+                            </span>
+                            <span class={[
+                              "badge badge-xs",
+                              enabled_badge(pool_member_active?(member))
+                            ]}>
+                              {enabled_label(pool_member_active?(member))}
+                            </span>
+                            <button
+                              type="button"
+                              phx-click="remove_pool_member"
+                              phx-value-id={member.id}
+                              class="btn btn-xs btn-ghost text-error"
+                              id={"remove-pool-member-#{member.id}"}
+                              title={gettext("Remove this API key from the pool")}
+                            >
+                              <.icon name="hero-x-mark" class="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <%!-- El alta es su propio form (nunca anidado en otro): es
+                             lo que hace que el select viaje con el submit. --%>
+                        <form
+                          id={"pool-add-form-#{ap.id}"}
+                          phx-submit="add_pool_member"
+                          class="flex items-center gap-2 mt-3"
+                        >
+                          <input type="hidden" name="lane_id" value={ap.id} />
+                          <select
+                            id={"pool-add-member-#{ap.id}"}
+                            name="credential_id"
+                            class="select select-xs w-72"
+                          >
+                            <option value="">{gettext("Add an API key…")}</option>
+                            <option
+                              :for={credential <- pool_add_options(ap.pool, @credentials_for_select)}
+                              value={credential.id}
+                            >
+                              {credential.name || mask_key(credential.api_key_encrypted)}
+                            </option>
+                          </select>
+                          <button
+                            type="submit"
+                            class="btn btn-xs"
+                            id={"pool-add-member-btn-#{ap.id}"}
+                          >
+                            <.icon name="hero-plus" class="w-3 h-3" /> {gettext("Add")}
+                          </button>
+                        </form>
+                      </td>
                     </tr>
                   <% end %>
                 </tbody>
@@ -1894,55 +2707,224 @@ defmodule TokengateWeb.ModelProvidersLive do
                   <% end %>
                 </div>
 
+                <%!-- Fuente del lane: una key suelta (el camino de siempre) o un
+                     pool de keys del MISMO proveedor, que rota por request. El
+                     pool sólo aporta keys: prioridad, modelo y precio siguen
+                     siendo del lane. --%>
+                <div class="mb-5">
+                  <label class="text-sm font-medium text-base-content">
+                    {gettext("Credential source")}
+                  </label>
+                  <p class="text-xs text-base-content/50 mb-2">
+                    {gettext(
+                      "A pool groups API keys of the same provider and rotates between them on every request."
+                    )}
+                  </p>
+                  <div class="flex gap-5">
+                    <label class="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="radio"
+                        id="lane-source-key"
+                        name="model_provider[source]"
+                        value="key"
+                        checked={@lane_source == "key"}
+                        class="radio radio-sm"
+                      />
+                      <.icon name="hero-key" class="w-4 h-4" /> {gettext("One API key")}
+                    </label>
+                    <label class="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="radio"
+                        id="lane-source-pool"
+                        name="model_provider[source]"
+                        value="pool"
+                        checked={@lane_source == "pool"}
+                        class="radio radio-sm"
+                      />
+                      <.icon name="hero-rectangle-stack" class="w-4 h-4" />
+                      {gettext("A pool of keys")}
+                    </label>
+                  </div>
+                </div>
+
                 <div class="grid md:grid-cols-2 gap-x-8 gap-y-5">
                   <div>
-                    <div class="flex items-end gap-2">
-                      <div class="flex-1">
-                        <.input
-                          field={@provider_form[:credential_id]}
-                          type="select"
-                          label={gettext("Credential (API key)")}
-                          options={credential_options(@credential_choices)}
-                          prompt={
-                            cond do
-                              @credential_choices == [] ->
-                                gettext("No active API keys")
+                    <%= if @lane_source == "key" do %>
+                      <div class="flex items-end gap-2">
+                        <div class="flex-1">
+                          <.input
+                            field={@provider_form[:credential_id]}
+                            type="select"
+                            label={gettext("Credential (API key)")}
+                            options={credential_options(@credential_choices)}
+                            prompt={
+                              cond do
+                                @credential_choices == [] ->
+                                  gettext("No active API keys")
 
-                              @provider_form_provider_key ->
-                                gettext("Pick an API key from this provider")
+                                @provider_form_provider_key ->
+                                  gettext("Pick an API key from this provider")
 
-                              true ->
-                                gettext("Pick the API key that will serve this model")
-                            end
-                          }
-                          required
-                          hint={
-                            gettext(
-                              "The specific API key that will serve this model. Picking it derives its provider, and with it the provider model and the list price when models.dev publishes them. Every credential has its own circuit breaker and priority."
-                            )
-                          }
-                        />
+                                true ->
+                                  gettext("Pick the API key that will serve this model")
+                              end
+                            }
+                            required
+                            hint={
+                              gettext(
+                                "The specific API key that will serve this model. Picking it derives its provider, and with it the provider model and the list price when models.dev publishes them. Every credential has its own circuit breaker and priority."
+                              )
+                            }
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          phx-click="new_credential_inline"
+                          class="btn btn-sm btn-outline mb-6"
+                          id="new-credential-inline"
+                          title={gettext("Add another API key for this provider")}
+                        >
+                          <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New API key")}
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        phx-click="new_credential_inline"
-                        class="btn btn-sm btn-outline mb-6"
-                        id="new-credential-inline"
-                        title={gettext("Add another API key for this provider")}
-                      >
-                        <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New API key")}
-                      </button>
-                    </div>
 
-                    <div
-                      :if={!is_nil(@provider_form_provider_key) and @credential_choices == []}
-                      class="text-xs text-warning -mt-3 mb-2"
-                      id="no-credentials-hint"
-                    >
-                      {gettext(
-                        "This provider has no API keys yet. Use “New API key” to create the first one."
-                      )}
-                    </div>
+                      <div
+                        :if={!is_nil(@provider_form_provider_key) and @credential_choices == []}
+                        class="text-xs text-warning -mt-3 mb-2"
+                        id="no-credentials-hint"
+                      >
+                        {gettext(
+                          "This provider has no API keys yet. Use “New API key” to create the first one."
+                        )}
+                      </div>
+                    <% else %>
+                      <%!-- Modo pool: el select de pools del proveedor elegido más
+                         el alta inline de un pool nuevo con sus miembros. --%>
+                      <div class="space-y-2">
+                        <div>
+                          <label class="text-sm font-medium text-base-content" for="lane-pool-select">
+                            {gettext("Pool")}
+                          </label>
+                          <p class="text-xs text-base-content/50 mb-1">
+                            {gettext(
+                              "Pools of the selected provider. Every key in the pool rotates on each request."
+                            )}
+                          </p>
+                          <select
+                            id="lane-pool-select"
+                            name="model_provider[pool_id]"
+                            class="select select-sm w-full"
+                          >
+                            <option value="">{gettext("Pick a pool")}</option>
+                            <option
+                              :for={pool <- @provider_pools}
+                              value={pool.id}
+                              selected={@lane_pool_id == pool.id}
+                            >
+                              {pool.name} ({length(pool.members)} key(s))
+                            </option>
+                          </select>
+                          <div class="flex justify-end">
+                            <button
+                              type="button"
+                              phx-click="delete_pool"
+                              phx-value-id={@lane_pool_id || ""}
+                              data-confirm={gettext("Delete this pool? This cannot be undone.")}
+                              class="btn btn-xs btn-ghost text-error mt-1"
+                              id="delete-selected-pool"
+                              disabled={is_nil(@lane_pool_id)}
+                            >
+                              <.icon name="hero-trash" class="w-3 h-3" />
+                              {gettext("Delete pool")}
+                            </button>
+                          </div>
+                          <p
+                            :if={is_nil(@provider_form_provider_key)}
+                            id="pool-needs-provider"
+                            class="text-xs text-warning mt-1"
+                          >
+                            {gettext("Pick the provider the pool belongs to first.")}
+                          </p>
+                          <p
+                            :if={
+                              not is_nil(@provider_form_provider_key) and @provider_pools == [] and
+                                not @lane_new_pool_open
+                            }
+                            id="no-pools-hint"
+                            class="text-xs text-base-content/50 mt-1"
+                          >
+                            {gettext("This provider has no pools yet. Create one.")}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          phx-click="toggle_new_pool"
+                          class="btn btn-xs btn-outline"
+                          id="new-pool-toggle"
+                        >
+                          <.icon name="hero-plus" class="w-3 h-3" /> {gettext("New pool")}
+                        </button>
+
+                        <div
+                          :if={@lane_new_pool_open}
+                          id="new-pool-block"
+                          class="rounded-lg border border-base-300 p-3 space-y-2"
+                        >
+                          <div>
+                            <label class="text-sm font-medium text-base-content" for="new-pool-name">
+                              {gettext("Pool name")}
+                            </label>
+                            <input
+                              type="text"
+                              id="new-pool-name"
+                              name="model_provider[new_pool_name]"
+                              value={@provider_form[:new_pool_name].value}
+                              placeholder={gettext("Production keys")}
+                              class="input input-sm w-full"
+                              autocomplete="off"
+                            />
+                          </div>
+                          <p class="text-xs text-base-content/50">
+                            {gettext(
+                              "Pick the API keys that become members. All of them must belong to the same provider."
+                            )}
+                          </p>
+                          <div class="max-h-40 overflow-y-auto space-y-1">
+                            <label
+                              :for={credential <- @provider_credentials || []}
+                              class="flex items-center gap-2 text-xs"
+                            >
+                              <input
+                                type="checkbox"
+                                id={"new-pool-member-#{credential.id}"}
+                                name="model_provider[new_pool_member_ids][]"
+                                value={credential.id}
+                                checked={new_pool_member_checked?(@provider_form, credential.id)}
+                                class="checkbox checkbox-xs"
+                              />
+                              <span class="font-mono">
+                                {credential.name || gettext("unnamed key")}
+                              </span>
+                              <span class="text-base-content/40">
+                                {mask_key(credential.api_key_encrypted)}
+                              </span>
+                            </label>
+                          </div>
+                          <p
+                            :if={(@provider_credentials || []) == []}
+                            class="text-xs text-warning"
+                            id="new-pool-no-keys"
+                          >
+                            {gettext("This provider has no API keys yet.")}
+                          </p>
+                        </div>
+                      </div>
+                    <% end %>
+
+                    <p :if={@lane_pool_error} id="lane-pool-error" class="text-xs text-error">
+                      {@lane_pool_error}
+                    </p>
 
                     <%= if @provider_models_loading do %>
                       <div class="flex items-center gap-2 text-sm text-base-content/50 py-2">
@@ -2301,16 +3283,21 @@ defmodule TokengateWeb.ModelProvidersLive do
                         label="Prioridad"
                         hint="Menor = se intenta primero."
                       />
-                      <.input
-                        field={@provider_form[:sticky_ttl_seconds]}
-                        type="number"
-                        label="TTL sticky (segundos)"
-                        hint={
-                          gettext(
-                            "Empty uses the config default (180 s / 3 min) for every credential, regardless of billing. If you set a value, that one is always used. Minimum 1 s, maximum 86400 s (24 h). It is stored in milliseconds."
-                          )
-                        }
-                      />
+                      <%!-- El sticky es de lanes de UNA key: el router no lo
+                           consulta ni lo escribe en un lane de pool (ahí la
+                           elección de miembro ocurre después). --%>
+                      <%= if @lane_source != "pool" do %>
+                        <.input
+                          field={@provider_form[:sticky_ttl_seconds]}
+                          type="number"
+                          label="TTL sticky (segundos)"
+                          hint={
+                            gettext(
+                              "Empty uses the config default (180 s / 3 min) for every credential, regardless of billing. If you set a value, that one is always used. Minimum 1 s, maximum 86400 s (24 h). It is stored in milliseconds."
+                            )
+                          }
+                        />
+                      <% end %>
                     </div>
 
                     <%!-- El precio se cobra en la unidad que ESTE lane declara. Los

@@ -5466,3 +5466,171 @@ msgstr "Marcado ilimitado: sin techo mensual"
 msgid "UTC day spend (00:00–24:00 UTC)"
 msgstr "Gasto del día UTC (00:00–24:00 UTC)"
 
+
+#: lib/tokengate_web/live/model_providers_live.ex:767
+#, elixir-autogen, elixir-format
+msgid "A pool cannot be left without API keys. Delete the lane or the pool instead."
+msgstr "Un pool no puede quedar sin API keys. Borra el lane o el pool en su lugar."
+
+#: lib/tokengate_web/live/model_providers_live.ex:2610
+#, elixir-autogen, elixir-format
+msgid "A pool groups API keys of the same provider and rotates between them on every request."
+msgstr "Un pool agrupa API keys del mismo proveedor y rota entre ellas en cada request."
+
+#: lib/tokengate_web/live/model_providers_live.ex:2636
+#, elixir-autogen, elixir-format
+msgid "A pool of keys"
+msgstr "Un pool de keys"
+
+#: lib/tokengate_web/live/model_providers_live.ex:802
+#, elixir-autogen, elixir-format
+msgid "API key added to the pool."
+msgstr "API key agregada al pool."
+
+#: lib/tokengate_web/live/model_providers_live.ex:759
+#, elixir-autogen, elixir-format
+msgid "API key removed from the pool."
+msgstr "API key quitada del pool."
+
+#: lib/tokengate_web/live/model_providers_live.ex:2226
+#: lib/tokengate_web/live/model_providers_live.ex:2352
+#: lib/tokengate_web/live/models_live.ex:1846
+#, elixir-autogen, elixir-format
+msgid "API keys in this pool: rotation per request"
+msgstr "API keys de este pool: rotación por request"
+
+#: lib/tokengate_web/live/model_providers_live.ex:2397
+#, elixir-autogen, elixir-format
+msgid "Add an API key…"
+msgstr "Agregar una API key…"
+
+#: lib/tokengate_web/live/model_providers_live.ex:818
+#, elixir-autogen, elixir-format
+msgid "Could not add the API key to the pool."
+msgstr "No se pudo agregar la API key al pool."
+
+#: lib/tokengate_web/live/model_providers_live.ex:814
+#, elixir-autogen, elixir-format
+msgid "Could not add the API key: %{errors}"
+msgstr "No se pudo agregar la API key: %{errors}"
+
+#: lib/tokengate_web/live/model_providers_live.ex:1511
+#, elixir-autogen, elixir-format
+msgid "Could not create the pool: %{errors}"
+msgstr "No se pudo crear el pool: %{errors}"
+
+#: lib/tokengate_web/live/model_providers_live.ex:772
+#, elixir-autogen, elixir-format
+msgid "Could not remove the API key from the pool."
+msgstr "No se pudo quitar la API key del pool."
+
+#: lib/tokengate_web/live/model_providers_live.ex:1549
+#, elixir-autogen, elixir-format
+msgid "Could not save: %{errors}"
+msgstr "No se pudo guardar: %{errors}"
+
+#: lib/tokengate_web/live/model_providers_live.ex:2607
+#, elixir-autogen, elixir-format
+msgid "Credential source"
+msgstr "Fuente de credenciales"
+
+#: lib/tokengate_web/live/model_providers_live.ex:2743
+#, elixir-autogen, elixir-format
+msgid "New pool"
+msgstr "Nuevo pool"
+
+#: lib/tokengate_web/live/model_providers_live.ex:2624
+#, elixir-autogen, elixir-format
+msgid "One API key"
+msgstr "Una API key"
+
+#: lib/tokengate_web/live/model_providers_live.ex:2709
+#, elixir-autogen, elixir-format
+msgid "Pick a pool"
+msgstr "Elige un pool"
+
+#: lib/tokengate_web/live/model_providers_live.ex:1480
+#: lib/tokengate_web/live/model_providers_live.ex:1485
+#, elixir-autogen, elixir-format
+msgid "Pick an existing pool or create a new one."
+msgstr "Elige un pool existente o crea uno nuevo."
+
+#: lib/tokengate_web/live/model_providers_live.ex:2766
+#, elixir-autogen, elixir-format
+msgid "Pick the API keys that become members. All of them must belong to the same provider."
+msgstr "Elige las API keys que serán miembros. Todas deben ser del mismo proveedor."
+
+#: lib/tokengate_web/live/model_providers_live.ex:1476
+#: lib/tokengate_web/live/model_providers_live.ex:2723
+#, elixir-autogen, elixir-format
+msgid "Pick the provider the pool belongs to first."
+msgstr "Elige primero el proveedor al que pertenece el pool."
+
+#: lib/tokengate_web/live/model_providers_live.ex:2697
+#, elixir-autogen, elixir-format
+msgid "Pool"
+msgstr "Pool"
+
+#: lib/tokengate_web/live/model_providers_live.ex:2753
+#, elixir-autogen, elixir-format
+msgid "Pool name"
+msgstr "Nombre del pool"
+
+#: lib/tokengate_web/live/model_providers_live.ex:2700
+#, elixir-autogen, elixir-format
+msgid "Pools of the selected provider. Every key in the pool rotates on each request."
+msgstr "Pools del proveedor elegido. Cada key del pool rota en cada request."
+
+#: lib/tokengate_web/live/model_providers_live.ex:2760
+#, elixir-autogen, elixir-format
+msgid "Production keys"
+msgstr "Keys de producción"
+
+#: lib/tokengate_web/live/model_providers_live.ex:2377
+#, elixir-autogen, elixir-format
+msgid "Remove this API key from the pool"
+msgstr "Quitar esta API key del pool"
+
+#: lib/tokengate_web/live/model_providers_live.ex:1492
+#: lib/tokengate_web/live/model_providers_live.ex:1503
+#, elixir-autogen, elixir-format
+msgid "Select at least one API key for the new pool."
+msgstr "Selecciona al menos una API key para el pool nuevo."
+
+#: lib/tokengate_web/live/model_providers_live.ex:2243
+#, elixir-autogen, elixir-format
+msgid "Show the API keys in this pool"
+msgstr "Ver las API keys de este pool"
+
+#: lib/tokengate_web/live/provider_keys_live.ex:310
+#, elixir-autogen, elixir-format
+msgid "This API key belongs to a pool. Remove it from the pool first."
+msgstr "Esta API key pertenece a un pool. Quítala del pool primero."
+
+#: lib/tokengate_web/live/model_providers_live.ex:807
+#, elixir-autogen, elixir-format
+msgid "This API key belongs to another provider."
+msgstr "Esta API key pertenece a otro proveedor."
+
+#: lib/tokengate_web/live/model_providers_live.ex:2733
+#, elixir-autogen, elixir-format
+msgid "This provider has no pools yet. Create one."
+msgstr "Este proveedor todavía no tiene pools. Crea uno."
+
+msgid "Could not delete the pool."
+msgstr "No se pudo borrar el pool."
+
+msgid "Delete pool"
+msgstr "Borrar pool"
+
+msgid "Delete this pool? This cannot be undone."
+msgstr "¿Borrar este pool? No se puede deshacer."
+
+msgid "Pool deleted."
+msgstr "Pool eliminado."
+
+msgid "This pool is mounted on a model. Remove the lane first."
+msgstr "Este pool está montado en un modelo. Quita primero el lane."
+
+msgid "One of the selected API keys is not valid for this pool."
+msgstr "Una de las API keys seleccionadas no sirve para este pool."

@@ -27,6 +27,20 @@ defmodule Tokengate.Routing.Router do
   `available?` predicate built from the circuit breaker so they never
   call the breaker directly.
 
+  ### Credential pools
+
+  A lane mounted on a credential pool (`pool_id`) carries no credential of
+  its own: it stands for N keys of the same provider. Before the credential,
+  status, `exclude` and visibility filters run, every lane is materialized
+  into one candidate per pool member — a COPY of the lane with the member's
+  credential and the lane's `id` (`Tokengate.Routing.Pools.expand/1`) — so the
+  filters and the breaker run per member while priority, price, scope and
+  `provider_model` stay on the lane. Candidates are then grouped back by lane
+  id (`Pools.group/1`) and `Priority.select_groups/2` picks the group first
+  (health, priority) and the member second (rotation per request, no sticky).
+  The route is built from the chosen copy, so `route.model_provider.credential`
+  is the member that served and `route.model_provider.id` is still the lane.
+
   ### Exclusive scope
 
   Providers can be scoped to serve only specific consumers:
@@ -49,6 +63,7 @@ defmodule Tokengate.Routing.Router do
   alias Tokengate.Providers
   alias Tokengate.Routing.CircuitBreakerManager
   alias Tokengate.Routing.CredentialHealth
+  alias Tokengate.Routing.Pools
   alias Tokengate.Routing.Priority
 
   @type route :: %{
@@ -273,6 +288,14 @@ defmodule Tokengate.Routing.Router do
     else
       disabled_ids = Tokengate.Routing.Cache.disabled_credential_ids()
 
+      # Expansion comes FIRST: a lane mounted on a credential pool is one row
+      # that stands for N keys, so it becomes one candidate per member — a copy
+      # of the lane with the member's credential and the lane's id — before the
+      # credential/status/exclude/visibility filter and before the breaker is
+      # ever asked. Every member is therefore filtered (and breaker-checked) as
+      # its own credential, while priority, provider_model, price and scope stay
+      # on the lane. A single-key lane expands to itself.
+      #
       # Filter out candidates whose credential is excluded, disabled, or
       # missing. Disabled credentials are checked against the cached set so
       # a freshly-disabled credential stops receiving traffic within 60s
@@ -282,6 +305,7 @@ defmodule Tokengate.Routing.Router do
       # the owner's exclusive provider.
       candidates =
         model_providers
+        |> Pools.expand()
         |> Enum.filter(fn mp ->
           mp.credential != nil and
             mp.credential.status == "active" and
@@ -293,26 +317,39 @@ defmodule Tokengate.Routing.Router do
       if candidates == [] do
         {:error, :no_available_provider}
       else
-        select_and_build_route(model, candidates, request_context, breaker)
+        select_and_build_route(model, candidates, request_context, breaker, exclude)
       end
     end
   end
 
-  defp select_and_build_route(model, candidates, request_context, breaker) do
+  defp select_and_build_route(model, candidates, request_context, breaker, exclude) do
     available? = fn ap ->
       breaker.allow?(ap.credential.id)
     end
 
-    # Mark exclusive providers with priority -1 so they always come first
+    # Mark exclusive providers with priority -1 so they always come first.
+    # The boost lands on the copies (a pool lane's members inherit it), so an
+    # exclusive lane mounted on a pool still outranks every global lane.
     candidates = inject_exclusive_priority(candidates)
+
+    # Group back by lane: the selector ranks lanes (health, priority) and only
+    # then chooses inside the winning lane — rotation for a pool, sticky for a
+    # single key.
+    groups = Pools.group(candidates)
 
     strategy_opts = %{
       api_key_hash: Map.get(request_context, :api_key_hash),
       model_id: model.id,
-      available?: available?
+      available?: available?,
+      # Las credenciales que la cascada ya intentó: los candidatos ya se
+      # filtraron arriba, pero el selector necesita los ids para contar los
+      # MIEMBROS del pool que quedaron fuera y saltar el grupo agotado
+      # (`Pools.exhausted?/2`). Sale del MISMO `exclude` que alimentó el
+      # filtro (request_context + opts), no de una relectura del contexto.
+      exclude_ids: exclude
     }
 
-    case Priority.select(candidates, strategy_opts) do
+    case Priority.select_groups(groups, strategy_opts) do
       {:ok, model_provider} ->
         credential = model_provider.credential
 

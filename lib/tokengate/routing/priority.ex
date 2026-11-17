@@ -20,6 +20,32 @@ defmodule Tokengate.Routing.Priority do
        stick to it (only when `opts[:api_key_hash]` is present), and return it.
     4. If no candidate is available, return `{:error, :no_available_provider}`.
 
+  ## Selection by groups (credential pools)
+
+  `select_groups/2` is the entry point for models that mount a credential pool:
+  candidates arrive already expanded —one copy per pool member— and grouped by
+  lane (`Tokengate.Routing.Pools.Group`). The algorithm above gains one level:
+
+    1. Groups sort by `{health, priority, lane.id}`, where health is aggregated
+       from the group's candidates. A pool whose members are all degraded sinks
+       below a healthy group even if its priority is better; a single-key lane
+       keeps competing on its own health.
+    2. The first group with at least one available candidate wins. Inside it a
+       lane with `pool_id` (N members) rotates: the start index comes from
+       `PoolCounters.next_start/2`, open breakers and degraded members are
+       skipped while a healthy member remains, and `StickyTracker` is neither
+       read nor written — the stick pins the LANE, and the member choice happens
+       after, always by rotation. A lane without `pool_id` (a group of one)
+       keeps the exact `select/2` behavior, sticky included.
+    3. Groups that already spent their cascade budget are skipped before the
+       ranking: `opts[:exclude_ids]` (the credentials the cascade already tried,
+       `:exclude_credential_ids` in the request context) feeds
+       `Tokengate.Routing.Pools.exhausted?/2`. A pool of N stops at
+       `max(1, round(N * 0.8))` tried members even though it may still have an
+       untried one, so the attempt budget covers the next group.
+
+  `select/2` is untouched: same signature, same return type, same algorithm.
+
   `StickyTracker` may not be running (e.g. tests in isolation). Tracker
   calls are wrapped so that any `:exit` / `:undefined` / `ArgumentError`
   is treated as a miss and selection continues without stickiness.
@@ -28,6 +54,8 @@ defmodule Tokengate.Routing.Priority do
   @behaviour Tokengate.Routing.Strategy
   alias Tokengate.Providers.ModelProvider
   alias Tokengate.Routing.CredentialHealth
+  alias Tokengate.Routing.Pools
+  alias Tokengate.Routing.PoolCounters
   alias Tokengate.Routing.StickyTracker
 
   @impl true
@@ -47,7 +75,163 @@ defmodule Tokengate.Routing.Priority do
     end
   end
 
+  @doc """
+  Selects one candidate across lane groups.
+
+  `groups` are `Tokengate.Routing.Pools.Group` structs: candidates already
+  expanded (one copy per pool member) and grouped by `model_provider.id`. The
+  return value is the chosen copy, so `route.model_provider.credential` is the
+  credential that serves the request while `route.model_provider.id` stays the
+  lane's.
+
+  Same options as `select/2` (`:available?`, `:api_key_hash`, `:model_id`) plus
+  `:exclude_ids` — the credential ids the cascade already tried. Groups that
+  spent their budget (`Pools.exhausted?/2`) are skipped before the ranking, so
+  an exhausted pool never swallows another attempt.
+  Returns `{:error, :no_available_provider}` when no group has an available
+  candidate.
+  """
+  @spec select_groups([Pools.Group.t()], map()) ::
+          {:ok, ModelProvider.t()} | {:error, :no_available_provider}
+  def select_groups(groups, opts) when is_list(groups) and is_map(opts) do
+    available? = Map.get(opts, :available?, fn _ -> true end)
+    api_key_hash = Map.get(opts, :api_key_hash)
+    model_id = Map.get(opts, :model_id)
+    exclude_ids = Map.get(opts, :exclude_ids, [])
+
+    # El sticky de un lane de una sola key se resuelve ANTES del ranking: igual
+    # que `select/2`, un stick vivo gana a la prioridad. Consultarlo dentro del
+    # grupo ya elegido perdería un stick que apunta a un lane de peor prioridad.
+    with :miss <- sticky_candidate(groups, api_key_hash, model_id, available?) do
+      groups
+      |> Enum.reject(&Pools.exhausted?(&1, exclude_ids))
+      |> Enum.sort_by(&group_sort_key/1)
+      |> Enum.reduce_while({:error, :no_available_provider}, fn group, _not_found ->
+        case select_in_group(group, available?, api_key_hash, model_id) do
+          {:ok, %ModelProvider{} = ap} -> {:halt, {:ok, ap}}
+          {:error, :no_available_provider} -> {:cont, {:error, :no_available_provider}}
+        end
+      end)
+    else
+      {:ok, %ModelProvider{} = ap} -> {:ok, ap}
+    end
+  end
+
   ## Internal ---------------------------------------------------------------
+
+  # Sticky across single-key lanes: the stick stores the LANE id and only key
+  # lanes participate. Pools never read nor write it (rotation is per request),
+  # and a candidate without a loaded credential is never a key lane.
+  defp sticky_candidate(_groups, nil, _model_id, _available?), do: :miss
+
+  defp sticky_candidate(groups, api_key_hash, model_id, available?) do
+    case sticky_get(api_key_hash, model_id) do
+      nil ->
+        :miss
+
+      stuck_id ->
+        stuck_group =
+          Enum.find(groups, fn %Pools.Group{lane: lane} ->
+            lane.id == stuck_id and lane.pool_id == nil
+          end)
+
+        case stuck_group do
+          %Pools.Group{candidates: [candidate]} ->
+            if available?.(candidate) and not degraded_credential?(candidate) do
+              {:ok, candidate}
+            else
+              # Igual que `select/2`: un stick que ya no sirve se suelta. Sin
+              # esto, si el grupo ganador es un pool (que nunca toca el tracker)
+              # el stick viejo sobreviviría hasta su TTL.
+              sticky_clear(api_key_hash, model_id)
+              :miss
+            end
+
+          _ ->
+            :miss
+        end
+    end
+  end
+
+  # `{health, priority, tiebreak}` with the same tie-break as before for
+  # single-key lanes (`credential_id`, the order the query returns). A pool lane
+  # has no credential of its own, so its lane id closes the order.
+  defp group_sort_key(%Pools.Group{} = group) do
+    {Pools.health(group), priority_value(group.lane), group_tiebreak(group)}
+  end
+
+  defp group_tiebreak(%Pools.Group{lane: %ModelProvider{credential_id: nil, id: id}}), do: id
+
+  defp group_tiebreak(%Pools.Group{lane: %ModelProvider{credential_id: credential_id}}),
+    do: credential_id
+
+  defp select_in_group(
+         %Pools.Group{lane: lane, candidates: candidates},
+         available?,
+         api_key_hash,
+         model_id
+       ) do
+    if lane.pool_id == nil do
+      # Lane de una sola key: el grupo es de un candidato y se comporta
+      # exactamente como antes — el sticky fija el LANE y aquí ya no hay nada
+      # más que elegir.
+      sorted = sort_by_priority(candidates)
+
+      cond do
+        api_key_hash != nil -> select_with_stickiness(sorted, api_key_hash, model_id, available?)
+        true -> select_plain(sorted, available?)
+      end
+    else
+      # Lane de pool: rotación por request. El sticky NO se consulta ni se
+      # escribe (el stick es del lane, no del miembro) y la elección de miembro
+      # es siempre por rotación, nunca por afinidad.
+      select_rotating(candidates, lane.id, available?)
+    end
+  end
+
+  # Rotación uniforme: se filtra primero por breaker (un miembro con el breaker
+  # abierto no consume fase) y se rota sobre los sobrevivientes desde el
+  # contador del lane. Los degraded se saltan mientras quede uno sano; si todos
+  # los disponibles están degraded, se permite uno degraded antes que fallar el
+  # request (el breaker ya dijo que están vivos).
+  defp select_rotating(candidates, lane_id, available?) do
+    usable =
+      candidates
+      |> Enum.sort_by(&credential_sort_key/1)
+      |> Enum.filter(available?)
+
+    case usable do
+      [] ->
+        {:error, :no_available_provider}
+
+      _ ->
+        usable
+        |> rotate(PoolCounters.next_start(lane_id, length(usable)))
+        |> pick_healthy_or_degraded()
+    end
+  end
+
+  defp rotate(list, 0), do: list
+
+  defp rotate(list, start) do
+    {head, tail} = Enum.split(list, start)
+    tail ++ head
+  end
+
+  defp pick_healthy_or_degraded(rotated) do
+    case Enum.reject(rotated, &degraded_credential?/1) do
+      [%ModelProvider{} = healthy | _] -> {:ok, healthy}
+      [] -> pick_any(rotated)
+    end
+  end
+
+  defp pick_any([%ModelProvider{} = ap | _]), do: {:ok, ap}
+  defp pick_any(_none), do: {:error, :no_available_provider}
+
+  # Orden estable de los miembros de un pool, independiente del orden en que
+  # llegaron del cache: la fase la pone el contador, no Postgres.
+  defp credential_sort_key(%ModelProvider{credential: %{id: id}}), do: id
+  defp credential_sort_key(%ModelProvider{}), do: ""
 
   defp select_plain(sorted, available?) do
     case Enum.find(sorted, available?) do

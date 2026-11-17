@@ -4,9 +4,12 @@ defmodule Tokengate.Providers.ModelProvider do
   at the provider (`provider_model`), priority for routing, and
   enabled flag.
 
-  Each row pins a specific credential — allowing multiple credentials
-  from the same provider to serve the same model with different
-  priorities for fallback.
+  Each row pins ONE source of credentials: a single credential
+  (`credential_id`) or a credential pool (`pool_id`) — never both, never
+  neither. That lets a model mount N keys of the same provider as one lane
+  that rotates between them, with the lane still owning priority, price and
+  scope. The XOR is enforced in the DB (`model_providers_one_source_check`)
+  and mirrored here by `validate_credential_source/1`.
 
   ## Exclusive scope
 
@@ -115,6 +118,7 @@ defmodule Tokengate.Providers.ModelProvider do
 
     belongs_to :model, Tokengate.Providers.Model
     belongs_to :credential, Tokengate.Providers.Credential
+    belongs_to :pool, Tokengate.Providers.CredentialPool
     belongs_to :exclusive_to_group_member, Tokengate.Accounts.GroupMember
     belongs_to :exclusive_to_group, Tokengate.Accounts.Group
     belongs_to :exclusive_to_service, Tokengate.Accounts.Service
@@ -132,6 +136,7 @@ defmodule Tokengate.Providers.ModelProvider do
     |> cast(attrs, [
       :model_id,
       :credential_id,
+      :pool_id,
       :provider_model,
       :priority,
       :enabled,
@@ -154,7 +159,10 @@ defmodule Tokengate.Providers.ModelProvider do
       :exclusive_to_group_id,
       :exclusive_to_service_id
     ])
-    |> validate_required([:model_id, :credential_id, :provider_model, :enabled])
+    |> validate_required([:model_id, :provider_model, :enabled])
+    # Exactamente una fuente por lane: una credencial o un pool, espejo del
+    # CHECK `num_nonnulls(credential_id, pool_id) = 1`.
+    |> validate_credential_source()
     # 0 is the floor: -1 is reserved at runtime for exclusive providers
     # (Router.inject_exclusive_priority/1), so a configured negative priority
     # on a global row would outrank an exclusive one.
@@ -173,6 +181,7 @@ defmodule Tokengate.Providers.ModelProvider do
     |> validate_exclusive_scope()
     |> foreign_key_constraint(:model_id)
     |> foreign_key_constraint(:credential_id)
+    |> foreign_key_constraint(:pool_id)
     |> foreign_key_constraint(:exclusive_to_group_member_id)
     |> foreign_key_constraint(:exclusive_to_group_id)
     |> foreign_key_constraint(:exclusive_to_service_id)
@@ -196,6 +205,10 @@ defmodule Tokengate.Providers.ModelProvider do
     |> unique_constraint(:credential_id,
       name: :model_providers_global_credential_unique_index,
       message: "this credential is already global for this model"
+    )
+    |> unique_constraint(:pool_id,
+      name: :model_providers_global_pool_unique_index,
+      message: "this pool is already global for this model"
     )
     |> sync_scope_field()
   end
@@ -358,6 +371,29 @@ defmodule Tokengate.Providers.ModelProvider do
           Enum.map(other, fn item -> if downcase?, do: String.downcase(item), else: item end)
 
         put_change(changeset, stored_field, items)
+    end
+  end
+
+  # A lane has exactly one credential source. `validate_required` can't express
+  # "one of these two", so the XOR lives here — and the DB repeats it as a CHECK
+  # so a programmatic write can't bypass the changeset.
+  defp validate_credential_source(changeset) do
+    credential_id = get_field(changeset, :credential_id)
+    pool_id = get_field(changeset, :pool_id)
+
+    case {credential_id, pool_id} do
+      {nil, nil} ->
+        add_error(changeset, :credential_id, "a lane needs a credential or a pool")
+
+      {credential, pool} when not is_nil(credential) and not is_nil(pool) ->
+        add_error(
+          changeset,
+          :pool_id,
+          "a lane cannot use a credential and a pool at the same time"
+        )
+
+      _ ->
+        changeset
     end
   end
 

@@ -71,6 +71,17 @@ The public surface is exactly these seven routes:
   credentials first, slow ones sinking below until they recover; within a level,
   `priority` ASC decides. Billing surface (subscription vs pay-per-token) does
   **not** rank candidates — order is priority alone.
+- **API key pools** — a model route can mount a **provider-scoped pool** of API
+  keys instead of a single key. The route keeps its priority, `provider_model`
+  and price; the pool only contributes keys, and the router rotates across them
+  **per request** (no sticky inside a pool, so prompt-cache affinity does not pin
+  a member). A pool is ranked as one route, and the cascade tries at most
+  `max(1, round(n * 0.8))` of its members in a single request before falling
+  through to the next route; a failed member is excluded immediately instead of
+  being retried. Each key keeps its own breaker, rpm and concurrency buckets, so
+  a pool of N multiplies the provider's aggregate quota. Pools are reusable
+  across models of the same provider and are managed from the model's page next
+  to the single-key routes.
 - **Fallback + circuit breaker** — auth errors (401/402/403) permanently disable
   the credential and fall back; timeouts (and first-token timeouts) fall back
   immediately; other errors retry the provider before moving on. Per-credential

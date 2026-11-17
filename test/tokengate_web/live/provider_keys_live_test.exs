@@ -261,4 +261,25 @@ defmodule TokengateWeb.ProviderKeysLiveTest do
     assert html =~ "Credencial reactivada."
     assert Providers.get_credential!(credential.id).status == "active"
   end
+
+  # Una key que vive en un pool no se borra: la membresía es parte de la fuente
+  # de credenciales de un lane (FK RESTRICT). El contexto la rechaza y la UI lo
+  # dice, en vez de reventar con un 500.
+  test "una key que vive en un pool no se borra y se avisa", %{conn: conn} do
+    provider = create_provider()
+    credential = create_credential(provider, %{name: "Pooled"})
+
+    {:ok, pool} = Providers.create_pool(provider, %{name: "Pool de keys"})
+    {:ok, _member} = Providers.add_pool_member(pool, credential)
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_keys(conn, provider)
+
+    html = view |> element("#delete-credential-#{credential.id}") |> render_click()
+
+    assert html =~ "Esta API key pertenece a un pool. Quítala del pool primero."
+    assert has_element?(view, "#credential-#{credential.id}")
+    assert Providers.get_credential(credential.id) != nil
+  end
 end

@@ -13,7 +13,7 @@ msgstr ""
 
 #: lib/tokengate_web/components/core_components.ex:414
 #: lib/tokengate_web/live/group_members_live.ex:601
-#: lib/tokengate_web/live/model_providers_live.ex:1584
+#: lib/tokengate_web/live/model_providers_live.ex:2283
 #: lib/tokengate_web/live/notifications_live.ex:588
 #: lib/tokengate_web/live/notifications_live.ex:660
 #: lib/tokengate_web/live/observability_live.ex:301
@@ -154,10 +154,10 @@ msgstr ""
 #: lib/tokengate_web/components/layouts.ex:361
 #: lib/tokengate_web/live/group_members_live.ex:598
 #: lib/tokengate_web/live/group_members_live.ex:738
-#: lib/tokengate_web/live/model_providers_live.ex:1528
+#: lib/tokengate_web/live/model_providers_live.ex:2227
 #: lib/tokengate_web/live/models_live.ex:78
-#: lib/tokengate_web/live/models_live.ex:1209
-#: lib/tokengate_web/live/provider_keys_live.ex:490
+#: lib/tokengate_web/live/models_live.ex:1229
+#: lib/tokengate_web/live/provider_keys_live.ex:501
 #: lib/tokengate_web/live/providers_live.ex:1134
 #: lib/tokengate_web/live/services_live.ex:1240
 #: lib/tokengate_web/live/stats/groups.ex:206
@@ -182,8 +182,8 @@ msgid "Operations"
 msgstr ""
 
 #: lib/tokengate_web/components/layouts.ex:353
-#: lib/tokengate_web/live/models_live.ex:1241
-#: lib/tokengate_web/live/provider_keys_live.ex:383
+#: lib/tokengate_web/live/models_live.ex:1261
+#: lib/tokengate_web/live/provider_keys_live.ex:394
 #: lib/tokengate_web/live/providers_live.ex:60
 #: lib/tokengate_web/live/providers_live.ex:752
 #: lib/tokengate_web/live/stats/model.ex:196
@@ -267,7 +267,7 @@ msgstr ""
 msgid "session of"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:445
+#: lib/tokengate_web/live/provider_keys_live.ex:456
 #, elixir-autogen, elixir-format
 msgid " (leave empty = unchanged)"
 msgstr ""
@@ -289,17 +289,17 @@ msgstr ""
 
 #: lib/tokengate_web/components/service_stats_body.ex:85
 #: lib/tokengate_web/live/dashboard_live.html.heex:121
-#: lib/tokengate_web/live/model_providers_live.ex:1577
-#: lib/tokengate_web/live/models_live.ex:1460
+#: lib/tokengate_web/live/model_providers_live.ex:2276
+#: lib/tokengate_web/live/models_live.ex:1480
 #: lib/tokengate_web/live/monitoring_live.ex:1063
-#: lib/tokengate_web/live/provider_keys_live.ex:390
-#: lib/tokengate_web/live/provider_keys_live.ex:445
+#: lib/tokengate_web/live/provider_keys_live.ex:401
+#: lib/tokengate_web/live/provider_keys_live.ex:456
 #, elixir-autogen, elixir-format
 msgid "API key"
 msgstr ""
 
 #: lib/tokengate_web/components/keys_panel.ex:170
-#: lib/tokengate_web/live/model_providers_live.ex:1449
+#: lib/tokengate_web/live/model_providers_live.ex:2136
 #: lib/tokengate_web/live/providers_live.ex:1194
 #: lib/tokengate_web/live/users_live.ex:1143
 #: lib/tokengate_web/live/users_live.ex:1505
@@ -319,12 +319,12 @@ msgstr ""
 msgid "Add provider"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:488
+#: lib/tokengate_web/live/provider_keys_live.ex:499
 #, elixir-autogen, elixir-format
 msgid "Alias"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:492
+#: lib/tokengate_web/live/provider_keys_live.ex:503
 #, elixir-autogen, elixir-format
 msgid "Breaker"
 msgstr ""
@@ -335,12 +335,12 @@ msgstr ""
 #: lib/tokengate_web/live/labs_live.ex:376
 #: lib/tokengate_web/live/maintenance_live.ex:364
 #: lib/tokengate_web/live/maintenance_live.ex:400
-#: lib/tokengate_web/live/model_providers_live.ex:2469
-#: lib/tokengate_web/live/model_providers_live.ex:2523
-#: lib/tokengate_web/live/models_live.ex:1433
-#: lib/tokengate_web/live/models_live.ex:2048
-#: lib/tokengate_web/live/models_live.ex:2091
-#: lib/tokengate_web/live/provider_keys_live.ex:460
+#: lib/tokengate_web/live/model_providers_live.ex:3456
+#: lib/tokengate_web/live/model_providers_live.ex:3510
+#: lib/tokengate_web/live/models_live.ex:1453
+#: lib/tokengate_web/live/models_live.ex:2085
+#: lib/tokengate_web/live/models_live.ex:2128
+#: lib/tokengate_web/live/provider_keys_live.ex:471
 #: lib/tokengate_web/live/providers_live.ex:1044
 #: lib/tokengate_web/live/providers_live.ex:1101
 #: lib/tokengate_web/live/services_live.ex:946
@@ -396,7 +396,7 @@ msgstr ""
 msgid "Close"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:339
+#: lib/tokengate_web/live/provider_keys_live.ex:350
 #, elixir-autogen, elixir-format
 msgid "Closed"
 msgstr ""
@@ -416,12 +416,12 @@ msgstr ""
 msgid "Configure the path of each capability (base_url + path)"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:303
+#: lib/tokengate_web/live/provider_keys_live.ex:314
 #, elixir-autogen, elixir-format
 msgid "Could not delete the credential."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:650
+#: lib/tokengate_web/live/model_providers_live.ex:682
 #: lib/tokengate_web/live/providers_live.ex:493
 #, elixir-autogen, elixir-format
 msgid "Could not delete the provider."
@@ -442,7 +442,7 @@ msgstr ""
 msgid "Could not update the credential."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:626
+#: lib/tokengate_web/live/model_providers_live.ex:658
 #: lib/tokengate_web/live/providers_live.ex:435
 #, elixir-autogen, elixir-format
 msgid "Could not update the provider."
@@ -453,16 +453,16 @@ msgstr ""
 msgid "Custom provider"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1385
-#: lib/tokengate_web/live/models_live.ex:1386
-#: lib/tokengate_web/live/provider_keys_live.ex:587
+#: lib/tokengate_web/live/models_live.ex:1405
+#: lib/tokengate_web/live/models_live.ex:1406
+#: lib/tokengate_web/live/provider_keys_live.ex:598
 #: lib/tokengate_web/live/providers_live.ex:1327
 #: lib/tokengate_web/live/providers_live.ex:1328
 #, elixir-autogen, elixir-format
 msgid "Delete"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:583
+#: lib/tokengate_web/live/provider_keys_live.ex:594
 #, elixir-autogen, elixir-format
 msgid "Delete this credential?"
 msgstr ""
@@ -472,8 +472,8 @@ msgstr ""
 msgid "Delete this provider?"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1480
-#: lib/tokengate_web/live/provider_keys_live.ex:562
+#: lib/tokengate_web/live/model_providers_live.ex:2179
+#: lib/tokengate_web/live/provider_keys_live.ex:573
 #: lib/tokengate_web/live/providers_live.ex:1274
 #: lib/tokengate_web/live/providers_live.ex:1279
 #, elixir-autogen, elixir-format
@@ -490,29 +490,29 @@ msgstr ""
 msgid "Documentation for %{name}"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1374
-#: lib/tokengate_web/live/models_live.ex:1375
-#: lib/tokengate_web/live/provider_keys_live.ex:418
-#: lib/tokengate_web/live/provider_keys_live.ex:578
+#: lib/tokengate_web/live/models_live.ex:1394
+#: lib/tokengate_web/live/models_live.ex:1395
+#: lib/tokengate_web/live/provider_keys_live.ex:429
+#: lib/tokengate_web/live/provider_keys_live.ex:589
 #: lib/tokengate_web/live/providers_live.ex:1316
 #: lib/tokengate_web/live/providers_live.ex:1317
 #, elixir-autogen, elixir-format
 msgid "Edit"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:429
+#: lib/tokengate_web/live/provider_keys_live.ex:440
 #, elixir-autogen, elixir-format
 msgid "Edit credential"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1726
+#: lib/tokengate_web/live/model_providers_live.ex:2539
 #: lib/tokengate_web/live/providers_live.ex:948
 #, elixir-autogen, elixir-format
 msgid "Edit provider"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1475
-#: lib/tokengate_web/live/provider_keys_live.ex:563
+#: lib/tokengate_web/live/model_providers_live.ex:2174
+#: lib/tokengate_web/live/provider_keys_live.ex:574
 #: lib/tokengate_web/live/providers_live.ex:1275
 #: lib/tokengate_web/live/providers_live.ex:1280
 #, elixir-autogen, elixir-format
@@ -520,7 +520,7 @@ msgid "Enable"
 msgstr ""
 
 #: lib/tokengate_web/live/monitoring_live.ex:1130
-#: lib/tokengate_web/live/provider_keys_live.ex:491
+#: lib/tokengate_web/live/provider_keys_live.ex:502
 #, elixir-autogen, elixir-format
 msgid "In flight"
 msgstr ""
@@ -531,8 +531,8 @@ msgid "It resolves as"
 msgstr ""
 
 #: lib/tokengate_web/components/service_stats_body.ex:232
-#: lib/tokengate_web/live/models_live.ex:761
-#: lib/tokengate_web/live/provider_keys_live.ex:489
+#: lib/tokengate_web/live/models_live.ex:766
+#: lib/tokengate_web/live/provider_keys_live.ex:500
 #, elixir-autogen, elixir-format
 msgid "Key"
 msgstr ""
@@ -553,7 +553,7 @@ msgstr ""
 msgid "Max concurrency"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:407
+#: lib/tokengate_web/live/provider_keys_live.ex:418
 #: lib/tokengate_web/live/providers_live.ex:1027
 #, elixir-autogen, elixir-format
 msgid "Max concurrency per user"
@@ -576,13 +576,13 @@ msgstr ""
 msgid "Name"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2507
-#: lib/tokengate_web/live/provider_keys_live.ex:440
+#: lib/tokengate_web/live/model_providers_live.ex:3494
+#: lib/tokengate_web/live/provider_keys_live.ex:451
 #, elixir-autogen, elixir-format
 msgid "Name to identify this credential."
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:430
+#: lib/tokengate_web/live/provider_keys_live.ex:441
 #, elixir-autogen, elixir-format
 msgid "New credential"
 msgstr ""
@@ -607,12 +607,12 @@ msgstr ""
 msgid "Only credentials in error can be reactivated."
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:453
+#: lib/tokengate_web/live/provider_keys_live.ex:464
 #, elixir-autogen, elixir-format
 msgid "Only if you want to change it."
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:340
+#: lib/tokengate_web/live/provider_keys_live.ex:351
 #, elixir-autogen, elixir-format
 msgid "Open"
 msgstr ""
@@ -632,13 +632,13 @@ msgstr ""
 msgid "Paths reset: every capability falls back to its default."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2506
-#: lib/tokengate_web/live/provider_keys_live.ex:439
+#: lib/tokengate_web/live/model_providers_live.ex:3493
+#: lib/tokengate_web/live/provider_keys_live.ex:450
 #, elixir-autogen, elixir-format
 msgid "Production"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:619
+#: lib/tokengate_web/live/model_providers_live.ex:651
 #: lib/tokengate_web/live/providers_live.ex:428
 #, elixir-autogen, elixir-format
 msgid "Provider activated."
@@ -649,7 +649,7 @@ msgstr ""
 msgid "Provider created."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:620
+#: lib/tokengate_web/live/model_providers_live.ex:652
 #: lib/tokengate_web/live/providers_live.ex:429
 #, elixir-autogen, elixir-format
 msgid "Provider deactivated."
@@ -665,30 +665,30 @@ msgstr ""
 msgid "Provider limits"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:404
+#: lib/tokengate_web/live/provider_keys_live.ex:415
 #, elixir-autogen, elixir-format
 msgid "Provider max concurrency"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1074
+#: lib/tokengate_web/live/model_providers_live.ex:1312
 #: lib/tokengate_web/live/providers_live.ex:560
 #, elixir-autogen, elixir-format
 msgid "Provider updated."
 msgstr ""
 
 #: lib/tokengate_web/components/keys_panel.ex:247
-#: lib/tokengate_web/live/provider_keys_live.ex:552
+#: lib/tokengate_web/live/provider_keys_live.ex:563
 #: lib/tokengate_web/live/topups_live.html.heex:268
 #, elixir-autogen, elixir-format
 msgid "Reactivate"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:410
+#: lib/tokengate_web/live/provider_keys_live.ex:421
 #, elixir-autogen, elixir-format
 msgid "Receive timeout"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:401
+#: lib/tokengate_web/live/provider_keys_live.ex:412
 #: lib/tokengate_web/live/stats/live.ex:181
 #, elixir-autogen, elixir-format
 msgid "Requests per minute"
@@ -700,11 +700,11 @@ msgid "Requests per minute across the provider. Empty = no limit."
 msgstr ""
 
 #: lib/tokengate_web/components/keys_panel.ex:149
-#: lib/tokengate_web/live/model_providers_live.ex:2472
-#: lib/tokengate_web/live/models_live.ex:2051
-#: lib/tokengate_web/live/models_live.ex:2094
+#: lib/tokengate_web/live/model_providers_live.ex:3459
+#: lib/tokengate_web/live/models_live.ex:2088
+#: lib/tokengate_web/live/models_live.ex:2131
 #: lib/tokengate_web/live/notifications_live.ex:509
-#: lib/tokengate_web/live/provider_keys_live.ex:463
+#: lib/tokengate_web/live/provider_keys_live.ex:474
 #: lib/tokengate_web/live/providers_live.ex:1047
 #: lib/tokengate_web/live/providers_live.ex:1104
 #: lib/tokengate_web/live/services_live.ex:949
@@ -723,7 +723,7 @@ msgstr ""
 msgid "The delete failed in the database (timeout or lock). Try again; if it persists, contact an administrator."
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:454
+#: lib/tokengate_web/live/provider_keys_live.ex:465
 #, elixir-autogen, elixir-format
 msgid "The token the provider gives you (sk-...)."
 msgstr ""
@@ -743,13 +743,13 @@ msgstr ""
 msgid "Unique id of the custom provider."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:243
+#: lib/tokengate_web/live/model_providers_live.ex:266
 #: lib/tokengate_web/live/providers_live.ex:293
 #, elixir-autogen, elixir-format
 msgid "Unknown provider."
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:463
+#: lib/tokengate_web/live/provider_keys_live.ex:474
 #, elixir-autogen, elixir-format
 msgid "Update"
 msgstr ""
@@ -759,7 +759,7 @@ msgstr ""
 msgid "models.dev catalog (%{count} providers). Picking one opens its credential."
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:448
+#: lib/tokengate_web/live/provider_keys_live.ex:459
 #, elixir-autogen, elixir-format
 msgid "sk-... (leave empty to keep)"
 msgstr ""
@@ -841,7 +841,7 @@ msgstr ""
 msgid "no usage"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:408
+#: lib/tokengate_web/live/provider_keys_live.ex:419
 #: lib/tokengate_web/live/providers_live.ex:1230
 #, elixir-autogen, elixir-format
 msgid "Conc./user"
@@ -865,7 +865,7 @@ msgstr ""
 #: lib/tokengate_web/components/layouts.ex:545
 #: lib/tokengate_web/components/service_stats_body.ex:227
 #: lib/tokengate_web/live/provider_keys_live.ex:43
-#: lib/tokengate_web/live/provider_keys_live.ex:372
+#: lib/tokengate_web/live/provider_keys_live.ex:383
 #: lib/tokengate_web/live/users_live.ex:1440
 #, elixir-autogen, elixir-format
 msgid "API keys"
@@ -1016,7 +1016,7 @@ msgstr ""
 msgid "Key revoked."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1240
+#: lib/tokengate_web/live/models_live.ex:1260
 #: lib/tokengate_web/live/providers_live.ex:1133
 #: lib/tokengate_web/live/services_live.ex:1209
 #: lib/tokengate_web/live/users_live.ex:1230
@@ -1138,7 +1138,7 @@ msgstr ""
 
 #: lib/tokengate_web/components/service_stats_body.ex:233
 #: lib/tokengate_web/components/service_stats_body.ex:357
-#: lib/tokengate_web/live/model_providers_live.ex:1582
+#: lib/tokengate_web/live/model_providers_live.ex:2281
 #: lib/tokengate_web/live/monitoring_live.ex:933
 #: lib/tokengate_web/live/monitoring_live.ex:1074
 #: lib/tokengate_web/live/notifications_live.ex:659
@@ -1366,7 +1366,7 @@ msgstr ""
 #: lib/tokengate_web/live/group_members_live.ex:367
 #: lib/tokengate_web/live/group_members_live.ex:399
 #: lib/tokengate_web/live/groups_live.ex:224
-#: lib/tokengate_web/live/models_live.ex:531
+#: lib/tokengate_web/live/models_live.ex:536
 #: lib/tokengate_web/live/services_live.ex:660
 #, elixir-autogen, elixir-format
 msgid "Could not update the model."
@@ -1590,6 +1590,7 @@ msgid "90 days"
 msgstr ""
 
 #: lib/tokengate_web/live/group_members_live.ex:553
+#: lib/tokengate_web/live/model_providers_live.ex:2519
 #, elixir-autogen, elixir-format
 msgid "Add"
 msgstr ""
@@ -1700,7 +1701,7 @@ msgid "Load more"
 msgstr ""
 
 #: lib/tokengate_web/live/group_members_live.ex:596
-#: lib/tokengate_web/live/model_providers_live.ex:1407
+#: lib/tokengate_web/live/model_providers_live.ex:2040
 #, elixir-autogen, elixir-format
 msgid "Member"
 msgstr ""
@@ -1723,9 +1724,9 @@ msgstr ""
 #: lib/tokengate_web/components/service_stats_body.ex:296
 #: lib/tokengate_web/components/service_stats_body.ex:369
 #: lib/tokengate_web/live/dashboard_live.html.heex:395
-#: lib/tokengate_web/live/model_providers_live.ex:1579
-#: lib/tokengate_web/live/models_live.ex:1238
-#: lib/tokengate_web/live/models_live.ex:1461
+#: lib/tokengate_web/live/model_providers_live.ex:2278
+#: lib/tokengate_web/live/models_live.ex:1258
+#: lib/tokengate_web/live/models_live.ex:1481
 #: lib/tokengate_web/live/monitoring_live.ex:947
 #: lib/tokengate_web/live/monitoring_live.ex:1058
 #: lib/tokengate_web/live/stats/groups.ex:253
@@ -1982,55 +1983,55 @@ msgstr ""
 msgid "user@example.com"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1018
+#: lib/tokengate_web/live/model_providers_live.ex:1253
 #, elixir-autogen, elixir-format
 msgid "%{count} providers assigned to the model."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:663
+#: lib/tokengate_web/live/models_live.ex:668
 #, elixir-autogen, elixir-format
 msgid "Cannot delete: the model has providers assigned. Remove them first."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1046
+#: lib/tokengate_web/live/model_providers_live.ex:1283
 #, elixir-autogen, elixir-format
 msgid "Could not assign: %{errors}"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:678
+#: lib/tokengate_web/live/models_live.ex:683
 #, elixir-autogen, elixir-format
 msgid "Could not delete the model."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:819
+#: lib/tokengate_web/live/model_providers_live.ex:1042
 #, elixir-autogen, elixir-format
 msgid "Could not load the provider models."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1423
+#: lib/tokengate_web/live/model_providers_live.ex:2056
 #, elixir-autogen, elixir-format
 msgid "Exclusive per limit profile"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1424
+#: lib/tokengate_web/live/model_providers_live.ex:2057
 #, elixir-autogen, elixir-format
 msgid "Exclusive per user"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1131
+#: lib/tokengate_web/live/models_live.ex:1136
 #, elixir-autogen, elixir-format
 msgid "Generic icon: link a lab or pick one from the palette."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:685
+#: lib/tokengate_web/live/model_providers_live.ex:758
 #, elixir-autogen, elixir-format
 msgid "Invalid order for this model."
 msgstr ""
 
 #: lib/tokengate_web/live/dashboard_live.html.heex:448
 #: lib/tokengate_web/live/dashboard_live.html.heex:495
-#: lib/tokengate_web/live/model_providers_live.ex:1411
-#: lib/tokengate_web/live/model_providers_live.ex:2012
+#: lib/tokengate_web/live/model_providers_live.ex:2044
+#: lib/tokengate_web/live/model_providers_live.ex:2994
 #: lib/tokengate_web/live/monitoring_live.ex:954
 #: lib/tokengate_web/live/monitoring_live.ex:1061
 #: lib/tokengate_web/live/stats/groups.ex:646
@@ -2041,141 +2042,145 @@ msgstr ""
 msgid "Limit profile"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1393
-#: lib/tokengate_web/live/model_providers_live.ex:1397
+#: lib/tokengate_web/live/model_providers_live.ex:2026
+#: lib/tokengate_web/live/model_providers_live.ex:2030
 #, elixir-autogen, elixir-format
 msgid "Limit profile exclusive"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1014
+#: lib/tokengate_web/live/models_live.ex:1019
 #, elixir-autogen, elixir-format
 msgid "Model created."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:674
+#: lib/tokengate_web/live/models_live.ex:679
 #, elixir-autogen, elixir-format
 msgid "Model deleted."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:992
+#: lib/tokengate_web/live/models_live.ex:997
 #, elixir-autogen, elixir-format
 msgid "Model updated."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:271
-#: lib/tokengate_web/live/model_providers_live.ex:312
+#: lib/tokengate_web/live/model_providers_live.ex:297
+#: lib/tokengate_web/live/model_providers_live.ex:339
 #, elixir-autogen, elixir-format
 msgid "Pick the provider the API key belongs to first."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1017
+#: lib/tokengate_web/live/model_providers_live.ex:1252
 #, elixir-autogen, elixir-format
 msgid "Provider assigned to the model."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:646
+#: lib/tokengate_web/live/model_providers_live.ex:678
 #, elixir-autogen, elixir-format
 msgid "Provider removed from the model."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:951
-#: lib/tokengate_web/live/model_providers_live.ex:973
+#: lib/tokengate_web/live/model_providers_live.ex:1174
+#: lib/tokengate_web/live/model_providers_live.ex:1205
 #, elixir-autogen, elixir-format
 msgid "Select at least one limit profile or user for the exclusive scope."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1130
+#: lib/tokengate_web/live/models_live.ex:1135
 #, elixir-autogen, elixir-format
 msgid "The model's own icon."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:220
-#: lib/tokengate_web/live/model_providers_live.ex:308
-#: lib/tokengate_web/live/model_providers_live.ex:431
-#: lib/tokengate_web/live/model_providers_live.ex:630
-#: lib/tokengate_web/live/model_providers_live.ex:654
-#: lib/tokengate_web/live/model_providers_live.ex:689
-#: lib/tokengate_web/live/model_providers_live.ex:791
-#: lib/tokengate_web/live/models_live.ex:302
-#: lib/tokengate_web/live/models_live.ex:341
-#: lib/tokengate_web/live/models_live.ex:390
-#: lib/tokengate_web/live/models_live.ex:535
-#: lib/tokengate_web/live/models_live.ex:550
-#: lib/tokengate_web/live/models_live.ex:570
-#: lib/tokengate_web/live/models_live.ex:628
-#: lib/tokengate_web/live/models_live.ex:647
-#: lib/tokengate_web/live/models_live.ex:683
+#: lib/tokengate_web/live/model_providers_live.ex:243
+#: lib/tokengate_web/live/model_providers_live.ex:335
+#: lib/tokengate_web/live/model_providers_live.ex:459
+#: lib/tokengate_web/live/model_providers_live.ex:662
+#: lib/tokengate_web/live/model_providers_live.ex:686
+#: lib/tokengate_web/live/model_providers_live.ex:721
+#: lib/tokengate_web/live/model_providers_live.ex:762
+#: lib/tokengate_web/live/model_providers_live.ex:829
+#: lib/tokengate_web/live/model_providers_live.ex:879
+#: lib/tokengate_web/live/model_providers_live.ex:1014
+#: lib/tokengate_web/live/models_live.ex:307
+#: lib/tokengate_web/live/models_live.ex:346
+#: lib/tokengate_web/live/models_live.ex:395
+#: lib/tokengate_web/live/models_live.ex:540
+#: lib/tokengate_web/live/models_live.ex:555
+#: lib/tokengate_web/live/models_live.ex:575
+#: lib/tokengate_web/live/models_live.ex:633
+#: lib/tokengate_web/live/models_live.ex:652
+#: lib/tokengate_web/live/models_live.ex:688
 #, elixir-autogen, elixir-format
 msgid "You do not have permission for this action."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1470
+#: lib/tokengate_web/live/model_providers_live.ex:2169
+#: lib/tokengate_web/live/models_live.ex:1858
 #, elixir-autogen, elixir-format
 msgid "no credential"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2152
-#: lib/tokengate_web/live/model_providers_live.ex:2281
+#: lib/tokengate_web/live/model_providers_live.ex:3134
+#: lib/tokengate_web/live/model_providers_live.ex:3263
 #, elixir-autogen, elixir-format
 msgid "(current)"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1931
+#: lib/tokengate_web/live/model_providers_live.ex:2785
 #, elixir-autogen, elixir-format
 msgid "Add another API key for this provider"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1725
+#: lib/tokengate_web/live/model_providers_live.ex:2538
 #, elixir-autogen, elixir-format
 msgid "Assign provider"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1967
+#: lib/tokengate_web/live/models_live.ex:2004
 #, elixir-autogen, elixir-format
 msgid "Brand (lab / icon)"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1797
-#: lib/tokengate_web/live/models_live.ex:1596
-#: lib/tokengate_web/live/models_live.ex:1692
-#: lib/tokengate_web/live/models_live.ex:1838
-#: lib/tokengate_web/live/models_live.ex:1867
+#: lib/tokengate_web/live/model_providers_live.ex:2610
+#: lib/tokengate_web/live/models_live.ex:1616
+#: lib/tokengate_web/live/models_live.ex:1712
+#: lib/tokengate_web/live/models_live.ex:1875
+#: lib/tokengate_web/live/models_live.ex:1904
 #, elixir-autogen, elixir-format
 msgid "Change"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1795
+#: lib/tokengate_web/live/model_providers_live.ex:2608
 #, elixir-autogen, elixir-format
 msgid "Choose another provider"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1961
+#: lib/tokengate_web/live/models_live.ex:1998
 #, elixir-autogen, elixir-format
 msgid "Context window (tokens)"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1904
-#: lib/tokengate_web/live/models_live.ex:1606
+#: lib/tokengate_web/live/model_providers_live.ex:2758
+#: lib/tokengate_web/live/models_live.ex:1626
 #, elixir-autogen, elixir-format
 msgid "Credential (API key)"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1382
+#: lib/tokengate_web/live/models_live.ex:1402
 #, elixir-autogen, elixir-format
 msgid "Delete this model? This action cannot be undone."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1572
+#: lib/tokengate_web/live/model_providers_live.ex:2271
 #, elixir-autogen, elixir-format
 msgid "Drag to reorder priority"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1446
+#: lib/tokengate_web/live/models_live.ex:1466
 #, elixir-autogen, elixir-format
 msgid "Edit model"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2017
+#: lib/tokengate_web/live/models_live.ex:2054
 #, elixir-autogen, elixir-format
 msgid "Hero icon name, e.g. hero-fire. Optional."
 msgstr ""
@@ -2186,85 +2191,85 @@ msgstr ""
 msgid "LLM (chat)"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1978
+#: lib/tokengate_web/live/models_live.ex:2015
 #, elixir-autogen, elixir-format
 msgid "Lab (who built the model)"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1950
+#: lib/tokengate_web/live/model_providers_live.ex:2932
 #, elixir-autogen, elixir-format
 msgid "Loading provider models…"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1963
+#: lib/tokengate_web/live/models_live.ex:2000
 #, elixir-autogen, elixir-format
 msgid "Maximum context size of the model in tokens."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1918
+#: lib/tokengate_web/live/models_live.ex:1955
 #, elixir-autogen, elixir-format
 msgid "Model type"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1911
+#: lib/tokengate_web/live/models_live.ex:1948
 #, elixir-autogen, elixir-format
 msgid "Name (identifier)"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1933
+#: lib/tokengate_web/live/model_providers_live.ex:2787
 #, elixir-autogen, elixir-format
 msgid "New API key"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1412
-#: lib/tokengate_web/live/models_live.ex:1446
+#: lib/tokengate_web/live/models_live.ex:1432
+#: lib/tokengate_web/live/models_live.ex:1466
 #, elixir-autogen, elixir-format
 msgid "New model"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1909
+#: lib/tokengate_web/live/model_providers_live.ex:2763
 #, elixir-autogen, elixir-format
 msgid "No active API keys"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1912
-#: lib/tokengate_web/live/models_live.ex:1621
+#: lib/tokengate_web/live/model_providers_live.ex:2766
+#: lib/tokengate_web/live/models_live.ex:1641
 #, elixir-autogen, elixir-format
 msgid "Pick an API key from this provider"
 msgstr ""
 
 #: lib/tokengate_web/live/labs_live.ex:337
-#: lib/tokengate_web/live/models_live.ex:2021
+#: lib/tokengate_web/live/models_live.ex:2058
 #, elixir-autogen, elixir-format
 msgid "Pick from the palette"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1915
+#: lib/tokengate_web/live/model_providers_live.ex:2769
 #, elixir-autogen, elixir-format
 msgid "Pick the API key that will serve this model"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1347
-#: lib/tokengate_web/live/models_live.ex:1351
+#: lib/tokengate_web/live/models_live.ex:1367
+#: lib/tokengate_web/live/models_live.ex:1371
 #, elixir-autogen, elixir-format
 msgid "Pin to top"
 msgstr ""
 
 #: lib/tokengate_web/live/labs_live.ex:363
-#: lib/tokengate_web/live/models_live.ex:1989
+#: lib/tokengate_web/live/models_live.ex:2026
 #, elixir-autogen, elixir-format
 msgid "Preview"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1580
-#: lib/tokengate_web/live/model_providers_live.ex:1650
+#: lib/tokengate_web/live/model_providers_live.ex:2279
+#: lib/tokengate_web/live/model_providers_live.ex:2391
 #, elixir-autogen, elixir-format
 msgid "Priority"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1577
-#: lib/tokengate_web/live/model_providers_live.ex:1741
-#: lib/tokengate_web/live/models_live.ex:1459
+#: lib/tokengate_web/live/model_providers_live.ex:2276
+#: lib/tokengate_web/live/model_providers_live.ex:2554
+#: lib/tokengate_web/live/models_live.ex:1479
 #: lib/tokengate_web/live/monitoring_live.ex:1035
 #: lib/tokengate_web/live/monitoring_live.ex:1064
 #: lib/tokengate_web/live/providers_live.ex:1131
@@ -2272,239 +2277,239 @@ msgstr ""
 msgid "Provider"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1957
+#: lib/tokengate_web/live/model_providers_live.ex:2939
 #, elixir-autogen, elixir-format
 msgid "Provider model"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1701
+#: lib/tokengate_web/live/model_providers_live.ex:2442
 #, elixir-autogen, elixir-format
 msgid "Remove this provider from the model?"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1581
-#: lib/tokengate_web/live/model_providers_live.ex:1991
+#: lib/tokengate_web/live/model_providers_live.ex:2280
+#: lib/tokengate_web/live/model_providers_live.ex:2973
 #, elixir-autogen, elixir-format
 msgid "Scope"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1961
+#: lib/tokengate_web/live/model_providers_live.ex:2943
 #, elixir-autogen, elixir-format
 msgid "Suggestions from the provider catalog. You can type any value for dedicated or private tiers."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2007
+#: lib/tokengate_web/live/models_live.ex:2044
 #, elixir-autogen, elixir-format
 msgid "The model's own icon is queued: it is used if you unlink the lab."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1913
+#: lib/tokengate_web/live/models_live.ex:1950
 #, elixir-autogen, elixir-format
 msgid "This is what clients send in `model`. It must be unique."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1942
+#: lib/tokengate_web/live/model_providers_live.ex:2796
 #, elixir-autogen, elixir-format
 msgid "This provider has no API keys yet. Use “New API key” to create the first one."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1959
+#: lib/tokengate_web/live/model_providers_live.ex:2941
 #, elixir-autogen, elixir-format
 msgid "Type or pick the model (e.g. glm-5.2:dedicated)"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1347
-#: lib/tokengate_web/live/models_live.ex:1350
+#: lib/tokengate_web/live/models_live.ex:1367
+#: lib/tokengate_web/live/models_live.ex:1370
 #, elixir-autogen, elixir-format
 msgid "Unpin"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1982
+#: lib/tokengate_web/live/models_live.ex:2019
 #, elixir-autogen, elixir-format
 msgid "With a linked lab its brand wins; without one the icon below is used."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1883
-#: lib/tokengate_web/live/models_live.ex:1555
-#: lib/tokengate_web/live/models_live.ex:1683
-#: lib/tokengate_web/live/models_live.ex:1858
+#: lib/tokengate_web/live/model_providers_live.ex:2696
+#: lib/tokengate_web/live/models_live.ex:1575
+#: lib/tokengate_web/live/models_live.ex:1703
+#: lib/tokengate_web/live/models_live.ex:1895
 #, elixir-autogen, elixir-format
 msgid "no key"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1980
+#: lib/tokengate_web/live/models_live.ex:2017
 #, elixir-autogen, elixir-format
 msgid "— No lab —"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2530
+#: lib/tokengate_web/live/model_providers_live.ex:3517
 #, elixir-autogen, elixir-format
 msgid "Create and use"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2080
+#: lib/tokengate_web/live/models_live.ex:2117
 #, elixir-autogen, elixir-format
 msgid "E.g. Always answer in English. Do not use markdown. Be concise…"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2309
+#: lib/tokengate_web/live/model_providers_live.ex:3295
 #, elixir-autogen, elixir-format
 msgid "Empty uses the config default (180 s / 3 min) for every credential, regardless of billing. If you set a value, that one is always used. Minimum 1 s, maximum 86400 s (24 h). It is stored in milliseconds."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2169
+#: lib/tokengate_web/live/model_providers_live.ex:3151
 #, elixir-autogen, elixir-format
 msgid "Exclusive limit profile"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2028
+#: lib/tokengate_web/live/model_providers_live.ex:3010
 #, elixir-autogen, elixir-format
 msgid "Exclusive user"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2462
+#: lib/tokengate_web/live/model_providers_live.ex:3449
 #, elixir-autogen, elixir-format
 msgid "If it is off, this provider gets no traffic for the model."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2400
+#: lib/tokengate_web/live/model_providers_live.ex:3387
 #, elixir-autogen, elixir-format
 msgid "Input tokens with a cache hit (cheaper). Empty = use the input price for all of them."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1830
+#: lib/tokengate_web/live/model_providers_live.ex:2643
 #, elixir-autogen, elixir-format
 msgid "No provider matches. Create the provider in"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2384
+#: lib/tokengate_web/live/model_providers_live.ex:3371
 #, elixir-autogen, elixir-format
 msgid "Non-cached input tokens. Fallback when the provider does not report cost."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2178
+#: lib/tokengate_web/live/model_providers_live.ex:3160
 #, elixir-autogen, elixir-format
 msgid "Only the members of this limit profile will be able to use this API key for this model."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2037
+#: lib/tokengate_web/live/model_providers_live.ex:3019
 #, elixir-autogen, elixir-format
 msgid "Only this user will be able to use this API key for this model."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2433
+#: lib/tokengate_web/live/model_providers_live.ex:3420
 #, elixir-autogen, elixir-format
 msgid "Output tokens. Same fallback as input."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2451
+#: lib/tokengate_web/live/model_providers_live.ex:3438
 #, elixir-autogen, elixir-format
 msgid "Prompt cache:"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1754
+#: lib/tokengate_web/live/model_providers_live.ex:2567
 #, elixir-autogen, elixir-format
 msgid "Provider of this assignment, derived from its API key. Change the key below to"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1817
+#: lib/tokengate_web/live/model_providers_live.ex:2630
 #, elixir-autogen, elixir-format
 msgid "Search provider by name or id… (e.g. openrouter, fireworks)"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2444
+#: lib/tokengate_web/live/model_providers_live.ex:3431
 #, elixir-autogen, elixir-format
 msgid "Sends service_tier: priority — more reliability at peak hours, billed at a premium depending on the model."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2077
+#: lib/tokengate_web/live/models_live.ex:2114
 #, elixir-autogen, elixir-format
 msgid "System instructions (guard rails)"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2069
+#: lib/tokengate_web/live/models_live.ex:2106
 #, elixir-autogen, elixir-format
 msgid "Text injected at the start of every system prompt sent to the provider."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1744
+#: lib/tokengate_web/live/model_providers_live.ex:2557
 #, elixir-autogen, elixir-format
 msgid "The provider of this row is"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1920
+#: lib/tokengate_web/live/model_providers_live.ex:2774
 #, elixir-autogen, elixir-format
 msgid "The specific API key that will serve this model. Picking it derives its provider, and with it the provider model and the list price when models.dev publishes them. Every credential has its own circuit breaker and priority."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2514
+#: lib/tokengate_web/live/model_providers_live.ex:3501
 #, elixir-autogen, elixir-format
 msgid "The token the provider gives you."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2083
+#: lib/tokengate_web/live/models_live.ex:2120
 #, elixir-autogen, elixir-format
 msgid "This text is prepended to the user system prompt. Leave it empty to inject nothing."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2197
-#: lib/tokengate_web/live/model_providers_live.ex:2249
+#: lib/tokengate_web/live/model_providers_live.ex:3179
+#: lib/tokengate_web/live/model_providers_live.ex:3231
 #, elixir-autogen, elixir-format
 msgid "Type to search a limit profile…"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2061
-#: lib/tokengate_web/live/model_providers_live.ex:2114
+#: lib/tokengate_web/live/model_providers_live.ex:3043
+#: lib/tokengate_web/live/model_providers_live.ex:3096
 #, elixir-autogen, elixir-format
 msgid "Type to search a user…"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2070
+#: lib/tokengate_web/live/models_live.ex:2107
 #, elixir-autogen, elixir-format
 msgid "Use it for behaviour instructions, content limits, or formatting rules."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1752
+#: lib/tokengate_web/live/model_providers_live.ex:2565
 #, elixir-autogen, elixir-format
 msgid "You can also filter the API keys by provider here."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2174
+#: lib/tokengate_web/live/model_providers_live.ex:3156
 #, elixir-autogen, elixir-format
 msgid "You can select multiple limit profiles. An exclusive provider will be created for each one."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2033
+#: lib/tokengate_web/live/model_providers_live.ex:3015
 #, elixir-autogen, elixir-format
 msgid "You can select multiple users. An exclusive provider will be created for each one."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1832
+#: lib/tokengate_web/live/model_providers_live.ex:2645
 #, elixir-autogen, elixir-format
 msgid "and come back here."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1745
+#: lib/tokengate_web/live/model_providers_live.ex:2558
 #, elixir-autogen, elixir-format
 msgid "derived from the API key"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1749
+#: lib/tokengate_web/live/model_providers_live.ex:2562
 #, elixir-autogen, elixir-format
 msgid "models.dev, the provider model and the list price are filled in automatically."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1757
+#: lib/tokengate_web/live/model_providers_live.ex:2570
 #, elixir-autogen, elixir-format
 msgid "move the row to another provider."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2451
+#: lib/tokengate_web/live/model_providers_live.ex:3438
 #, elixir-autogen, elixir-format
 msgid "on by default"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1746
+#: lib/tokengate_web/live/model_providers_live.ex:2559
 #, elixir-autogen, elixir-format
 msgid "you pick below: every credential belongs to a provider. If that provider serves this model according to"
 msgstr ""
@@ -2514,7 +2519,7 @@ msgstr ""
 msgid "From catalog"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1993
+#: lib/tokengate_web/live/model_providers_live.ex:2975
 #, elixir-autogen, elixir-format
 msgid "Global = every member with access. Exclusive = only the selected member or limit profile."
 msgstr ""
@@ -3589,7 +3594,7 @@ msgstr ""
 msgid "Time to first token — streaming only"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1239
+#: lib/tokengate_web/live/models_live.ex:1259
 #: lib/tokengate_web/live/monitoring_live.ex:1059
 #: lib/tokengate_web/live/observability_live.ex:299
 #, elixir-autogen, elixir-format
@@ -4290,7 +4295,7 @@ msgstr ""
 msgid "Limit profile members"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:34
+#: lib/tokengate_web/live/model_providers_live.ex:44
 #: lib/tokengate_web/live/stats/model.ex:55
 #, elixir-autogen, elixir-format
 msgid "Model not found."
@@ -4672,8 +4677,8 @@ msgstr ""
 msgid "Granted by your limit profile"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1390
-#: lib/tokengate_web/live/model_providers_live.ex:1396
+#: lib/tokengate_web/live/model_providers_live.ex:2023
+#: lib/tokengate_web/live/model_providers_live.ex:2029
 #, elixir-autogen, elixir-format
 msgid "Member exclusive"
 msgstr ""
@@ -4683,7 +4688,7 @@ msgstr ""
 msgid "Removed for this member (click to restore)"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2452
+#: lib/tokengate_web/live/model_providers_live.ex:3439
 #, elixir-autogen, elixir-format
 msgid "on Fireworks (prefix matching, cached tokens at a discount). TokenGate keeps conversations sticky via the x-session-affinity header and logs the cached tokens — no configuration required."
 msgstr ""
@@ -4758,85 +4763,85 @@ msgstr ""
 msgid "Decisions"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1567
-#: lib/tokengate_web/live/models_live.ex:1658
-#: lib/tokengate_web/live/models_live.ex:1774
+#: lib/tokengate_web/live/models_live.ex:1587
+#: lib/tokengate_web/live/models_live.ex:1678
+#: lib/tokengate_web/live/models_live.ex:1794
 #, elixir-autogen, elixir-format
 msgid "Back"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1481
+#: lib/tokengate_web/live/models_live.ex:1501
 #, elixir-autogen, elixir-format
 msgid "Choose the provider that will serve this model. Only the providers that can serve the type you picked are listed."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1576
+#: lib/tokengate_web/live/models_live.ex:1596
 #, elixir-autogen, elixir-format
 msgid "Create by hand"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1462
+#: lib/tokengate_web/live/models_live.ex:1482
 #, elixir-autogen, elixir-format
 msgid "Data"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2355
+#: lib/tokengate_web/live/model_providers_live.ex:3342
 #, elixir-autogen, elixir-format
 msgid "Fallback when the provider does not report cost. It is multiplied by what the call actually produced (images, megapixels, seconds, characters)."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1547
+#: lib/tokengate_web/live/models_live.ex:1567
 #, elixir-autogen, elixir-format
 msgid "It already has API keys"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1008
+#: lib/tokengate_web/live/models_live.ex:1013
 #, elixir-autogen, elixir-format
 msgid "Model created with its first provider assignment."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1699
+#: lib/tokengate_web/live/models_live.ex:1719
 #, elixir-autogen, elixir-format
 msgid "Models this provider serves for this type:"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1508
+#: lib/tokengate_web/live/models_live.ex:1528
 #, elixir-autogen, elixir-format
 msgid "No provider declares this type."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2326
+#: lib/tokengate_web/live/model_providers_live.ex:3313
 #, elixir-autogen, elixir-format
 msgid "Pricing unit"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1496
+#: lib/tokengate_web/live/models_live.ex:1516
 #, elixir-autogen, elixir-format
 msgid "Search provider… (e.g. openrouter, alibaba)"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1638
-#: lib/tokengate_web/live/models_live.ex:1898
+#: lib/tokengate_web/live/models_live.ex:1658
+#: lib/tokengate_web/live/models_live.ex:1935
 #, elixir-autogen, elixir-format
 msgid "This provider has no API keys yet: the model is created without a provider assignment. Add the key on the Providers page and assign it afterwards."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2353
+#: lib/tokengate_web/live/model_providers_live.ex:3340
 #, elixir-autogen, elixir-format
 msgid "Unit cost (USD per unit)"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2342
+#: lib/tokengate_web/live/model_providers_live.ex:3329
 #, elixir-autogen, elixir-format
 msgid "What this provider charges per. It defaults to the model's own unit; change it if this provider prices differently."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1782
+#: lib/tokengate_web/live/models_live.ex:1802
 #, elixir-autogen, elixir-format
 msgid "Write it by hand"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1509
+#: lib/tokengate_web/live/models_live.ex:1529
 #, elixir-autogen, elixir-format
 msgid "You can still create the model by hand and assign a provider later."
 msgstr ""
@@ -4903,7 +4908,7 @@ msgstr ""
 msgid "Deletes all usage history (logs, hourly metrics, budget counters and sticky routes), plus catalog records with no deployment: models without deployments and providers without credentials or deployments."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1647
+#: lib/tokengate_web/live/model_providers_live.ex:2388
 #, elixir-autogen, elixir-format
 msgid "Sends service_tier: priority — premium serving path."
 msgstr ""
@@ -4944,84 +4949,87 @@ msgstr ""
 msgid "Downloads the catalog again (providers and labs) and updates name, base URL,"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1414
+#: lib/tokengate_web/live/models_live.ex:1434
 #, elixir-autogen, elixir-format
 msgid "First choose the type — it decides which providers are offered and the endpoint that will serve the model."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1667
+#: lib/tokengate_web/live/models_live.ex:1687
 #, elixir-autogen, elixir-format
 msgid "See its models"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1760
+#: lib/tokengate_web/live/models_live.ex:1780
 #, elixir-autogen, elixir-format
 msgid "This provider does not publish a list for this type: write the id by hand in the next step."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1644
+#: lib/tokengate_web/live/models_live.ex:1664
 #, elixir-autogen, elixir-format
 msgid "With this key the gateway asks the provider which models it serves for this type."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1708
+#: lib/tokengate_web/live/models_live.ex:1728
 #, elixir-autogen, elixir-format
 msgid "asking the provider…"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1738
+#: lib/tokengate_web/live/models_live.ex:1758
 #, elixir-autogen, elixir-format
 msgid "Pick an API key in the previous step: the list comes from the provider itself."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1748
+#: lib/tokengate_web/live/models_live.ex:1768
 #, elixir-autogen, elixir-format
 msgid "The provider did not answer the listing:"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1803
+#: lib/tokengate_web/live/models_live.ex:1823
 #, elixir-autogen, elixir-format
 msgid "No API key assigned yet: the model is registered but nothing can route to it."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1566
-#: lib/tokengate_web/live/models_live.ex:1795
+#: lib/tokengate_web/live/model_providers_live.ex:2265
+#: lib/tokengate_web/live/models_live.ex:1815
 #, elixir-autogen, elixir-format
 msgid "Served by (API keys)"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1824
+#: lib/tokengate_web/live/models_live.ex:1861
 #, elixir-autogen, elixir-format
 msgid "disabled"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1535
+#: lib/tokengate_web/live/model_providers_live.ex:2234
 #, elixir-autogen, elixir-format
 msgid "Assign API key"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1557
+#: lib/tokengate_web/live/model_providers_live.ex:2256
 #, elixir-autogen, elixir-format
 msgid "No API key assigned: nothing can route to it."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1625
-#: lib/tokengate_web/live/models_live.ex:1818
+#: lib/tokengate_web/live/model_providers_live.ex:2093
+#: lib/tokengate_web/live/model_providers_live.ex:2366
+#: lib/tokengate_web/live/model_providers_live.ex:2907
+#: lib/tokengate_web/live/models_live.ex:1852
 #, elixir-autogen, elixir-format
 msgid "unnamed key"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1873
+#: lib/tokengate_web/live/models_live.ex:1910
 #, elixir-autogen, elixir-format
 msgid "Model id at the provider"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1210
+#: lib/tokengate_web/live/models_live.ex:1230
 #, elixir-autogen, elixir-format
 msgid "Configure models and the API keys that serve them"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1636
+#: lib/tokengate_web/live/model_providers_live.ex:2342
+#: lib/tokengate_web/live/model_providers_live.ex:2377
 #, elixir-autogen, elixir-format
 msgid "Provider that owns this API key"
 msgstr ""
@@ -5033,17 +5041,17 @@ msgid "Other"
 msgstr ""
 
 #: lib/tokengate_web/live/models_live.ex:216
-#: lib/tokengate_web/live/models_live.ex:1285
+#: lib/tokengate_web/live/models_live.ex:1305
 #, elixir-autogen, elixir-format
 msgid "Pinned"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1303
+#: lib/tokengate_web/live/models_live.ex:1323
 #, elixir-autogen, elixir-format
 msgid "Endpoint that serves this model type"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1924
+#: lib/tokengate_web/live/models_live.ex:1961
 #, elixir-autogen, elixir-format
 msgid "Defines which endpoint serves it (chat, embeddings, audio, image)."
 msgstr ""
@@ -5272,12 +5280,12 @@ msgstr ""
 msgid "by API key"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1933
+#: lib/tokengate_web/live/models_live.ex:1970
 #, elixir-autogen, elixir-format
 msgid "Reasoning effort default"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1946
+#: lib/tokengate_web/live/models_live.ex:1983
 #, elixir-autogen, elixir-format
 msgid "Reasoning effort override"
 msgstr ""
@@ -5287,22 +5295,22 @@ msgstr ""
 msgid "Reasoning effort the gateway sent upstream after the operator's effort policy"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1937
+#: lib/tokengate_web/live/models_live.ex:1974
 #, elixir-autogen, elixir-format
 msgid "Replaces a client reasoning_effort of none/minimal with this value (upstreams that reject those values)."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1950
+#: lib/tokengate_web/live/models_live.ex:1987
 #, elixir-autogen, elixir-format
 msgid "Replaces the client reasoning_effort with this value, whatever the client sends."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1935
+#: lib/tokengate_web/live/models_live.ex:1972
 #, elixir-autogen, elixir-format
 msgid "— No default —"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1948
+#: lib/tokengate_web/live/models_live.ex:1985
 #, elixir-autogen, elixir-format
 msgid "— No override —"
 msgstr ""
@@ -5319,12 +5327,12 @@ msgstr ""
 msgid "per day (last month)"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2395
+#: lib/tokengate_web/live/model_providers_live.ex:3382
 #, elixir-autogen, elixir-format
 msgid "Cache cost (USD / %{unit})"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2412
+#: lib/tokengate_web/live/model_providers_live.ex:3399
 #, elixir-autogen, elixir-format
 msgid "Cache write cost (USD / %{unit})"
 msgstr ""
@@ -5335,7 +5343,7 @@ msgstr ""
 msgid "Could not reactivate the key."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2379
+#: lib/tokengate_web/live/model_providers_live.ex:3366
 #, elixir-autogen, elixir-format
 msgid "Input cost (USD / %{unit})"
 msgstr ""
@@ -5346,7 +5354,7 @@ msgstr ""
 msgid "Key reactivated."
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2429
+#: lib/tokengate_web/live/model_providers_live.ex:3416
 #, elixir-autogen, elixir-format
 msgid "Output cost (USD / %{unit})"
 msgstr ""
@@ -5367,22 +5375,22 @@ msgstr ""
 msgid "Revoked keys"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:2417
+#: lib/tokengate_web/live/model_providers_live.ex:3404
 #, elixir-autogen, elixir-format
 msgid "Tokens written into the prompt cache. Only charged when the call reports cache-write tokens; empty = not charged."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1022
+#: lib/tokengate_web/live/models_live.ex:1027
 #, elixir-autogen, elixir-format
 msgid "Model created without a provider assignment: no API key was selected for this provider."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1030
+#: lib/tokengate_web/live/models_live.ex:1035
 #, elixir-autogen, elixir-format
 msgid "Model created without a provider assignment: the assignment could not be saved."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1027
+#: lib/tokengate_web/live/models_live.ex:1032
 #, elixir-autogen, elixir-format
 msgid "Model created without a provider assignment: the provider model id is empty."
 msgstr ""
@@ -5397,7 +5405,7 @@ msgstr ""
 msgid "Health"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:399
+#: lib/tokengate_web/live/provider_keys_live.ex:410
 #, elixir-autogen, elixir-format
 msgid "Inherited limits"
 msgstr ""
@@ -5417,7 +5425,8 @@ msgstr ""
 msgid "Requests in flight across this provider's keys"
 msgstr ""
 
-#: lib/tokengate_web/live/provider_keys_live.ex:477
+#: lib/tokengate_web/live/model_providers_live.ex:2919
+#: lib/tokengate_web/live/provider_keys_live.ex:488
 #, elixir-autogen, elixir-format
 msgid "This provider has no API keys yet."
 msgstr ""
@@ -5427,24 +5436,24 @@ msgstr ""
 msgid "%{count} in error"
 msgstr ""
 
-#: lib/tokengate_web/live/model_providers_live.ex:1546
-#: lib/tokengate_web/live/models_live.ex:1364
-#: lib/tokengate_web/live/models_live.ex:1365
+#: lib/tokengate_web/live/model_providers_live.ex:2245
+#: lib/tokengate_web/live/models_live.ex:1384
+#: lib/tokengate_web/live/models_live.ex:1385
 #, elixir-autogen, elixir-format
 msgid "Guard Rails"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1314
+#: lib/tokengate_web/live/models_live.ex:1334
 #, elixir-autogen, elixir-format
 msgid "Manage the API keys that serve this model"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1242
+#: lib/tokengate_web/live/models_live.ex:1262
 #, elixir-autogen, elixir-format
 msgid "Price"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:1328
+#: lib/tokengate_web/live/models_live.ex:1348
 #, elixir-autogen, elixir-format
 msgid "mixed units"
 msgstr ""
@@ -5458,4 +5467,184 @@ msgstr ""
 #: lib/tokengate_web/live/stats/live.ex:80
 #, elixir-autogen, elixir-format
 msgid "UTC day spend (00:00–24:00 UTC)"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:813
+#, elixir-autogen, elixir-format
+msgid "A pool cannot be left without API keys. Delete the lane or the pool instead."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2719
+#, elixir-autogen, elixir-format
+msgid "A pool groups API keys of the same provider and rotates between them on every request."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2745
+#, elixir-autogen, elixir-format
+msgid "A pool of keys"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:858
+#, elixir-autogen, elixir-format
+msgid "API key added to the pool."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:805
+#, elixir-autogen, elixir-format
+msgid "API key removed from the pool."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2335
+#: lib/tokengate_web/live/model_providers_live.ex:2461
+#: lib/tokengate_web/live/models_live.ex:1846
+#, elixir-autogen, elixir-format
+msgid "API keys in this pool: rotation per request"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2506
+#, elixir-autogen, elixir-format
+msgid "Add an API key…"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:874
+#, elixir-autogen, elixir-format
+msgid "Could not add the API key to the pool."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:870
+#, elixir-autogen, elixir-format
+msgid "Could not add the API key: %{errors}"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:1594
+#, elixir-autogen, elixir-format
+msgid "Could not create the pool: %{errors}"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:820
+#, elixir-autogen, elixir-format
+msgid "Could not remove the API key from the pool."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:1657
+#, elixir-autogen, elixir-format
+msgid "Could not save: %{errors}"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2716
+#, elixir-autogen, elixir-format
+msgid "Credential source"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2866
+#, elixir-autogen, elixir-format
+msgid "New pool"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2733
+#, elixir-autogen, elixir-format
+msgid "One API key"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2818
+#, elixir-autogen, elixir-format
+msgid "Pick a pool"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:1558
+#: lib/tokengate_web/live/model_providers_live.ex:1563
+#, elixir-autogen, elixir-format
+msgid "Pick an existing pool or create a new one."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2889
+#, elixir-autogen, elixir-format
+msgid "Pick the API keys that become members. All of them must belong to the same provider."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:1554
+#: lib/tokengate_web/live/model_providers_live.ex:2846
+#, elixir-autogen, elixir-format
+msgid "Pick the provider the pool belongs to first."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2806
+#, elixir-autogen, elixir-format
+msgid "Pool"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2876
+#, elixir-autogen, elixir-format
+msgid "Pool name"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2809
+#, elixir-autogen, elixir-format
+msgid "Pools of the selected provider. Every key in the pool rotates on each request."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2883
+#, elixir-autogen, elixir-format
+msgid "Production keys"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2486
+#, elixir-autogen, elixir-format
+msgid "Remove this API key from the pool"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:1570
+#: lib/tokengate_web/live/model_providers_live.ex:1600
+#, elixir-autogen, elixir-format
+msgid "Select at least one API key for the new pool."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2352
+#, elixir-autogen, elixir-format
+msgid "Show the API keys in this pool"
+msgstr ""
+
+#: lib/tokengate_web/live/provider_keys_live.ex:310
+#, elixir-autogen, elixir-format
+msgid "This API key belongs to a pool. Remove it from the pool first."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:863
+#, elixir-autogen, elixir-format
+msgid "This API key belongs to another provider."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2856
+#, elixir-autogen, elixir-format
+msgid "This provider has no pools yet. Create one."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:716
+#, elixir-autogen, elixir-format
+msgid "Could not delete the pool."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2838
+#, elixir-autogen, elixir-format
+msgid "Delete pool"
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:2832
+#, elixir-autogen, elixir-format
+msgid "Delete this pool? This cannot be undone."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:703
+#, elixir-autogen, elixir-format
+msgid "Pool deleted."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:712
+#, elixir-autogen, elixir-format
+msgid "This pool is mounted on a model. Remove the lane first."
+msgstr ""
+
+#: lib/tokengate_web/live/model_providers_live.ex:1597
+#, elixir-autogen, elixir-format
+msgid "One of the selected API keys is not valid for this pool."
 msgstr ""

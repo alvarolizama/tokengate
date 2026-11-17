@@ -14,13 +14,20 @@ defmodule Tokengate.Routing.RouterTest do
 
   use Tokengate.DataCase, async: false
   alias Tokengate.Providers
-  alias Tokengate.Routing.{Router, CircuitBreakerManager}
+  alias Tokengate.Routing.{Router, CircuitBreakerManager, CredentialHealth, StickyTracker}
 
   setup do
     # The Routing.Cache ETS table persists across tests (it's owned by the
     # app-tree GenServer, not the test). Clear it so provider fixtures from
     # one test don't leak into the next through the 60s cache TTL.
     Tokengate.Routing.Cache.invalidate_all()
+
+    # Soft health is also app-tree state: a degraded mark from one test would
+    # sink a same-named credential in the next one.
+    if :ets.whereis(:tokengate_credential_health) != :undefined do
+      :ets.delete_all_objects(:tokengate_credential_health)
+    end
+
     :ok
   end
 
@@ -755,6 +762,276 @@ defmodule Tokengate.Routing.RouterTest do
       assert {:ok, mate_route} = Router.route(model.name, groupmate)
       assert mate_route.model_provider.id == global_ap.id
       assert mate_route.model_responded == "gpt-4-global"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Credential pools
+  # ---------------------------------------------------------------------------
+
+  # A model mounted on a credential pool: ONE lane row and N keys of the same
+  # provider. The lane owns priority, provider_model, price and scope; the pool
+  # only contributes credentials.
+  defp pool_setup(opts) do
+    group = group_fixture()
+    member = group_member_fixture(group)
+
+    model = model_fixture(%{name: "pool-model-#{System.unique_integer([:positive])}"})
+    {:ok, _} = Providers.grant_model_to_group(group.id, model.id)
+
+    provider = provider_fixture()
+    pool_name = "pool-#{System.unique_integer([:positive])}"
+    {:ok, pool} = Providers.create_pool(provider, %{name: pool_name})
+
+    credentials =
+      for _ <- 1..Keyword.get(opts, :members, 3), do: pool_credential_fixture(provider, pool)
+
+    lane = pool_lane_fixture(model, pool, %{priority: Keyword.get(opts, :priority, 1)})
+
+    %{
+      group: group,
+      member: Repo.preload(member, [:group]),
+      model: model,
+      provider: provider,
+      pool: pool,
+      credentials: credentials,
+      lane: lane
+    }
+  end
+
+  defp pool_credential_fixture(provider, pool) do
+    credential = credential_fixture(provider, %{status: "active"})
+    {:ok, _member} = Providers.add_pool_member(pool, credential)
+    credential
+  end
+
+  defp pool_lane_fixture(model, pool, attrs) do
+    {:ok, lane} =
+      Providers.create_model_provider(
+        Enum.into(attrs, %{
+          model_id: model.id,
+          pool_id: pool.id,
+          provider_model: "pooled-model",
+          enabled: true,
+          priority: 1
+        })
+      )
+
+    lane
+  end
+
+  # Trips the real CircuitBreakerManager for one credential.
+  defp open_breaker(credential) do
+    CircuitBreakerManager.reset(credential.id)
+
+    for _ <- 1..15 do
+      :ok = CircuitBreakerManager.record_failure(credential.id, :server_error)
+    end
+
+    refute CircuitBreakerManager.allow?(credential.id)
+    :ok
+  end
+
+  # Marks one credential slow (soft health). Flush with `flush_health/0` before
+  # routing: `mark_slow` is a cast.
+  defp degrade(credential) do
+    :ok = CredentialHealth.mark_slow(credential.id)
+    :ok
+  end
+
+  defp flush_health do
+    _ = :sys.get_state(GenServer.whereis(CredentialHealth))
+    :ok
+  end
+
+  describe "credential pools" do
+    test "a pool of three members rotates: three consecutive routes use all three, same hash" do
+      f = pool_setup(members: 3)
+      hash = "pool-hash-#{System.unique_integer([:positive])}"
+
+      routes =
+        for _ <- 1..3 do
+          assert {:ok, route} = Router.route(f.model.name, f.member, %{api_key_hash: hash})
+          route
+        end
+
+      member_ids = MapSet.new(f.credentials, & &1.id)
+      served = MapSet.new(routes, & &1.credential.id)
+
+      # Rotación por request: tres peticiones, tres miembros distintos.
+      assert MapSet.size(served) == 3
+      assert MapSet.subset?(served, member_ids)
+
+      # El lane es uno solo: el id no cambia entre peticiones, sólo el miembro.
+      assert Enum.all?(routes, &(&1.model_provider.id == f.lane.id))
+      assert Enum.all?(routes, &(&1.model_provider.credential.id == &1.credential.id))
+      assert Enum.all?(routes, &(&1.model_responded == "pooled-model"))
+
+      # El sticky fija el LANE, y el lane del pool no se pega: no se escribe
+      # nada para el par (hash, modelo).
+      _ = :sys.get_state(StickyTracker)
+      assert StickyTracker.get(hash, f.model.id) == nil
+    end
+
+    test "a single key at priority 1 beats a pool at priority 2" do
+      f = pool_setup(members: 2, priority: 2)
+
+      key_provider = provider_fixture()
+      key_credential = credential_fixture(key_provider, %{status: "active"})
+
+      key_lane =
+        model_provider_fixture(f.model, key_provider, %{
+          priority: 1,
+          provider_model: "key-model",
+          credential: key_credential
+        })
+
+      assert {:ok, route} = Router.route(f.model.name, f.member)
+      assert route.model_provider.id == key_lane.id
+      assert route.credential.id == key_credential.id
+      assert route.model_responded == "key-model"
+    end
+
+    test "a pool seated behind a higher-priority key still serves all its members" do
+      f = pool_setup(members: 3, priority: 2)
+
+      key_provider = provider_fixture()
+      key_credential = credential_fixture(key_provider, %{status: "active"})
+
+      model_provider_fixture(f.model, key_provider, %{
+        priority: 1,
+        provider_model: "key-model",
+        credential: key_credential
+      })
+
+      # La key de prioridad 1 queda fuera: el pool tiene que servir con TODOS
+      # sus miembros. Si la agrupación mezclara lanes, el pool quedaría con un
+      # solo candidato y las tres rutas repetirían la misma key.
+      open_breaker(key_credential)
+
+      served =
+        for _ <- 1..3 do
+          assert {:ok, route} = Router.route(f.model.name, f.member)
+          assert route.model_provider.id == f.lane.id
+          assert route.model_responded == "pooled-model"
+          route.credential.id
+        end
+
+      assert MapSet.size(MapSet.new(served)) == 3
+    end
+
+    test "a live stick to a worse-priority key lane beats priority" do
+      f = full_setup()
+
+      other_provider = provider_fixture()
+      other_credential = credential_fixture(other_provider, %{status: "active"})
+
+      other_lane =
+        model_provider_fixture(f.model, other_provider, %{
+          priority: 5,
+          provider_model: "backup-model",
+          credential: other_credential
+        })
+
+      hash = "sticky-worse-#{System.unique_integer([:positive])}"
+
+      # Primera ruta con la key de prioridad 1 caída: se pega a la de 5.
+      open_breaker(f.credential)
+      assert {:ok, first} = Router.route(f.model.name, f.member, %{api_key_hash: hash})
+      assert first.model_provider.id == other_lane.id
+      assert first.credential.id == other_credential.id
+
+      # La de prioridad 1 revive; el stick vivo la sigue prefiriendo a la 5,
+      # igual que hacía `Priority.select/2`.
+      CircuitBreakerManager.reset(f.credential.id)
+      assert {:ok, second} = Router.route(f.model.name, f.member, %{api_key_hash: hash})
+      assert second.model_provider.id == other_lane.id
+      assert second.credential.id == other_credential.id
+    end
+
+    test "a pool whose members all have open breakers is skipped for the priority-2 key" do
+      f = pool_setup(members: 2, priority: 1)
+      Enum.each(f.credentials, &open_breaker/1)
+
+      key_provider = provider_fixture()
+      key_credential = credential_fixture(key_provider, %{status: "active"})
+
+      key_lane =
+        model_provider_fixture(f.model, key_provider, %{
+          priority: 2,
+          provider_model: "key-model",
+          credential: key_credential
+        })
+
+      # El pool tiene mejor prioridad, pero ningún miembro disponible: el grupo
+      # se salta completo y gana la key.
+      assert {:ok, route} = Router.route(f.model.name, f.member)
+      assert route.model_provider.id == key_lane.id
+      assert route.credential.id == key_credential.id
+    end
+
+    test "a degraded member is skipped while another member stays healthy" do
+      f = pool_setup(members: 2)
+      [degraded, healthy] = f.credentials
+
+      degrade(degraded)
+      flush_health()
+
+      # Cuatro peticiones (más que miembros): la fase rota, la elección no.
+      for _ <- 1..4 do
+        assert {:ok, route} = Router.route(f.model.name, f.member)
+        assert route.credential.id == healthy.id
+        assert route.model_provider.id == f.lane.id
+      end
+    end
+
+    test "a pool with every member degraded loses to a healthy key of worse priority" do
+      f = pool_setup(members: 2, priority: 1)
+      Enum.each(f.credentials, &degrade/1)
+      flush_health()
+
+      key_provider = provider_fixture()
+      key_credential = credential_fixture(key_provider, %{status: "active"})
+
+      key_lane =
+        model_provider_fixture(f.model, key_provider, %{
+          priority: 5,
+          provider_model: "key-model",
+          credential: key_credential
+        })
+
+      # El pool tiene mejor prioridad, pero TODOS sus miembros están degraded:
+      # la salud del grupo (calculada de los candidatos) lo hunde bajo una key
+      # sana, aunque esa key tenga peor prioridad.
+      assert {:ok, route} = Router.route(f.model.name, f.member)
+      assert route.model_provider.id == key_lane.id
+      assert route.credential.id == key_credential.id
+    end
+
+    test "a single-key lane keeps its sticky across requests" do
+      f = full_setup()
+
+      other_provider = provider_fixture()
+      other_credential = credential_fixture(other_provider, %{status: "active"})
+
+      model_provider_fixture(f.model, other_provider, %{
+        priority: 5,
+        provider_model: "backup-model",
+        credential: other_credential
+      })
+
+      hash = "sticky-hash-#{System.unique_integer([:positive])}"
+
+      assert {:ok, first} = Router.route(f.model.name, f.member, %{api_key_hash: hash})
+      assert {:ok, second} = Router.route(f.model.name, f.member, %{api_key_hash: hash})
+
+      # Sin pool no hay rotación: el sticky sigue fijando el lane ganador.
+      assert first.credential.id == f.credential.id
+      assert second.credential.id == f.credential.id
+      assert second.model_provider.id == f.model_provider.id
+
+      _ = :sys.get_state(StickyTracker)
+      assert StickyTracker.get(hash, f.model.id) == f.model_provider.id
     end
   end
 end

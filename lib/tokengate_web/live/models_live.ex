@@ -262,7 +262,12 @@ defmodule TokengateWeb.ModelsLive do
   defp aliases_with_providers_query do
     from(ma in Model,
       left_join: aps in assoc(ma, :model_providers),
-      preload: [model_providers: {aps, [credential: :provider]}],
+      # El pool entra en el MISMO preload: la fila del modelo lo cuenta y el
+      # modal de edición lo pinta. Ningún lane de pool tiene credencial, así
+      # que sin este preload su nombre no existiría.
+      preload: [
+        model_providers: {aps, [credential: :provider, pool: [members: [credential: :provider]]]}
+      ],
       order_by: [
         desc: ma.pinned,
         asc: ma.name,
@@ -773,7 +778,7 @@ defmodule TokengateWeb.ModelsLive do
     from(mp in Tokengate.Providers.ModelProvider,
       where: mp.model_id == ^model_id,
       order_by: [asc_nulls_last: mp.priority, asc: mp.credential_id],
-      preload: [credential: :provider]
+      preload: [credential: :provider, pool: [members: [credential: :provider]]]
     )
     |> Repo.all()
   end
@@ -1145,12 +1150,27 @@ defmodule TokengateWeb.ModelsLive do
   def lane_provider_count(%{model_providers: lanes}) do
     lanes
     |> List.wrap()
-    |> Enum.map(& &1.credential_id)
+    |> Enum.map(&lane_provider_key/1)
+    |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
     |> length()
   end
 
   def lane_provider_count(_model), do: 0
+
+  @doc "Cantidad de keys de un lane de pool (0 cuando el lane es de una key)."
+  def lane_pool_member_count(%{pool: %{members: members}}) when is_list(members),
+    do: length(members)
+
+  def lane_pool_member_count(_lane), do: 0
+
+  # Un lane de pool no tiene `credential_id`: su proveedor es el del pool, y sin
+  # esto todos los lanes de pool colapsaban en un mismo `nil` (el conteo los
+  # contaba como UNO y escondía el resto).
+  defp lane_provider_key(%{pool: %{provider_id: provider_id}}) when is_binary(provider_id),
+    do: provider_id
+
+  defp lane_provider_key(lane), do: Map.get(lane, :credential_id)
 
   @doc """
   El precio más barato de las lanes del modelo, como `{unidad, monto}`.
@@ -1813,13 +1833,30 @@ defmodule TokengateWeb.ModelsLive do
                     <span class="flex-1 min-w-0 truncate text-sm">
                       <%!-- La key, y nada más: el modelo se relaciona con ELLA. El
                            proveedor que la posee no se pinta aquí — vive en su
-                           página, y se elige al crear la key. --%>
-                      <span class="font-mono text-xs">
-                        {lane.credential.name || gettext("unnamed key")}
-                      </span>
-                      <span class="text-xs text-base-content/40 ml-1">
-                        {mask_key(lane.credential.api_key_encrypted)}
-                      </span>
+                           página, y se elige al crear la key. Un lane de pool no
+                           tiene key: se identifica por el pool y su conteo. --%>
+                      <%= cond do %>
+                        <% lane.pool -> %>
+                          <span class="font-mono text-xs" id={"lane-pool-name-#{lane.id}"}>
+                            {lane.pool.name}
+                          </span>
+                          <span
+                            class="badge badge-xs badge-info ml-1"
+                            id={"lane-pool-badge-#{lane.id}"}
+                            title={gettext("API keys in this pool: rotation per request")}
+                          >
+                            {lane_pool_member_count(lane)} key(s)
+                          </span>
+                        <% lane.credential -> %>
+                          <span class="font-mono text-xs">
+                            {lane.credential.name || gettext("unnamed key")}
+                          </span>
+                          <span class="text-xs text-base-content/40 ml-1">
+                            {mask_key(lane.credential.api_key_encrypted)}
+                          </span>
+                        <% true -> %>
+                          {gettext("no credential")}
+                      <% end %>
                       <span :if={!lane.enabled} class="badge badge-xs badge-ghost ml-1">
                         {gettext("disabled")}
                       </span>
