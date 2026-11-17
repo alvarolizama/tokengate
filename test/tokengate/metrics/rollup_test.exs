@@ -276,6 +276,97 @@ defmodule Tokengate.Metrics.RollupTest do
     end
   end
 
+  # ---------------------------------------------------------------------
+  # hourly_series_for_model/2
+  # ---------------------------------------------------------------------
+
+  describe "hourly_series_for_model/2" do
+    test "lane+credential filter sums to cost_summary and leaves the other lane out" do
+      {tm, _group} = group_member_fixture()
+
+      # UUIDs sueltos: request_logs no tiene FK en model_id/model_provider_id/
+      # credential_id, así que no hace falta sembrar el catálogo.
+      model_id = Ecto.UUID.generate()
+      lane_a = Ecto.UUID.generate()
+      lane_b = Ecto.UUID.generate()
+      cred_a = Ecto.UUID.generate()
+      cred_b = Ecto.UUID.generate()
+
+      # Ventana LITERAL y horas ya cerradas: el assert no depende del reloj.
+      from = ~U[2026-08-01 00:00:00Z]
+      to = ~U[2026-08-01 23:59:59Z]
+
+      # lane A / cred A — $1.25 @ 01:10
+      log_request(tm.id, ~U[2026-08-01 01:10:00Z], %{
+        model_id: model_id,
+        model_provider_id: lane_a,
+        credential_id: cred_a,
+        provider_cost_usd: Decimal.new("1.250000")
+      })
+
+      # lane A / cred B — $2.00 @ 02:20 (mismo lane, OTRA key)
+      log_request(tm.id, ~U[2026-08-01 02:20:00Z], %{
+        model_id: model_id,
+        model_provider_id: lane_a,
+        credential_id: cred_b,
+        provider_cost_usd: Decimal.new("2.000000")
+      })
+
+      # lane B / cred A — $3.50 @ 03:30 (el lane que NO debe aparecer)
+      log_request(tm.id, ~U[2026-08-01 03:30:00Z], %{
+        model_id: model_id,
+        model_provider_id: lane_b,
+        credential_id: cred_a,
+        provider_cost_usd: Decimal.new("3.500000")
+      })
+
+      series =
+        Rollup.hourly_series_for_model(model_id,
+          from: from,
+          to: to,
+          model_provider_id: lane_a,
+          credential_id: cred_a
+        )
+
+      series_total =
+        Enum.reduce(series, Decimal.new(0), fn row, acc -> Decimal.add(acc, row.cost_usd) end)
+
+      summary =
+        Logs.cost_summary(%{
+          model_id: model_id,
+          model_provider_id: lane_a,
+          credential_id: cred_a,
+          from: from,
+          to: to
+        })
+
+      # La suma de la serie filtrada es EXACTAMENTE el summary con los mismos filtros.
+      assert Decimal.equal?(series_total, summary.total_cost_usd)
+      assert Decimal.equal?(series_total, Decimal.new("1.250000"))
+      assert Enum.sum(Enum.map(series, & &1.request_count)) == 1
+
+      # Un solo bucket, el de la 01:00: fuera el de cred B (02:00) y el otro lane (03:00).
+      assert [bucket] = series
+
+      assert bucket.hour |> DateTime.truncate(:second) |> DateTime.to_iso8601() ==
+               "2026-08-01T01:00:00Z"
+
+      refute Enum.any?(
+               series,
+               &(DateTime.to_iso8601(DateTime.truncate(&1.hour, :second)) ==
+                   "2026-08-01T03:00:00Z")
+             )
+
+      # Sin opts el lane B SÍ está (backward-compatible): la serie completa suma los tres.
+      all_total =
+        model_id
+        |> Rollup.hourly_series_for_model(from: from, to: to)
+        |> Enum.reduce(Decimal.new(0), fn row, acc -> Decimal.add(acc, row.cost_usd) end)
+
+      assert Decimal.equal?(all_total, Decimal.new("6.750000"))
+    end
+  end
+
   defp hours_ago(hours) do
     DateTime.utc_now()
     |> DateTime.add(-hours * 3600, :second)

@@ -280,6 +280,7 @@ defmodule Tokengate.Logs do
     |> maybe_where_group_id(filters)
     |> maybe_where(:provider_id, filters)
     |> maybe_where(:credential_id, filters)
+    |> maybe_where(:model_provider_id, filters)
     |> maybe_where(:model_id, filters)
     |> maybe_where(:agent_type, filters)
     |> maybe_where(:status_code, filters)

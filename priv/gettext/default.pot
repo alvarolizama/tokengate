@@ -1294,7 +1294,7 @@ msgstr ""
 msgid "0 = zero spend. Empty = no budget (top-ups only)."
 msgstr ""
 
-#: lib/tokengate_web/live/calculator_live.ex:204
+#: lib/tokengate_web/live/calculator_live.ex:366
 #: lib/tokengate_web/live/dashboard_live.ex:849
 #: lib/tokengate_web/live/services_live.ex:1043
 #: lib/tokengate_web/live/services_live.ex:1050
@@ -1329,7 +1329,7 @@ msgstr ""
 msgid "Absolute cap (defaults to 60 when empty)."
 msgstr ""
 
-#: lib/tokengate_web/live/calculator_live.html.heex:147
+#: lib/tokengate_web/live/calculator_live.html.heex:231
 #: lib/tokengate_web/live/services_live.ex:1039
 #: lib/tokengate_web/live/supervised_services_live.ex:293
 #: lib/tokengate_web/live/supervised_services_live.ex:379
@@ -1577,7 +1577,7 @@ msgstr ""
 msgid "(top-ups only)"
 msgstr ""
 
-#: lib/tokengate_web/live/calculator_live.ex:203
+#: lib/tokengate_web/live/calculator_live.ex:365
 #: lib/tokengate_web/live/dashboard_live.ex:848
 #: lib/tokengate_web/topup_helpers.ex:110
 #, elixir-autogen, elixir-format
@@ -3095,7 +3095,7 @@ msgstr ""
 #: lib/tokengate_web/components/service_stats_body.ex:105
 #: lib/tokengate_web/components/service_stats_body.ex:234
 #: lib/tokengate_web/components/service_stats_body.ex:297
-#: lib/tokengate_web/live/calculator_live.html.heex:194
+#: lib/tokengate_web/live/calculator_live.html.heex:279
 #: lib/tokengate_web/live/dashboard_live.ex:858
 #: lib/tokengate_web/live/dashboard_live.html.heex:396
 #: lib/tokengate_web/live/dashboard_live.html.heex:450
@@ -3144,7 +3144,7 @@ msgstr ""
 msgid "TPS"
 msgstr ""
 
-#: lib/tokengate_web/live/calculator_live.html.heex:203
+#: lib/tokengate_web/live/calculator_live.html.heex:288
 #: lib/tokengate_web/live/stats/provider.ex:107
 #, elixir-autogen, elixir-format
 msgid "Tokens"
@@ -4245,7 +4245,7 @@ msgstr ""
 msgid "Cost / req"
 msgstr ""
 
-#: lib/tokengate_web/live/calculator_live.html.heex:150
+#: lib/tokengate_web/live/calculator_live.html.heex:234
 #, elixir-autogen, elixir-format
 msgid "Cost reported by the provider for the period"
 msgstr ""
@@ -4260,7 +4260,7 @@ msgstr ""
 msgid "Daily usage per provider"
 msgstr ""
 
-#: lib/tokengate_web/live/calculator_live.html.heex:165
+#: lib/tokengate_web/live/calculator_live.html.heex:251
 #, elixir-autogen, elixir-format
 msgid "Estimated cost with the custom prices on the left"
 msgstr ""
@@ -5315,7 +5315,7 @@ msgstr ""
 msgid "— No override —"
 msgstr ""
 
-#: lib/tokengate_web/live/calculator_live.ex:205
+#: lib/tokengate_web/live/calculator_live.ex:367
 #: lib/tokengate_web/live/dashboard_live.ex:850
 #: lib/tokengate_web/stats_helpers.ex:94
 #, elixir-autogen, elixir-format

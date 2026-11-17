@@ -2042,7 +2042,12 @@ defmodule Tokengate.Metrics.Rollup do
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
+    * `:model_provider_id` — restrict to one lane (`request_logs.model_provider_id`)
+    * `:credential_id` — restrict to one credential (`request_logs.credential_id`)
     * `:timezone` — IANA zone for local-hour bucketing; default `"Etc/UTC"`
+
+  Without `:model_provider_id` / `:credential_id` the series covers every lane
+  of the model, exactly as before those opts existed.
   """
   @spec hourly_series_for_model(String.t() | nil, keyword()) :: [map()]
   def hourly_series_for_model(model_id, opts \\ [])
@@ -2057,6 +2062,8 @@ defmodule Tokengate.Metrics.Rollup do
     bucketed =
       RequestLog
       |> where([rl], rl.model_id == ^model_id)
+      |> maybe_model_provider_id(Keyword.get(opts, :model_provider_id))
+      |> maybe_credential_id(Keyword.get(opts, :credential_id))
       |> maybe_from(from)
       |> maybe_to(to)
       |> select([rl], %{
@@ -2710,6 +2717,21 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp maybe_to(query, nil), do: query
   defp maybe_to(query, to), do: where(query, [rl], rl.inserted_at <= ^to)
+
+  # Lane ("model × provider × credential") and credential filters: hard `where`
+  # over the bucketed RequestLog, so the hourly series can be narrowed to a
+  # single lane and still sum to `Logs.cost_summary/1` with the same filters.
+  defp maybe_model_provider_id(query, nil), do: query
+
+  defp maybe_model_provider_id(query, model_provider_id) when is_binary(model_provider_id) do
+    where(query, [rl], rl.model_provider_id == ^model_provider_id)
+  end
+
+  defp maybe_credential_id(query, nil), do: query
+
+  defp maybe_credential_id(query, credential_id) when is_binary(credential_id) do
+    where(query, [rl], rl.credential_id == ^credential_id)
+  end
 
   defp compute_tps(_tokens, 0), do: nil
   defp compute_tps(0, _latency), do: 0.0

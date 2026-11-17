@@ -7,7 +7,7 @@
         <:subtitle>
           <span class="inline-flex items-center gap-2">
             <.icon name="hero-calculator" class="w-4 h-4 text-base-content/50" />
-            Compara gasto real vs estimado por modelo
+            Compara gasto real vs estimado por modelo, lane y key
           </span>
         </:subtitle>
       </.header>
@@ -38,6 +38,53 @@
               </div>
 
               <div class="space-y-1.5">
+                <label
+                  class="text-xs font-semibold uppercase tracking-wide text-base-content/50"
+                  for="lane-select"
+                >
+                  Lane
+                </label>
+                <select
+                  id="lane-select"
+                  name="lane_id"
+                  class="select select-bordered select-sm w-full"
+                >
+                  <option value="">Todos los providers</option>
+                  <%= for lane <- @lanes do %>
+                    <option value={lane.id} selected={lane.id == @selected_lane_id}>
+                      {lane_label(lane)}
+                    </option>
+                  <% end %>
+                </select>
+              </div>
+
+              <%!-- Only a lane mounted on a pool can narrow down to ONE of its keys --%>
+              <% pool_lane = selected_pool_lane(@lanes, @selected_lane_id) %>
+              <div :if={pool_lane} class="space-y-1.5">
+                <label
+                  class="text-xs font-semibold uppercase tracking-wide text-base-content/50"
+                  for="credential-select"
+                >
+                  API key
+                </label>
+                <select
+                  id="credential-select"
+                  name="credential_id"
+                  class="select select-bordered select-sm w-full"
+                >
+                  <option value="">Todas las keys del pool</option>
+                  <%= for credential <- pool_credentials(pool_lane) do %>
+                    <option
+                      value={credential.id}
+                      selected={credential.id == @selected_credential_id}
+                    >
+                      {credential_label(credential)}
+                    </option>
+                  <% end %>
+                </select>
+              </div>
+
+              <div class="space-y-1.5">
                 <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
                   Periodo
                 </label>
@@ -59,8 +106,22 @@
                   Precios custom
                 </p>
                 <p class="text-[11px] text-base-content/40 -mt-1">
-                  Por millón de tokens — solo afecta la línea "Estimado (custom)"
+                  <%= if @lane_non_token do %>
+                    El lane cobra por unidad, no por tokens — sin estimado
+                  <% else %>
+                    Por {Pricing.rate_suffix(@lane_unit)} de tokens — solo afecta la línea "Estimado (custom)"
+                  <% end %>
                 </p>
+
+                <div
+                  :if={@lane_non_token}
+                  id="lane-unit-notice"
+                  class="alert alert-warning text-[11px] py-2 px-3"
+                >
+                  <span>
+                    Este lane cobra por unidad ({Pricing.label(@lane_unit)}), no por tokens: el estimado no aplica. Solo se muestra el gasto real.
+                  </span>
+                </div>
 
                 <div class="space-y-3">
                   <div class="space-y-1.5">
@@ -81,7 +142,7 @@
                         class="input input-bordered input-sm w-full rounded-l-none"
                       />
                       <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
-                        /1M
+                        /{Pricing.rate_suffix(@lane_unit)}
                       </span>
                     </div>
                   </div>
@@ -104,7 +165,30 @@
                         class="input input-bordered input-sm w-full rounded-l-none"
                       />
                       <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
-                        /1M
+                        /{Pricing.rate_suffix(@lane_unit)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-medium text-base-content/60" for="cost-cache-write">
+                      Escritura de cache
+                    </label>
+                    <div class="join w-full">
+                      <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
+                        $
+                      </span>
+                      <input
+                        type="number"
+                        name="cost_cache_write"
+                        id="cost-cache-write"
+                        value={@cost_cache_write}
+                        min="0"
+                        step="0.01"
+                        class="input input-bordered input-sm w-full rounded-l-none"
+                      />
+                      <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
+                        /{Pricing.rate_suffix(@lane_unit)}
                       </span>
                     </div>
                   </div>
@@ -127,7 +211,7 @@
                         class="input input-bordered input-sm w-full rounded-l-none"
                       />
                       <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
-                        /1M
+                        /{Pricing.rate_suffix(@lane_unit)}
                       </span>
                     </div>
                   </div>
@@ -157,7 +241,9 @@
               </:sub>
             </.kpi_card>
 
+            <%!-- Without a token unit there is no estimate: the card is not rendered --%>
             <.kpi_card
+              :if={!@lane_non_token}
               id="calc-estimated"
               label="Estimado (custom)"
               icon="hero-calculator"
@@ -171,14 +257,13 @@
               id="calc-difference"
               label="Diferencia"
               icon="hero-scale"
-              accent={
-                if Decimal.compare(@summary.difference, 0) == :gt, do: "error", else: "primary"
-              }
+              accent={difference_accent(@summary.difference)}
               title="Estimado (custom) − Real: positivo = pagas menos de lo estimado"
             >
-              <span class={difference_class(@summary.difference)}>
+              <span :if={@summary.difference} class={difference_class(@summary.difference)}>
                 {difference_sign(@summary.difference)}${abs_decimal(@summary.difference)}
               </span>
+              <span :if={is_nil(@summary.difference)} class="text-base-content/40">—</span>
               <:sub :if={difference_pct(@summary)}>
                 <span class={difference_class(@summary.difference)}>
                   {difference_sign(@summary.difference)}{difference_pct(@summary)}% vs real
@@ -204,7 +289,7 @@
               icon="hero-cpu-chip"
               accent="primary"
               title={
-                "#{format_number(@summary.total_prompt)} in / #{format_number(@summary.total_cache_read)} cache / #{format_number(@summary.total_completion)} out"
+                "#{format_number(@summary.total_prompt)} in / #{format_number(@summary.total_cache_read)} cache / #{format_number(@summary.total_cache_creation)} cache write / #{format_number(@summary.total_completion)} out"
               }
             >
               <span class="flex items-baseline gap-2">
@@ -219,6 +304,7 @@
               </span>
               <:sub>
                 total {format_number(@summary.total_prompt + @summary.total_completion)} tokens
+                · {format_compact(@summary.total_cache_creation)} cache write
               </:sub>
             </.kpi_card>
           </div>
@@ -260,7 +346,7 @@
                     <span class="w-3 h-3 rounded-sm bg-success"></span>
                     <span class="text-base-content/60">Real</span>
                   </span>
-                  <span class="inline-flex items-center gap-1.5">
+                  <span :if={!@lane_non_token} class="inline-flex items-center gap-1.5">
                     <span class="w-3 h-3 rounded-sm bg-primary"></span>
                     <span class="text-base-content/60">Estimado (custom)</span>
                   </span>
@@ -306,8 +392,9 @@
                     stroke-linecap="round"
                   />
 
-                  <%!-- Estimated cost line (custom prices) --%>
+                  <%!-- Estimated cost line (custom prices) — absent without a token unit --%>
                   <polyline
+                    :if={!@lane_non_token}
                     points={chart.est_points}
                     fill="none"
                     class="stroke-primary"
@@ -343,18 +430,31 @@
 
               <%!-- Hourly breakdown table ─────────────────────────────────────── --%>
               <div class="mt-4 overflow-x-auto">
-                <div class="hidden md:grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+                <div class={[
+                  "hidden md:grid gap-2 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40",
+                  if(@lane_non_token,
+                    do: "grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr]",
+                    else: "grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr_1fr]"
+                  )
+                ]}>
                   <span>Hora</span>
                   <span class="text-right">Requests</span>
                   <span class="text-right">Entrada</span>
-                  <span class="text-right">Cache</span>
+                  <span class="text-right">Cache read</span>
+                  <span class="text-right">Cache write</span>
                   <span class="text-right">Salida</span>
                   <span class="text-right">Real</span>
-                  <span class="text-right">Estimado (custom)</span>
+                  <span :if={!@lane_non_token} class="text-right">Estimado (custom)</span>
                 </div>
                 <div
                   :for={row <- @chart_data}
-                  class="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-2 py-1.5 items-center text-[11px] tabular-nums hover:bg-base-200/20 border-b border-base-200/30 last:border-b-0"
+                  class={[
+                    "grid grid-cols-[1fr_auto] gap-2 px-2 py-1.5 items-center text-[11px] tabular-nums hover:bg-base-200/20 border-b border-base-200/30 last:border-b-0",
+                    if(@lane_non_token,
+                      do: "md:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr]",
+                      else: "md:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr_1fr]"
+                    )
+                  ]}
                 >
                   <span class="text-base-content/60 truncate">
                     {Calendar.strftime(row.hour, "%d/%m %H:%M")}
@@ -369,12 +469,15 @@
                     row.cache_read_tokens
                   )}</span>
                   <span class="text-right text-base-content/50 hidden md:block">{format_number(
+                    row.cache_creation_tokens
+                  )}</span>
+                  <span class="text-right text-base-content/50 hidden md:block">{format_number(
                     row.completion_tokens
                   )}</span>
                   <span class="text-right font-medium text-success/70">${format_cost(
                     row.real_cost
                   )}</span>
-                  <span class="text-right font-medium text-primary/70">${format_cost(
+                  <span :if={!@lane_non_token} class="text-right font-medium text-primary/70">${format_cost(
                     row.estimated_cost
                   )}</span>
                 </div>

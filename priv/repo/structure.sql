@@ -2784,17 +2784,10 @@ CREATE INDEX request_logs_2026_07_26_model_id_inserted_at_idx1 ON public.request
 
 
 --
--- Name: request_logs_model_provider_id_index; Type: INDEX; Schema: public; Owner: -
+-- Name: request_logs_model_provider_inserted_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX request_logs_model_provider_id_index ON ONLY public.request_logs USING btree (model_provider_id);
-
-
---
--- Name: request_logs_2026_07_26_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_07_26_model_provider_id_idx ON public.request_logs_2026_07_26 USING btree (model_provider_id);
+CREATE INDEX request_logs_model_provider_inserted_idx ON public.request_logs USING btree (model_provider_id, inserted_at DESC);
 
 
 --
@@ -2959,13 +2952,6 @@ CREATE INDEX request_logs_2026_09_18_model_alias_id_inserted_at_idx ON public.re
 
 
 --
--- Name: request_logs_2026_09_18_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_09_18_model_provider_id_idx ON public.request_logs_2026_09_18 USING btree (model_provider_id);
-
-
---
 -- Name: request_logs_2026_09_18_oban_job_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3068,13 +3054,6 @@ CREATE INDEX request_logs_2026_09_19_inserted_at_id_idx ON public.request_logs_2
 --
 
 CREATE INDEX request_logs_2026_09_19_model_alias_id_inserted_at_idx ON public.request_logs_2026_09_19 USING btree (model_id, inserted_at DESC);
-
-
---
--- Name: request_logs_2026_09_19_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_09_19_model_provider_id_idx ON public.request_logs_2026_09_19 USING btree (model_provider_id);
 
 
 --
@@ -3183,13 +3162,6 @@ CREATE INDEX request_logs_2026_09_20_model_alias_id_inserted_at_idx ON public.re
 
 
 --
--- Name: request_logs_2026_09_20_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_09_20_model_provider_id_idx ON public.request_logs_2026_09_20 USING btree (model_provider_id);
-
-
---
 -- Name: request_logs_2026_09_20_oban_job_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3292,13 +3264,6 @@ CREATE INDEX request_logs_2026_09_21_inserted_at_id_idx ON public.request_logs_2
 --
 
 CREATE INDEX request_logs_2026_09_21_model_alias_id_inserted_at_idx ON public.request_logs_2026_09_21 USING btree (model_id, inserted_at DESC);
-
-
---
--- Name: request_logs_2026_09_21_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_09_21_model_provider_id_idx ON public.request_logs_2026_09_21 USING btree (model_provider_id);
 
 
 --
@@ -3407,13 +3372,6 @@ CREATE INDEX request_logs_2026_09_22_model_alias_id_inserted_at_idx ON public.re
 
 
 --
--- Name: request_logs_2026_09_22_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_09_22_model_provider_id_idx ON public.request_logs_2026_09_22 USING btree (model_provider_id);
-
-
---
 -- Name: request_logs_2026_09_22_oban_job_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3516,13 +3474,6 @@ CREATE INDEX request_logs_2026_09_23_inserted_at_id_idx ON public.request_logs_2
 --
 
 CREATE INDEX request_logs_2026_09_23_model_alias_id_inserted_at_idx ON public.request_logs_2026_09_23 USING btree (model_id, inserted_at DESC);
-
-
---
--- Name: request_logs_2026_09_23_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_09_23_model_provider_id_idx ON public.request_logs_2026_09_23 USING btree (model_provider_id);
 
 
 --
@@ -3631,13 +3582,6 @@ CREATE INDEX request_logs_2026_11_08_model_alias_id_inserted_at_idx ON public.re
 
 
 --
--- Name: request_logs_2026_11_08_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_11_08_model_provider_id_idx ON public.request_logs_2026_11_08 USING btree (model_provider_id);
-
-
---
 -- Name: request_logs_2026_11_08_oban_job_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3740,13 +3684,6 @@ CREATE INDEX request_logs_2026_11_09_inserted_at_id_idx ON public.request_logs_2
 --
 
 CREATE INDEX request_logs_2026_11_09_model_alias_id_inserted_at_idx ON public.request_logs_2026_11_09 USING btree (model_id, inserted_at DESC);
-
-
---
--- Name: request_logs_2026_11_09_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_11_09_model_provider_id_idx ON public.request_logs_2026_11_09 USING btree (model_provider_id);
 
 
 --
@@ -3855,13 +3792,6 @@ CREATE INDEX request_logs_2026_11_10_model_alias_id_inserted_at_idx ON public.re
 
 
 --
--- Name: request_logs_2026_11_10_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_11_10_model_provider_id_idx ON public.request_logs_2026_11_10 USING btree (model_provider_id);
-
-
---
 -- Name: request_logs_2026_11_10_oban_job_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3964,13 +3894,6 @@ CREATE INDEX request_logs_2026_11_11_inserted_at_id_idx ON public.request_logs_2
 --
 
 CREATE INDEX request_logs_2026_11_11_model_alias_id_inserted_at_idx ON public.request_logs_2026_11_11 USING btree (model_id, inserted_at DESC);
-
-
---
--- Name: request_logs_2026_11_11_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_11_11_model_provider_id_idx ON public.request_logs_2026_11_11 USING btree (model_provider_id);
 
 
 --
@@ -4079,13 +4002,6 @@ CREATE INDEX request_logs_2026_11_12_model_alias_id_inserted_at_idx ON public.re
 
 
 --
--- Name: request_logs_2026_11_12_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_11_12_model_provider_id_idx ON public.request_logs_2026_11_12 USING btree (model_provider_id);
-
-
---
 -- Name: request_logs_2026_11_12_oban_job_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4188,13 +4104,6 @@ CREATE INDEX request_logs_2026_11_13_inserted_at_id_idx ON public.request_logs_2
 --
 
 CREATE INDEX request_logs_2026_11_13_model_alias_id_inserted_at_idx ON public.request_logs_2026_11_13 USING btree (model_id, inserted_at DESC);
-
-
---
--- Name: request_logs_2026_11_13_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_11_13_model_provider_id_idx ON public.request_logs_2026_11_13 USING btree (model_provider_id);
 
 
 --
@@ -4303,13 +4212,6 @@ CREATE INDEX request_logs_2026_11_14_model_alias_id_inserted_at_idx ON public.re
 
 
 --
--- Name: request_logs_2026_11_14_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_11_14_model_provider_id_idx ON public.request_logs_2026_11_14 USING btree (model_provider_id);
-
-
---
 -- Name: request_logs_2026_11_14_oban_job_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4412,13 +4314,6 @@ CREATE INDEX request_logs_2026_11_15_inserted_at_id_idx ON public.request_logs_2
 --
 
 CREATE INDEX request_logs_2026_11_15_model_alias_id_inserted_at_idx ON public.request_logs_2026_11_15 USING btree (model_id, inserted_at DESC);
-
-
---
--- Name: request_logs_2026_11_15_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_11_15_model_provider_id_idx ON public.request_logs_2026_11_15 USING btree (model_provider_id);
 
 
 --
@@ -4527,13 +4422,6 @@ CREATE INDEX request_logs_2026_11_16_model_alias_id_inserted_at_idx ON public.re
 
 
 --
--- Name: request_logs_2026_11_16_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_11_16_model_provider_id_idx ON public.request_logs_2026_11_16 USING btree (model_provider_id);
-
-
---
 -- Name: request_logs_2026_11_16_oban_job_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4636,13 +4524,6 @@ CREATE INDEX request_logs_default_inserted_at_id_idx ON public.request_logs_defa
 --
 
 CREATE INDEX request_logs_default_model_id_inserted_at_idx ON public.request_logs_default USING btree (model_id, inserted_at DESC);
-
-
---
--- Name: request_logs_default_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_default_model_provider_id_idx ON public.request_logs_default USING btree (model_provider_id);
 
 
 --
@@ -5087,13 +4968,6 @@ ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.
 
 
 --
--- Name: request_logs_2026_07_26_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_07_26_model_provider_id_idx;
-
-
---
 -- Name: request_logs_2026_07_26_oban_job_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -5203,13 +5077,6 @@ ALTER INDEX public.request_logs_inserted_id_desc_idx ATTACH PARTITION public.req
 --
 
 ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_09_18_model_alias_id_inserted_at_idx;
-
-
---
--- Name: request_logs_2026_09_18_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_09_18_model_provider_id_idx;
 
 
 --
@@ -5325,13 +5192,6 @@ ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.
 
 
 --
--- Name: request_logs_2026_09_19_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_09_19_model_provider_id_idx;
-
-
---
 -- Name: request_logs_2026_09_19_oban_job_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -5441,13 +5301,6 @@ ALTER INDEX public.request_logs_inserted_id_desc_idx ATTACH PARTITION public.req
 --
 
 ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_09_20_model_alias_id_inserted_at_idx;
-
-
---
--- Name: request_logs_2026_09_20_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_09_20_model_provider_id_idx;
 
 
 --
@@ -5563,13 +5416,6 @@ ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.
 
 
 --
--- Name: request_logs_2026_09_21_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_09_21_model_provider_id_idx;
-
-
---
 -- Name: request_logs_2026_09_21_oban_job_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -5679,13 +5525,6 @@ ALTER INDEX public.request_logs_inserted_id_desc_idx ATTACH PARTITION public.req
 --
 
 ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_09_22_model_alias_id_inserted_at_idx;
-
-
---
--- Name: request_logs_2026_09_22_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_09_22_model_provider_id_idx;
 
 
 --
@@ -5801,13 +5640,6 @@ ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.
 
 
 --
--- Name: request_logs_2026_09_23_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_09_23_model_provider_id_idx;
-
-
---
 -- Name: request_logs_2026_09_23_oban_job_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -5917,13 +5749,6 @@ ALTER INDEX public.request_logs_inserted_id_desc_idx ATTACH PARTITION public.req
 --
 
 ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_11_08_model_alias_id_inserted_at_idx;
-
-
---
--- Name: request_logs_2026_11_08_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_11_08_model_provider_id_idx;
 
 
 --
@@ -6039,13 +5864,6 @@ ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.
 
 
 --
--- Name: request_logs_2026_11_09_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_11_09_model_provider_id_idx;
-
-
---
 -- Name: request_logs_2026_11_09_oban_job_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -6155,13 +5973,6 @@ ALTER INDEX public.request_logs_inserted_id_desc_idx ATTACH PARTITION public.req
 --
 
 ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_11_10_model_alias_id_inserted_at_idx;
-
-
---
--- Name: request_logs_2026_11_10_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_11_10_model_provider_id_idx;
 
 
 --
@@ -6277,13 +6088,6 @@ ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.
 
 
 --
--- Name: request_logs_2026_11_11_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_11_11_model_provider_id_idx;
-
-
---
 -- Name: request_logs_2026_11_11_oban_job_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -6393,13 +6197,6 @@ ALTER INDEX public.request_logs_inserted_id_desc_idx ATTACH PARTITION public.req
 --
 
 ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_11_12_model_alias_id_inserted_at_idx;
-
-
---
--- Name: request_logs_2026_11_12_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_11_12_model_provider_id_idx;
 
 
 --
@@ -6515,13 +6312,6 @@ ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.
 
 
 --
--- Name: request_logs_2026_11_13_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_11_13_model_provider_id_idx;
-
-
---
 -- Name: request_logs_2026_11_13_oban_job_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -6631,13 +6421,6 @@ ALTER INDEX public.request_logs_inserted_id_desc_idx ATTACH PARTITION public.req
 --
 
 ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_11_14_model_alias_id_inserted_at_idx;
-
-
---
--- Name: request_logs_2026_11_14_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_11_14_model_provider_id_idx;
 
 
 --
@@ -6753,13 +6536,6 @@ ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.
 
 
 --
--- Name: request_logs_2026_11_15_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_11_15_model_provider_id_idx;
-
-
---
 -- Name: request_logs_2026_11_15_oban_job_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -6872,13 +6648,6 @@ ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.
 
 
 --
--- Name: request_logs_2026_11_16_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_11_16_model_provider_id_idx;
-
-
---
 -- Name: request_logs_2026_11_16_oban_job_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -6988,13 +6757,6 @@ ALTER INDEX public.request_logs_inserted_id_desc_idx ATTACH PARTITION public.req
 --
 
 ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.request_logs_default_model_id_inserted_at_idx;
-
-
---
--- Name: request_logs_default_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_default_model_provider_id_idx;
 
 
 --
@@ -7583,3 +7345,4 @@ INSERT INTO public."schema_migrations" (version) VALUES (20261113033304);
 INSERT INTO public."schema_migrations" (version) VALUES (20261113033916);
 INSERT INTO public."schema_migrations" (version) VALUES (20261117020312);
 INSERT INTO public."schema_migrations" (version) VALUES (20261117134824);
+INSERT INTO public."schema_migrations" (version) VALUES (20261117160000);

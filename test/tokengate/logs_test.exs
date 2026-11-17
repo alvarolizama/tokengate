@@ -788,6 +788,66 @@ defmodule Tokengate.LogsTest do
 
       assert summary.avg_ttft_ms == nil
     end
+
+    # Dos lanes del MISMO modelo (dos `model_provider_id` distintos) y dos
+    # credenciales: el resumen debe poder aislarse por lane y por lane+key.
+    # Los tres ids son UUIDs sin FK (request_logs los guarda sueltos).
+    test "filters by model_provider_id (lane) and credential_id" do
+      model_id = Ecto.UUID.generate()
+      lane_a = Ecto.UUID.generate()
+      lane_b = Ecto.UUID.generate()
+      cred_1 = Ecto.UUID.generate()
+      cred_2 = Ecto.UUID.generate()
+
+      # lane A, cred 1 — $1.00
+      {_, _} =
+        log_fixture(%{
+          model_id: model_id,
+          model_provider_id: lane_a,
+          credential_id: cred_1,
+          provider_cost_usd: Decimal.new("1.000000")
+        })
+
+      # lane A, cred 2 — $2.00
+      {_, _} =
+        log_fixture(%{
+          model_id: model_id,
+          model_provider_id: lane_a,
+          credential_id: cred_2,
+          provider_cost_usd: Decimal.new("2.000000")
+        })
+
+      # lane B, cred 1 — $4.00
+      {_, _} =
+        log_fixture(%{
+          model_id: model_id,
+          model_provider_id: lane_b,
+          credential_id: cred_1,
+          provider_cost_usd: Decimal.new("4.000000")
+        })
+
+      # (a) Un lane devuelve solo SU costo y SU conteo.
+      lane_a_summary = Logs.cost_summary(%{model_id: model_id, model_provider_id: lane_a})
+
+      assert Decimal.equal?(lane_a_summary.total_cost_usd, Decimal.new("3.000000"))
+      assert lane_a_summary.request_count == 2
+
+      lane_b_summary = Logs.cost_summary(%{model_id: model_id, model_provider_id: lane_b})
+
+      assert Decimal.equal?(lane_b_summary.total_cost_usd, Decimal.new("4.000000"))
+      assert lane_b_summary.request_count == 1
+
+      # (b) Lane + credencial reduce a esa key exacta.
+      key_summary =
+        Logs.cost_summary(%{
+          model_id: model_id,
+          model_provider_id: lane_a,
+          credential_id: cred_1
+        })
+
+      assert Decimal.equal?(key_summary.total_cost_usd, Decimal.new("1.000000"))
+      assert key_summary.request_count == 1
+    end
   end
 
   describe "log_request/1 with ttft_ms" do
