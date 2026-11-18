@@ -355,10 +355,14 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#nav-groups")
     assert has_element?(view, "#period-selector")
     assert has_element?(view, "#period-today")
+    assert has_element?(view, "#period-yesterday")
     assert has_element?(view, "#period-week")
-    assert has_element?(view, "#period-month")
     assert has_element?(view, "#period-30d")
-    assert has_element?(view, "#period-last_month")
+    # El set canónico es exactamente esos cuatro: los botones de las ventanas
+    # mensuales ya no existen (los bookmarks degradan, ver el test de abajo).
+    refute has_element?(view, "#period-month")
+    refute has_element?(view, "#period-last_month")
+    refute has_element?(view, "#period-7d")
   end
 
   test "admin sees KPI cards on index (no tops/rankings anymore)", %{conn: conn} do
@@ -558,7 +562,7 @@ defmodule TokengateWeb.StatsLiveTest do
     # no al listado (regresión: tiraba el drilldown en silencio).
     assert has_element?(
              view,
-             "#period-last_month[href='/stats/models/#{ma.id}?period=last_month']"
+             "#period-yesterday[href='/stats/models/#{ma.id}?period=yesterday']"
            )
 
     {:ok, detail, _html} = live(conn, ~p"/stats/models/#{ma.id}?period=today")
@@ -850,12 +854,12 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/stats")
 
     refute has_element?(view, "#period-selector")
-    refute has_element?(view, "#period-last_month")
+    refute has_element?(view, "#period-yesterday")
 
     # Sigue presente en las tabs de datos.
     {:ok, overview, _html} = live(conn, ~p"/stats/overview")
     assert has_element?(overview, "#period-selector")
-    assert has_element?(overview, "#period-last_month")
+    assert has_element?(overview, "#period-yesterday")
   end
 
   test "En vivo: el estado de auto-refresh vive en el header, no en el contenido", %{conn: conn} do
@@ -911,13 +915,22 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#kpi-cost", "Costo")
     refute has_element?(view, "#kpi-cost", "Reinicia en")
 
-    # "Este mes" mide la ventana UTC del techo mensual (capa 1, intacta), así
-    # que el label lo declara.
-    view |> element("#period-month") |> render_click()
+    # "Ayer" es una ventana CERRADA y sin tope asociado: label corto.
+    view |> element("#period-yesterday") |> render_click()
     wait_stats_loaded(view)
 
-    assert has_element?(view, "#kpi-cost", "Costo (mes UTC)")
+    assert has_element?(view, "#kpi-cost", "Costo")
+    refute has_element?(view, "#kpi-cost", "mes UTC")
     refute has_element?(view, "#kpi-cost", "Reinicia en")
+
+    # Un bookmark viejo (?period=month) degrada al default canónico: ni la
+    # ventana mensual ni el label del techo mensual vuelven por la URL.
+    {:ok, legacy, _html} = live(conn, ~p"/stats/overview?period=month")
+    wait_stats_loaded(legacy)
+
+    assert has_element?(legacy, "#period-week.btn-primary")
+    assert has_element?(legacy, "#kpi-cost", "Costo")
+    refute has_element?(legacy, "#kpi-cost", "mes UTC")
   end
 
   test "Resumen: el número del KPI de costo mide el día UTC, no el local",

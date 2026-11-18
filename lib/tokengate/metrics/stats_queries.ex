@@ -43,6 +43,7 @@ defmodule Tokengate.Metrics.StatsQueries do
   alias Tokengate.Accounts.User
   alias Tokengate.Logs
   alias Tokengate.Logs.RequestLog
+  alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.RequestMetricsHourly
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Providers.Model
@@ -59,6 +60,13 @@ defmodule Tokengate.Metrics.StatsQueries do
   # Same refresh window the RollupWorker re-aggregates every tick — anything
   # older is immutable in practice (request_logs is append-only).
   @tail_hours 3
+
+  # TTL of the rollup-coverage verdict. The span it describes is CLOSED and
+  # `request_logs` is append-only, so the only thing that can change the
+  # answer mid-TTL is someone repairing the rollup (backfill). 60s keeps that
+  # window short while removing the repeated COUNT from every viewer's read —
+  # see `rollup_trusted?/4`.
+  @guard_cache_ttl_ms 60_000
 
   # ---------------------------------------------------------------------
   # Summary
@@ -274,13 +282,18 @@ defmodule Tokengate.Metrics.StatsQueries do
   @doc "24h UTC hour-of-day distribution. Same shape as `Rollup.usage_by_hour_of_day/2`."
   def usage_by_hour_of_day(group_id \\ nil, opts \\ []) do
     if hybrid?(opts) and is_nil(group_id) do
-      counts =
-        Enum.reduce(rollup_hour_counts(opts) ++ tail_hour_counts(opts), %{}, fn {hour, n}, acc ->
-          Map.update(acc, hour, n, &(&1 + n))
-        end)
+      if coverage_ok?(opts) do
+        counts =
+          Enum.reduce(rollup_hour_counts(opts) ++ tail_hour_counts(opts), %{}, fn {hour, n},
+                                                                                  acc ->
+            Map.update(acc, hour, n, &(&1 + n))
+          end)
 
-      for hour <- 0..23 do
-        %{hour: hour, request_count: Map.get(counts, hour, 0)}
+        for hour <- 0..23 do
+          %{hour: hour, request_count: Map.get(counts, hour, 0)}
+        end
+      else
+        Rollup.usage_by_hour_of_day(group_id, opts)
       end
     else
       Rollup.usage_by_hour_of_day(group_id, opts)
@@ -293,31 +306,44 @@ defmodule Tokengate.Metrics.StatsQueries do
 
   Hybrid: the rollup answers the hour buckets (dims `hour_utc` + `provider_id`
   are both in the rollup) and only the fresh tail is raw — in production this
-  turns a multi-million-row month scan into a few thousand rollup rows.
+  turns a multi-million-row month scan into a few thousand rollup rows. The
+  chart goes through the coverage guard (see `rollup_trusted?/4`): with a
+  rollup gap it answers the WHOLE window raw, so a chart can never draw a
+  smaller total than the KPI card next to it.
   """
   def usage_by_hour_of_day_by_provider(opts \\ []) do
-    if hybrid?(opts) do
-      Rollup.hour_provider_profile(
-        rollup_hour_provider_rows(opts) ++ tail_hour_provider_rows(opts)
-      )
-    else
-      Rollup.usage_by_hour_of_day_by_provider(opts)
+    cond do
+      not hybrid?(opts) ->
+        Rollup.usage_by_hour_of_day_by_provider(opts)
+
+      not coverage_ok?(opts) ->
+        Rollup.usage_by_hour_of_day_by_provider(opts)
+
+      true ->
+        Rollup.hour_provider_profile(
+          rollup_hour_provider_rows(opts) ++ tail_hour_provider_rows(opts)
+        )
     end
   end
 
   @doc """
   Gráfica apilada modelo × proveedor. Same shape as
   `Rollup.usage_by_model_provider_stacked/1`. Hybrid — see
-  `usage_by_hour_of_day_by_provider/1`.
+  `usage_by_hour_of_day_by_provider/1`, guard included.
   """
   def usage_by_model_provider_stacked(opts \\ []) do
-    if hybrid?(opts) do
-      rollup_rows = opts |> rollup_model_provider_rows() |> model_provider_names()
-      tail_rows = tail_model_provider_rows(opts)
+    cond do
+      not hybrid?(opts) ->
+        Rollup.usage_by_model_provider_stacked(opts)
 
-      Rollup.model_provider_stacked(merge_flat_rows(rollup_rows, tail_rows))
-    else
-      Rollup.usage_by_model_provider_stacked(opts)
+      not coverage_ok?(opts) ->
+        Rollup.usage_by_model_provider_stacked(opts)
+
+      true ->
+        rollup_rows = opts |> rollup_model_provider_rows() |> model_provider_names()
+        tail_rows = tail_model_provider_rows(opts)
+
+        Rollup.model_provider_stacked(merge_flat_rows(rollup_rows, tail_rows))
     end
   end
 
@@ -338,6 +364,11 @@ defmodule Tokengate.Metrics.StatsQueries do
       not whole_hour_zone?(opts) ->
         Rollup.busiest_hours(nil, opts)
 
+      # Mismo guard que el resto de las gráficas híbridas: con un hueco en el
+      # rollup el top saldría subcontado en silencio.
+      not coverage_ok?(opts) ->
+        Rollup.busiest_hours(nil, opts)
+
       true ->
         # Rollup: buckets UTC enteros → key = instante (para zonas de hora
         # entera el bucket UTC ES la hora local). Cola cruda: el mismo
@@ -355,6 +386,13 @@ defmodule Tokengate.Metrics.StatsQueries do
         |> Enum.take(limit)
         |> Enum.map(fn {bucket, n} -> %{bucket: bucket, request_count: n} end)
     end
+  end
+
+  # Coverage verdict for the closed span of a hybrid read — one call site per
+  # aggregate, cached per (scope, span) inside `rollup_trusted?/4`.
+  defp coverage_ok?(opts) do
+    {from, to} = rollup_window(opts)
+    rollup_trusted?(opts, from, to)
   end
 
   # El offset de la zona en `from` y en el corte del rollup debe ser de
@@ -923,19 +961,77 @@ defmodule Tokengate.Metrics.StatsQueries do
   # double count (the tail is not merged on top).
   #
   # Cost: one COUNT over the closed span plus one SUM over the rollup span, per
-  # hybrid read. The count is an index-only range scan (no decimal/token
-  # aggregation) and the reads that use this guard are behind the 60s
-  # structural/dashboard caches; a truthful guard is worth that and the silent
-  # shrinkage it prevents reads to the owner as "the period had no traffic".
+  # hybrid read — memoized per (scope, closed span) for `@guard_cache_ttl_ms`.
+  # The verdict only covers an already-closed, hour-aligned span of an
+  # append-only table, so a second read of the same window in the same minute
+  # is the same question with the same answer; two viewers or four graph cards
+  # behind one bundle pay it once.
+  #
+  # Goal (A17): replace the COUNT by a watermark (`max(hour_utc)` of the
+  # rollup) — O(1) instead of O(n) — once gap instrumentation exists. A
+  # watermark alone cannot tell a partial interior gap from a covered hour,
+  # which is why the exact reconciliation stays the source of truth for now.
   defp rollup_trusted?(opts, rollup_from, rollup_to, known_rollup_requests \\ nil) do
     if DateTime.compare(rollup_to, rollup_from) != :gt do
       true
     else
-      rollup_requests =
-        known_rollup_requests || rollup_requests_between(opts, rollup_from, rollup_to)
+      key = guard_cache_key(opts, rollup_from, rollup_to)
 
-      raw_rows_between?(opts, rollup_from, rollup_to) == rollup_requests
+      case cached_verdict(key) do
+        {:ok, verdict} ->
+          verdict
+
+        :miss ->
+          verdict = verify_coverage(opts, rollup_from, rollup_to, known_rollup_requests)
+          cache_verdict(key, verdict)
+          verdict
+      end
     end
+  end
+
+  defp verify_coverage(opts, rollup_from, rollup_to, known_rollup_requests) do
+    rollup_requests =
+      known_rollup_requests || rollup_requests_between(opts, rollup_from, rollup_to)
+
+    raw_rows_between?(opts, rollup_from, rollup_to) == rollup_requests
+  end
+
+  # Scope + closed span. Both bounds are hour-aligned absolute instants, so
+  # the key rotates by itself as the window advances; the TTL bounds the key
+  # space (two per hour per scope at most).
+  defp guard_cache_key(opts, from, to) do
+    {:stats_rollup_guard, guard_scope(opts), from, to}
+  end
+
+  defp guard_scope(opts) do
+    {filter_value(opts, :member_ids) || filter_value(opts, :group_member_ids),
+     filter_value(opts, :user_ids), filter_value(opts, :model_id),
+     filter_value(opts, :provider_id)}
+  end
+
+  # Same switch the stats surface uses to disable its caches in the test env:
+  # specs share one ETS table, so a verdict cached by one test must never
+  # answer another.
+  defp verdict_cache_enabled?,
+    do: Application.get_env(:tokengate, :stats_structural_cache, enabled: true)[:enabled] != false
+
+  defp cached_verdict(key) do
+    if verdict_cache_enabled?() and DashboardCache.available?() do
+      case DashboardCache.fetch(key) do
+        {:ok, verdict} -> {:ok, verdict}
+        :miss -> :miss
+      end
+    else
+      :miss
+    end
+  end
+
+  defp cache_verdict(key, verdict) do
+    if verdict_cache_enabled?() and DashboardCache.available?() do
+      DashboardCache.put(key, verdict, @guard_cache_ttl_ms)
+    end
+
+    verdict
   end
 
   defp raw_rows_between?(opts, from, to) do
