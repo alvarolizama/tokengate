@@ -61,6 +61,7 @@ defmodule TokengateWeb.ServiceStatsBody do
   attr :form, :any, required: true
   attr :streams, :map, required: true
   attr :has_more, :boolean, default: false
+  attr :logs_empty?, :boolean, default: false
   attr :logs_id, :string, default: "service-stats-logs"
   attr :logs_empty_text, :string, default: nil
   attr :load_more_id, :string, default: "load-more-service-stats-logs"
@@ -226,59 +227,48 @@ defmodule TokengateWeb.ServiceStatsBody do
         <div class="card-body p-4">
           <h3 class="text-sm font-semibold mb-2">{gettext("API keys")}</h3>
           <div class="overflow-x-auto">
-            <table class="table table-sm" id="service-api-keys-table">
-              <thead>
-                <tr>
-                  <th>{gettext("Key")}</th>
-                  <th>{gettext("Status")}</th>
-                  <th class="text-right">{gettext("Requests")}</th>
-                  <th class="text-right">{gettext("Input")}</th>
-                  <th class="text-right">{gettext("Output")}</th>
-                  <th class="text-right">{gettext("Cost")}</th>
-                  <th>{gettext("Last request")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <%= if @key_rows == [] do %>
-                  <tr id="service-api-keys-empty">
-                    <td colspan="7" class="text-center py-6 text-base-content/40">
-                      {gettext("This service has no API keys.")}
-                    </td>
-                  </tr>
+            <.table
+              id="service-api-keys-table"
+              rows={@key_rows}
+              row_id={fn row -> row.dom_id end}
+            >
+              <:col :let={row} label={gettext("Key")}>
+                <span class="font-mono text-sm">{row.label}</span>
+              </:col>
+              <:col :let={row} label={gettext("Status")}>
+                <%= if row.status do %>
+                  <span class={[
+                    "badge badge-sm",
+                    if(row.status == "active", do: "badge-success", else: "badge-error")
+                  ]}>
+                    {row.status}
+                  </span>
                 <% else %>
-                  <tr :for={row <- @key_rows} id={row.dom_id}>
-                    <td class="font-mono text-sm">{row.label}</td>
-                    <td>
-                      <%= if row.status do %>
-                        <span class={[
-                          "badge badge-sm",
-                          if(row.status == "active", do: "badge-success", else: "badge-error")
-                        ]}>
-                          {row.status}
-                        </span>
-                      <% else %>
-                        <span class="text-base-content/40">—</span>
-                      <% end %>
-                    </td>
-                    <td class="text-right text-sm font-mono">
-                      {format_number(row.stats.request_count)}
-                    </td>
-                    <td class="text-right text-sm">
-                      {format_number(row.stats.total_prompt_tokens)}
-                    </td>
-                    <td class="text-right text-sm">
-                      {format_number(row.stats.total_completion_tokens)}
-                    </td>
-                    <td class="text-right text-sm font-mono">
-                      {fmt_money(row.stats.total_cost_usd)}
-                    </td>
-                    <td class="text-sm">
-                      {last_request_label(row.stats.last_request_at, @timezone)}
-                    </td>
-                  </tr>
+                  <span class="text-base-content/40">—</span>
                 <% end %>
-              </tbody>
-            </table>
+              </:col>
+              <:col :let={row} label={gettext("Requests")} align="right">
+                <span class="text-sm font-mono">{format_number(row.stats.request_count)}</span>
+              </:col>
+              <:col :let={row} label={gettext("Input")} align="right">
+                <span class="text-sm">{format_number(row.stats.total_prompt_tokens)}</span>
+              </:col>
+              <:col :let={row} label={gettext("Output")} align="right">
+                <span class="text-sm">{format_number(row.stats.total_completion_tokens)}</span>
+              </:col>
+              <:col :let={row} label={gettext("Cost")} align="right">
+                <span class="text-sm font-mono">{fmt_money(row.stats.total_cost_usd)}</span>
+              </:col>
+              <:col :let={row} label={gettext("Last request")}>
+                <span class="text-sm">{last_request_label(row.stats.last_request_at, @timezone)}</span>
+              </:col>
+              <:empty>
+                <div id="service-api-keys-empty">
+                  <.icon name="hero-key" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                  <p>{gettext("This service has no API keys.")}</p>
+                </div>
+              </:empty>
+            </.table>
           </div>
         </div>
       </div>
@@ -290,54 +280,40 @@ defmodule TokengateWeb.ServiceStatsBody do
             {gettext("Spend per model")} · {gettext("by API key")}
           </h3>
           <div class="overflow-x-auto">
-            <table class="table table-sm" id="service-model-breakdown-table">
-              <thead>
-                <tr>
-                  <th>{gettext("Model")}</th>
-                  <th class="text-right">{gettext("Requests")}</th>
-                  <th class="text-right">{gettext("Cost")}</th>
-                  <th
-                    :for={
-                      {key_id, label} <-
-                        Enum.sort_by(@model_breakdown.key_labels, fn {_id, l} -> l end)
-                    }
-                    class="text-right"
-                  >
-                    {label}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <%= if @model_breakdown.rows == [] do %>
-                  <tr id="service-model-breakdown-empty">
-                    <td class="text-center py-6 text-base-content/40" colspan="100">
-                      {gettext("No requests in this period.")}
-                    </td>
-                  </tr>
-                <% else %>
-                  <tr
-                    :for={row <- @model_breakdown.rows}
-                    id={"model-breakdown-#{String.replace(row.model || "unknown", "/", "-")}"}
-                  >
-                    <td class="font-mono text-sm">{row.model || "—"}</td>
-                    <td class="text-right text-sm">{format_number(row.request_count)}</td>
-                    <td class="text-right text-sm font-mono">{fmt_money(row.total_cost_usd)}</td>
-                    <td
-                      :for={
-                        {key_id, _label} <-
-                          Enum.sort_by(@model_breakdown.key_labels, fn {_id, l} -> l end)
-                      }
-                      class="text-right text-sm font-mono"
-                    >
-                      {case Map.get(row.by_key, key_id) do
-                        nil -> "—"
-                        cell -> fmt_money(cell.total_cost_usd)
-                      end}
-                    </td>
-                  </tr>
-                <% end %>
-              </tbody>
-            </table>
+            <% key_cols = Enum.sort_by(@model_breakdown.key_labels, fn {_id, label} -> label end) %>
+            <.table
+              id="service-model-breakdown-table"
+              rows={@model_breakdown.rows}
+              row_id={
+                fn row ->
+                  "model-breakdown-#{String.replace(row.model || "unknown", "/", "-")}"
+                end
+              }
+            >
+              <:col :let={row} label={gettext("Model")}>
+                <span class="font-mono text-sm">{row.model || "—"}</span>
+              </:col>
+              <:col :let={row} label={gettext("Requests")} align="right">
+                <span class="text-sm">{format_number(row.request_count)}</span>
+              </:col>
+              <:col :let={row} label={gettext("Cost")} align="right">
+                <span class="text-sm font-mono">{fmt_money(row.total_cost_usd)}</span>
+              </:col>
+              <:col :let={row} :for={{key_id, label} <- key_cols} label={label} align="right">
+                <span class="text-sm font-mono">
+                  {case Map.get(row.by_key, key_id) do
+                    nil -> "—"
+                    cell -> fmt_money(cell.total_cost_usd)
+                  end}
+                </span>
+              </:col>
+              <:empty>
+                <div id="service-model-breakdown-empty">
+                  <.icon name="hero-chart-bar" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                  <p>{gettext("No requests in this period.")}</p>
+                </div>
+              </:empty>
+            </.table>
           </div>
         </div>
       </div>
@@ -375,47 +351,48 @@ defmodule TokengateWeb.ServiceStatsBody do
 
       <%!-- Logs table (stream) --%>
       <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
-        <table class="table table-sm">
-          <thead>
-            <tr>
-              <th>{gettext("Date")}</th>
-              <th>{gettext("Model")}</th>
-              <th>{gettext("Agent")}</th>
-              <th>Streaming</th>
-              <th>{gettext("Status")}</th>
-              <th class="text-right">Input</th>
-              <th class="text-right">Output</th>
-              <th class="text-right">{gettext("Cost")}</th>
-              <th class="text-right">{gettext("Latency")}</th>
-            </tr>
-          </thead>
-          <tbody id={@logs_id} phx-update="stream">
-            <tr id={"#{@logs_id}-empty"} class="hidden only:table-row">
-              <td colspan="9" class="text-center py-8 text-base-content/40">
-                {@logs_empty_text || gettext("No requests with the current filters.")}
-              </td>
-            </tr>
-            <tr :for={{id, log} <- @streams.logs} id={id}>
-              <td class="whitespace-nowrap text-sm">
-                {TokengateWeb.TimezoneHelper.format_datetime(log.inserted_at, @timezone)}
-              </td>
-              <td class="text-sm">
-                {model_display(log.model_requested, log.model_responded)}
-              </td>
-              <td class="text-sm">{log.client_agent || "—"}</td>
-              <td>{if log.streaming, do: gettext("Yes"), else: gettext("No")}</td>
-              <td>
-                <span class={["badge badge-sm", status_badge(log.status_code)]}>
-                  {Integer.to_string(log.status_code)}
-                </span>
-              </td>
-              <td class="text-right text-sm">{format_number(log.prompt_tokens || 0)}</td>
-              <td class="text-right text-sm">{format_number(log.completion_tokens || 0)}</td>
-              <td class="text-right text-sm font-mono">${format_cost(log.provider_cost_usd)}</td>
-              <td class="text-right text-sm">{format_number(log.latency_ms || 0)} ms</td>
-            </tr>
-          </tbody>
-        </table>
+        <.table
+          id={@logs_id}
+          rows={@streams.logs}
+          row_item={fn {_id, log} -> log end}
+          empty?={@logs_empty?}
+        >
+          <:col :let={log} label={gettext("Date")}>
+            <span class="whitespace-nowrap text-sm">
+              {TokengateWeb.TimezoneHelper.format_datetime(log.inserted_at, @timezone)}
+            </span>
+          </:col>
+          <:col :let={log} label={gettext("Model")}>
+            <span class="text-sm">{model_display(log.model_requested, log.model_responded)}</span>
+          </:col>
+          <:col :let={log} label={gettext("Agent")}>
+            <span class="text-sm">{log.client_agent || "—"}</span>
+          </:col>
+          <:col :let={log} label={gettext("Streaming")}>
+            {if log.streaming, do: gettext("Yes"), else: gettext("No")}
+          </:col>
+          <:col :let={log} label={gettext("Status")}>
+            <span class={["badge badge-sm", status_badge(log.status_code)]}>
+              {Integer.to_string(log.status_code)}
+            </span>
+          </:col>
+          <:col :let={log} label={gettext("Input")} align="right">
+            <span class="text-sm">{format_number(log.prompt_tokens || 0)}</span>
+          </:col>
+          <:col :let={log} label={gettext("Output")} align="right">
+            <span class="text-sm">{format_number(log.completion_tokens || 0)}</span>
+          </:col>
+          <:col :let={log} label={gettext("Cost")} align="right">
+            <span class="text-sm font-mono">${format_cost(log.provider_cost_usd)}</span>
+          </:col>
+          <:col :let={log} label={gettext("Latency")} align="right">
+            <span class="text-sm">{format_number(log.latency_ms || 0)} ms</span>
+          </:col>
+          <:empty>
+            <.icon name="hero-inbox" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+            <p>{@logs_empty_text || gettext("No requests with the current filters.")}</p>
+          </:empty>
+        </.table>
       </div>
 
       <%= if @has_more do %>
@@ -688,8 +665,17 @@ defmodule TokengateWeb.ServiceStatsBody do
   # Aplica el resultado de `compute_logs/3` al socket. El cursor sólo se pisa
   # cuando llegaron filas (misma semántica que la carga síncrona original).
   def apply_logs(socket, %{logs: logs, has_more: has_more, cursor: cursor}, mode) do
+    # El stream no es enumerable: `.table` necesita el flag explícito para el
+    # empty-state. `:reset` lo recalcula; `:more` sólo lo apaga si llegó algo.
+    logs_empty? =
+      case mode do
+        :reset -> logs == []
+        :more -> Map.get(socket.assigns, :logs_empty?, true) and logs == []
+      end
+
     socket
     |> assign(:has_more, has_more)
+    |> assign(:logs_empty?, logs_empty?)
     |> then(fn s -> if cursor, do: assign(s, :cursor, cursor), else: s end)
     |> then(fn s ->
       case mode do

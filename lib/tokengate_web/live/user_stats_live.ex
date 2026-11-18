@@ -55,6 +55,9 @@ defmodule TokengateWeb.UserStatsLive do
           |> assign(:form, to_form(default_filters(), as: :filter))
           |> assign(:cursor, nil)
           |> assign(:has_more, false)
+          # El stream no es enumerable: `.table` necesita el flag explícito para
+          # el empty-state (se recalcula en cada `load_logs/2`).
+          |> assign(:logs_empty?, true)
           |> assign(:page_size, @page_size)
           |> assign(:summary_5d, default_summary())
           |> assign(:summary_30d, default_summary())
@@ -99,7 +102,10 @@ defmodule TokengateWeb.UserStatsLive do
       filters = socket.assigns.filters
 
       if log_matches_filters?(log, filters, timezone) do
-        socket = stream_insert(socket, :logs, log, at: 0)
+        socket =
+          socket
+          |> stream_insert(:logs, log, at: 0)
+          |> assign(:logs_empty?, false)
 
         # Coalesce summary reloads: at most one member_stats recompute per
         # interval per connected LiveView, regardless of broadcast rate.
@@ -223,9 +229,18 @@ defmodule TokengateWeb.UserStatsLive do
 
     has_more = length(logs) == @page_size
 
+    # `:reset` recalcula el empty-state desde cero; `:more` sólo lo apaga si
+    # llegó alguna fila (una página vacía no vacía lo ya pintado).
+    logs_empty? =
+      case mode do
+        :reset -> logs == []
+        :more -> socket.assigns[:logs_empty?] == true and logs == []
+      end
+
     socket =
       socket
       |> assign(:has_more, has_more)
+      |> assign(:logs_empty?, logs_empty?)
       |> case do
         s when mode == :reset ->
           s |> stream(:logs, logs, reset: true)
@@ -581,51 +596,54 @@ defmodule TokengateWeb.UserStatsLive do
 
         <%!-- Logs table (stream) --%>
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
-          <table class="table table-sm">
-            <thead>
-              <tr>
-                <th>{gettext("Date")}</th>
-                <th>{gettext("Model")}</th>
-                <th>{gettext("Agent")}</th>
-                <th>Streaming</th>
-                <th>{gettext("Status")}</th>
-                <th class="text-right">Input</th>
-                <th class="text-right">Output</th>
-                <th class="text-right">{gettext("Cost")}</th>
-                <th class="text-right">{gettext("Latency")}</th>
-              </tr>
-            </thead>
-            <tbody id="user-stats-logs" phx-update="stream">
-              <tr id="user-stats-logs-empty" class="hidden only:table-row">
-                <td colspan="9" class="text-center py-8 text-base-content/40">
-                  <%= if @memberships == [] do %>
-                    {gettext("This user has no memberships — there are no logs to show.")}
-                  <% else %>
-                    {gettext("No requests with the current filters.")}
-                  <% end %>
-                </td>
-              </tr>
-              <tr :for={{id, log} <- @streams.logs} id={id}>
-                <td class="whitespace-nowrap text-sm">
-                  {TokengateWeb.TimezoneHelper.format_datetime(log.inserted_at, @timezone)}
-                </td>
-                <td class="text-sm">
-                  {model_display(log.model_requested, log.model_responded)}
-                </td>
-                <td class="text-sm">{log.client_agent || "—"}</td>
-                <td>{if log.streaming, do: gettext("Yes"), else: gettext("No")}</td>
-                <td>
-                  <span class={["badge badge-sm", status_badge(log.status_code)]}>
-                    {Integer.to_string(log.status_code)}
-                  </span>
-                </td>
-                <td class="text-right text-sm">{format_number(log.prompt_tokens || 0)}</td>
-                <td class="text-right text-sm">{format_number(log.completion_tokens || 0)}</td>
-                <td class="text-right text-sm font-mono">${format_cost(log.provider_cost_usd)}</td>
-                <td class="text-right text-sm">{format_number(log.latency_ms || 0)} ms</td>
-              </tr>
-            </tbody>
-          </table>
+          <.table
+            id="user-stats-logs"
+            rows={@streams.logs}
+            row_item={fn {_id, log} -> log end}
+            empty?={@logs_empty?}
+          >
+            <:col :let={log} label={gettext("Date")}>
+              <span class="whitespace-nowrap text-sm">
+                {TokengateWeb.TimezoneHelper.format_datetime(log.inserted_at, @timezone)}
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("Model")}>
+              <span class="text-sm">{model_display(log.model_requested, log.model_responded)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Agent")}>
+              <span class="text-sm">{log.client_agent || "—"}</span>
+            </:col>
+            <:col :let={log} label={gettext("Streaming")}>
+              {if log.streaming, do: gettext("Yes"), else: gettext("No")}
+            </:col>
+            <:col :let={log} label={gettext("Status")}>
+              <span class={["badge badge-sm", status_badge(log.status_code)]}>
+                {Integer.to_string(log.status_code)}
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("Input")} align="right">
+              <span class="text-sm">{format_number(log.prompt_tokens || 0)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Output")} align="right">
+              <span class="text-sm">{format_number(log.completion_tokens || 0)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Cost")} align="right">
+              <span class="text-sm font-mono">${format_cost(log.provider_cost_usd)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Latency")} align="right">
+              <span class="text-sm">{format_number(log.latency_ms || 0)} ms</span>
+            </:col>
+            <:empty>
+              <.icon name="hero-inbox" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+              <p>
+                <%= if @memberships == [] do %>
+                  {gettext("This user has no memberships — there are no logs to show.")}
+                <% else %>
+                  {gettext("No requests with the current filters.")}
+                <% end %>
+              </p>
+            </:empty>
+          </.table>
         </div>
 
         <%= if @has_more do %>
