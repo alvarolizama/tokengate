@@ -366,21 +366,22 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    group_with_log(%{cost: "0.005", user: admin})
+    fixture = group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
     render_async(view)
 
-    # Default is model
-    html = render(view)
-    assert html =~ "bd-model-"
+    # Default is model. El cuerpo de la tabla (.table) es el ancla del contrato
+    # y cada fila conserva su id estable de siempre.
+    assert has_element?(view, "#bd-model-rows")
+    assert has_element?(view, "#bd-model-rows #bd-model-unknown")
 
     # Switch to member
     view |> element("#tab-member") |> render_click()
-    html = render(view)
-    assert html =~ "bd-member-"
+    assert has_element?(view, "#bd-member-rows")
+    assert has_element?(view, "#bd-member-rows #bd-member-#{fixture.member.id}")
 
     # Group tab is not rendered on the personal dashboard
     refute has_element?(view, "#tab-group")

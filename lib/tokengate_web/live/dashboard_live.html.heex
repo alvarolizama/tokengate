@@ -431,47 +431,36 @@
                 <%= if @active_breakdown == "model" do %>
                   <%= if has_breakdown_data?(@breakdown_model) do %>
                     <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>{gettext("Model")}</th>
-                            <th class="text-right">{gettext("Requests")}</th>
-                            <th class="text-right">{gettext("Cost")}</th>
-                            <th class="text-right">{gettext("Tokens in")}</th>
-                            <th class="text-right">{gettext("Tokens out")}</th>
-                            <th class="text-right">{gettext("TPS")}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            :for={row <- @breakdown_model}
-                            id={"bd-model-#{row.model_id || "unknown"}"}
-                          >
-                            <td class="font-medium">
-                              <div class="flex items-center gap-2">
-                                <.model_mark
-                                  mark={Map.get(@model_marks, row.model_id)}
-                                  id={"bd-model-mark-#{row.model_id || "unknown"}"}
-                                />
-                                <span>{row.model_name}</span>
-                              </div>
-                            </td>
-                            <td class="text-right font-mono">
-                              {format_number(row.request_count)}
-                            </td>
-                            <td class="text-right font-mono">
-                              ${format_decimal(row.cost_usd)}
-                            </td>
-                            <td class="text-right font-mono">
-                              {format_number(row.prompt_tokens)}
-                            </td>
-                            <td class="text-right font-mono">
-                              {format_number(row.completion_tokens)}
-                            </td>
-                            <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
+                      <.table
+                        id="bd-model-rows"
+                        rows={@breakdown_model}
+                        row_id={fn row -> "bd-model-#{row.model_id || "unknown"}" end}
+                      >
+                        <:col :let={row} label={gettext("Model")}>
+                          <div class="flex items-center gap-2 font-medium">
+                            <.model_mark
+                              mark={Map.get(@model_marks, row.model_id)}
+                              id={"bd-model-mark-#{row.model_id || "unknown"}"}
+                            />
+                            <span>{row.model_name}</span>
+                          </div>
+                        </:col>
+                        <:col :let={row} label={gettext("Requests")} align="right">
+                          <span class="font-mono">{format_number(row.request_count)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Cost")} align="right">
+                          <span class="font-mono">${format_decimal(row.cost_usd)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Tokens in")} align="right">
+                          <span class="font-mono">{format_number(row.prompt_tokens)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Tokens out")} align="right">
+                          <span class="font-mono">{format_number(row.completion_tokens)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("TPS")} align="right">
+                          <span class="font-mono">{format_tps(row.avg_tps)}</span>
+                        </:col>
+                      </.table>
                     </div>
                   <% else %>
                     <p class="text-sm text-base-content/40 py-6 text-center">
@@ -484,41 +473,33 @@
                 <%= if @active_breakdown == "member" do %>
                   <%= if has_breakdown_data?(@breakdown_member) do %>
                     <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>{gettext("Limit profile")}</th>
-                            <th>{gettext("User")}</th>
-                            <th class="text-right">{gettext("Requests")}</th>
-                            <th class="text-right">{gettext("Cost")}</th>
-                            <th class="text-right">{gettext("Tokens in")}</th>
-                            <th class="text-right">{gettext("Tokens out")}</th>
-                            <th class="text-right">{gettext("TPS")}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            :for={row <- @breakdown_member}
-                            id={"bd-member-#{row.group_member_id}"}
-                          >
-                            <td>{row.group_name}</td>
-                            <td class="font-mono text-sm">{row.user_email}</td>
-                            <td class="text-right font-mono">
-                              {format_number(row.request_count)}
-                            </td>
-                            <td class="text-right font-mono">
-                              ${format_decimal(row.cost_usd)}
-                            </td>
-                            <td class="text-right font-mono">
-                              {format_number(row.prompt_tokens)}
-                            </td>
-                            <td class="text-right font-mono">
-                              {format_number(row.completion_tokens)}
-                            </td>
-                            <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
+                      <.table
+                        id="bd-member-rows"
+                        rows={@breakdown_member}
+                        row_id={fn row -> "bd-member-#{row.group_member_id}" end}
+                      >
+                        <:col :let={row} label={gettext("Limit profile")}>
+                          {row.group_name}
+                        </:col>
+                        <:col :let={row} label={gettext("User")}>
+                          <span class="font-mono text-sm">{row.user_email}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Requests")} align="right">
+                          <span class="font-mono">{format_number(row.request_count)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Cost")} align="right">
+                          <span class="font-mono">${format_decimal(row.cost_usd)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Tokens in")} align="right">
+                          <span class="font-mono">{format_number(row.prompt_tokens)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Tokens out")} align="right">
+                          <span class="font-mono">{format_number(row.completion_tokens)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("TPS")} align="right">
+                          <span class="font-mono">{format_tps(row.avg_tps)}</span>
+                        </:col>
+                      </.table>
                     </div>
                   <% else %>
                     <p class="text-sm text-base-content/40 py-6 text-center">
@@ -531,36 +512,30 @@
                 <%= if @active_breakdown == "group" do %>
                   <%= if has_breakdown_data?(@breakdown_group) do %>
                     <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>{gettext("Limit profile")}</th>
-                            <th class="text-right">{gettext("Requests")}</th>
-                            <th class="text-right">{gettext("Cost")}</th>
-                            <th class="text-right">{gettext("Tokens in")}</th>
-                            <th class="text-right">{gettext("Tokens out")}</th>
-                            <th class="text-right">{gettext("TPS")}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr :for={row <- @breakdown_group} id={"bd-group-#{row.group_id}"}>
-                            <td class="font-medium">{row.group_name}</td>
-                            <td class="text-right font-mono">
-                              {format_number(row.request_count)}
-                            </td>
-                            <td class="text-right font-mono">
-                              ${format_decimal(row.cost_usd)}
-                            </td>
-                            <td class="text-right font-mono">
-                              {format_number(row.prompt_tokens)}
-                            </td>
-                            <td class="text-right font-mono">
-                              {format_number(row.completion_tokens)}
-                            </td>
-                            <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
+                      <.table
+                        id="bd-group-rows"
+                        rows={@breakdown_group}
+                        row_id={fn row -> "bd-group-#{row.group_id}" end}
+                      >
+                        <:col :let={row} label={gettext("Limit profile")}>
+                          <span class="font-medium">{row.group_name}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Requests")} align="right">
+                          <span class="font-mono">{format_number(row.request_count)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Cost")} align="right">
+                          <span class="font-mono">${format_decimal(row.cost_usd)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Tokens in")} align="right">
+                          <span class="font-mono">{format_number(row.prompt_tokens)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("Tokens out")} align="right">
+                          <span class="font-mono">{format_number(row.completion_tokens)}</span>
+                        </:col>
+                        <:col :let={row} label={gettext("TPS")} align="right">
+                          <span class="font-mono">{format_tps(row.avg_tps)}</span>
+                        </:col>
+                      </.table>
                     </div>
                   <% else %>
                     <p class="text-sm text-base-content/40 py-6 text-center">
