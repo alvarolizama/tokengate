@@ -272,6 +272,18 @@ defmodule TokengateWeb.ModelsLive do
     Enum.map(Model.effort_levels(), &{String.upcase(&1), &1})
   end
 
+  # Los pasos del alta, en el orden en que se decide todo, para el indicador
+  # que pinta `.modal` (`.steps`). Las claves son las mismas de `@wizard_step`:
+  # el componente sólo resalta la activa, el avance lo valida el LiveView.
+  defp wizard_steps do
+    [
+      {"provider", gettext("Provider")},
+      {"credential", gettext("API key")},
+      {"model", gettext("Model")},
+      {"details", gettext("Data")}
+    ]
+  end
+
   # Providers are grouped by scope first — global, then group-exclusive,
   # then member-exclusive — and ordered by priority within each group.
   defp aliases_with_providers_query do
@@ -1517,249 +1529,419 @@ defmodule TokengateWeb.ModelsLive do
           </div>
         </div>
 
-        <%!-- Alias form (new/edit) --%>
-        <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-4xl">
-            <div class="card-body p-6 max-h-[88vh] overflow-y-auto">
-              <h2 class="text-lg font-semibold mb-1">
-                {if @editing_model_id == :new, do: gettext("New model"), else: gettext("Edit model")}
-              </h2>
+        <%!-- Alta/edición en el contenedor único (`.modal`): el componente pinta
+             el título, el indicador de pasos (`.steps`) y cierra con ✕/Escape/
+             click-away por `cancel_form`. El wizard es el mismo de siempre — 4
+             pasos: proveedor (acotado por el tipo) → API key → modelo → datos —
+             y el paso vive en `@wizard_step`: el modal no cambia, sólo lo que
+             renderiza dentro. En edición no hay pasos (todo está ya decidido),
+             así que `steps` va nil y el indicador no aparece. --%>
+        <.modal
+          :if={@form}
+          id="model-wizard"
+          title={if @editing_model_id == :new, do: gettext("New model"), else: gettext("Edit model")}
+          on_close="cancel_form"
+          max_w="max-w-4xl"
+          steps={if @editing_model_id == :new, do: wizard_steps(), else: nil}
+          current_step={@wizard_step}
+        >
+          <div class="max-h-[70vh] overflow-y-auto">
+            <%= if @wizard_step == "provider" do %>
+              <p class="text-sm text-base-content/60 mb-3">
+                {gettext(
+                  "Choose the provider that will serve this model. Only the providers that can serve the type you picked are listed."
+                )}
+              </p>
 
-              <%!-- El wizard en 3 pasos, en el orden en que se decide todo:
-                   proveedor (acotado por el tipo) → modelo → datos. El paso es un
-                   assign porque el modal es el mismo; en edición se entra
-                   directo a los datos (todo está ya decidido). --%>
-              <div
-                :if={@editing_model_id == :new}
-                class="flex items-center gap-2 mb-4 text-xs"
-                id="model-wizard-steps"
+              <form
+                id="wizard-provider-search-form"
+                phx-change="wizard_search_providers"
+                phx-submit="wizard_search_providers"
               >
-                <%= for {step, label} <- [
-                    {"provider", gettext("Provider")},
-                    {"credential", gettext("API key")},
-                    {"model", gettext("Model")},
-                    {"details", gettext("Data")}
-                  ] do %>
-                  <span
-                    id={"wizard-crumb-#{step}"}
-                    class={[
-                      "px-2 py-0.5 rounded-full border",
-                      if(@wizard_step == step,
-                        do: "border-primary bg-primary/10 text-primary font-medium",
-                        else: "border-base-300 text-base-content/50"
-                      )
-                    ]}
-                  >
-                    {label}
-                  </span>
-                <% end %>
+                <input
+                  type="text"
+                  name="q"
+                  id="wizard-provider-search"
+                  value={@wizard_provider_search}
+                  placeholder={gettext("Search provider… (e.g. openrouter, alibaba)")}
+                  class="input input-sm w-full mb-2"
+                  autocomplete="off"
+                  phx-debounce="150"
+                />
+              </form>
+
+              <div
+                :if={wizard_provider_results(@wizard_providers, @wizard_provider_search) == []}
+                id="wizard-provider-empty"
+                class="text-sm text-base-content/50 py-4 text-center"
+              >
+                {gettext("No provider declares this type.")}
+                {gettext("You can still create the model by hand and assign a provider later.")}
               </div>
 
-              <%= if @wizard_step == "provider" do %>
-                <p class="text-sm text-base-content/60 mb-3">
-                  {gettext(
-                    "Choose the provider that will serve this model. Only the providers that can serve the type you picked are listed."
-                  )}
-                </p>
-
-                <form
-                  id="wizard-provider-search-form"
-                  phx-change="wizard_search_providers"
-                  phx-submit="wizard_search_providers"
+              <div
+                :if={wizard_provider_results(@wizard_providers, @wizard_provider_search) != []}
+                id="wizard-provider-results"
+                class="max-h-72 overflow-y-auto rounded-lg border border-base-300"
+              >
+                <button
+                  :for={p <- wizard_provider_results(@wizard_providers, @wizard_provider_search)}
+                  type="button"
+                  phx-click="wizard_pick_provider"
+                  phx-value-key={provider_ref(p)}
+                  id={"wizard-provider-#{dom_key(provider_ref(p))}"}
+                  class="w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0 flex items-center gap-2"
                 >
-                  <input
-                    type="text"
-                    name="q"
-                    id="wizard-provider-search"
-                    value={@wizard_provider_search}
-                    placeholder={gettext("Search provider… (e.g. openrouter, alibaba)")}
-                    class="input input-sm w-full mb-2"
-                    autocomplete="off"
-                    phx-debounce="150"
+                  <img
+                    :if={p.logo_url}
+                    src={p.logo_url}
+                    alt=""
+                    data-logo
+                    class="w-5 h-5 shrink-0 rounded"
+                    loading="lazy"
                   />
-                </form>
-
-                <div
-                  :if={wizard_provider_results(@wizard_providers, @wizard_provider_search) == []}
-                  id="wizard-provider-empty"
-                  class="text-sm text-base-content/50 py-4 text-center"
-                >
-                  {gettext("No provider declares this type.")}
-                  {gettext("You can still create the model by hand and assign a provider later.")}
-                </div>
-
-                <div
-                  :if={wizard_provider_results(@wizard_providers, @wizard_provider_search) != []}
-                  id="wizard-provider-results"
-                  class="max-h-72 overflow-y-auto rounded-lg border border-base-300"
-                >
-                  <button
-                    :for={p <- wizard_provider_results(@wizard_providers, @wizard_provider_search)}
-                    type="button"
-                    phx-click="wizard_pick_provider"
-                    phx-value-key={provider_ref(p)}
-                    id={"wizard-provider-#{dom_key(provider_ref(p))}"}
-                    class="w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0 flex items-center gap-2"
-                  >
-                    <img
-                      :if={p.logo_url}
-                      src={p.logo_url}
-                      alt=""
-                      data-logo
-                      class="w-5 h-5 shrink-0 rounded"
-                      loading="lazy"
-                    />
-                    <%!-- El icono va SIEMPRE (oculto si hay logo): una URL que
+                  <%!-- El icono va SIEMPRE (oculto si hay logo): una URL que
                      no carga no dispara el fallback del servidor, así que la
                      revela el listener global de `error` en app.js. --%>
-                    <.icon
-                      name="hero-server-stack"
-                      class={["w-5 h-5 shrink-0 text-base-content/30", p.logo_url && "hidden"]}
-                    />
-                    <span class="flex-1 min-w-0">
-                      <span class="text-sm font-medium truncate">{p.name}</span>
-                      <span class="text-xs text-base-content/50 font-mono ml-1">{p.key}</span>
-                    </span>
-                    <span
-                      :if={length(p.credentials) > 0}
-                      class="badge badge-xs badge-success shrink-0"
-                      title={gettext("It already has API keys")}
-                    >
-                      {length(p.credentials)} key(s)
-                    </span>
-                    <span
-                      :if={length(p.credentials) == 0}
-                      class="badge badge-xs badge-ghost shrink-0"
-                    >
-                      {gettext("no key")}
-                    </span>
+                  <.icon
+                    name="hero-server-stack"
+                    class={["w-5 h-5 shrink-0 text-base-content/30", p.logo_url && "hidden"]}
+                  />
+                  <span class="flex-1 min-w-0">
+                    <span class="text-sm font-medium truncate">{p.name}</span>
+                    <span class="text-xs text-base-content/50 font-mono ml-1">{p.key}</span>
+                  </span>
+                  <span
+                    :if={length(p.credentials) > 0}
+                    class="badge badge-xs badge-success shrink-0"
+                    title={gettext("It already has API keys")}
+                  >
+                    {length(p.credentials)} key(s)
+                  </span>
+                  <span
+                    :if={length(p.credentials) == 0}
+                    class="badge badge-xs badge-ghost shrink-0"
+                  >
+                    {gettext("no key")}
+                  </span>
+                </button>
+              </div>
+
+              <div class="flex justify-between mt-3">
+                <button
+                  type="button"
+                  phx-click="back_to_type_picker"
+                  class="btn btn-ghost btn-sm"
+                  id="wizard-back-to-type"
+                >
+                  {gettext("Back")}
+                </button>
+                <div class="flex gap-2">
+                  <button
+                    type="button"
+                    phx-click="wizard_skip_model"
+                    class="btn btn-outline btn-sm"
+                    id="wizard-custom"
+                  >
+                    <.icon name="hero-pencil" class="w-4 h-4" /> {gettext("Create by hand")}
                   </button>
+                </div>
+              </div>
+            <% end %>
+
+            <%= if @wizard_step in ~w(credential model) and @wizard_provider_key do %>
+              <div
+                class="flex items-center gap-2 px-3 py-2 mb-3 rounded-lg bg-primary/10 border border-primary/30"
+                id="wizard-chosen-provider"
+              >
+                <.icon name="hero-server-stack" class="w-4 h-4 text-primary shrink-0" />
+                <span class="text-sm font-medium flex-1">{@wizard_provider_label}</span>
+                <button
+                  type="button"
+                  phx-click="wizard_back"
+                  phx-value-step="provider"
+                  class="btn btn-xs btn-ghost"
+                  id="wizard-change-provider"
+                >
+                  <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Change")}
+                </button>
+              </div>
+
+              <%!-- Paso 2: la API key. No es una formalidad — es lo que permite
+                     preguntarle al proveedor qué modelos sirve para este tipo. --%>
+              <%= if @wizard_step == "credential" do %>
+                <div class="rounded-lg border border-base-300 p-3 mb-4" id="wizard-key-step">
+                  <div class="fieldset mb-2">
+                    <label class="label" for="wizard-credential">
+                      {gettext("Credential (API key)")}
+                    </label>
+                    <%!-- phx-submit: sin él, Enter en el select resuelve en un
+                           submit NATIVO (recarga /catalog/models) y tira el
+                           wizard entero. --%>
+                    <form
+                      id="wizard-credential-form"
+                      phx-change="wizard_pick_credential"
+                      phx-submit="wizard_pick_credential"
+                    >
+                      <select
+                        id="wizard-credential"
+                        name="credential_id"
+                        class="select select-sm w-full"
+                      >
+                        <option value="">{gettext("Pick an API key from this provider")}</option>
+                        <option
+                          :for={c <- @wizard_credentials}
+                          value={c.id}
+                          selected={@wizard_credential_id == c.id}
+                        >
+                          {credential_label(c)}
+                        </option>
+                      </select>
+                    </form>
+                  </div>
+
+                  <p
+                    :if={@wizard_credentials == []}
+                    class="text-xs text-warning mt-1"
+                    id="wizard-no-credentials"
+                  >
+                    {gettext(
+                      "This provider has no API keys yet: the model is created without a provider assignment. Add the key on the Providers page and assign it afterwards."
+                    )}
+                  </p>
+
+                  <p :if={@wizard_credentials != []} class="text-xs text-base-content/50 mt-1">
+                    {gettext(
+                      "With this key the gateway asks the provider which models it serves for this type."
+                    )}
+                  </p>
                 </div>
 
                 <div class="flex justify-between mt-3">
                   <button
                     type="button"
-                    phx-click="back_to_type_picker"
+                    phx-click="wizard_back"
+                    phx-value-step="provider"
                     class="btn btn-ghost btn-sm"
-                    id="wizard-back-to-type"
+                    id="wizard-back-to-provider"
                   >
                     {gettext("Back")}
                   </button>
-                  <div class="flex gap-2">
-                    <button
-                      type="button"
-                      phx-click="wizard_skip_model"
-                      class="btn btn-outline btn-sm"
-                      id="wizard-custom"
-                    >
-                      <.icon name="hero-pencil" class="w-4 h-4" /> {gettext("Create by hand")}
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    phx-click="wizard_continue"
+                    phx-value-step="model"
+                    class="btn btn-primary btn-sm"
+                    id="wizard-continue"
+                  >
+                    {gettext("See its models")}
+                  </button>
                 </div>
               <% end %>
 
-              <%= if @wizard_step in ~w(credential model) and @wizard_provider_key do %>
+              <%!-- Paso 3: los modelos que publica ESE proveedor para ESE tipo,
+                     en vivo con la key. Donde el proveedor no publica catálogo
+                     (DashScope para los tres servicios de media) queda la semilla curada
+                     en código. --%>
+              <%= if @wizard_step == "model" do %>
                 <div
-                  class="flex items-center gap-2 px-3 py-2 mb-3 rounded-lg bg-primary/10 border border-primary/30"
-                  id="wizard-chosen-provider"
+                  class="flex items-center gap-2 mb-3 text-xs text-base-content/70"
+                  id="wizard-models-key"
                 >
-                  <.icon name="hero-server-stack" class="w-4 h-4 text-primary shrink-0" />
-                  <span class="text-sm font-medium flex-1">{@wizard_provider_label}</span>
+                  <.icon name="hero-key" class="w-3.5 h-3.5 text-primary shrink-0" />
+                  <span class="font-mono flex-1">
+                    {@wizard_credential_label || gettext("no key")}
+                  </span>
                   <button
                     type="button"
                     phx-click="wizard_back"
-                    phx-value-step="provider"
+                    phx-value-step="credential"
                     class="btn btn-xs btn-ghost"
-                    id="wizard-change-provider"
+                    id="wizard-change-key-from-models"
                   >
                     <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Change")}
                   </button>
                 </div>
 
-                <%!-- Paso 2: la API key. No es una formalidad — es lo que permite
-                     preguntarle al proveedor qué modelos sirve para este tipo. --%>
-                <%= if @wizard_step == "credential" do %>
-                  <div class="rounded-lg border border-base-300 p-3 mb-4" id="wizard-key-step">
-                    <div class="fieldset mb-2">
-                      <label class="label" for="wizard-credential">
-                        {gettext("Credential (API key)")}
-                      </label>
-                      <%!-- phx-submit: sin él, Enter en el select resuelve en un
-                           submit NATIVO (recarga /catalog/models) y tira el
-                           wizard entero. --%>
-                      <form
-                        id="wizard-credential-form"
-                        phx-change="wizard_pick_credential"
-                        phx-submit="wizard_pick_credential"
-                      >
-                        <select
-                          id="wizard-credential"
-                          name="credential_id"
-                          class="select select-sm w-full"
-                        >
-                          <option value="">{gettext("Pick an API key from this provider")}</option>
-                          <option
-                            :for={c <- @wizard_credentials}
-                            value={c.id}
-                            selected={@wizard_credential_id == c.id}
-                          >
-                            {credential_label(c)}
-                          </option>
-                        </select>
-                      </form>
-                    </div>
-
-                    <p
-                      :if={@wizard_credentials == []}
-                      class="text-xs text-warning mt-1"
-                      id="wizard-no-credentials"
+                <div id="wizard-models" class="mb-4">
+                  <p class="text-xs text-base-content/60 mb-2 flex items-center gap-2">
+                    <span>
+                      {gettext("Models this provider serves for this type:")}
+                      <b id="wizard-models-count">{length(@wizard_models)}</b>
+                    </span>
+                    <span
+                      :if={@wizard_models_loading}
+                      class="flex items-center gap-1 text-base-content/50"
+                      id="wizard-models-loading"
                     >
-                      {gettext(
-                        "This provider has no API keys yet: the model is created without a provider assignment. Add the key on the Providers page and assign it afterwards."
-                      )}
-                    </p>
+                      <span class="loading loading-spinner loading-xs"></span>
+                      {gettext("asking the provider…")}
+                    </span>
+                  </p>
 
-                    <p :if={@wizard_credentials != []} class="text-xs text-base-content/50 mt-1">
-                      {gettext(
-                        "With this key the gateway asks the provider which models it serves for this type."
-                      )}
-                    </p>
-                  </div>
-
-                  <div class="flex justify-between mt-3">
-                    <button
-                      type="button"
-                      phx-click="wizard_back"
-                      phx-value-step="provider"
-                      class="btn btn-ghost btn-sm"
-                      id="wizard-back-to-provider"
-                    >
-                      {gettext("Back")}
-                    </button>
-                    <button
-                      type="button"
-                      phx-click="wizard_continue"
-                      phx-value-step="model"
-                      class="btn btn-primary btn-sm"
-                      id="wizard-continue"
-                    >
-                      {gettext("See its models")}
-                    </button>
-                  </div>
-                <% end %>
-
-                <%!-- Paso 3: los modelos que publica ESE proveedor para ESE tipo,
-                     en vivo con la key. Donde el proveedor no publica catálogo
-                     (DashScope para los tres servicios de media) queda la semilla curada
-                     en código. --%>
-                <%= if @wizard_step == "model" do %>
                   <div
-                    class="flex items-center gap-2 mb-3 text-xs text-base-content/70"
-                    id="wizard-models-key"
+                    :if={@wizard_models != []}
+                    class="max-h-56 overflow-y-auto rounded-lg border border-base-300"
                   >
-                    <.icon name="hero-key" class="w-3.5 h-3.5 text-primary shrink-0" />
-                    <span class="font-mono flex-1">
+                    <button
+                      :for={m <- @wizard_models}
+                      type="button"
+                      phx-click="wizard_pick_model"
+                      phx-value-model={m}
+                      id={"wizard-model-#{dom_key(m)}"}
+                      class="block w-full text-left px-3 py-2 text-sm font-mono hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0"
+                    >
+                      {m}
+                    </button>
+                  </div>
+
+                  <%!-- Tres estados distintos, TRES mensajes: "no hay key"
+                         (no se preguntó), "no contestó" (se preguntó y falló) y
+                         "no publica" (contestó y no trae nada de este tipo). El
+                         primero manda al operador al paso 2; el segundo le dice
+                         POR QUÉ; el tercero es el único que invita a teclear. --%>
+                  <p
+                    :if={is_nil(@wizard_credential_id) and @wizard_models == []}
+                    class="text-sm text-base-content/60 py-3"
+                    id="wizard-models-need-key"
+                  >
+                    {gettext(
+                      "Pick an API key in the previous step: the list comes from the provider itself."
+                    )}
+                  </p>
+
+                  <p
+                    :if={@wizard_models_error}
+                    class="text-sm text-error py-3"
+                    id="wizard-models-error"
+                  >
+                    {gettext("The provider did not answer the listing:")}
+                    <span class="font-mono">{@wizard_models_error}</span>
+                  </p>
+
+                  <p
+                    :if={
+                      @wizard_models == [] and !@wizard_models_loading and
+                        @wizard_models_error == nil and @wizard_credential_id
+                    }
+                    class="text-sm text-base-content/50 py-3"
+                    id="wizard-models-empty"
+                  >
+                    {gettext(
+                      "This provider does not publish a list for this type: write the id by hand in the next step."
+                    )}
+                  </p>
+                </div>
+
+                <div class="flex justify-between mt-3">
+                  <button
+                    type="button"
+                    phx-click="wizard_back"
+                    phx-value-step="credential"
+                    class="btn btn-ghost btn-sm"
+                    id="wizard-back-to-credential"
+                  >
+                    {gettext("Back")}
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="wizard_skip_model"
+                    class="btn btn-outline btn-sm"
+                    id="wizard-write-by-hand"
+                  >
+                    <.icon name="hero-pencil" class="w-4 h-4" /> {gettext("Write it by hand")}
+                  </button>
+                </div>
+              <% end %>
+            <% end %>
+
+            <%!-- La relación que el modelo SÍ tiene: sus lanes, cada uno con su
+                   API key (y el proveedor de esa key) y el id que viaja al
+                   upstream. Es de donde se lee —y se cambia— cómo se sirve el
+                   modelo; el "proveedor" no es una relación suya. --%>
+            <%= if @editing_model_id not in [nil, :new] do %>
+              <div class="rounded-lg border border-base-300 p-3 mb-4" id="model-serving-lanes">
+                <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/50 mb-2">
+                  {gettext("Served by (API keys)")}
+                </h4>
+
+                <p
+                  :if={@wizard_lanes == []}
+                  class="text-sm text-base-content/40 py-1"
+                  id="model-lanes-empty"
+                >
+                  {gettext(
+                    "No API key assigned yet: the model is registered but nothing can route to it."
+                  )}
+                </p>
+
+                <div
+                  :for={lane <- @wizard_lanes}
+                  id={"model-lane-#{lane.id}"}
+                  class="flex items-center gap-2 py-1.5 border-b border-base-200 last:border-0"
+                >
+                  <span class="flex-1 min-w-0 truncate text-sm">
+                    <%!-- La key, y nada más: el modelo se relaciona con ELLA. El
+                           proveedor que la posee no se pinta aquí — vive en su
+                           página, y se elige al crear la key. Un lane de pool no
+                           tiene key: se identifica por el pool y su conteo. --%>
+                    <%= cond do %>
+                      <% lane.pool -> %>
+                        <span class="font-mono text-xs" id={"lane-pool-name-#{lane.id}"}>
+                          {lane.pool.name}
+                        </span>
+                        <span
+                          class="badge badge-xs badge-info ml-1"
+                          id={"lane-pool-badge-#{lane.id}"}
+                          title={gettext("API keys in this pool: rotation per request")}
+                        >
+                          {lane_pool_member_count(lane)} key(s)
+                        </span>
+                      <% lane.credential -> %>
+                        <span class="font-mono text-xs">
+                          {lane.credential.name || gettext("unnamed key")}
+                        </span>
+                        <span class="text-xs text-base-content/40 ml-1">
+                          {mask_key(lane.credential.api_key_encrypted)}
+                        </span>
+                      <% true -> %>
+                        {gettext("no credential")}
+                    <% end %>
+                    <span :if={!lane.enabled} class="badge badge-xs badge-ghost ml-1">
+                      {gettext("disabled")}
+                    </span>
+                  </span>
+                  <span class="font-mono text-xs text-base-content/60 truncate max-w-[14rem]">
+                    {lane.provider_model}
+                  </span>
+                  <%= if @is_admin do %>
+                    <button
+                      type="button"
+                      phx-click="edit_model_provider_from_modal"
+                      phx-value-id={lane.id}
+                      class="btn btn-xs btn-ghost"
+                      id={"model-lane-change-#{lane.id}"}
+                    >
+                      <.icon name="hero-pencil" class="w-3 h-3" /> {gettext("Change")}
+                    </button>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+
+            <%!-- Paso 4: los datos del modelo y lo que el wizard ya decidió —
+                   la API key que lo sirve y el id que viaja al upstream. La key
+                   viene PRIMERO: es la relación del modelo. El proveedor no se
+                   repite aquí — el dueño de la key, no un vínculo del modelo. --%>
+            <%= if @wizard_step == "details" do %>
+              <%= if @wizard_provider_key do %>
+                <div class="rounded-lg border border-base-300 p-3 mb-4" id="wizard-lane">
+                  <div
+                    class="flex items-center gap-2 mb-3"
+                    id="wizard-chosen-key"
+                  >
+                    <.icon name="hero-key" class="w-4 h-4 text-primary shrink-0" />
+                    <span class="text-sm font-mono font-medium flex-1">
                       {@wizard_credential_label || gettext("no key")}
                     </span>
                     <button
@@ -1767,392 +1949,203 @@ defmodule TokengateWeb.ModelsLive do
                       phx-click="wizard_back"
                       phx-value-step="credential"
                       class="btn btn-xs btn-ghost"
-                      id="wizard-change-key-from-models"
+                      id="wizard-change-key"
                     >
                       <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Change")}
                     </button>
                   </div>
 
-                  <div id="wizard-models" class="mb-4">
-                    <p class="text-xs text-base-content/60 mb-2 flex items-center gap-2">
-                      <span>
-                        {gettext("Models this provider serves for this type:")}
-                        <b id="wizard-models-count">{length(@wizard_models)}</b>
-                      </span>
-                      <span
-                        :if={@wizard_models_loading}
-                        class="flex items-center gap-1 text-base-content/50"
-                        id="wizard-models-loading"
-                      >
-                        <span class="loading loading-spinner loading-xs"></span>
-                        {gettext("asking the provider…")}
-                      </span>
-                    </p>
-
-                    <div
-                      :if={@wizard_models != []}
-                      class="max-h-56 overflow-y-auto rounded-lg border border-base-300"
+                  <div class="fieldset mb-2">
+                    <label class="label" for="wizard-provider-model">
+                      {gettext("Model id at the provider")}
+                    </label>
+                    <%!-- phx-submit: Enter en el id resuelve en un submit NATIVO
+                           sin él (recarga y se pierde el wizard). --%>
+                    <form
+                      id="wizard-provider-model-form"
+                      phx-change="wizard_pick_provider_model"
+                      phx-submit="wizard_pick_provider_model"
                     >
-                      <button
-                        :for={m <- @wizard_models}
-                        type="button"
-                        phx-click="wizard_pick_model"
-                        phx-value-model={m}
-                        id={"wizard-model-#{dom_key(m)}"}
-                        class="block w-full text-left px-3 py-2 text-sm font-mono hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0"
-                      >
-                        {m}
-                      </button>
-                    </div>
-
-                    <%!-- Tres estados distintos, TRES mensajes: "no hay key"
-                         (no se preguntó), "no contestó" (se preguntó y falló) y
-                         "no publica" (contestó y no trae nada de este tipo). El
-                         primero manda al operador al paso 2; el segundo le dice
-                         POR QUÉ; el tercero es el único que invita a teclear. --%>
-                    <p
-                      :if={is_nil(@wizard_credential_id) and @wizard_models == []}
-                      class="text-sm text-base-content/60 py-3"
-                      id="wizard-models-need-key"
-                    >
-                      {gettext(
-                        "Pick an API key in the previous step: the list comes from the provider itself."
-                      )}
-                    </p>
-
-                    <p
-                      :if={@wizard_models_error}
-                      class="text-sm text-error py-3"
-                      id="wizard-models-error"
-                    >
-                      {gettext("The provider did not answer the listing:")}
-                      <span class="font-mono">{@wizard_models_error}</span>
-                    </p>
-
-                    <p
-                      :if={
-                        @wizard_models == [] and !@wizard_models_loading and
-                          @wizard_models_error == nil and @wizard_credential_id
-                      }
-                      class="text-sm text-base-content/50 py-3"
-                      id="wizard-models-empty"
-                    >
-                      {gettext(
-                        "This provider does not publish a list for this type: write the id by hand in the next step."
-                      )}
-                    </p>
+                      <input
+                        type="text"
+                        id="wizard-provider-model"
+                        name="wizard_provider_model"
+                        value={@wizard_provider_model || ""}
+                        class="input input-sm w-full"
+                        phx-debounce="300"
+                      />
+                    </form>
                   </div>
-
-                  <div class="flex justify-between mt-3">
-                    <button
-                      type="button"
-                      phx-click="wizard_back"
-                      phx-value-step="credential"
-                      class="btn btn-ghost btn-sm"
-                      id="wizard-back-to-credential"
-                    >
-                      {gettext("Back")}
-                    </button>
-                    <button
-                      type="button"
-                      phx-click="wizard_skip_model"
-                      class="btn btn-outline btn-sm"
-                      id="wizard-write-by-hand"
-                    >
-                      <.icon name="hero-pencil" class="w-4 h-4" /> {gettext("Write it by hand")}
-                    </button>
-                  </div>
-                <% end %>
-              <% end %>
-
-              <%!-- La relación que el modelo SÍ tiene: sus lanes, cada uno con su
-                   API key (y el proveedor de esa key) y el id que viaja al
-                   upstream. Es de donde se lee —y se cambia— cómo se sirve el
-                   modelo; el "proveedor" no es una relación suya. --%>
-              <%= if @editing_model_id not in [nil, :new] do %>
-                <div class="rounded-lg border border-base-300 p-3 mb-4" id="model-serving-lanes">
-                  <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/50 mb-2">
-                    {gettext("Served by (API keys)")}
-                  </h4>
 
                   <p
-                    :if={@wizard_lanes == []}
-                    class="text-sm text-base-content/40 py-1"
-                    id="model-lanes-empty"
+                    :if={@wizard_credentials == []}
+                    class="text-xs text-warning mt-1"
+                    id="wizard-no-credentials"
                   >
                     {gettext(
-                      "No API key assigned yet: the model is registered but nothing can route to it."
+                      "This provider has no API keys yet: the model is created without a provider assignment. Add the key on the Providers page and assign it afterwards."
                     )}
                   </p>
-
-                  <div
-                    :for={lane <- @wizard_lanes}
-                    id={"model-lane-#{lane.id}"}
-                    class="flex items-center gap-2 py-1.5 border-b border-base-200 last:border-0"
-                  >
-                    <span class="flex-1 min-w-0 truncate text-sm">
-                      <%!-- La key, y nada más: el modelo se relaciona con ELLA. El
-                           proveedor que la posee no se pinta aquí — vive en su
-                           página, y se elige al crear la key. Un lane de pool no
-                           tiene key: se identifica por el pool y su conteo. --%>
-                      <%= cond do %>
-                        <% lane.pool -> %>
-                          <span class="font-mono text-xs" id={"lane-pool-name-#{lane.id}"}>
-                            {lane.pool.name}
-                          </span>
-                          <span
-                            class="badge badge-xs badge-info ml-1"
-                            id={"lane-pool-badge-#{lane.id}"}
-                            title={gettext("API keys in this pool: rotation per request")}
-                          >
-                            {lane_pool_member_count(lane)} key(s)
-                          </span>
-                        <% lane.credential -> %>
-                          <span class="font-mono text-xs">
-                            {lane.credential.name || gettext("unnamed key")}
-                          </span>
-                          <span class="text-xs text-base-content/40 ml-1">
-                            {mask_key(lane.credential.api_key_encrypted)}
-                          </span>
-                        <% true -> %>
-                          {gettext("no credential")}
-                      <% end %>
-                      <span :if={!lane.enabled} class="badge badge-xs badge-ghost ml-1">
-                        {gettext("disabled")}
-                      </span>
-                    </span>
-                    <span class="font-mono text-xs text-base-content/60 truncate max-w-[14rem]">
-                      {lane.provider_model}
-                    </span>
-                    <%= if @is_admin do %>
-                      <button
-                        type="button"
-                        phx-click="edit_model_provider_from_modal"
-                        phx-value-id={lane.id}
-                        class="btn btn-xs btn-ghost"
-                        id={"model-lane-change-#{lane.id}"}
-                      >
-                        <.icon name="hero-pencil" class="w-3 h-3" /> {gettext("Change")}
-                      </button>
-                    <% end %>
-                  </div>
                 </div>
               <% end %>
 
-              <%!-- Paso 4: los datos del modelo y lo que el wizard ya decidió —
-                   la API key que lo sirve y el id que viaja al upstream. La key
-                   viene PRIMERO: es la relación del modelo. El proveedor no se
-                   repite aquí — el dueño de la key, no un vínculo del modelo. --%>
-              <%= if @wizard_step == "details" do %>
-                <%= if @wizard_provider_key do %>
-                  <div class="rounded-lg border border-base-300 p-3 mb-4" id="wizard-lane">
-                    <div
-                      class="flex items-center gap-2 mb-3"
-                      id="wizard-chosen-key"
-                    >
-                      <.icon name="hero-key" class="w-4 h-4 text-primary shrink-0" />
-                      <span class="text-sm font-mono font-medium flex-1">
-                        {@wizard_credential_label || gettext("no key")}
-                      </span>
-                      <button
-                        type="button"
-                        phx-click="wizard_back"
-                        phx-value-step="credential"
-                        class="btn btn-xs btn-ghost"
-                        id="wizard-change-key"
-                      >
-                        <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Change")}
-                      </button>
-                    </div>
-
-                    <div class="fieldset mb-2">
-                      <label class="label" for="wizard-provider-model">
-                        {gettext("Model id at the provider")}
-                      </label>
-                      <%!-- phx-submit: Enter en el id resuelve en un submit NATIVO
-                           sin él (recarga y se pierde el wizard). --%>
-                      <form
-                        id="wizard-provider-model-form"
-                        phx-change="wizard_pick_provider_model"
-                        phx-submit="wizard_pick_provider_model"
-                      >
-                        <input
-                          type="text"
-                          id="wizard-provider-model"
-                          name="wizard_provider_model"
-                          value={@wizard_provider_model || ""}
-                          class="input input-sm w-full"
-                          phx-debounce="300"
-                        />
-                      </form>
-                    </div>
-
-                    <p
-                      :if={@wizard_credentials == []}
-                      class="text-xs text-warning mt-1"
-                      id="wizard-no-credentials"
-                    >
-                      {gettext(
-                        "This provider has no API keys yet: the model is created without a provider assignment. Add the key on the Providers page and assign it afterwards."
-                      )}
-                    </p>
+              <.form for={@form} id="model-form" phx-change="validate_model" phx-submit="save_model">
+                <div class="grid md:grid-cols-2 gap-x-8 gap-y-1">
+                  <div>
+                    <.input
+                      field={@form[:name]}
+                      type="text"
+                      label={gettext("Name (identifier)")}
+                      required
+                      hint={gettext("This is what clients send in `model`. It must be unique.")}
+                    />
+                    <.input
+                      field={@form[:model_type]}
+                      type="select"
+                      label={gettext("Model type")}
+                      options={
+                        model_type_choices()
+                        |> Enum.map(fn {label, type, _icon} -> {label, type} end)
+                      }
+                      hint={
+                        gettext("Defines which endpoint serves it (chat, embeddings, audio, image).")
+                      }
+                    />
                   </div>
-                <% end %>
 
-                <.form for={@form} id="model-form" phx-change="validate_model" phx-submit="save_model">
-                  <div class="grid md:grid-cols-2 gap-x-8 gap-y-1">
-                    <div>
-                      <.input
-                        field={@form[:name]}
-                        type="text"
-                        label={gettext("Name (identifier)")}
-                        required
-                        hint={gettext("This is what clients send in `model`. It must be unique.")}
-                      />
-                      <.input
-                        field={@form[:model_type]}
-                        type="select"
-                        label={gettext("Model type")}
-                        options={
-                          model_type_choices()
-                          |> Enum.map(fn {label, type, _icon} -> {label, type} end)
-                        }
-                        hint={
-                          gettext(
-                            "Defines which endpoint serves it (chat, embeddings, audio, image)."
-                          )
-                        }
-                      />
+                  <div class="space-y-1">
+                    <.input
+                      field={@form[:context_window]}
+                      type="number"
+                      label={gettext("Context window (tokens)")}
+                      required
+                      hint={gettext("Maximum context size of the model in tokens.")}
+                    />
 
-                      <.input
-                        field={@form[:effort_default]}
-                        type="select"
-                        label={gettext("Reasoning effort default")}
-                        options={effort_policy_options()}
-                        prompt={gettext("— No default —")}
-                        hint={
-                          gettext(
-                            "Replaces a client reasoning_effort of none/minimal with this value (upstreams that reject those values)."
-                          )
-                        }
-                      />
-
-                      <.input
-                        field={@form[:effort_override]}
-                        type="select"
-                        label={gettext("Reasoning effort override")}
-                        options={effort_policy_options()}
-                        prompt={gettext("— No override —")}
-                        hint={
-                          gettext(
-                            "Replaces the client reasoning_effort with this value, whatever the client sends."
-                          )
-                        }
-                      />
+                    <div class="divider my-2 text-xs text-base-content/50">
+                      {gettext("Brand (lab / icon)")}
                     </div>
-
-                    <div class="space-y-1">
-                      <.input
-                        field={@form[:context_window]}
-                        type="number"
-                        label={gettext("Context window (tokens)")}
-                        required
-                        hint={gettext("Maximum context size of the model in tokens.")}
-                      />
-
-                      <div class="divider my-2 text-xs text-base-content/50">
-                        {gettext("Brand (lab / icon)")}
-                      </div>
-                      <%!--
+                    <%!--
                       La marca sale del lab vinculado cuando lo hay; sin lab, del
                       icono propio del modelo, elegible de una paleta. Misma
                       precedencia que un lab (`Model.mark/2`), resuelta contra el
                       índice de labs cargado una vez.
                     --%>
+                    <.input
+                      field={@form[:lab_key]}
+                      type="select"
+                      label={gettext("Lab (who built the model)")}
+                      options={lab_options(@form, @lab_choices)}
+                      prompt={gettext("— No lab —")}
+                      hint={
+                        gettext(
+                          "With a linked lab its brand wins; without one the icon below is used."
+                        )
+                      }
+                    />
+
+                    <div class="fieldset mb-2">
+                      <span class="label">{gettext("Preview")}</span>
+                      <div
+                        class="flex items-center gap-3 rounded-lg border border-base-300 bg-base-200/40 px-3 h-16"
+                        id="model-mark-preview"
+                      >
+                        <.mark_badge
+                          mark={Model.mark(preview_model(@form), @labs_by_key)}
+                          id="model-mark-preview-inner"
+                          size="md"
+                        />
+                        <span class="text-xs text-base-content/60" id="model-mark-origin">
+                          {mark_origin(@form, @labs_by_key)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <%= if linked_lab(@form, @labs_by_key) do %>
+                      <p class="text-xs text-base-content/50">
+                        {gettext("The model's own icon is queued: it is used if you unlink the lab.")}
+                      </p>
+                    <% else %>
                       <.input
-                        field={@form[:lab_key]}
-                        type="select"
-                        label={gettext("Lab (who built the model)")}
-                        options={lab_options(@form, @lab_choices)}
-                        prompt={gettext("— No lab —")}
-                        hint={
-                          gettext(
-                            "With a linked lab its brand wins; without one the icon below is used."
-                          )
-                        }
+                        field={@form[:icon]}
+                        type="text"
+                        label={gettext("Icon")}
+                        placeholder={Model.default_icon()}
+                        hint={gettext("Hero icon name, e.g. hero-fire. Optional.")}
                       />
 
-                      <div class="fieldset mb-2">
-                        <span class="label">{gettext("Preview")}</span>
-                        <div
-                          class="flex items-center gap-3 rounded-lg border border-base-300 bg-base-200/40 px-3 h-16"
-                          id="model-mark-preview"
-                        >
-                          <.mark_badge
-                            mark={Model.mark(preview_model(@form), @labs_by_key)}
-                            id="model-mark-preview-inner"
-                            size="md"
-                          />
-                          <span class="text-xs text-base-content/60" id="model-mark-origin">
-                            {mark_origin(@form, @labs_by_key)}
-                          </span>
+                      <div class="fieldset">
+                        <span class="label">{gettext("Pick from the palette")}</span>
+                        <div class="grid grid-cols-8 gap-1" id="model-icon-picker">
+                          <button
+                            :for={icon <- @icon_choices}
+                            type="button"
+                            phx-click="pick_model_icon"
+                            phx-value-icon={icon}
+                            class={[
+                              "flex items-center justify-center rounded-lg border p-1.5 transition-colors",
+                              if(@form[:icon].value == icon,
+                                do: "border-primary bg-primary/10 text-primary",
+                                else: "border-base-300 hover:bg-base-200"
+                              )
+                            ]}
+                            id={"model-icon-choice-#{icon}"}
+                            title={icon}
+                          >
+                            <.icon name={icon} class="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
-
-                      <%= if linked_lab(@form, @labs_by_key) do %>
-                        <p class="text-xs text-base-content/50">
-                          {gettext(
-                            "The model's own icon is queued: it is used if you unlink the lab."
-                          )}
-                        </p>
-                      <% else %>
-                        <.input
-                          field={@form[:icon]}
-                          type="text"
-                          label={gettext("Icon")}
-                          placeholder={Model.default_icon()}
-                          hint={gettext("Hero icon name, e.g. hero-fire. Optional.")}
-                        />
-
-                        <div class="fieldset">
-                          <span class="label">{gettext("Pick from the palette")}</span>
-                          <div class="grid grid-cols-8 gap-1" id="model-icon-picker">
-                            <button
-                              :for={icon <- @icon_choices}
-                              type="button"
-                              phx-click="pick_model_icon"
-                              phx-value-icon={icon}
-                              class={[
-                                "flex items-center justify-center rounded-lg border p-1.5 transition-colors",
-                                if(@form[:icon].value == icon,
-                                  do: "border-primary bg-primary/10 text-primary",
-                                  else: "border-base-300 hover:bg-base-200"
-                                )
-                              ]}
-                              id={"model-icon-choice-#{icon}"}
-                              title={icon}
-                            >
-                              <.icon name={icon} class="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      <% end %>
-                    </div>
+                    <% end %>
                   </div>
+                </div>
 
-                  <div class="md:col-span-2 flex gap-2 mt-4 justify-end">
-                    <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
-                      {gettext("Cancel")}
-                    </button>
-                    <button type="submit" class="btn btn-primary btn-sm" id="save-model-btn">
-                      {gettext("Save")}
-                    </button>
-                  </div>
-                </.form>
-              <% end %>
-            </div>
+                <%!-- Comportamiento: cómo responde el modelo (política de
+                     effort). Va en su propia banda, separado de la identidad
+                     por un divisor: es lo que se afina después del alta, no lo
+                     que define al modelo. --%>
+                <div class="divider my-3"></div>
+
+                <div class="grid md:grid-cols-2 gap-x-8 gap-y-1">
+                  <.input
+                    field={@form[:effort_default]}
+                    type="select"
+                    label={gettext("Reasoning effort default")}
+                    options={effort_policy_options()}
+                    prompt={gettext("— No default —")}
+                    hint={
+                      gettext(
+                        "Replaces a client reasoning_effort of none/minimal with this value (upstreams that reject those values)."
+                      )
+                    }
+                  />
+
+                  <.input
+                    field={@form[:effort_override]}
+                    type="select"
+                    label={gettext("Reasoning effort override")}
+                    options={effort_policy_options()}
+                    prompt={gettext("— No override —")}
+                    hint={
+                      gettext(
+                        "Replaces the client reasoning_effort with this value, whatever the client sends."
+                      )
+                    }
+                  />
+                </div>
+
+                <div class="flex gap-2 mt-4 justify-end">
+                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
+                    {gettext("Cancel")}
+                  </button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="save-model-btn">
+                    {gettext("Save")}
+                  </button>
+                </div>
+              </.form>
+            <% end %>
           </div>
-        </div>
+        </.modal>
 
         <%!-- Guard Rails form --%>
         <div :if={@guard_rails_form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
