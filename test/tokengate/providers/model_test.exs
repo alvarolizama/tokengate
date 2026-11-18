@@ -75,4 +75,28 @@ defmodule Tokengate.Providers.ModelTest do
       assert Ecto.Changeset.get_field(changeset, :effort_default) == nil
     end
   end
+
+  describe "changeset — model_type" do
+    test "rerank es un tipo válido (la superficie /v1/rerank lo sirve)" do
+      assert "rerank" in Model.model_types()
+
+      changeset =
+        Model.changeset(%Model{}, %{
+          name: "qwen3-reranker-8b",
+          context_window: 32_768,
+          model_type: "rerank"
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :model_type) == "rerank"
+    end
+
+    test "un tipo fuera del vocabulario sigue siendo inválido" do
+      changeset =
+        Model.changeset(%Model{}, %{name: "m", context_window: 1, model_type: "video"})
+
+      refute changeset.valid?
+      assert {"is invalid", _} = changeset.errors[:model_type]
+    end
+  end
 end

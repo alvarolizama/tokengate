@@ -17,6 +17,23 @@ defmodule Tokengate.Providers.ProviderPathsTest do
       assert ProviderPaths.resolve(%{key: "openrouter"}, :tts) == "/audio/speech"
     end
 
+    test "rerank resolves to the documented /rerank segment on every lane" do
+      # Fireworks (api.fireworks.ai/inference/v1), OpenRouter (/api/v1), NaN,
+      # Helmcode and a custom oMLX host all answer `{base_url}/rerank`; the
+      # service is in the vocabulary so every one of them books it.
+      for key <- ["fireworks-ai", "openrouter", "nan", "helmcode", nil] do
+        assert ProviderPaths.resolve(%{key: key}, :rerank) == "/rerank"
+      end
+
+      assert ProviderPaths.resolve(%{key: "fireworks-ai"}, "rerank") == "/rerank"
+    end
+
+    test "an operator override can point rerank at another host" do
+      provider = %{key: "nan", path_overrides: %{"rerank" => "https://rerank.lan/v1/rerank"}}
+
+      assert ProviderPaths.resolve(provider, :rerank) == "https://rerank.lan/v1/rerank"
+    end
+
     test "the provider's own override wins, by storage key or by code atom" do
       provider = %{key: "mi-relay", path_overrides: %{"chat" => "/v1/chat"}}
 

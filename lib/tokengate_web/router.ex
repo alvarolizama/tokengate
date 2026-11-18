@@ -248,6 +248,10 @@ defmodule TokengateWeb.Router do
     post "/audio/speech", ProxyController, :speech
     post "/images/generations", ProxyController, :image_generations
     post "/decisions", ProxyController, :decisions
+
+    # Rerank: the document-relevance surface. Canonical in and out — the
+    # per-provider translation lives in `Proxy.Rerank`, not in the router.
+    post "/rerank", ProxyController, :rerank
   end
 
   # Other scopes may use custom stacks.

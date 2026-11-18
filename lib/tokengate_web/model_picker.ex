@@ -232,6 +232,10 @@ defmodule TokengateWeb.ModelPicker do
     # hablan ese wire. El camino de chat de TypeSafe queda por compatibilidad.
     "decision" => "POST /v1/decisions",
     "embedding" => "POST /v1/embeddings",
+    # Rerank: contrato canónico propio (`{model, query, documents, top_n}` →
+    # `results[] {index, relevance_score}`). La traducción por proveedor vive
+    # en `Tokengate.Proxy.Rerank`; el path upstream lo pone `ProviderPaths`.
+    "rerank" => "POST /v1/rerank",
     "stt" => "POST /v1/audio/transcriptions",
     "tts" => "POST /v1/audio/speech",
     "image" => "POST /v1/images/generations"

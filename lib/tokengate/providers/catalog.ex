@@ -46,17 +46,18 @@ defmodule Tokengate.Providers.Catalog do
 
   ## Capabilities
 
-  `#{inspect(~w(llm embedding stt tts image))}` — what a provider
-  can serve, declared per provider IN CODE. models.dev has no field for it: an
-  embedding model and a chat model both report
+  `#{inspect(~w(llm embedding decision rerank stt tts image))}` — what a
+  provider can serve, declared per provider IN CODE. models.dev has no field
+  for it: an embedding model and a chat model both report
   `modalities: %{input: ["text"], output: ["text"]}` and only `family` or the
   model id hints at the difference. A provider with no entry here is treated
   as chat — add the capabilities the day a real case needs them.
 
   The vocabulary here is what a provider may DECLARE. What the proxy routes is
-  `/v1/chat/completions`, `/v1/models`, `/v1/embeddings` and the three
-  path-routed services (`stt`, `tts`, `image` — see `ProviderPaths`); a
-  model's `model_type` IS the routing capability for those.
+  `/v1/chat/completions`, `/v1/models`, `/v1/embeddings`, `/v1/decisions`,
+  `/v1/rerank` and the three path-routed services (`stt`, `tts`, `image` — see
+  `ProviderPaths`); a model's `model_type` IS the routing capability for
+  those.
 
   ## Custom provider capabilities
 
@@ -80,21 +81,22 @@ defmodule Tokengate.Providers.Catalog do
   # A capability is a PROMISE, and it is only honest when the gateway has a ROUTE
   # to serve it (one /v1 surface per type — see `ModelPicker.type_endpoint/1`).
   # Declaring a type no route serves offers the operator a model nothing can
-  # answer for; the catalog already documents that for NaN/Helmcode's `rerank`
-  # models (F61: the reason is the missing type, not the missing upstream).
+  # answer for; the catalog used to document that for NaN/Helmcode's `rerank`
+  # models (F61: the reason was the missing type, not the missing upstream).
   #
-  # `rerank` is therefore deliberately OUT of this list: it joins it in W14,
-  # together with the `model_aliases` type, the CHECK migration, the
-  # `POST /v1/rerank` route and its endpoint entry. Until then `declares?/2`
-  # answers false for it whatever a provider declares (`served_capabilities/0`
-  # is the single place to flip).
+  # `rerank` joined this list together with the `models` CHECK, the
+  # `POST /v1/rerank` route and its endpoint entry — the five upstreams that
+  # answer it (Fireworks `data[]+usage`, OpenRouter/NaN/Helmcode `results[]`,
+  # an oMLX host `results[]`) are declared below, and `declares?/2` narrows
+  # whatever a provider writes to this set. A capability without a route never
+  # survives (`served_capabilities/0` is the single place to flip).
   #
   # The same rule applies to a CUSTOM relay the operator declares (a local oMLX
   # host, say): a capability the upstream cannot serve — `embedding` with no
   # embedding model installed answers 404 "Available models: (none)" — must not
   # be declared. The catalog cannot know what a custom host has installed, so
   # the declaration is the operator's, and the wizard's type step reads it as-is.
-  @served_capabilities ~w(llm embedding decision stt tts image)
+  @served_capabilities ~w(llm embedding decision rerank stt tts image)
   @capabilities @served_capabilities
 
   # models.dev npm package -> dialect. Anything absent is unsupported until a
@@ -128,6 +130,12 @@ defmodule Tokengate.Providers.Catalog do
   #                             :openai (passthrough, default) | :systemone
   #                             (the request translates) — see
   #                             `decisions_shape/1` and `Proxy.Decisions`
+  #   * :rerank_shape         — the wire of the rerank surface:
+  #                             :results (the Cohere envelope every
+  #                             OpenAI-dialect reseller speaks, default) |
+  #                             :fireworks (`data[]` + `usage`, and its own
+  #                             `return_documents` request field) — see
+  #                             `rerank_shape/1` and `Proxy.Rerank`
   #   * :omit_body_fields     — fields the gateway must STRIP from the body
   #   * :reasoning_dialect    — how the upstream wants its reasoning knobs on
   #                             the wire, one of @reasoning_dialects: the
@@ -178,19 +186,28 @@ defmodule Tokengate.Providers.Catalog do
     #     Habla el envelope System One (sirve Jev/Clef), así que la superficie
     #     pública /v1/decisions del gateway pasa por el traductor.
     "openrouter" => %{
-      capabilities: ~w(llm embedding stt tts image decision),
+      capabilities: ~w(llm embedding rerank stt tts image decision),
       dialect: "openrouter",
       paths: %{image: "/images", decisions: "https://openrouter.ai/api/alpha/decisions"},
       decisions_shape: :systemone,
+      rerank_shape: :results,
       reasoning_dialect: :openrouter_nested
     },
     # Fireworks: decisions en shape OpenAI nativo (`POST
     # /inference/v1/decisions`, y el mismo contenido en /systemone) — la
     # superficie pública pasa verbatim. Su modelo público `rune` sólo sirve
     # esta API: chat contra él responde 400.
+    #
+    # Rerank: `POST {base}/rerank` (docs.fireworks.ai/api-reference/
+    # rerank-documents) responde en SU shape — `data[]` con `{index,
+    # relevance_score, document}` más un bloque `usage` (prompt_tokens /
+    # total_tokens) — y su request acepta `return_documents`. Es la única de
+    # las cinco superficies que no habla el envelope `results[]` de Cohere, y
+    # por eso declara `rerank_shape: :fireworks` (Proxy.Rerank).
     "fireworks-ai" => %{
-      capabilities: ~w(llm embedding decision),
+      capabilities: ~w(llm embedding decision rerank),
       decisions_shape: :openai,
+      rerank_shape: :fireworks,
       reasoning_dialect: :scalar
     },
     # DashScope (Model Studio) expone dos superficies:
@@ -310,9 +327,16 @@ defmodule Tokengate.Providers.Catalog do
     # the capabilities and the dialect (there is no npm package to derive
     # either from). Reasoning is the SCALAR `reasoning_effort`
     # (low/medium/high/max) like NaN, which is the same platform.
+    #
+    # Rerank: `POST {base}/rerank` answers the Cohere envelope (`results[]`
+    # with `{index, relevance_score}`) AND reports billing in its own
+    # `meta.billed_units` block — Proxy.Rerank absorbs both into the canonical
+    # response. The lane is flat-rate in practice (F64), so its price is
+    # `per_request`.
     "helmcode" => %{
-      capabilities: ~w(llm embedding stt tts image),
+      capabilities: ~w(llm embedding rerank stt tts image),
       dialect: "openai",
+      rerank_shape: :results,
       reasoning_dialect: :scalar
     },
     "huggingface" => %{capabilities: ~w(llm embedding)},
@@ -330,9 +354,16 @@ defmodule Tokengate.Providers.Catalog do
     # `/audio/speech` (audio/mpeg), flux-2-klein y qwen-image-2.1 en
     # `/images/generations`, qwen3-embedding en `/embeddings`.
     #
-    # Su modelo `rerank` (Qwen3-Reranker-8B, `POST /rerank`) queda FUERA A
-    # PROPÓSITO: el gateway ya no tiene esa superficie (commit 887a1a9), así
-    # que declararla aquí ofrecería un tipo que ninguna ruta sirve.
+    # Su modelo `rerank` (Qwen3-Reranker-8B, `POST {base}/rerank`) SÍ se
+    # sirve ahora: la superficie `/v1/rerank` existe y el upstream responde
+    # `results[]` con `{index, relevance_score}`. Un `403 tier_restricted` o
+    # un `402` de este lane siguen siendo rechazos POR MODELO, no de la key.
+    #
+    # NaN y Helmcode son la MISMA casa (F66: helmcode.com enlaza los binarios
+    # de `helmcode/nan-desktop` y el catálogo del clúster coincide modelo por
+    # modelo). Son dos hosts del mismo stack, no dos upstreams
+    # independientes: tener los dos como lanes NO es redundancia de proveedor
+    # — por eso ninguno de los dos se presenta como "fallback" del otro.
     #
     # Reasoning: acepta el escalar `reasoning_effort` (`none`…`max`) y mapea
     # los alias (`thinking.type`, `reasoning.enabled`, `enable_thinking`) a
@@ -340,7 +371,8 @@ defmodule Tokengate.Providers.Catalog do
     # `deepseek-v4-pro` — normalizar todo al escalar es lo único que sirve
     # para los trece modelos de chat.
     "nan" => %{
-      capabilities: ~w(llm embedding stt tts image),
+      capabilities: ~w(llm embedding rerank stt tts image),
+      rerank_shape: :results,
       reasoning_dialect: :scalar
     },
     "nearai" => %{capabilities: ~w(llm embedding image stt)},
@@ -422,8 +454,8 @@ defmodule Tokengate.Providers.Catalog do
     # row lives here. Base URL and surface verified against
     # https://helmcode.com/docs/api (2026-11-17): `/v1/chat/completions`,
     # `/v1/models`, `/v1/embeddings`, `/v1/audio/transcriptions`,
-    # `/v1/audio/speech`, `/v1/images/generations`. Its `rerank` model has no
-    # gateway surface, so it is not declared.
+    # `/v1/audio/speech`, `/v1/images/generations`. Its `/v1/rerank` answers
+    # `results[]` and is declared in `@customizations` (same platform as NaN).
     "helmcode" => %{
       name: "Helmcode",
       base_url: "https://api.helmcode.com/v1",
@@ -575,7 +607,7 @@ defmodule Tokengate.Providers.Catalog do
   construction.
 
       iex> Tokengate.Providers.Catalog.capabilities("fireworks-ai")
-      ["llm", "embedding", "decision"]
+      ["llm", "embedding", "decision", "rerank"]
 
       iex> Tokengate.Providers.Catalog.capabilities("anthropic")
       []
@@ -591,8 +623,9 @@ defmodule Tokengate.Providers.Catalog do
   @doc """
   The capabilities the gateway can route today — one per `/v1` surface.
 
-  `rerank` is not here yet: W14 adds it together with its type, its route and
-  its endpoint. Flipping it is a one-line change in this list.
+  `rerank` is here since `POST /v1/rerank` exists: the set is exactly the
+  types whose endpoint `ModelPicker.type_endpoint/1` publishes, and
+  `served_capabilities/0` remains the single place to flip.
   """
   @spec served_capabilities() :: [String.t()]
   def served_capabilities, do: @served_capabilities
@@ -643,6 +676,30 @@ defmodule Tokengate.Providers.Catalog do
     case option(key, :decisions_shape, :openai) do
       :systemone -> :systemone
       _ -> :openai
+    end
+  end
+
+  @doc """
+  The wire shape a provider speaks on the rerank surface:
+
+    * `:results` (default) — the Cohere envelope every OpenAI-dialect
+      reseller of the cluster speaks: `{query, documents, top_n}` in,
+      `{results: [{index, relevance_score}]}` out (OpenRouter, NaN,
+      Helmcode, an oMLX host).
+    * `:fireworks` — Fireworks' own rerank API: same input plus
+      `return_documents`, and `{data: [{index, relevance_score, document}],
+      usage: {prompt_tokens, total_tokens}}` out.
+
+  Defaults to `:results`: a custom host (oMLX, a relay) speaks the Cohere
+  envelope by construction. This is REQUEST-side only — `Proxy.Rerank`
+  absorbs `data[]` and `results[]` by presence, so a provider that answers
+  the other list still normalizes instead of failing.
+  """
+  @spec rerank_shape(String.t() | nil) :: :results | :fireworks
+  def rerank_shape(key) do
+    case option(key, :rerank_shape, :results) do
+      :fireworks -> :fireworks
+      _ -> :results
     end
   end
 

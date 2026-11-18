@@ -203,7 +203,7 @@ defmodule TokengateWeb.ModelsLive do
 
   # Orden canónico de tipos = el del picker de alta (`model_type_choices/0`),
   # crudo porque un atributo de módulo no puede evaluar gettext.
-  @type_order ~w(llm embedding decision stt tts image)
+  @type_order ~w(llm embedding decision rerank stt tts image)
 
   defp type_rank(type), do: Enum.find_index(@type_order, &(&1 == type)) || length(@type_order)
 
@@ -275,6 +275,7 @@ defmodule TokengateWeb.ModelsLive do
       {gettext("LLM (chat)"), "llm", "hero-chat-bubble-left-right"},
       {gettext("Embedding"), "embedding", "hero-squares-2x2"},
       {gettext("Decisions"), "decision", "hero-scale"},
+      {gettext("Rerank"), "rerank", "hero-arrows-up-down"},
       {gettext("Transcription"), "stt", "hero-microphone"},
       {gettext("Speech"), "tts", "hero-speaker-wave"},
       {gettext("Images"), "image", "hero-photo"}

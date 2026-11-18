@@ -23,6 +23,11 @@ defmodule TokengateWeb.ProxyController do
       embeddings. Each URL is `base_url` + the path `ProviderPaths` resolves
       for that service (operator override → catalog hardcode → generic
       default), so one provider serves all of them off one `base_url`.
+    * `POST /v1/rerank` — the ONE endpoint whose contract is canonical on both
+      sides: `{model, query, documents, top_n}` in,
+      `results[] {index, relevance_score}` out, with the per-provider
+      translation in `Tokengate.Proxy.Rerank` (Fireworks' `data[]`+`usage`,
+      the `results[]` of OpenRouter/NaN/Helmcode, an oMLX host).
 
   ## Two-gate throttling
 
@@ -79,6 +84,7 @@ defmodule TokengateWeb.ProxyController do
     ProviderAdapter,
     PromptOptimizer,
     RawResponse,
+    Rerank,
     ResponseCache,
     ServiceUsage,
     SessionId,
@@ -462,6 +468,35 @@ defmodule TokengateWeb.ProxyController do
         "decision",
         &Tokengate.Proxy.Decisions.post(&1, &2, &3, &4),
         :decision
+      )
+    else
+      {:error, message} -> render_proxy_error(conn, {:invalid_request, message})
+    end
+  end
+
+  # POST /v1/rerank — the public rerank surface, canonical in and out:
+  # `{model, query, documents, top_n}` → `results[] {index, relevance_score}`.
+  #
+  # The shape is validated BEFORE the gates for the same reason decisions is:
+  # a malformed body is the caller's fault and must not pick credentials,
+  # retry the fallback matrix or pollute the error logs with a per-attempt 400.
+  #
+  # Routing capability is the model's type — only a `rerank` model is
+  # reachable here, and a model of another type answers `model_type_mismatch`.
+  # `kind` is :rerank so `simple_usage/4` bills the call, and the adapter_fun
+  # is the surface module: it builds the upstream wire, POSTs to the path
+  # `ProviderPaths` resolves for `:rerank` and normalizes the answer (F67: the
+  # translation lives above the transport, not in a ProviderAdapter dialect).
+  def rerank(conn, _params) do
+    payload = conn.body_params
+
+    with :ok <- Rerank.validate(payload) do
+      simple_proxy(
+        conn,
+        payload,
+        "rerank",
+        &Rerank.post(&1, &2, &3, &4),
+        :rerank
       )
     else
       {:error, message} -> render_proxy_error(conn, {:invalid_request, message})
@@ -853,6 +888,19 @@ defmodule TokengateWeb.ProxyController do
           error_message: error_message
         )
 
+      {:error, :no_available_provider} when reason == :lane_not_servable ->
+        # Every lane was dropped for the same local gap (no upstream model id):
+        # the pool is healthy and nothing failed upstream, so the client gets
+        # the gateway's OWN code instead of a 503 "all providers failed".
+        log_and_render_proxy_error(
+          conn,
+          route,
+          member,
+          {:upstream_error, :lane_not_servable, nil},
+          error_reason: "lane_not_servable",
+          error_message: error_message
+        )
+
       {:error, :no_available_provider} ->
         log_and_render_proxy_error(conn, route, member, :all_providers_down,
           error_reason: "all_providers_down"
@@ -966,6 +1014,43 @@ defmodule TokengateWeb.ProxyController do
   defp simple_usage(payload, body, kind, resp_headers)
        when kind in [:stt, :tts, :image, :decision] do
     {reported_or_estimated_usage(payload, body, resp_headers), body}
+  end
+
+  # Rerank (F68: without this clause the FIRST served request raises a
+  # FunctionClauseError). The canonical body carries a `usage` block when the
+  # upstream reported billable counters (Fireworks' `usage`, Helmcode's
+  # `meta.billed_units` — both absorbed by `Rerank.normalize/1`). When it
+  # reported none, the request's own text (query + documents) is estimated, so
+  # a `per_1m_tokens` lane still books something proportional; no text at all
+  # estimates to 0, which is the explicit $0 (a `per_request` lane does not
+  # even look at the tokens: `ServiceUsage` always yields `per_request => 1`).
+  defp simple_usage(payload, body, :rerank, resp_headers) do
+    reported = UsageNormalizer.normalize(:openai, body, resp_headers)
+
+    usage =
+      if reported != nil and not zero_usage?(reported) do
+        reported
+      else
+        %{
+          prompt_tokens: rerank_prompt_tokens(payload),
+          completion_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0
+        }
+      end
+
+    {usage, body}
+  end
+
+  # The input text of a rerank call: the query plus every document's text, in
+  # the same token estimator the embeddings estimate uses.
+  defp rerank_prompt_tokens(payload) do
+    payload
+    |> Map.get("documents")
+    |> Rerank.document_texts()
+    |> Enum.reduce(estimate_strings(payload["query"]), fn text, acc ->
+      acc + TokenEstimator.estimate_completion(text)
+    end)
   end
 
   defp reported_or_estimated_usage(payload, body, resp_headers) do
@@ -1148,6 +1233,14 @@ defmodule TokengateWeb.ProxyController do
   # instead of resending the same body to the same key.
   defp next_candidate(route, exclude, _provider_retries, reason)
        when reason in [:model_not_available, :billing_error] do
+    {[route.credential.id | exclude], 0}
+  end
+
+  # A lane whose row carries no upstream model id cannot serve ANY body: the
+  # refusal is local and deterministic (no byte left the gateway), so the
+  # cascade drops that lane at once instead of spending its three per-provider
+  # retries on the same configuration gap.
+  defp next_candidate(route, exclude, _provider_retries, :lane_not_servable) do
     {[route.credential.id | exclude], 0}
   end
 
@@ -3327,6 +3420,11 @@ defmodule TokengateWeb.ProxyController do
   # breaker ignores (see CircuitBreaker.@counting_reasons).
   defp breaker_reason(:bad_request), do: :bad_request
   defp breaker_reason(:client_error), do: :client_error
+  # A lane with no upstream model id never reached a provider: it is a local
+  # refusal, so it must not count against the credential's breaker (that would
+  # suspend a healthy key for a configuration gap). Same family as a 400 —
+  # non-counting — while the cascade still excludes the lane.
+  defp breaker_reason(:lane_not_servable), do: :bad_request
   # Scoped refusals and a provider edge timeout are NOT symptoms of credential
   # health: they pass through as themselves, which the breaker ignores (it only
   # counts @counting_reasons). Without these clauses the catch-all below would
@@ -3467,6 +3565,16 @@ defmodule TokengateWeb.ProxyController do
     do:
       {status, "invalid_request_error", "upstream_client_error",
        "Provider rejected the request (#{status})"}
+
+  # A lane without an upstream model id never left the gateway: the client's
+  # body is fine, the row is not. It gets the gateway's OWN code (never the
+  # `model: null` 400 an upstream would answer) and the same 503 family as
+  # "no provider can serve this model" — the request cannot be retried into
+  # success until an operator fixes the lane.
+  defp error_details({:upstream_error, :lane_not_servable, _status}),
+    do:
+      {503, "service_unavailable", "lane_not_servable",
+       "The model's lane has no upstream model id configured"}
 
   defp error_details({:upstream_error, reason, status}),
     do: {upstream_status(status), "api_error", safe_reason(reason), "Upstream provider error"}

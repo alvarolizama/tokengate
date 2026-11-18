@@ -25,7 +25,7 @@ defmodule Tokengate.ProdSeedTest do
   @demo_emails ~w(dev@tokengate.local tester@tokengate.local)
   @demo_groups ~w(devs qa)
   @demo_services ~w(ci-bot)
-  @demo_models ~w(gpt-5-nano glm-5.2 text-embedding qwen3-tts)
+  @demo_models ~w(gpt-5-nano glm-5.2 text-embedding qwen3-tts qwen3-reranker-8b)
 
   setup do
     previous = %{
@@ -85,5 +85,27 @@ defmodule Tokengate.ProdSeedTest do
     eval_prod_seed()
 
     assert Repo.aggregate(User, :count) == 0
+  end
+
+  # oMLX es un host LOCAL de rerank: su fila es custom y vive en el seed de
+  # DESARROLLO (con el prerequisito de tener un reranker instalado). Nunca es
+  # builtin (F70): el catálogo de código se materializa con identidad bloqueada
+  # en cada instancia y una `base_url` de 127.0.0.1 quedaría muerta en
+  # cualquier otro host. El seed de producción no puede crearlo.
+  test "el lane local de rerank (oMLX) no es builtin ni lo siembra producción" do
+    alias Tokengate.Providers.{Catalog, Provider, ModelProvider}
+
+    refute "omlx" in Catalog.code_provider_keys()
+
+    eval_prod_seed()
+
+    assert Repo.get_by(Provider, key: "omlx") == nil
+    assert Repo.get_by(Provider, name: "oMLX (local)") == nil
+    assert Repo.get_by(Model, name: "qwen3-reranker-8b") == nil
+    assert Repo.aggregate(ModelProvider, :count) == 0
+
+    # El tipo SÍ es servible (la ruta existe): lo que no existe es un builtin
+    # que lo sirva desde código.
+    assert "rerank" in Catalog.served_capabilities()
   end
 end

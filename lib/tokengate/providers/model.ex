@@ -20,8 +20,11 @@ defmodule Tokengate.Providers.Model do
   # TypeSafe's System One surface: its PUBLIC endpoint is `/v1/decisions`
   # (the OpenAI Decisions shape, translated for System One providers), with
   # the chat path kept for compatibility — its own type so pickers and
-  # grants distinguish it.
-  @model_types ~w(llm embedding decision stt tts image)
+  # grants distinguish it. `rerank` is the document-relevance surface:
+  # its only public endpoint is `/v1/rerank` (`Proxy.Rerank`), which speaks
+  # a canonical `{model, query, documents, top_n}` in and
+  # `results[] {index, relevance_score}` out.
+  @model_types ~w(llm embedding decision rerank stt tts image)
 
   # Operator effort policy vocabulary (`models.effort_default` /
   # `effort_override`): the levels every mainstream upstream documents for

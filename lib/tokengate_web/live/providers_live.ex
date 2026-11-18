@@ -780,6 +780,7 @@ defmodule TokengateWeb.ProvidersLive do
         "llm" -> [{gettext("LLM (chat)"), value, "hero-chat-bubble-left-right"}]
         "embedding" -> [{gettext("Embedding"), value, "hero-squares-2x2"}]
         "decision" -> [{gettext("Decisions"), value, "hero-scale"}]
+        "rerank" -> [{gettext("Rerank"), value, "hero-arrows-up-down"}]
         "stt" -> [{gettext("Transcription"), value, "hero-microphone"}]
         "tts" -> [{gettext("Speech"), value, "hero-speaker-wave"}]
         "image" -> [{gettext("Images"), value, "hero-photo"}]

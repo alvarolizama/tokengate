@@ -204,7 +204,8 @@ seed_topup.(%{
 })
 
 # ---------------------------------------------------------------------------
-# Models of every type (llm, embedding + the media services route as llm)
+# Models of every type (llm, embedding, tts; the oMLX rerank model has its
+# own section below, next to its provider)
 # ---------------------------------------------------------------------------
 
 seed_model = fn name, attrs ->
@@ -312,6 +313,92 @@ seed_grant.(dev_group, glm)
 seed_grant.(dev_group, embed)
 seed_grant.(qa_group, embed)
 seed_grant.(qa_group, tts)
+
+# ---------------------------------------------------------------------------
+# oMLX (local rerank) — DEV ONLY, and a CUSTOM row on purpose
+# ---------------------------------------------------------------------------
+# oMLX answers `POST http://127.0.0.1:8000/v1/rerank` (canonical `results[]`),
+# which is exactly what `/v1/rerank` serves. It can NEVER be a builtin (F70):
+# the code catalog materializes builtins on every instance with a locked
+# identity, so a `127.0.0.1` row would be dead on any other host and not
+# re-editable to a LAN/Tailscale address. Its place is this custom row plus
+# this dev seed — the operator repoints `base_url` from the Providers page.
+#
+# PREREQUISITE (not created by this seed): an oMLX server running on
+# 127.0.0.1:8000 WITH a reranker installed — a `SequenceClassification` model
+# (oMLX 0.7.3 recognizes Qwen3-Reranker by name). With no reranker installed,
+# `/v1/rerank` answers 404 and lists what it has ("Available models: (none)"),
+# so the lane is simply not servable. `provider_model` below must match the id
+# oMLX reports for that install.
+#
+# The lane is priced `per_request` at $0: running locally has no marginal cost,
+# and a token lane with no rates would report the same $0 less explicitly.
+omlx =
+  case Repo.get_by(Tokengate.Providers.Provider, name: "oMLX (local)") do
+    nil ->
+      {:ok, provider} =
+        Providers.create_provider(%{
+          name: "oMLX (local)",
+          base_url: "http://127.0.0.1:8000/v1",
+          capabilities: ["rerank"],
+          source: "custom",
+          billing_type: "subscription",
+          receive_timeout_ms: 120_000
+        })
+
+      IO.puts("Seeded provider: #{provider.name} (custom, rerank only)")
+      provider
+
+    provider ->
+      provider
+  end
+
+omlx_cred =
+  case Repo.get_by(Tokengate.Providers.Credential, provider_id: omlx.id, name: "local") do
+    nil ->
+      {:ok, cred} =
+        Providers.create_credential(%{
+          provider_id: omlx.id,
+          name: "local",
+          # oMLX ignores the Authorization header; a local marker keeps the
+          # column non-null without pretending to be a secret.
+          api_key_encrypted: "local-no-key",
+          status: "active"
+        })
+
+      IO.puts("Seeded credential: local (oMLX)")
+      cred
+
+    cred ->
+      cred
+  end
+
+reranker =
+  seed_model.("qwen3-reranker-8b", %{"context_window" => 32_768, "model_type" => "rerank"})
+
+case Repo.get_by(Tokengate.Providers.ModelProvider,
+       model_id: reranker.id,
+       credential_id: omlx_cred.id
+     ) do
+  nil ->
+    {:ok, _mp} =
+      Providers.create_model_provider(%{
+        model_id: reranker.id,
+        credential_id: omlx_cred.id,
+        provider_model: "Qwen3-Reranker-8B",
+        priority: 1,
+        enabled: true,
+        pricing_unit: "per_request",
+        unit_cost: Decimal.new(0)
+      })
+
+    IO.puts("Seeded binding: #{reranker.name} ← oMLX (Qwen3-Reranker-8B, per_request $0)")
+
+  _mp ->
+    :ok
+end
+
+seed_grant.(dev_group, reranker)
 
 # ---------------------------------------------------------------------------
 # Proxy API keys — the tg- tokens clients send as Bearer
