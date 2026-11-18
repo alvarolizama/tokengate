@@ -1075,7 +1075,11 @@ defmodule TokengateWeb.MonitoringLive do
             id="logs"
             rows={@streams.logs}
             row_item={fn {_id, log} -> log end}
-            row_class="align-top"
+            row_class={
+              fn {_id, log} ->
+                ["align-top", Map.get(log, :__pending__) && "bg-warning/20 hover:bg-warning/30"]
+              end
+            }
             empty?={@stream_rows == 0}
           >
             <:col :let={log} label={gettext("Date")}>
