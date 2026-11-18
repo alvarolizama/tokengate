@@ -34,7 +34,6 @@ defmodule TokengateWeb.SupervisedServicesLive do
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
   alias Tokengate.Providers
-  alias Tokengate.Repo
   alias TokengateWeb.StatsHelpers, as: Stats
 
   # Same window the card labels advertise ("30 días").
@@ -109,12 +108,15 @@ defmodule TokengateWeb.SupervisedServicesLive do
     user = socket.assigns.current_user
     timezone = socket.assigns[:timezone] || "Etc/UTC"
 
-    services =
-      user.id
-      |> Accounts.services_for_supervisor()
-      |> Repo.preload(:api_key)
+    services = Accounts.services_for_supervisor(user.id)
 
     service_ids = Enum.map(services, & &1.id)
+
+    # W2 lifecycle: a service may hold N keys, and `has_one :api_key` would
+    # surface whichever row the preload happened to pick (often the revoked
+    # one). The card must show the ACTIVE, non-hidden keys — one grouped query
+    # for the whole set, never N+1.
+    api_keys = Accounts.list_api_keys_for_services(service_ids)
 
     # granted_models: %{service_id => [model_id, ...]} — scoped to the
     # supervisor's services only (never load the whole grant table into the
@@ -147,6 +149,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
     )
     |> assign(:services_empty?, services == [])
     |> assign(:service_count, length(services))
+    |> assign(:api_keys, api_keys)
     |> assign(:granted_models, granted_models)
     |> assign(:models, models)
     |> assign(:summaries, summaries)
@@ -344,19 +347,23 @@ defmodule TokengateWeb.SupervisedServicesLive do
                     </span>
                     <span class="badge badge-ghost badge-sm">{limit_label(service)}</span>
 
-                    <%= if service.api_key do %>
+                    <% active_keys = Map.get(@api_keys, service.id, []) %>
+                    <%= if active_keys != [] do %>
                       <span class="badge badge-ghost badge-sm gap-1">
                         <.icon name="hero-key" class="w-3 h-3" />
-                        <span class="font-mono">{service.api_key.key_prefix}</span>…
+                        <span class="font-mono">{hd(active_keys).key_prefix}</span>…
                         <span class={[
                           "badge badge-xs",
-                          if(service.api_key.status == "active",
+                          if(hd(active_keys).status == "active",
                             do: "badge-success",
                             else: "badge-error"
                           )
                         ]}>
-                          {service.api_key.status}
+                          {hd(active_keys).status}
                         </span>
+                      </span>
+                      <span :if={length(active_keys) > 1} class="badge badge-ghost badge-sm">
+                        {gettext("%{count} keys", count: length(active_keys))}
                       </span>
                     <% else %>
                       <span class="badge badge-ghost badge-sm">{gettext("No API key")}</span>

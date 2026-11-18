@@ -2,6 +2,7 @@ defmodule TokengateWeb.ServicesLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
+  import Ecto.Query, only: [from: 2]
   alias Tokengate.Accounts
 
   defp unique, do: System.unique_integer([:positive])
@@ -243,6 +244,28 @@ defmodule TokengateWeb.ServicesLiveTest do
     assert Accounts.get_service(service.id) == nil
   end
 
+  # F9: the modal promised "the service API key" (singular) although a
+  # service holds N keys, and said nothing about the real CASCADE over its
+  # history. The copy now states the true FK effect.
+  test "el modal de borrado describe el CASCADE real sobre request_logs", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    service = service_fixture()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    view |> element("#delete-#{service.id}") |> render_click()
+
+    html = render(view)
+
+    assert html =~ "request_logs"
+    assert html =~ "ON DELETE CASCADE"
+    assert html =~ "Sus claves API"
+    assert html =~ "top-ups"
+    # The old promise (a single key) is gone.
+    refute html =~ "La clave API del servicio"
+  end
+
   # Los servicios tienen la misma función que los usuarios: limpiar su stickiness
   # (todas sus keys) para forzar el re-ruteo en la próxima petición.
   test "limpiar sticky routes del servicio (todas sus keys)", %{conn: conn} do
@@ -360,7 +383,7 @@ defmodule TokengateWeb.ServicesLiveTest do
       assert labels == ["ci", "nueva"]
     end
 
-    test "revocar una clave no afecta a las demás", %{conn: conn} do
+    test "revocar una clave no afecta a las demás y emite una nueva", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       service = service_fixture()
       k1 = create_service_key(service, "revocar")
@@ -377,10 +400,24 @@ defmodule TokengateWeb.ServicesLiveTest do
 
       assert Accounts.get_api_key(k1.id).status == "revoked"
       assert Accounts.get_api_key(k2.id).status == "active"
-      assert Enum.map(Accounts.list_api_keys_for_service(service.id), & &1.id) == [k2.id]
+
+      # Revoke = issue a new key (W2 contract): the old row stays `revoked`
+      # to preserve the historical attribution and the service gains a new
+      # key with the same label. The token is shown exactly once.
+      active = Accounts.list_api_keys_for_service(service.id)
+      active_ids = Enum.map(active, & &1.id)
+
+      assert length(active_ids) == 2
+      assert k2.id in active_ids
+      refute k1.id in active_ids
+
+      replacement = Enum.find(active, &(&1.id != k2.id))
+      assert replacement.label == "revocar"
+      assert replacement.key_hash != k1.key_hash
+      assert has_element?(view, "#new-key-token")
     end
 
-    test "una clave revocada se lista aparte y se puede reactivar", %{conn: conn} do
+    test "una clave revocada se lista aparte y no ofrece reactivación", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       service = service_fixture()
       k1 = create_service_key(service, "volver")
@@ -397,33 +434,157 @@ defmodule TokengateWeb.ServicesLiveTest do
       assert has_element?(view, "#revoked-key-#{k1.id}", "volver")
       assert has_element?(view, "#revoke-key-#{k2.id}")
 
-      html = view |> element("#reactivate-key-#{k1.id}") |> render_click()
-      assert html =~ "Clave reactivada"
+      # W2 contract: the panel never resurrects tokens. Revoking means issuing
+      # a new one, so the revoked row is read-only — neither "reactivate" nor
+      # "revoke" renders on it again.
+      refute has_element?(view, "#reactivate-key-#{k1.id}")
+      refute has_element?(view, "#revoke-key-#{k1.id}")
+      # ...while the active key does carry its delete (soft-hide) button.
+      assert has_element?(view, "#hide-key-#{k2.id}")
 
-      assert has_element?(view, "#key-#{k1.id}", "volver")
-      assert has_element?(view, "#key-#{k1.id}", "Activo")
-      refute has_element?(view, "#revoked-key-#{k1.id}")
-
-      assert Accounts.get_api_key(k1.id).status == "active"
+      assert Accounts.get_api_key(k1.id).status == "revoked"
       assert Accounts.get_api_key(k2.id).status == "active"
     end
 
-    test "reactivar una clave de otro servicio se rechaza", %{conn: conn} do
+    test "revocar u ocultar la clave de otro servicio (payload forjado) se rechaza", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       service = service_fixture()
       other_service = service_fixture()
       foreign = create_service_key(other_service, "ajena")
-      {:ok, _} = Accounts.revoke_service_api_key(foreign)
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/access/services")
 
       view |> element("#keys-#{service.id}") |> render_click()
 
-      html = render_hook(view, "reactivate_service_key", %{"key-id" => foreign.id})
-
+      html = render_hook(view, "revoke_service_key", %{"key-id" => foreign.id})
       assert html =~ "Clave no encontrada"
-      assert Accounts.get_api_key(foreign.id).status == "revoked"
+
+      html = render_hook(view, "hide_service_key", %{"key-id" => foreign.id})
+      assert html =~ "Clave no encontrada"
+
+      survived = Accounts.get_api_key(foreign.id)
+      assert survived.status == "active"
+      assert survived.hidden_at == nil
+
+      assert Enum.map(Accounts.list_api_keys_for_service(other_service.id), & &1.id) ==
+               [foreign.id]
+    end
+
+    test "borrar una clave es soft-hide: la oculta y conserva la atribución", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      k1 = create_service_key(service, "efímera")
+      k2 = create_service_key(service, "estable")
+
+      {:ok, log} =
+        Tokengate.Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          api_key_id: k1.id,
+          model_requested: "gpt-4o",
+          provider_cost_usd: Decimal.new("1.25"),
+          latency_ms: 100
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      assert has_element?(view, "#keys-#{service.id}", "2 claves")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+      html = view |> element("#hide-key-#{k1.id}") |> render_click()
+
+      assert html =~ "Clave borrada"
+      refute has_element?(view, "#key-#{k1.id}")
+      refute has_element?(view, "#revoked-key-#{k1.id}")
+      assert has_element?(view, "#key-#{k2.id}", "estable")
+
+      hidden = Accounts.get_api_key(k1.id)
+      assert hidden.hidden_at != nil
+      assert hidden.status == "revoked"
+
+      # The log keeps its api_key_id: deleting never rewrites the history.
+      # (`request_logs` is partitioned and its PK is (id, inserted_at), so
+      # `Repo.get/2` by id is not available.)
+      persisted_key_id =
+        Tokengate.Repo.one(
+          from(rl in Tokengate.Logs.RequestLog,
+            where: rl.id == ^log.id,
+            select: rl.api_key_id
+          )
+        )
+
+      assert persisted_key_id == k1.id
+      # And the row no longer counts for the table's keys badge.
+      badge_keys = Accounts.list_api_keys_for_services([service.id])[service.id]
+      assert Enum.map(badge_keys, & &1.id) == [k2.id]
+    end
+
+    test "renombrar audita api_key.rename con old/new label", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      k1 = create_service_key(service, "antes")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+      view |> element("#rename-key-#{k1.id}") |> render_click()
+
+      view
+      |> form("#rename-key-inline-#{k1.id}", %{"key-id" => k1.id, key: %{label: "después"}})
+      |> render_submit()
+
+      assert [audit] =
+               Tokengate.Auditing.list_audit_logs(%{
+                 action: "api_key.rename",
+                 entity_id: k1.id
+               })
+
+      assert audit.changes["old_label"] == "antes"
+      assert audit.changes["new_label"] == "después"
+      assert audit.entity_type == "api_key"
+    end
+
+    test "un id de cliente no-UUID no revienta la vista", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      # Every handler that touches the DB casts the id first: garbage is a
+      # flash, not an `Ecto.Query.CastError` that kills the LiveView.
+      assert render_hook(view, "edit_service", %{"id" => "no-es-uuid"}) =~
+               "Servicio no encontrado"
+
+      assert render_hook(view, "delete_service", %{"id" => "no-es-uuid"}) =~
+               "Servicio no encontrado"
+
+      assert render_hook(view, "manage_keys", %{"id" => "no-es-uuid"}) =~ "Servicio no encontrado"
+
+      assert render_hook(view, "clear_service_sticky_routes", %{"id" => "no-es-uuid"}) =~
+               "Servicio no encontrado"
+
+      assert render_hook(view, "add_supervisor", %{
+               "service-id" => "no-es-uuid",
+               "user-id" => "tampoco"
+             }) =~ "No se pudo agregar"
+
+      # The view is still alive and serving real events.
+      view |> element("#new-service-btn") |> render_click()
+      assert has_element?(view, "#service-form-modal")
+
+      # A well-formed but missing id does not crash either.
+      assert render_hook(view, "edit_service", %{"id" => Ecto.UUID.generate()}) =~
+               "Servicio no encontrado"
+
+      # And adding a supervisor that does not exist is an error, not an FK violation.
+      assert render_hook(view, "add_supervisor", %{
+               "service-id" => service.id,
+               "user-id" => Ecto.UUID.generate()
+             }) =~ "No se pudo agregar"
     end
 
     test "renombrar una clave cambia su label sin tocar hash ni status", %{conn: conn} do

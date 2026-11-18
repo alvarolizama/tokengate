@@ -32,6 +32,10 @@ defmodule TokengateWeb.ServicesLive do
   # this surface yet).
   @list_limit 500
 
+  # The subset of `Service.changeset/2`'s `@permitted` fields worth recording
+  # in `service.update`; auditing anything else logs keys the row never stores.
+  @service_audit_fields ~w(name concurrency_limit rpm_limit monthly_spend_limit_usd unlimited_spend)
+
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
@@ -345,14 +349,20 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   def handle_event("edit_service", %{"id" => service_id}, socket) do
-    service = Accounts.get_service!(service_id)
-    changeset = Accounts.change_service(service)
+    with {:ok, service_id} <- cast_id(service_id),
+         %Service{} = service <- Accounts.get_service(service_id) do
+      changeset = Accounts.change_service(service)
 
-    {:noreply,
-     socket
-     |> assign(:form, to_form(changeset, as: :service))
-     |> assign(:editing_service_id, service.id)}
+      {:noreply,
+       socket
+       |> assign(:form, to_form(changeset, as: :service))
+       |> assign(:editing_service_id, service.id)}
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Service not found."))}
+    end
   end
+
+  def handle_event("edit_service", _params, socket), do: {:noreply, socket}
 
   def handle_event("save_service", %{"service" => service_params}, socket) do
     save_service(socket, socket.assigns.editing_service_id, service_params)
@@ -376,45 +386,41 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   def handle_event("delete_service", %{"id" => service_id}, socket) do
-    service = Accounts.get_service!(service_id)
-
-    case Accounts.delete_service(service) do
-      {:ok, _} ->
-        audit(socket, "service.delete", "service", service.id, %{"name" => service.name})
-
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Service deleted."))
-         |> assign(:delete_target_id, nil)
-         |> assign(:delete_target_name, nil)
-         |> load_services()}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        msg =
-          changeset.errors
-          |> Enum.map(fn {field, {message, _}} -> "#{field} #{message}" end)
-          |> Enum.join(", ")
-
-        {:noreply, put_flash(socket, :error, gettext("Could not delete: %{reason}", reason: msg))}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Could not delete the service."))}
+    with {:ok, service_id} <- cast_id(service_id),
+         %Service{} = service <- Accounts.get_service(service_id) do
+      delete_service_row(socket, service)
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Service not found."))}
     end
   end
+
+  def handle_event("delete_service", _params, socket), do: {:noreply, socket}
 
   ## Events — detail / models modals ---------------------------------------
 
   def handle_event("view_detail", %{"id" => service_id}, socket) do
-    {:noreply, assign(socket, :detail_service_id, service_id)}
+    with {:ok, service_id} <- cast_id(service_id) do
+      {:noreply, assign(socket, :detail_service_id, service_id)}
+    else
+      _ -> {:noreply, socket}
+    end
   end
+
+  def handle_event("view_detail", _params, socket), do: {:noreply, socket}
 
   def handle_event("close_detail", _params, socket) do
     {:noreply, assign(socket, :detail_service_id, nil)}
   end
 
   def handle_event("edit_models", %{"id" => service_id}, socket) do
-    {:noreply, assign(socket, :models_service_id, service_id)}
+    with {:ok, service_id} <- cast_id(service_id) do
+      {:noreply, assign(socket, :models_service_id, service_id)}
+    else
+      _ -> {:noreply, socket}
+    end
   end
+
+  def handle_event("edit_models", _params, socket), do: {:noreply, socket}
 
   def handle_event("close_models", _params, socket) do
     {:noreply, assign(socket, :models_service_id, nil)}
@@ -425,19 +431,20 @@ defmodule TokengateWeb.ServicesLive do
   # Las claves de un servicio se cargan solo al abrir su panel: el listado no
   # paga N+1 por cada fila.
   def handle_event("manage_keys", %{"id" => service_id}, socket) do
-    case Accounts.get_service(service_id) do
-      nil ->
-        {:noreply, put_flash(socket, :error, gettext("Service not found."))}
-
-      service ->
-        {:noreply,
-         socket
-         |> assign(:keys_service_id, service.id)
-         |> assign(:keys_service_name, service.name)
-         |> assign(:new_token, nil)
-         |> load_service_keys(service.id)}
+    with {:ok, service_id} <- cast_id(service_id),
+         %Service{} = service <- Accounts.get_service(service_id) do
+      {:noreply,
+       socket
+       |> assign(:keys_service_id, service.id)
+       |> assign(:keys_service_name, service.name)
+       |> assign(:new_token, nil)
+       |> load_service_keys(service.id)}
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Service not found."))}
     end
   end
+
+  def handle_event("manage_keys", _params, socket), do: {:noreply, socket}
 
   def handle_event("cancel_manage_keys", _params, socket) do
     {:noreply,
@@ -493,33 +500,35 @@ defmodule TokengateWeb.ServicesLive do
   # Submit del form inline: cambia el label de la key del servicio en edición.
   # Va ANTES del clause del lápiz — su pattern es un superconjunto (el payload
   # del submit también trae "key-id") y el orden de clauses decide.
+  #
+  # `Accounts.rename_api_key/3` is the single rename path for users and
+  # services: it re-reads the row, enforces `service_id` ownership and writes
+  # the `api_key.rename` audit entry with old/new label. The surface only
+  # keeps the session-side guard (panel closed ⇒ nobody renames anything).
   def handle_event(
         "rename_service_key",
         %{"key-id" => key_id, "key" => %{"label" => label}},
         socket
       )
       when is_binary(label) do
-    label = String.trim(label)
+    service_id = socket.assigns.keys_service_id
 
-    with {:ok, key_id} <- Ecto.UUID.cast(key_id),
+    with true <- is_binary(service_id),
+         {:ok, key_id} <- cast_id(key_id),
          %{} = api_key <- Accounts.get_service_api_key(key_id),
          # Chequeo hermético: keys_service_id nil (panel cerrado) + una key de
          # usuario (service_id nil) era true por nil == nil.
-         true <-
-           is_binary(socket.assigns.keys_service_id) and
-             api_key.service_id == socket.assigns.keys_service_id,
-         {:ok, _} <- Accounts.update_api_key(api_key, %{"label" => label}) do
-      audit(socket, "api_key.rename", "api_key", api_key.id, %{
-        "old_label" => api_key.label,
-        "new_label" => label,
-        "service_id" => api_key.service_id
-      })
-
+         true <- api_key.service_id == service_id,
+         {:ok, _renamed} <-
+           Accounts.rename_api_key(api_key, label,
+             service_id: service_id,
+             actor: socket.assigns.current_user
+           ) do
       {:noreply,
        socket
        |> put_flash(:info, gettext("Key renamed."))
        |> assign(:editing_key_id, nil)
-       |> load_service_keys(socket.assigns.keys_service_id)}
+       |> load_service_keys(service_id)}
     else
       _ ->
         {:noreply, put_flash(socket, :error, gettext("Could not rename the key."))}
@@ -538,63 +547,73 @@ defmodule TokengateWeb.ServicesLive do
     {:noreply, assign(socket, :editing_key_id, nil)}
   end
 
+  # Revoke = issue a new key and invalidate the previous one (W2 lifecycle): the
+  # old row stays `revoked` (its hash is what keeps the historical attribution)
+  # and the replacement token is shown once in `new_token`.
   def handle_event("revoke_service_key", %{"key-id" => api_key_id}, socket) do
-    with {:ok, api_key_id} <- Ecto.UUID.cast(api_key_id),
+    service_id = socket.assigns.keys_service_id
+
+    with true <- is_binary(service_id),
+         {:ok, api_key_id} <- cast_id(api_key_id),
          %{} = api_key <- Accounts.get_service_api_key(api_key_id),
          # Mismo chequeo hermético que el rename: nil == nil dejaba pasar una
          # key de usuario con el panel cerrado.
-         true <-
-           is_binary(socket.assigns.keys_service_id) and
-             api_key.service_id == socket.assigns.keys_service_id do
-      case Accounts.revoke_service_api_key(api_key) do
-        {:ok, _} ->
-          audit(socket, "api_key.revoke", "api_key", api_key.id, %{
-            "label" => api_key.label,
-            "service_id" => api_key.service_id
-          })
+         true <- api_key.service_id == service_id,
+         {:ok, replacement, token} <- Accounts.revoke_and_replace_api_key(api_key) do
+      audit(socket, "api_key.revoke", "api_key", api_key.id, %{
+        "label" => api_key.label,
+        "service_id" => api_key.service_id,
+        "replacement_id" => replacement.id
+      })
 
-          {:noreply,
-           socket
-           |> put_flash(:info, gettext("Key revoked."))
-           |> load_service_keys(socket.assigns.keys_service_id)
-           |> load_services()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
-      end
+      {:noreply,
+       socket
+       |> assign(:new_token, token)
+       |> assign(:editing_key_id, nil)
+       |> put_flash(:info, gettext("Key revoked."))
+       |> load_service_keys(service_id)
+       |> load_services()}
     else
-      _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
+      {:error, :not_active} ->
+        {:noreply, put_flash(socket, :error, gettext("Esa clave ya no está activa."))}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, gettext("Key not found."))}
     end
   end
 
-  # Reactivar una key revocada del servicio (el token vuelve a valer). Mismo
-  # scope hermético que revoke: la fila debe ser de ESTE servicio y estar
-  # realmente revocada.
-  def handle_event("reactivate_service_key", %{"key-id" => api_key_id}, socket) do
-    with {:ok, api_key_id} <- Ecto.UUID.cast(api_key_id),
+  # Delete = soft-hide (W2): the row disappears from every listing and its token
+  # stops authenticating; `request_logs` keeps the attribution because that
+  # table has no FK to `api_keys`.
+  def handle_event("hide_service_key", %{"key-id" => api_key_id}, socket) do
+    service_id = socket.assigns.keys_service_id
+
+    with true <- is_binary(service_id),
+         {:ok, api_key_id} <- cast_id(api_key_id),
          %{} = api_key <- Accounts.get_service_api_key(api_key_id),
-         true <- is_binary(socket.assigns.keys_service_id),
-         true <- api_key.service_id == socket.assigns.keys_service_id,
-         true <- api_key.status == "revoked" do
-      case Accounts.reactivate_api_key(api_key) do
-        {:ok, _} ->
-          audit(socket, "api_key.reactivate", "api_key", api_key.id, %{
-            "label" => api_key.label,
-            "service_id" => api_key.service_id
-          })
+         true <- api_key.service_id == service_id,
+         {:ok, _hidden} <- Accounts.hide_api_key(api_key) do
+      audit(socket, "api_key.hide", "api_key", api_key.id, %{
+        "label" => api_key.label,
+        "service_id" => api_key.service_id
+      })
 
-          {:noreply,
-           socket
-           |> put_flash(:info, gettext("Key reactivated."))
-           |> load_service_keys(socket.assigns.keys_service_id)}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not reactivate the key."))}
-      end
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Clave borrada. Su consumo histórico se conserva."))
+       |> assign(:editing_key_id, nil)
+       |> load_service_keys(service_id)
+       |> load_services()}
     else
-      _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
+      _ ->
+        {:noreply, put_flash(socket, :error, gettext("Key not found."))}
     end
   end
+
+  def handle_event("hide_service_key", _params, socket), do: {:noreply, socket}
 
   def handle_event("dismiss_new_key_token", _params, socket) do
     {:noreply, assign(socket, :new_token, nil)}
@@ -603,63 +622,40 @@ defmodule TokengateWeb.ServicesLive do
   # Limpia las sticky routes del SERVICIO (todas sus keys): su próxima petición
   # re-evalúa proveedores en vez de quedarse pegado a uno degradado.
   def handle_event("clear_service_sticky_routes", %{"id" => service_id}, socket) do
-    case Accounts.get_service(service_id) do
-      nil ->
-        {:noreply, put_flash(socket, :error, gettext("Service not found."))}
+    with {:ok, service_id} <- cast_id(service_id),
+         %Service{} = service <- Accounts.get_service(service_id) do
+      Accounts.clear_service_sticky_routes(service_id)
 
-      service ->
-        Accounts.clear_service_sticky_routes(service_id)
+      audit(socket, "routing.clear_sticky", "service", service_id, %{"name" => service.name})
 
-        audit(socket, "routing.clear_sticky", "service", service_id, %{"name" => service.name})
-
-        {:noreply,
-         socket
-         |> put_flash(
-           :info,
-           gettext("Sticky routes cleared for %{who}. Their next request will be re-routed.",
-             who: service.name
-           )
+      {:noreply,
+       socket
+       |> put_flash(
+         :info,
+         gettext("Sticky routes cleared for %{who}. Their next request will be re-routed.",
+           who: service.name
          )
-         |> load_service_keys(service_id)}
+       )
+       |> load_service_keys(service_id)}
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Service not found."))}
     end
   end
+
+  def handle_event("clear_service_sticky_routes", _params, socket), do: {:noreply, socket}
 
   ## Events — model grants ------------------------------------------------
 
   def handle_event("toggle_model", %{"target-id" => service_id, "model-id" => model_id}, socket) do
-    service_alias_ids = Map.get(socket.assigns.granted_models, service_id, [])
-
-    granted? = model_id not in service_alias_ids
-
-    result =
-      if granted? do
-        Providers.grant_model_to_service(service_id, model_id)
-      else
-        Providers.revoke_model_from_service(service_id, model_id)
-      end
-
-    case result do
-      {:ok, _} ->
-        audit(socket, "service.model_access_toggle", "service", service_id, %{
-          "model_id" => model_id,
-          "granted" => granted?
-        })
-
-        # Surgical refresh: only granted_models changes here.
-        granted_models =
-          from(sma in ServiceModel, select: {sma.service_id, sma.model_id})
-          |> Repo.all()
-          |> Enum.group_by(fn {sid, _} -> sid end, fn {_, mid} -> mid end)
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Modelos actualizados.")
-         |> assign(:granted_models, granted_models)}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
+    with {:ok, service_id} <- cast_id(service_id),
+         {:ok, model_id} <- cast_id(model_id) do
+      toggle_service_model(socket, service_id, model_id)
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
     end
   end
+
+  def handle_event("toggle_model", _params, socket), do: {:noreply, socket}
 
   ## Events — supervisor management -----------------------------------------
 
@@ -696,40 +692,52 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   def handle_event("add_supervisor", %{"service-id" => service_id, "user-id" => user_id}, socket) do
-    case Accounts.add_service_supervisor(service_id, user_id) do
-      {:ok, _supervisor} ->
-        audit(socket, "service_supervisor.add", "service", service_id, %{"user_id" => user_id})
+    # Both ids come from the client: cast + existence check BEFORE the insert,
+    # so a forged/non-UUID payload is a flash and never a CastError or a
+    # ForeignKeyViolation (W6 adds the FK constraint on `service_supervisors`,
+    # and its changeset error lands in the same `{:error, changeset}` branch).
+    with {:ok, service_id} <- cast_id(service_id),
+         {:ok, user_id} <- cast_id(user_id),
+         %Service{} <- Accounts.get_service(service_id),
+         %{} <- Accounts.get_user(user_id),
+         {:ok, _supervisor} <- Accounts.add_service_supervisor(service_id, user_id) do
+      audit(socket, "service_supervisor.add", "service", service_id, %{"user_id" => user_id})
 
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Supervisor added."))
-         |> assign(:supervisor_search_results, [])
-         |> assign(:supervisor_search_query, "")
-         |> load_services()}
-
-      {:error, _} ->
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Supervisor added."))
+       |> assign(:supervisor_search_results, [])
+       |> assign(:supervisor_search_query, "")
+       |> load_services()}
+    else
+      _ ->
         {:noreply, put_flash(socket, :error, gettext("Could not add the supervisor."))}
     end
   end
+
+  def handle_event("add_supervisor", _params, socket), do: {:noreply, socket}
 
   def handle_event(
         "remove_supervisor",
         %{"service-id" => service_id, "user-id" => user_id},
         socket
       ) do
-    case Accounts.remove_service_supervisor(service_id, user_id) do
-      {:ok, _} ->
-        audit(socket, "service_supervisor.remove", "service", service_id, %{"user_id" => user_id})
+    with {:ok, service_id} <- cast_id(service_id),
+         {:ok, user_id} <- cast_id(user_id),
+         {:ok, _} <- Accounts.remove_service_supervisor(service_id, user_id) do
+      audit(socket, "service_supervisor.remove", "service", service_id, %{"user_id" => user_id})
 
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Supervisor removed."))
-         |> load_services()}
-
-      {:error, _} ->
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Supervisor removed."))
+       |> load_services()}
+    else
+      _ ->
         {:noreply, put_flash(socket, :error, gettext("Could not remove the supervisor."))}
     end
   end
+
+  def handle_event("remove_supervisor", _params, socket), do: {:noreply, socket}
 
   defp service_supervisor_user_ids(socket, service_id) do
     case Map.get(socket.assigns.supervisors_map, service_id, []) do
@@ -739,6 +747,72 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   ## Private helpers — save ----------------------------------------------
+
+  # Client-supplied ids arrive as strings: cast before ANY DB call so a
+  # malformed id becomes a flash / empty state instead of an
+  # `Ecto.Query.CastError` that takes the whole LiveView down.
+  defp cast_id(id) when is_binary(id), do: Ecto.UUID.cast(id)
+  defp cast_id(_id), do: :error
+
+  defp delete_service_row(socket, service) do
+    case Accounts.delete_service(service) do
+      {:ok, _} ->
+        audit(socket, "service.delete", "service", service.id, %{"name" => service.name})
+
+        {:noreply,
+         socket
+         |> put_flash(:info, gettext("Service deleted."))
+         |> assign(:delete_target_id, nil)
+         |> assign(:delete_target_name, nil)
+         |> load_services()}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        msg =
+          changeset.errors
+          |> Enum.map(fn {field, {message, _}} -> "#{field} #{message}" end)
+          |> Enum.join(", ")
+
+        {:noreply, put_flash(socket, :error, gettext("Could not delete: %{reason}", reason: msg))}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Could not delete the service."))}
+    end
+  end
+
+  defp toggle_service_model(socket, service_id, model_id) do
+    service_alias_ids = Map.get(socket.assigns.granted_models, service_id, [])
+
+    granted? = model_id not in service_alias_ids
+
+    result =
+      if granted? do
+        Providers.grant_model_to_service(service_id, model_id)
+      else
+        Providers.revoke_model_from_service(service_id, model_id)
+      end
+
+    case result do
+      {:ok, _} ->
+        audit(socket, "service.model_access_toggle", "service", service_id, %{
+          "model_id" => model_id,
+          "granted" => granted?
+        })
+
+        # Surgical refresh: only granted_models changes here.
+        granted_models =
+          from(sma in ServiceModel, select: {sma.service_id, sma.model_id})
+          |> Repo.all()
+          |> Enum.group_by(fn {sid, _} -> sid end, fn {_, mid} -> mid end)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Modelos actualizados.")
+         |> assign(:granted_models, granted_models)}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
+    end
+  end
 
   # Keys activas del servicio + consumo por key, cargadas solo al abrir el panel.
   defp load_service_keys(socket, service_id) do
@@ -775,30 +849,31 @@ defmodule TokengateWeb.ServicesLive do
   defp save_service(socket, nil, _service_params), do: {:noreply, socket}
 
   defp save_service(socket, service_id, service_params) when is_binary(service_id) do
-    service = Accounts.get_service!(service_id)
+    with {:ok, service_id} <- cast_id(service_id),
+         %Service{} = service <- Accounts.get_service(service_id) do
+      case Accounts.update_service(service, service_params) do
+        {:ok, updated} ->
+          # Only fields the changeset actually accepts may be audited: a
+          # `Map.take` over params that `@permitted` never casts logs keys the
+          # service does not have (`status`, `default_*_limit`) and hides the
+          # ones it does.
+          audit(socket, "service.update", "service", updated.id, %{
+            "name" => updated.name,
+            "changes" => Map.take(service_params, @service_audit_fields)
+          })
 
-    case Accounts.update_service(service, service_params) do
-      {:ok, updated} ->
-        audit(socket, "service.update", "service", updated.id, %{
-          "name" => updated.name,
-          "changes" =>
-            Map.take(service_params, [
-              "name",
-              "status",
-              "default_concurrency_limit",
-              "default_rpm_limit"
-            ])
-        })
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Service updated."))
+           |> assign(:form, nil)
+           |> assign(:editing_service_id, nil)
+           |> load_services()}
 
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Service updated."))
-         |> assign(:form, nil)
-         |> assign(:editing_service_id, nil)
-         |> load_services()}
-
-      {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :service))}
+        {:error, changeset} ->
+          {:noreply, assign(socket, :form, to_form(changeset, as: :service))}
+      end
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Service not found."))}
     end
   end
 
@@ -974,7 +1049,7 @@ defmodule TokengateWeb.ServicesLive do
             new_token={@new_token}
             create_event="create_service_key"
             revoke_event="revoke_service_key"
-            reactivate_event="reactivate_service_key"
+            hide_event="hide_service_key"
             dismiss_event="dismiss_new_key_token"
             sticky_event="clear_service_sticky_routes"
             rename_event="rename_service_key"
@@ -1183,9 +1258,11 @@ defmodule TokengateWeb.ServicesLive do
           cancel_button_id="cancel-delete-service"
           warning_intro={gettext("Will be permanently erased:")}
           warning_items={[
-            gettext("The service API key"),
-            gettext("The models granted to the service"),
-            gettext("The assigned supervisors")
+            gettext("Sus claves API (todas las activas y revocadas)"),
+            gettext("Los modelos otorgados al servicio"),
+            gettext("Los supervisores asignados"),
+            gettext("Sus top-ups de crédito"),
+            gettext("Todo su historial de peticiones (request_logs): la FK es ON DELETE CASCADE")
           ]}
         />
 

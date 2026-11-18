@@ -49,6 +49,9 @@ defmodule TokengateWeb.TopupsLive do
         |> stream_configure(:topups, dom_id: &"topup-#{&1.id}")
         |> assign(:form, nil)
         |> assign(:editing_topup_id, nil)
+        # One-shot token for the top-up form: the double-submit guard. Minted
+        # when the modal opens and consumed by the first successful save.
+        |> assign(:form_token, nil)
         |> assign(:owner_kind, "user")
         |> assign(:owner_query, "")
         |> assign(:owner_results, [])
@@ -163,6 +166,7 @@ defmodule TokengateWeb.TopupsLive do
      |> assign(:editing_topup_id, nil)
      |> assign(:selected_owner, nil)
      |> assign(:owner_query, "")
+     |> assign(:form_token, Ecto.UUID.generate())
      # Se ofrecen los primeros sujetos sin escribir nada: el selector tiene que
      # ser usable de un clic.
      |> assign(:owner_results, search_users(""))
@@ -173,19 +177,30 @@ defmodule TokengateWeb.TopupsLive do
   end
 
   def handle_event("edit_topup", %{"id" => id}, socket) do
-    topup = Topups.get_topup!(id)
-
-    {:noreply,
-     socket
-     |> assign(:editing_topup_id, topup.id)
-     |> assign(:selected_owner, nil)
-     |> assign(:owner_query, "")
-     |> assign(:owner_results, [])
-     |> assign(:form, to_form(Topups.change_topup(topup), as: :topup))}
+    with {:ok, id} <- cast_id(id),
+         %Topup{} = topup <- Topups.get_topup(id) do
+      {:noreply,
+       socket
+       |> assign(:editing_topup_id, topup.id)
+       |> assign(:form_token, Ecto.UUID.generate())
+       |> assign(:selected_owner, nil)
+       |> assign(:owner_query, "")
+       |> assign(:owner_results, [])
+       |> assign(:form, to_form(Topups.change_topup(topup), as: :topup))}
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Top-up no encontrado."))}
+    end
   end
 
+  def handle_event("edit_topup", _params, socket), do: {:noreply, socket}
+
   def handle_event("cancel_topup", _params, socket) do
-    {:noreply, socket |> assign(:form, nil) |> assign(:editing_topup_id, nil)}
+    {:noreply,
+     socket
+     |> assign(:form, nil)
+     |> assign(:editing_topup_id, nil)
+     # Dropping the token also drops a submit that was already in flight.
+     |> assign(:form_token, nil)}
   end
 
   # El formulario ofrece un solo dueño: usuario o servicio.
@@ -200,37 +215,149 @@ defmodule TokengateWeb.TopupsLive do
      |> assign(:selected_owner, nil)}
   end
 
-  def handle_event("search_owner", %{"q" => query}, socket) do
+  # The owner search input carries its own `phx-change`, so LiveView ships the
+  # typed value under the `value` key — NOT under the input's `name`, which only
+  # travels as `_target`. The old clause expected `%{"q" => _}` and never
+  # matched a real payload, so the LiveView died on the first keystroke. The
+  # catch-all closes the family: an unexpected payload is ignored.
+  def handle_event("search_owner", %{"value" => query}, socket) when is_binary(query) do
     results =
       case socket.assigns.owner_kind do
         "user" -> search_users(query)
         "service" -> search_services(query)
+        _ -> []
       end
 
     {:noreply, socket |> assign(:owner_query, query) |> assign(:owner_results, results)}
   end
 
-  def handle_event("select_owner", %{"id" => id}, socket) do
-    owner =
-      case socket.assigns.owner_kind do
-        "user" -> Accounts.get_user(id)
-        "service" -> Accounts.get_service(id)
-      end
+  def handle_event("search_owner", _params, socket), do: {:noreply, socket}
 
-    {:noreply,
-     socket
-     |> assign(:selected_owner, owner && {socket.assigns.owner_kind, owner})
-     |> assign(:owner_results, [])
-     |> assign(:owner_query, owner_name(owner))}
+  def handle_event("select_owner", %{"id" => id}, socket) do
+    case owner_for(socket.assigns.owner_kind, id) do
+      nil ->
+        {:noreply, socket}
+
+      owner ->
+        {:noreply,
+         socket
+         |> assign(:selected_owner, {socket.assigns.owner_kind, owner})
+         |> assign(:owner_results, [])
+         |> assign(:owner_query, owner_name(owner))}
+    end
   end
 
-  def handle_event("save_topup", %{"topup" => params}, socket) do
+  def handle_event("select_owner", _params, socket), do: {:noreply, socket}
+
+  # A double click on Guardar (or a submit queued right behind the first one)
+  # used to insert TWO top-ups. The modal carries a one-shot token: the first
+  # save consumes it, so every later submit of the same form is a no-op.
+  def handle_event("save_topup", %{"topup" => params} = payload, socket) do
+    if valid_form_token?(socket, payload["idempotency_key"]) do
+      save_topup(socket, params)
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("save_topup", _params, socket), do: {:noreply, socket}
+
+  # Deactivate/reactivate: stop granting the remaining balance (what was already
+  # consumed stays visible in the Consumption column) until reactivated.
+  def handle_event("toggle_topup_status", %{"id" => id}, socket) do
+    with {:ok, id} <- cast_id(id),
+         %Topup{} = topup <- Topups.get_topup(id) do
+      {result, message} =
+        case topup.status do
+          "active" ->
+            {Topups.revoke(topup),
+             gettext("Top-up deactivated — the remaining balance stops being granted.")}
+
+          _ ->
+            {Topups.reactivate(topup), gettext("Top-up reactivated.")}
+        end
+
+      case result do
+        {:ok, _} ->
+          audit(socket, "topup.toggle_status", "topup", topup.id, %{
+            "status" => if(topup.status == "active", do: "inactive", else: "active")
+          })
+
+          {:noreply, socket |> load_topups() |> put_flash(:info, message)}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not change the status."))}
+      end
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Top-up no encontrado."))}
+    end
+  end
+
+  def handle_event("toggle_topup_status", _params, socket), do: {:noreply, socket}
+
+  def handle_event("revoke_topup", %{"id" => id}, socket) do
+    with {:ok, id} <- cast_id(id),
+         %Topup{} = topup <- Topups.get_topup(id) do
+      case Topups.revoke(topup) do
+        {:ok, _} ->
+          audit(socket, "topup.revoke", "topup", topup.id, %{"label" => topup.label})
+
+          {:noreply, socket |> load_topups() |> put_flash(:info, gettext("Top-up revoked."))}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not revoke."))}
+      end
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Top-up no encontrado."))}
+    end
+  end
+
+  def handle_event("revoke_topup", _params, socket), do: {:noreply, socket}
+
+  ## Helpers ----------------------------------------------------------------
+
+  # Client ids arrive as strings: cast before ANY DB call so a malformed id is
+  # a flash / no-op instead of an `Ecto.Query.CastError` that kills the view.
+  defp cast_id(id) when is_binary(id), do: Ecto.UUID.cast(id)
+  defp cast_id(_id), do: :error
+
+  defp owner_for(kind, id) do
+    case cast_id(id) do
+      {:ok, uuid} ->
+        case kind do
+          "user" -> Accounts.get_user(uuid)
+          "service" -> Accounts.get_service(uuid)
+          _ -> nil
+        end
+
+      :error ->
+        nil
+    end
+  end
+
+  # The one-shot submit token. Both sides must be present: a socket without an
+  # open form (nil) never accepts a payload, even a forged one.
+  defp valid_form_token?(socket, token) do
+    current = socket.assigns[:form_token]
+    is_binary(token) and is_binary(current) and token == current
+  end
+
+  # Writes the top-up only once per form-open (token already validated). The
+  # token is consumed on success and ROTATED on a changeset error, so the form
+  # the user corrects can be submitted again.
+  defp save_topup(socket, params) do
     attrs = topup_attrs(params, socket)
 
     result =
       case socket.assigns.editing_topup_id do
-        nil -> Topups.create(attrs)
-        id -> Topups.edit_topup(Topups.get_topup!(id), attrs)
+        nil ->
+          Topups.create(attrs)
+
+        id ->
+          case Topups.get_topup(id) do
+            nil -> {:error, :not_found}
+            topup -> Topups.edit_topup(topup, attrs)
+          end
       end
 
     case result do
@@ -247,57 +374,23 @@ defmodule TokengateWeb.TopupsLive do
          socket
          |> assign(:form, nil)
          |> assign(:editing_topup_id, nil)
+         |> assign(:form_token, nil)
          |> load_topups()
          |> put_flash(:info, gettext("Top-up saved."))}
 
-      {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :topup))}
-    end
-  end
-
-  # Desactivar/reactivar: dejar de otorgar el saldo restante (lo ya consumido
-  # sigue visible en la columna Consumo) hasta reactivar.
-  def handle_event("toggle_topup_status", %{"id" => id}, socket) do
-    topup = Topups.get_topup!(id)
-
-    {result, message} =
-      case topup.status do
-        "active" ->
-          {Topups.revoke(topup),
-           gettext("Top-up deactivated — the remaining balance stops being granted.")}
-
-        _ ->
-          {Topups.reactivate(topup), gettext("Top-up reactivated.")}
-      end
-
-    case result do
-      {:ok, _} ->
-        audit(socket, "topup.toggle_status", "topup", topup.id, %{
-          "status" => if(topup.status == "active", do: "inactive", else: "active")
-        })
-
-        {:noreply, socket |> load_topups() |> put_flash(:info, message)}
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply,
+         socket
+         |> assign(:form_token, Ecto.UUID.generate())
+         |> assign(:form, to_form(changeset, as: :topup))}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Could not change the status."))}
+        {:noreply,
+         socket
+         |> assign(:form_token, Ecto.UUID.generate())
+         |> put_flash(:error, gettext("Top-up no encontrado."))}
     end
   end
-
-  def handle_event("revoke_topup", %{"id" => id}, socket) do
-    topup = Topups.get_topup!(id)
-
-    case Topups.revoke(topup) do
-      {:ok, _} ->
-        audit(socket, "topup.revoke", "topup", topup.id, %{"label" => topup.label})
-
-        {:noreply, socket |> load_topups() |> put_flash(:info, gettext("Top-up revoked."))}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Could not revoke."))}
-    end
-  end
-
-  ## Helpers ----------------------------------------------------------------
 
   # El dueño sale del selector (usuario/servicio) o del top-up que se edita.
   defp topup_attrs(params, socket) do
@@ -326,8 +419,9 @@ defmodule TokengateWeb.TopupsLive do
   defp editing_owner(nil), do: {nil, nil}
 
   defp editing_owner(id) do
-    case Topups.get_topup!(id) do
+    case Topups.get_topup(id) do
       %{user_id: uid, service_id: sid} -> {uid, sid}
+      nil -> {nil, nil}
     end
   end
 

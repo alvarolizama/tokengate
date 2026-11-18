@@ -239,6 +239,60 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     assert html =~ model_.name
   end
 
+  # W2 lifecycle: `has_one :api_key` could return the revoked (or hidden) row.
+  # The card must show the service's ACTIVE keys instead.
+  test "the card shows the ACTIVE key after a revoke, never the old one", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+    service = supervised_service(user, %{"name" => "Ciclo de vida"})
+
+    {:ok, first, _token} = Accounts.generate_service_api_key(service)
+    {:ok, replacement, _new_token} = Accounts.revoke_and_replace_api_key(first)
+
+    conn = login(conn, user, password)
+    {:ok, view, html} = live(conn, ~p"/services/supervised")
+
+    assert html =~ replacement.key_prefix
+    refute html =~ first.key_prefix
+    assert render(element(view, "#supervised-service-#{service.id}")) =~ "active"
+  end
+
+  test "a soft-hidden key disappears from the card", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+    service = supervised_service(user, %{"name" => "Sin clave"})
+
+    {:ok, key, _token} = Accounts.generate_service_api_key(service)
+    {:ok, _hidden} = Accounts.hide_api_key(key)
+
+    conn = login(conn, user, password)
+    {:ok, _view, html} = live(conn, ~p"/services/supervised")
+
+    assert html =~ "Sin API key"
+    refute html =~ key.key_prefix
+  end
+
+  test "several active keys show the count badge", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+    service = supervised_service(user, %{"name" => "Dos claves"})
+
+    for label <- ["una", "otra"] do
+      {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      {:ok, _} =
+        Accounts.create_api_key(%{
+          "subject_type" => "service",
+          "service_id" => service.id,
+          "key_hash" => key_hash,
+          "key_prefix" => key_prefix,
+          "label" => label
+        })
+    end
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/services/supervised")
+
+    assert render(element(view, "#supervised-service-#{service.id}")) =~ "2 claves"
+  end
+
   test "service with no models shows the empty models message", %{conn: conn} do
     %{user: user, password: password} = register("user")
     service = supervised_service(user)
