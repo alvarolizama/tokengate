@@ -13,8 +13,6 @@ defmodule TokengateWeb.StatsLive.Model do
   use TokengateWeb, :html
 
   import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
-  import TokengateWeb.StatsHelpers, only: [sort_icon: 1]
-
   alias TokengateWeb.StatsHelpers, as: Stats
 
   attr :model, :any, required: true
@@ -226,174 +224,108 @@ defmodule TokengateWeb.StatsLive.Model do
               <% provider_total = Stats.breakdown_total(@breakdown_provider) %>
               <% provider_rows =
                 Stats.shown_rows(@breakdown_provider, "model-providers", @shown_counts, @per_page) %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm" id="model-providers">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>
-                        <button
-                          phx-click="sort"
-                          phx-value-field="provider_name"
-                          class="flex items-center gap-1 hover:text-primary"
-                        >
-                          {gettext("Provider / Model")}
-                          <.sort_icon
-                            field={:provider_name}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="request_count"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Requests")}
-                          <.sort_icon
-                            field={:request_count}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="cost_usd"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Cost")}
-                          <.sort_icon
-                            field={:cost_usd}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="prompt_tokens"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Tokens in")}
-                          <.sort_icon
-                            field={:prompt_tokens}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="completion_tokens"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Tokens out")}
-                          <.sort_icon
-                            field={:completion_tokens}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th
-                        class="text-right"
-                        title={gettext("Percentage of prompt tokens with cache hit")}
-                      >
-                        {gettext("Cache %")}
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="avg_tps"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("TPS")}
-                          <.sort_icon
-                            field={:avg_tps}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr
-                      :for={{row, idx} <- Enum.with_index(provider_rows, 1)}
-                      id={"bd-provider-#{row.model_provider_id || "unknown"}"}
-                    >
-                      <td class="text-base-content/60">{idx}</td>
-                      <td>
-                        <div class="flex items-center gap-2">
-                          <Stats.provider_logo logo_url={row.provider_logo_url} />
-                          <div class="font-medium">
-                            {Stats.provider_label(row.provider_name)}{if row.provider_model,
-                              do: " · #{row.provider_model}"}
-                          </div>
-                        </div>
-                        <div
-                          :if={row.credential_name}
-                          class="text-xs text-base-content/60"
-                        >
-                          {row.credential_name}
-                        </div>
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.cache_hit_pct(
-                          row.prompt_tokens,
-                          Map.get(row, :cache_read_tokens, 0)
-                        )}
-                      </td>
-                      <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                    </tr>
-                  </tbody>
-                  <tfoot>
-                    <tr class="font-bold bg-base-200">
-                      <td colspan="2">
-                        {gettext("Total · %{count} providers",
-                          count: Stats.distinct_providers(@breakdown_provider)
-                        )}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(provider_total.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(provider_total.cost_usd)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(provider_total.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(provider_total.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.cache_hit_pct(
-                          provider_total.prompt_tokens,
-                          provider_total.cache_read_tokens
-                        )}
-                      </td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                </table>
+              <div class="mt-3 overflow-x-auto">
+                <.table
+                  id="model-providers"
+                  rows={Enum.with_index(provider_rows, 1)}
+                  row_id={fn {row, _idx} -> "bd-provider-#{row.model_provider_id || "unknown"}" end}
+                  sort_field={@sort_field}
+                  sort_direction={@sort_direction}
+                  sort_event="sort"
+                >
+                  <:col :let={{_row, idx}} label="#" align="center">
+                    <span class="text-base-content/60">{idx}</span>
+                  </:col>
+                  <:col :let={{row, _idx}} label={gettext("Provider / Model")} field={:provider_name}>
+                    <div class="flex items-center gap-2">
+                      <Stats.provider_logo logo_url={row.provider_logo_url} />
+                      <div class="font-medium">
+                        {Stats.provider_label(row.provider_name)}{if row.provider_model,
+                          do: " · #{row.provider_model}"}
+                      </div>
+                    </div>
+                    <div :if={row.credential_name} class="text-xs text-base-content/60">
+                      {row.credential_name}
+                    </div>
+                  </:col>
+                  <:col
+                    :let={{row, _idx}}
+                    label={gettext("Requests")}
+                    field={:request_count}
+                    align="right"
+                  >
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                  </:col>
+                  <:col :let={{row, _idx}} label={gettext("Cost")} field={:cost_usd} align="right">
+                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  </:col>
+                  <:col
+                    :let={{row, _idx}}
+                    label={gettext("Tokens in")}
+                    field={:prompt_tokens}
+                    align="right"
+                  >
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
+                  </:col>
+                  <:col
+                    :let={{row, _idx}}
+                    label={gettext("Tokens out")}
+                    field={:completion_tokens}
+                    align="right"
+                  >
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.completion_tokens)}</span>
+                  </:col>
+                  <:col
+                    :let={{row, _idx}}
+                    label={gettext("Cache %")}
+                    align="right"
+                    tooltip={gettext("Percentage of prompt tokens with cache hit")}
+                  >
+                    <span class="font-mono tabular-nums">
+                      {Stats.cache_hit_pct(row.prompt_tokens, Map.get(row, :cache_read_tokens, 0))}
+                    </span>
+                  </:col>
+                  <:col :let={{row, _idx}} label={gettext("TPS")} field={:avg_tps} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                  </:col>
+                </.table>
+              </div>
+              <div
+                id="model-providers-totals"
+                class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+              >
+                <span class="font-semibold text-base-content/70">
+                  {gettext("Total · %{count} providers",
+                    count: Stats.distinct_providers(@breakdown_provider)
+                  )}
+                </span>
+                <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                  <span>
+                    <span class="text-base-content/40">{gettext("Requests")}</span>
+                    <span class="ml-1">{Stats.format_number(provider_total.request_count)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Cost")}</span>
+                    <span class="ml-1">${Stats.format_decimal(provider_total.cost_usd)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                    <span class="ml-1">{Stats.format_number(provider_total.prompt_tokens)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                    <span class="ml-1">{Stats.format_number(provider_total.completion_tokens)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Cache %")}</span>
+                    <span class="ml-1">
+                      {Stats.cache_hit_pct(
+                        provider_total.prompt_tokens,
+                        provider_total.cache_read_tokens
+                      )}
+                    </span>
+                  </span>
+                </div>
               </div>
               <Stats.show_more
                 key="model-providers"
@@ -418,105 +350,51 @@ defmodule TokengateWeb.StatsLive.Model do
               <% group_total = Stats.breakdown_total(@breakdown_group) %>
               <% group_rows =
                 Stats.shown_rows(@breakdown_group, "model-groups", @shown_counts, @per_page) %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm" id="model-groups">
-                  <thead>
-                    <tr>
-                      <th>
-                        <button
-                          phx-click="sort"
-                          phx-value-field="group_name"
-                          class="flex items-center gap-1 hover:text-primary"
-                        >
-                          {gettext("Limit profile")}
-                          <.sort_icon
-                            field={:group_name}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="request_count"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Requests")}
-                          <.sort_icon
-                            field={:request_count}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="cost_usd"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Cost")}
-                          <.sort_icon
-                            field={:cost_usd}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="avg_tps"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("TPS")}
-                          <.sort_icon
-                            field={:avg_tps}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr
-                      :for={row <- group_rows}
-                      id={"bd-model-group-#{row.group_id}"}
-                    >
-                      <td class="font-medium">
-                        <Stats.group_link
-                          group_id={row.group_id}
-                          name={row.group_name}
-                          period={@period}
-                          id={"bd-model-group-link-#{row.group_id}"}
-                        />
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </td>
-                      <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                    </tr>
-                  </tbody>
-                  <tfoot>
-                    <tr class="font-bold bg-base-200">
-                      <td>
-                        {gettext("Total · %{count} limit profiles", count: length(@breakdown_group))}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(group_total.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(group_total.cost_usd)}
-                      </td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                </table>
+              <div class="mt-3 overflow-x-auto">
+                <.table
+                  id="model-groups"
+                  rows={group_rows}
+                  row_id={fn row -> "bd-model-group-#{row.group_id}" end}
+                  sort_field={@sort_field}
+                  sort_direction={@sort_direction}
+                  sort_event="sort"
+                >
+                  <:col :let={row} label={gettext("Limit profile")} field={:group_name}>
+                    <Stats.group_link
+                      group_id={row.group_id}
+                      name={row.group_name}
+                      period={@period}
+                      id={"bd-model-group-link-#{row.group_id}"}
+                    />
+                  </:col>
+                  <:col :let={row} label={gettext("Requests")} field={:request_count} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
+                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                  </:col>
+                </.table>
+              </div>
+              <div
+                id="model-groups-totals"
+                class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+              >
+                <span class="font-semibold text-base-content/70">
+                  {gettext("Total · %{count} limit profiles", count: length(@breakdown_group))}
+                </span>
+                <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                  <span>
+                    <span class="text-base-content/40">{gettext("Requests")}</span>
+                    <span class="ml-1">{Stats.format_number(group_total.request_count)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Cost")}</span>
+                    <span class="ml-1">${Stats.format_decimal(group_total.cost_usd)}</span>
+                  </span>
+                </div>
               </div>
               <Stats.show_more
                 key="model-groups"
@@ -542,129 +420,59 @@ defmodule TokengateWeb.StatsLive.Model do
               <% member_total = Stats.breakdown_total(@breakdown_member) %>
               <% member_rows =
                 Stats.shown_rows(@breakdown_member, "model-members", @shown_counts, @per_page) %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm" id="model-members">
-                  <thead>
-                    <tr>
-                      <th>
-                        <button
-                          phx-click="sort"
-                          phx-value-field="group_name"
-                          class="flex items-center gap-1 hover:text-primary"
-                        >
-                          {gettext("Limit profile")}
-                          <.sort_icon
-                            field={:group_name}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th>
-                        <button
-                          phx-click="sort"
-                          phx-value-field="user_email"
-                          class="flex items-center gap-1 hover:text-primary"
-                        >
-                          {gettext("User")}
-                          <.sort_icon
-                            field={:user_email}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="request_count"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Requests")}
-                          <.sort_icon
-                            field={:request_count}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="cost_usd"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Cost")}
-                          <.sort_icon
-                            field={:cost_usd}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="avg_tps"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("TPS")}
-                          <.sort_icon
-                            field={:avg_tps}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr
-                      :for={row <- member_rows}
-                      id={"bd-model-member-#{row.group_member_id}"}
+              <div class="mt-3 overflow-x-auto">
+                <.table
+                  id="model-members"
+                  rows={member_rows}
+                  row_id={fn row -> "bd-model-member-#{row.group_member_id}" end}
+                  sort_field={@sort_field}
+                  sort_direction={@sort_direction}
+                  sort_event="sort"
+                >
+                  <:col :let={row} label={gettext("Limit profile")} field={:group_name}>
+                    <Stats.group_link
+                      group_id={row.group_id}
+                      name={row.group_name}
+                      period={@period}
+                      id={"bd-model-member-group-#{row.group_member_id}"}
+                    />
+                  </:col>
+                  <:col :let={row} label={gettext("User")} field={:user_email}>
+                    <.link
+                      navigate={~p"/stats/users/#{row.user_id}"}
+                      class="link link-hover font-mono text-sm"
                     >
-                      <td>
-                        <Stats.group_link
-                          group_id={row.group_id}
-                          name={row.group_name}
-                          period={@period}
-                          id={"bd-model-member-group-#{row.group_member_id}"}
-                        />
-                      </td>
-                      <td class="font-mono text-sm">
-                        <.link
-                          navigate={~p"/stats/users/#{row.user_id}"}
-                          class="link link-hover"
-                        >
-                          {row.user_email}
-                        </.link>
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </td>
-                      <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                    </tr>
-                  </tbody>
-                  <tfoot>
-                    <tr class="font-bold bg-base-200">
-                      <td colspan="2">
-                        {gettext("Total · %{count} users",
-                          count: Stats.distinct_users(@breakdown_member)
-                        )}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(member_total.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(member_total.cost_usd)}
-                      </td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                </table>
+                      {row.user_email}
+                    </.link>
+                  </:col>
+                  <:col :let={row} label={gettext("Requests")} field={:request_count} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
+                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                  </:col>
+                </.table>
+              </div>
+              <div
+                id="model-members-totals"
+                class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+              >
+                <span class="font-semibold text-base-content/70">
+                  {gettext("Total · %{count} users", count: Stats.distinct_users(@breakdown_member))}
+                </span>
+                <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                  <span>
+                    <span class="text-base-content/40">{gettext("Requests")}</span>
+                    <span class="ml-1">{Stats.format_number(member_total.request_count)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Cost")}</span>
+                    <span class="ml-1">${Stats.format_decimal(member_total.cost_usd)}</span>
+                  </span>
+                </div>
               </div>
               <Stats.show_more
                 key="model-members"

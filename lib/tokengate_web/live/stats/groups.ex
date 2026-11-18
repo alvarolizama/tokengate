@@ -16,8 +16,6 @@ defmodule TokengateWeb.StatsLive.Groups do
       format_hit_rate: 1
     ]
 
-  import TokengateWeb.StatsHelpers, only: [sort_icon: 1]
-
   attr :metrics, :any, required: true
   attr :breakdown_group, :any, required: true
   attr :breakdown_member, :any, required: true
@@ -240,163 +238,88 @@ defmodule TokengateWeb.StatsLive.Groups do
                     @shown_counts,
                     @per_page
                   ) %>
-                <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm" id="group-models">
-                    <thead>
-                      <tr>
-                        <th>
-                          <button
-                            phx-click="sort"
-                            phx-value-field="model_name"
-                            class="flex items-center gap-1 hover:text-primary"
-                          >
-                            {gettext("Model")}
-                            <.sort_icon
-                              field={:model_name}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="request_count"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Requests")}
-                            <.sort_icon
-                              field={:request_count}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="cost_usd"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Cost")}
-                            <.sort_icon
-                              field={:cost_usd}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="prompt_tokens"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Tokens in")}
-                            <.sort_icon
-                              field={:prompt_tokens}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="completion_tokens"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Tokens out")}
-                            <.sort_icon
-                              field={:completion_tokens}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th
-                          class="text-right"
-                          title={gettext("Percentage of prompt tokens with cache hit")}
-                        >
-                          {gettext("Cache %")}
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="avg_tps"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("TPS")}
-                            <.sort_icon
-                              field={:avg_tps}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        :for={row <- model_rows}
-                        id={"bd-group-model-#{row.model_id || "unknown"}"}
-                      >
-                        <td class="font-medium">
-                          <%= if row.model_id do %>
-                            <.link
-                              patch={~p"/stats/models?period=#{@period}&model_id=#{row.model_id}"}
-                              class="link link-hover"
-                            >{row.model_name}</.link>
-                          <% else %>
-                            {row.model_name}
-                          <% end %>
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(row.cost_usd)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.prompt_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.cache_hit_pct(
-                            row.prompt_tokens,
-                            Map.get(row, :cache_read_tokens, 0)
-                          )}
-                        </td>
-                        <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                      </tr>
-                    </tbody>
-                    <tfoot>
-                      <tr class="font-bold bg-base-200">
-                        <td>{gettext("Total · %{count} models", count: length(@breakdown_model))}</td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(model_total.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(model_total.cost_usd)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(model_total.prompt_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(model_total.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.cache_hit_pct(
-                            model_total.prompt_tokens,
-                            model_total.cache_read_tokens
-                          )}
-                        </td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  </table>
+                <div class="mt-3 overflow-x-auto">
+                  <.table
+                    id="group-models"
+                    rows={model_rows}
+                    row_id={fn row -> "bd-group-model-#{row.model_id || "unknown"}" end}
+                    sort_field={@sort_field}
+                    sort_direction={@sort_direction}
+                    sort_event="sort"
+                  >
+                    <:col :let={row} label={gettext("Model")} field={:model_name}>
+                      <%= if row.model_id do %>
+                        <.link
+                          patch={~p"/stats/models?period=#{@period}&model_id=#{row.model_id}"}
+                          class="link link-hover font-medium"
+                        >{row.model_name}</.link>
+                      <% else %>
+                        <span class="font-medium">{row.model_name}</span>
+                      <% end %>
+                    </:col>
+                    <:col :let={row} label={gettext("Requests")} field={:request_count} align="right">
+                      <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                    </:col>
+                    <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
+                      <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    </:col>
+                    <:col :let={row} label={gettext("Tokens in")} field={:prompt_tokens} align="right">
+                      <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
+                    </:col>
+                    <:col
+                      :let={row}
+                      label={gettext("Tokens out")}
+                      field={:completion_tokens}
+                      align="right"
+                    >
+                      <span class="font-mono tabular-nums">{Stats.format_number(row.completion_tokens)}</span>
+                    </:col>
+                    <:col
+                      :let={row}
+                      label={gettext("Cache %")}
+                      align="right"
+                      tooltip={gettext("Percentage of prompt tokens with cache hit")}
+                    >
+                      <span class="font-mono tabular-nums">
+                        {Stats.cache_hit_pct(row.prompt_tokens, Map.get(row, :cache_read_tokens, 0))}
+                      </span>
+                    </:col>
+                    <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">
+                      <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                    </:col>
+                  </.table>
+                </div>
+                <div
+                  id="group-models-totals"
+                  class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+                >
+                  <span class="font-semibold text-base-content/70">
+                    {gettext("Total · %{count} models", count: length(@breakdown_model))}
+                  </span>
+                  <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                    <span>
+                      <span class="text-base-content/40">{gettext("Requests")}</span>
+                      <span class="ml-1">{Stats.format_number(model_total.request_count)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Cost")}</span>
+                      <span class="ml-1">${Stats.format_decimal(model_total.cost_usd)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                      <span class="ml-1">{Stats.format_number(model_total.prompt_tokens)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                      <span class="ml-1">{Stats.format_number(model_total.completion_tokens)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Cache %")}</span>
+                      <span class="ml-1">
+                        {Stats.cache_hit_pct(model_total.prompt_tokens, model_total.cache_read_tokens)}
+                      </span>
+                    </span>
+                  </div>
                 </div>
                 <Stats.show_more
                   key="group-detail-models"
@@ -426,165 +349,89 @@ defmodule TokengateWeb.StatsLive.Groups do
                     @shown_counts,
                     @per_page
                   ) %>
-                <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm" id="group-members">
-                    <thead>
-                      <tr>
-                        <th>
-                          <button
-                            phx-click="sort"
-                            phx-value-field="user_email"
-                            class="flex items-center gap-1 hover:text-primary"
-                          >
-                            {gettext("User")}
-                            <.sort_icon
-                              field={:user_email}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="request_count"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Requests")}
-                            <.sort_icon
-                              field={:request_count}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="cost_usd"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Cost")}
-                            <.sort_icon
-                              field={:cost_usd}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="prompt_tokens"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Tokens in")}
-                            <.sort_icon
-                              field={:prompt_tokens}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="completion_tokens"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Tokens out")}
-                            <.sort_icon
-                              field={:completion_tokens}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th
-                          class="text-right"
-                          title={gettext("Percentage of prompt tokens with cache hit")}
-                        >
-                          {gettext("Cache %")}
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="avg_tps"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("TPS")}
-                            <.sort_icon
-                              field={:avg_tps}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        :for={row <- member_rows}
-                        id={"bd-group-member-#{row.group_member_id}"}
+                <div class="mt-3 overflow-x-auto">
+                  <.table
+                    id="group-members"
+                    rows={member_rows}
+                    row_id={fn row -> "bd-group-member-#{row.group_member_id}" end}
+                    sort_field={@sort_field}
+                    sort_direction={@sort_direction}
+                    sort_event="sort"
+                  >
+                    <:col :let={row} label={gettext("User")} field={:user_email}>
+                      <.link
+                        navigate={~p"/stats/users/#{row.user_id}"}
+                        class="link link-hover font-mono text-sm"
                       >
-                        <td class="font-mono text-sm">
-                          <.link
-                            navigate={~p"/stats/users/#{row.user_id}"}
-                            class="link link-hover"
-                          >
-                            {row.user_email}
-                          </.link>
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(row.cost_usd)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.prompt_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.cache_hit_pct(
-                            row.prompt_tokens,
-                            Map.get(row, :cache_read_tokens, 0)
-                          )}
-                        </td>
-                        <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                      </tr>
-                    </tbody>
-                    <tfoot>
-                      <tr class="font-bold bg-base-200">
-                        <td>
-                          {gettext("Total · %{count} users",
-                            count: Stats.distinct_users(@breakdown_member)
-                          )}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(member_total.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(member_total.cost_usd)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(member_total.prompt_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(member_total.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.cache_hit_pct(
-                            member_total.prompt_tokens,
-                            member_total.cache_read_tokens
-                          )}
-                        </td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  </table>
+                        {row.user_email}
+                      </.link>
+                    </:col>
+                    <:col :let={row} label={gettext("Requests")} field={:request_count} align="right">
+                      <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                    </:col>
+                    <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
+                      <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    </:col>
+                    <:col :let={row} label={gettext("Tokens in")} field={:prompt_tokens} align="right">
+                      <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
+                    </:col>
+                    <:col
+                      :let={row}
+                      label={gettext("Tokens out")}
+                      field={:completion_tokens}
+                      align="right"
+                    >
+                      <span class="font-mono tabular-nums">{Stats.format_number(row.completion_tokens)}</span>
+                    </:col>
+                    <:col
+                      :let={row}
+                      label={gettext("Cache %")}
+                      align="right"
+                      tooltip={gettext("Percentage of prompt tokens with cache hit")}
+                    >
+                      <span class="font-mono tabular-nums">
+                        {Stats.cache_hit_pct(row.prompt_tokens, Map.get(row, :cache_read_tokens, 0))}
+                      </span>
+                    </:col>
+                    <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">
+                      <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                    </:col>
+                  </.table>
+                </div>
+                <div
+                  id="group-members-totals"
+                  class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+                >
+                  <span class="font-semibold text-base-content/70">
+                    {gettext("Total · %{count} users", count: Stats.distinct_users(@breakdown_member))}
+                  </span>
+                  <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                    <span>
+                      <span class="text-base-content/40">{gettext("Requests")}</span>
+                      <span class="ml-1">{Stats.format_number(member_total.request_count)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Cost")}</span>
+                      <span class="ml-1">${Stats.format_decimal(member_total.cost_usd)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                      <span class="ml-1">{Stats.format_number(member_total.prompt_tokens)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                      <span class="ml-1">{Stats.format_number(member_total.completion_tokens)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Cache %")}</span>
+                      <span class="ml-1">
+                        {Stats.cache_hit_pct(
+                          member_total.prompt_tokens,
+                          member_total.cache_read_tokens
+                        )}
+                      </span>
+                    </span>
+                  </div>
                 </div>
                 <Stats.show_more
                   key="group-detail-members"
@@ -633,184 +480,110 @@ defmodule TokengateWeb.StatsLive.Groups do
                   placeholder={gettext("Filter by limit profile…")}
                 />
               </div>
-              <%= if rows == [] do %>
-                <p class="text-sm text-base-content/40 py-6 text-center" id="group-list-empty">
-                  {gettext("No matches.")}
-                </p>
-              <% else %>
-                <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm" id="group-table">
-                    <thead>
-                      <tr>
-                        <th>
-                          <button
-                            phx-click="sort"
-                            phx-value-field="group_name"
-                            class="flex items-center gap-1 hover:text-primary"
-                          >
-                            {gettext("Limit profile")}
-                            <.sort_icon
-                              field={:group_name}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="request_count"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Requests")}
-                            <.sort_icon
-                              field={:request_count}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="cost_usd"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Cost")}
-                            <.sort_icon
-                              field={:cost_usd}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="prompt_tokens"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Tokens in")}
-                            <.sort_icon
-                              field={:prompt_tokens}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="completion_tokens"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("Tokens out")}
-                            <.sort_icon
-                              field={:completion_tokens}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th
-                          class="text-right"
-                          title={gettext("Percentage of prompt tokens with cache hit")}
-                        >
-                          {gettext("Cache %")}
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="avg_tps"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            {gettext("TPS")}
-                            <.sort_icon
-                              field={:avg_tps}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th title={
-                          gettext("Calendar-month spend vs the aggregate cap of its members")
-                        }>
-                          {gettext("Budget · month")}
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr :for={row <- list_rows} id={"bd-group-#{row.group_id}"}>
-                        <td class="font-medium">
-                          <.link
-                            patch={~p"/stats/profiles/#{row.group_id}?period=#{@period}"}
-                            class="link link-hover"
-                          >{row.group_name}</.link>
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(row.cost_usd)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.prompt_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.cache_hit_pct(
-                            row.prompt_tokens,
-                            Map.get(row, :cache_read_tokens, 0)
-                          )}
-                        </td>
-                        <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                        <td class="min-w-[150px]">
-                          <%= if budget = group_budget_for(@group_budgets, row.group_id) do %>
-                            <div class="flex items-center gap-2">
-                              <Stats.budget_bar
-                                compact
-                                spend={budget.monthly_spend_usd}
-                                limit={budget.monthly_limit_usd}
-                                pct={budget.monthly_pct}
-                              />
-                              <Stats.budget_badge pct={budget.monthly_pct} />
-                            </div>
-                          <% else %>
-                            <span class="text-base-content/30">—</span>
-                          <% end %>
-                        </td>
-                      </tr>
-                    </tbody>
-                    <tfoot>
-                      <tr class="font-bold bg-base-200">
-                        <td>{gettext("Total · %{count} limit profiles", count: length(rows))}</td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(group_total.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(group_total.cost_usd)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(group_total.prompt_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(group_total.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.cache_hit_pct(
-                            group_total.prompt_tokens,
-                            group_total.cache_read_tokens
-                          )}
-                        </td>
-                        <td></td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  </table>
+              <div class="mt-3 overflow-x-auto">
+                <.table
+                  id="group-table"
+                  rows={list_rows}
+                  row_id={fn row -> "bd-group-#{row.group_id}" end}
+                  sort_field={@sort_field}
+                  sort_direction={@sort_direction}
+                  sort_event="sort"
+                >
+                  <:col :let={row} label={gettext("Limit profile")} field={:group_name}>
+                    <.link
+                      patch={~p"/stats/profiles/#{row.group_id}?period=#{@period}"}
+                      class="link link-hover font-medium"
+                    >{row.group_name}</.link>
+                  </:col>
+                  <:col :let={row} label={gettext("Requests")} field={:request_count} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
+                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Tokens in")} field={:prompt_tokens} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
+                  </:col>
+                  <:col
+                    :let={row}
+                    label={gettext("Tokens out")}
+                    field={:completion_tokens}
+                    align="right"
+                  >
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.completion_tokens)}</span>
+                  </:col>
+                  <:col
+                    :let={row}
+                    label={gettext("Cache %")}
+                    align="right"
+                    tooltip={gettext("Percentage of prompt tokens with cache hit")}
+                  >
+                    <span class="font-mono tabular-nums">
+                      {Stats.cache_hit_pct(row.prompt_tokens, Map.get(row, :cache_read_tokens, 0))}
+                    </span>
+                  </:col>
+                  <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                  </:col>
+                  <:col
+                    :let={row}
+                    label={gettext("Budget · month")}
+                    tooltip={gettext("Calendar-month spend vs the aggregate cap of its members")}
+                  >
+                    <%= if budget = group_budget_for(@group_budgets, row.group_id) do %>
+                      <div class="flex items-center gap-2 min-w-[150px]">
+                        <Stats.budget_bar
+                          compact
+                          spend={budget.monthly_spend_usd}
+                          limit={budget.monthly_limit_usd}
+                          pct={budget.monthly_pct}
+                        />
+                        <Stats.budget_badge pct={budget.monthly_pct} />
+                      </div>
+                    <% else %>
+                      <span class="text-base-content/30">—</span>
+                    <% end %>
+                  </:col>
+                  <:empty>
+                    <div id="group-list-empty">
+                      <.icon name="hero-magnifying-glass" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                      <p>{gettext("No matches.")}</p>
+                    </div>
+                  </:empty>
+                </.table>
+              </div>
+              <div
+                id="group-table-totals"
+                class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+              >
+                <span class="font-semibold text-base-content/70">
+                  {gettext("Total · %{count} limit profiles", count: length(rows))}
+                </span>
+                <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                  <span>
+                    <span class="text-base-content/40">{gettext("Requests")}</span>
+                    <span class="ml-1">{Stats.format_number(group_total.request_count)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Cost")}</span>
+                    <span class="ml-1">${Stats.format_decimal(group_total.cost_usd)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                    <span class="ml-1">{Stats.format_number(group_total.prompt_tokens)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                    <span class="ml-1">{Stats.format_number(group_total.completion_tokens)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Cache %")}</span>
+                    <span class="ml-1">
+                      {Stats.cache_hit_pct(group_total.prompt_tokens, group_total.cache_read_tokens)}
+                    </span>
+                  </span>
                 </div>
-              <% end %>
+              </div>
               <Stats.show_more
                 key="group-list"
                 id="group-list-more"

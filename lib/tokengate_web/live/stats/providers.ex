@@ -66,78 +66,69 @@ defmodule TokengateWeb.StatsLive.Providers do
                 placeholder={gettext("Filter by provider…")}
               />
             </div>
-            <%= if rows == [] do %>
-              <p class="text-sm text-base-content/40 py-6 text-center" id="provider-list-empty">
-                {gettext("No matches.")}
-              </p>
-            <% else %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm" id="provider-table">
-                  <thead>
-                    <tr>
-                      <th class="w-12">{gettext("Rank")}</th>
-                      <th>{gettext("Provider")}</th>
-                      <th class="text-right">Tier</th>
-                      <th class="text-right">Score</th>
-                      <th class="text-right">Requests</th>
-                      <th class="text-right">{gettext("Failures")}</th>
-                      <th class="text-right">{gettext("Latency")}</th>
-                      <th class="text-right">P95</th>
-                      <th class="text-right">TTFT</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr :for={{row, rank} <- list_rows} id={"provider-ranking-row-#{row.provider_id}"}>
-                      <td>
-                        <Stats.medal rank={rank} />
-                      </td>
-                      <td class="font-medium">
-                        <.link
-                          patch={~p"/stats/providers/#{row.provider_id}?period=#{@period}"}
-                          class="link link-hover inline-flex items-center gap-2"
-                          id={"provider-link-#{row.provider_id}"}
-                        >
-                          <Stats.provider_logo logo_url={row.provider_logo_url} />
-                          {Stats.provider_label(row.provider_name)}
-                          <.icon name="hero-chevron-right" class="w-3.5 h-3.5 text-base-content/40" />
-                        </.link>
-                      </td>
-                      <td class="text-right">
-                        <span class={["badge badge-sm", Stats.tier_badge_class(row.tier)]}>
-                          {row.tier}
-                        </span>
-                      </td>
-                      <td class="text-right font-mono tabular-nums">{row.score || "—"}</td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class={[
-                        "text-right font-mono tabular-nums",
-                        row.error_rate >= 0.05 && "text-error",
-                        row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
-                      ]}>
-                        {Stats.format_percent(row.error_rate)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_ms(row.avg_latency_ms)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_ms(row.p95_latency_ms)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_ms(row.avg_ttft_ms)}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <Stats.show_more
-                key="provider-list"
-                id="provider-list-more"
-                top={length(list_rows)}
-                total={length(rows)}
-              />
-            <% end %>
+            <div class="mt-3 overflow-x-auto">
+              <.table
+                id="provider-table"
+                rows={list_rows}
+                row_id={fn {row, _rank} -> "provider-ranking-row-#{row.provider_id}" end}
+              >
+                <:col :let={{_row, rank}} label={gettext("Rank")} align="center">
+                  <span class="inline-flex w-6 justify-center">
+                    <Stats.medal rank={rank} />
+                  </span>
+                </:col>
+                <:col :let={{row, _rank}} label={gettext("Provider")}>
+                  <.link
+                    patch={~p"/stats/providers/#{row.provider_id}?period=#{@period}"}
+                    class="link link-hover font-medium inline-flex items-center gap-2"
+                    id={"provider-link-#{row.provider_id}"}
+                  >
+                    <Stats.provider_logo logo_url={row.provider_logo_url} />
+                    {Stats.provider_label(row.provider_name)}
+                    <.icon name="hero-chevron-right" class="w-3.5 h-3.5 text-base-content/40" />
+                  </.link>
+                </:col>
+                <:col :let={{row, _rank}} label={gettext("Tier")} align="right">
+                  <span class={["badge badge-sm", Stats.tier_badge_class(row.tier)]}>{row.tier}</span>
+                </:col>
+                <:col :let={{row, _rank}} label={gettext("Score")} align="right">
+                  <span class="font-mono tabular-nums">{row.score || "—"}</span>
+                </:col>
+                <:col :let={{row, _rank}} label={gettext("Requests")} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                </:col>
+                <:col :let={{row, _rank}} label={gettext("Failures")} align="right">
+                  <span class={[
+                    "font-mono tabular-nums",
+                    row.error_rate >= 0.05 && "text-error",
+                    row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
+                  ]}>
+                    {Stats.format_percent(row.error_rate)}
+                  </span>
+                </:col>
+                <:col :let={{row, _rank}} label={gettext("Latency")} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_ms(row.avg_latency_ms)}</span>
+                </:col>
+                <:col :let={{row, _rank}} label={gettext("P95")} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_ms(row.p95_latency_ms)}</span>
+                </:col>
+                <:col :let={{row, _rank}} label={gettext("TTFT")} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_ms(row.avg_ttft_ms)}</span>
+                </:col>
+                <:empty>
+                  <div id="provider-list-empty">
+                    <.icon name="hero-magnifying-glass" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                    <p>{gettext("No matches.")}</p>
+                  </div>
+                </:empty>
+              </.table>
+            </div>
+            <Stats.show_more
+              key="provider-list"
+              id="provider-list-more"
+              top={length(list_rows)}
+              total={length(rows)}
+            />
           <% else %>
             <p class="text-sm text-base-content/40 py-6 text-center">
               {gettext("No data in this period.")}

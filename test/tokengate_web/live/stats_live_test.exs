@@ -586,12 +586,12 @@ defmodule TokengateWeb.StatsLiveTest do
     view = wait_stats_loaded(view)
 
     # La tabla llega de a 10 filas y el pie sigue midiendo el período completo.
-    assert count_rows(view, "#model-providers tbody tr") == 10
+    assert count_rows(view, "#model-providers tr") == 10
     assert has_element?(view, "#model-providers-more")
 
     view |> element("#model-providers-more") |> render_click()
 
-    assert count_rows(view, "#model-providers tbody tr") == 11
+    assert count_rows(view, "#model-providers tr") == 11
     refute has_element?(view, "#model-providers-more")
 
     # Cada tabla lleva su propio conteo: las que caben enteras no ganan botón.
@@ -1480,11 +1480,11 @@ defmodule TokengateWeb.StatsLiveTest do
       view = wait_stats_loaded(view)
 
       # Tabla única (no listado), con buscador y la información básica en columnas.
-      assert has_element?(view, "table#provider-table")
-      assert has_element?(view, "#provider-table tbody tr")
+      assert has_element?(view, "table #provider-table")
+      assert has_element?(view, "#provider-table tr")
       assert has_element?(view, "#provider-list-search")
-      assert has_element?(view, "#provider-table thead th", "Requests")
-      assert has_element?(view, "#provider-table thead th", "Latencia")
+      assert has_element?(view, "#provider-ranking table thead th", "Requests")
+      assert has_element?(view, "#provider-ranking table thead th", "Latencia")
 
       # Podio: medalla (icono) en 1º/2º/3º con su color; el 1º (más requests) manda.
       assert has_element?(
@@ -1555,7 +1555,7 @@ defmodule TokengateWeb.StatsLiveTest do
       |> render_change(%{"value" => "no-existe-este-proveedor"})
 
       assert has_element?(view, "#provider-list-empty")
-      refute has_element?(view, "#provider-table tbody tr")
+      refute has_element?(view, "#provider-table tr")
     end
 
     test "detalle del proveedor: métricas, modelos y quién lo usa", %{conn: conn} do
@@ -1603,12 +1603,12 @@ defmodule TokengateWeb.StatsLiveTest do
 
       # Primera página: 10 filas y el botón para lo que falta. El pie sigue
       # midiendo el período completo, no lo desplegado.
-      assert count_rows(view, "#provider-models tbody tr") == 10
+      assert count_rows(view, "#provider-models tr") == 10
       assert has_element?(view, "#provider-models-more")
 
       view |> element("#provider-models-more") |> render_click()
 
-      assert count_rows(view, "#provider-models tbody tr") == 11
+      assert count_rows(view, "#provider-models tr") == 11
       refute has_element?(view, "#provider-models-more")
 
       # Cada tabla lleva su propia clave: desplegar una no despliega las otras.
@@ -1634,11 +1634,11 @@ defmodule TokengateWeb.StatsLiveTest do
       conn = login(conn, admin, password)
 
       for {path, rows_selector, more_id} <- [
-            {~p"/stats/providers", "#provider-table tbody tr", "#provider-list-more"},
-            {~p"/stats/models", "#model-table tbody tr", "#model-list-more"},
-            {~p"/stats/profiles", "#group-table tbody tr", "#group-list-more"},
-            {~p"/stats/users", "#user-table tbody tr", "#user-list-more"},
-            {~p"/stats/services", "#service-table tbody tr", "#service-list-more"}
+            {~p"/stats/providers", "#provider-table tr", "#provider-list-more"},
+            {~p"/stats/models", "#model-table tr", "#model-list-more"},
+            {~p"/stats/profiles", "#group-table tr", "#group-list-more"},
+            {~p"/stats/users", "#user-table tr", "#user-list-more"},
+            {~p"/stats/services", "#service-table tr", "#service-list-more"}
           ] do
         {:ok, list_view, _html} = live(conn, path)
         list_view = wait_stats_loaded(list_view)
@@ -1673,12 +1673,12 @@ defmodule TokengateWeb.StatsLiveTest do
       {:ok, group_view, _html} = live(conn, ~p"/stats/profiles/#{fixture.group.id}?period=today")
       group_view = wait_stats_loaded(group_view)
 
-      assert count_rows(group_view, "#group-models tbody tr") == 10
+      assert count_rows(group_view, "#group-models tr") == 10
       assert has_element?(group_view, "#group-detail-models-more")
 
       group_view |> element("#group-detail-models-more") |> render_click()
 
-      assert count_rows(group_view, "#group-models tbody tr") == 11
+      assert count_rows(group_view, "#group-models tr") == 11
       refute has_element?(group_view, "#group-detail-models-more")
 
       # Los miembros del perfil de límites caben enteros: esa tabla no gana botón.
@@ -1714,9 +1714,9 @@ defmodule TokengateWeb.StatsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/stats/models")
       view = wait_stats_loaded(view)
 
-      assert has_element?(view, "table#model-table")
+      assert has_element?(view, "table #model-table")
       assert has_element?(view, "#model-list-search")
-      assert has_element?(view, "#model-table thead th", "Costo")
+      assert has_element?(view, "#model-ranking table thead th", "Costo")
       # Una sola tabla: el listado rankeado ya no existe.
       refute has_element?(view, "#model-list")
 
@@ -1773,6 +1773,38 @@ defmodule TokengateWeb.StatsLiveTest do
 
       assert has_element?(view, "#user-list-empty")
       refute has_element?(view, "#user-table")
+    end
+
+    test "las tablas analíticas usan el componente .table (sortable + tooltip)", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      group_with_log(%{cost: "0.005"})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/users")
+      view = wait_stats_loaded(view)
+
+      # El id del componente vive en el <tbody>: ya no hay un <table id="…">.
+      assert has_element?(view, "table tbody#user-table")
+      refute has_element?(view, "#user-table tbody")
+
+      # Headers ordenables los dibuja el componente (button + phx-value-field).
+      assert has_element?(
+               view,
+               "#user-ranking table thead th button[phx-click='sort'][phx-value-field='user_email']"
+             )
+
+      # Y la flecha ▲/▼ la pinta el componente en el campo activo (request_count desc).
+      assert has_element?(
+               view,
+               "#user-ranking table thead th button[phx-value-field='request_count'] span",
+               "▼"
+             )
+
+      # Tooltip del componente (data-tip) en la columna de crédito.
+      assert has_element?(view, "#user-ranking table thead th span[data-tip]")
+
+      # Los totales del pie se conservan como resumen bajo la tabla.
+      assert has_element?(view, "#user-table-totals")
     end
 
     test "groups y services: buscador en vivo sobre su tabla", %{conn: conn} do
