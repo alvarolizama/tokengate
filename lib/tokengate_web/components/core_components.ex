@@ -403,11 +403,11 @@ defmodule TokengateWeb.CoreComponents do
 
   attr :row_attrs, :any,
     default: nil,
-    doc: "function row -> keyword list of extra <tr> attributes (draggable, data-id, ...)"
+    doc: "function row -> keyword list with :draggable / :data_id for the <tr> (drag sorting)"
 
-  attr :tbody_attrs, :any,
+  attr :tbody_hook, :string,
     default: nil,
-    doc: "keyword list of extra <tbody> attributes (e.g. phx-hook for drag sorting)"
+    doc: "phx-hook for the <tbody> (e.g. SortableProviders for drag sorting)"
 
   attr :row_item, :any,
     default: &Function.identity/1,
@@ -437,6 +437,7 @@ defmodule TokengateWeb.CoreComponents do
       |> assign(:stream?, stream?)
       |> assign(:row_id, assigns.row_id || if(stream?, do: fn {id, _item} -> id end))
       |> assign(:is_empty?, assigns.empty? or (!stream? and assigns.rows == []))
+      |> assign(:row_attrs, assigns.row_attrs || fn _ -> [] end)
 
     ~H"""
     <div :if={@is_empty?} class="text-center py-12 text-base-content/40" id={@id <> "-empty"}>
@@ -481,12 +482,13 @@ defmodule TokengateWeb.CoreComponents do
           </th>
         </tr>
       </thead>
-      <tbody id={@id} phx-update={@stream? && "stream"} {...(@tbody_attrs || [])}>
+      <tbody id={@id} phx-update={@stream? && "stream"} phx-hook={@tbody_hook}>
         <tr
           :for={row <- @rows}
           id={@row_id && @row_id.(row)}
           class={row_class_for(@row_class, row)}
-          {...((@row_attrs && @row_attrs.(row)) || [])}
+          draggable={row_attr(@row_attrs, row, :draggable)}
+          data-id={row_attr(@row_attrs, row, :data_id)}
         >
           <td
             :for={col <- @col}
@@ -514,6 +516,9 @@ defmodule TokengateWeb.CoreComponents do
 
   defp row_class_for(fun, row) when is_function(fun, 1), do: fun.(row)
   defp row_class_for(class, _row), do: class
+
+  defp row_attr(fun, row, key) when is_function(fun, 1), do: Keyword.get(fun.(row), key)
+  defp row_attr(_fun, _row, _key), do: nil
 
   @doc """
   Renders a data list.
