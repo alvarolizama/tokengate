@@ -1656,6 +1656,11 @@ msgstr "No se pudo eliminar el miembro."
 msgid "Credit"
 msgstr "Crédito"
 
+#: lib/tokengate_web/live/services_live.ex:1284
+#, elixir-autogen, elixir-format
+msgid "Credit consumed against the service's monthly cap — the same reading as the Users list."
+msgstr "Crédito consumido contra el techo mensual del servicio — la misma lectura que en la lista de Usuarios."
+
 #: lib/tokengate_web/live/stats/groups.ex:147
 #, elixir-autogen, elixir-format
 msgid "Daily usage per model"
@@ -3098,6 +3103,12 @@ msgstr "Proveedor no encontrado."
 #, elixir-autogen, elixir-format
 msgid "Requests"
 msgstr "Requests"
+
+#: lib/tokengate_web/live/services_live.ex:1326
+#: lib/tokengate_web/live/supervised_services_live.ex:324
+#, elixir-autogen, elixir-format
+msgid "Requests 30d"
+msgstr "Peticiones 30d"
 
 #: lib/tokengate_web/live/stats/provider.ex:337
 #, elixir-autogen, elixir-format
@@ -5615,6 +5626,11 @@ msgstr "URL base (compatible con OpenAI)."
 #, elixir-autogen, elixir-format
 msgid "cache"
 msgstr "cache"
+
+#: lib/tokengate_web/live/supervised_services_live.ex:369
+#, elixir-autogen, elixir-format
+msgid "cache hit"
+msgstr "cache hit"
 
 #: lib/tokengate_web/live/calculator_live.ex:445
 #, elixir-autogen, elixir-format

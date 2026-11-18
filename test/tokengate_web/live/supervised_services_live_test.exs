@@ -7,8 +7,8 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     * unauthenticated → /login redirect
     * signed-in user who supervises NOTHING → /dashboard (the page is not a
       public "empty state": access is the supervision row, not the session)
-    * supervisor WITH a supervised service → summary card with real 30d numbers
-    * every card links to the per-service full stats
+    * supervisor WITH a supervised service → summary row with real 30d numbers
+    * every row links to the per-service full stats
     * removing the supervision row revokes the access (next mount AND the open
       view, which reacts to the PubSub notice)
     * view exposes ZERO mutating buttons (read-only contract)
@@ -240,8 +240,8 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
   end
 
   # W2 lifecycle: `has_one :api_key` could return the revoked (or hidden) row.
-  # The card must show the service's ACTIVE keys instead.
-  test "the card shows the ACTIVE key after a revoke, never the old one", %{conn: conn} do
+  # The row must show the service's ACTIVE keys instead.
+  test "the row shows the ACTIVE key after a revoke, never the old one", %{conn: conn} do
     %{user: user, password: password} = register("user")
     service = supervised_service(user, %{"name" => "Ciclo de vida"})
 
@@ -256,7 +256,7 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     assert render(element(view, "#supervised-service-#{service.id}")) =~ "active"
   end
 
-  test "a soft-hidden key disappears from the card", %{conn: conn} do
+  test "a soft-hidden key disappears from the row", %{conn: conn} do
     %{user: user, password: password} = register("user")
     service = supervised_service(user, %{"name" => "Sin clave"})
 
@@ -304,7 +304,7 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     assert html =~ "Este servicio no tiene models asignados."
   end
 
-  test "every card links to the full stats of that service", %{conn: conn} do
+  test "every row links to the full stats of that service", %{conn: conn} do
     %{user: user, password: password} = register("user")
     service = supervised_service(user)
 
@@ -314,6 +314,28 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     assert has_element?(
              view,
              "#service-stats-link-#{service.id}[href='/services/supervised/#{service.id}']"
+           )
+  end
+
+  # Contrato .table (Fase 0): el listado dejó de ser cards — una tabla con
+  # tbody stream y una fila por servicio — conservando los IDs de celda.
+  test "el listado es una tabla .table, no cards", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+    service = supervised_service(user, %{"name" => "Tabla"})
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/services/supervised")
+
+    assert has_element?(view, "table tbody#supervised-rows[phx-update='stream']")
+    assert has_element?(view, "tbody#supervised-rows tr#supervised-service-#{service.id}")
+    refute has_element?(view, "article#supervised-service-#{service.id}")
+    # Celdas numéricas a la derecha y la acción en la última columna.
+    assert has_element?(view, "td.text-right #metric-cost-#{service.id}")
+    assert has_element?(view, "td.text-right #metric-requests-#{service.id}")
+
+    assert has_element?(
+             view,
+             "tr#supervised-service-#{service.id} td #service-stats-link-#{service.id}"
            )
   end
 

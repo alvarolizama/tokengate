@@ -110,9 +110,11 @@ defmodule TokengateWeb.ServicesLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/access/services")
 
+    # El header ordenable del componente .table dispara `sort_services` con
+    # phx-value-field (antes era un botón con id #sort-<campo>).
     html =
       view
-      |> element("#sort-monthly_spend")
+      |> element("th button[phx-value-field='monthly_spend']")
       |> render_click()
 
     assert html =~ "Gasto mensual"
@@ -149,7 +151,7 @@ defmodule TokengateWeb.ServicesLiveTest do
 
     # Primer click = desc (más gasto primero). El que no tiene datos pinta
     # $0.00, así que va al final, no encabezando el listado.
-    html = view |> element("#sort-monthly_spend") |> render_click()
+    html = view |> element("th button[phx-value-field='monthly_spend']") |> render_click()
 
     ids =
       Regex.scan(~r/<tr[^>]+id="service-([^"]+)"/, html)
@@ -223,6 +225,40 @@ defmodule TokengateWeb.ServicesLiveTest do
     assert has_element?(view, "#credit-#{service.id}", "20.0000 / 50.0000")
     # El gasto real del mes sigue en su propia columna (incluye top-ups).
     assert has_element?(view, "#monthly-spend-#{service.id}", "$20.00")
+  end
+
+  # Contrato .table (Fase 0): el listado es una tabla real — tbody con stream
+  # y una fila por servicio con su dom_id —, con headers ordenables que
+  # disparan el evento existente por phx-value-field.
+  test "el listado usa el componente .table (stream + headers ordenables)", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    service = service_fixture()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    assert has_element?(view, "table tbody#services[phx-update='stream']")
+    assert has_element?(view, "tbody#services tr#service-#{service.id}")
+    assert has_element?(view, "th button[phx-click='sort_services'][phx-value-field='name']")
+    assert has_element?(view, "th button[phx-value-field='monthly_spend']")
+    # Los numéricos van a la derecha.
+    assert has_element?(view, "td.text-right #monthly-spend-#{service.id}")
+    assert has_element?(view, "td.text-right #total-spend-#{service.id}")
+  end
+
+  test "sin resultados el empty-state sustituye a las filas", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    _service = service_fixture()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    refute has_element?(view, "#services-empty")
+
+    view |> element("#search-form") |> render_change(%{"q" => "no-existe-#{unique()}"})
+
+    assert has_element?(view, "#services-empty")
+    refute has_element?(view, "tbody#services")
   end
 
   test "eliminar servicio via modal de confirmación", %{conn: conn} do
