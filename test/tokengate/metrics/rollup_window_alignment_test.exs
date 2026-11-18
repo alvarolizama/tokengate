@@ -18,6 +18,7 @@ defmodule Tokengate.Metrics.RollupWindowAlignmentTest do
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Metrics.Rollup.HourlyAggregate
+  alias Tokengate.Metrics.RollupWorker
   alias Tokengate.Metrics.StatsQueries
 
   @base_attrs %{
@@ -144,5 +145,182 @@ defmodule Tokengate.Metrics.RollupWindowAlignmentTest do
     assert Decimal.equal?(hybrid.total_cost_usd, raw.total_cost_usd)
     assert hybrid.total_prompt_tokens == raw.total_prompt_tokens
     assert hybrid.total_completion_tokens == raw.total_completion_tokens
+  end
+
+  # -------------------------------------------------------------------------
+  # Self-healing (F29) and cadence (F53/F54)
+  # -------------------------------------------------------------------------
+
+  describe "RollupWorker self-healing" do
+    setup do
+      previous = Application.get_env(:tokengate, :stats_rollup, hybrid: true)
+      Application.put_env(:tokengate, :stats_rollup, hybrid: true)
+      on_exit(fn -> Application.put_env(:tokengate, :stats_rollup, previous) end)
+      :ok
+    end
+
+    test "a gap bigger than the readers' tail heals at boot and the guard trusts again",
+         %{group_member: tm} do
+      at = now()
+      hour = floor_hour(at)
+
+      # Six closed hours of traffic and an EMPTY rollup: the deploy/OOM hole
+      # that used to make every hybrid read fall back to raw forever.
+      for h <- 1..6, do: log_request(tm.id, DateTime.add(hour, -h * 3600, :second))
+
+      assert %{last_hour_utc: nil, buckets: 0} = Rollup.coverage()
+      assert HourlyAggregate.gap_hours() == :empty
+
+      name = :w10_heal_worker
+
+      start_supervised!({
+        RollupWorker,
+        # Bounded retention for the fresh-rollup backfill: the test only has
+        # today's traffic, there is no reason to walk 90 empty days.
+        name: name, enabled: true, interval_ms: 3_600_000, retention_days: 2, boot_backfill: true
+      })
+
+      # `handle_continue(:boot)` runs before the GenServer handles any message:
+      # this call returns only after the boot backfill finished.
+      _ = :sys.get_state(name)
+
+      status = RollupWorker.status(name)
+      assert status.last_backfill.status == :backfilled
+      assert status.last_backfill.days >= 1
+
+      # The rollup now tracks the newest raw hour.
+      assert HourlyAggregate.gap_hours() == 0.0
+      assert %{last_hour_utc: %DateTime{}} = Rollup.coverage()
+
+      # The closed span is exactly covered by the rollup (this is the equality
+      # `StatsQueries.rollup_trusted?/4` checks)...
+      from = DateTime.add(hour, -7 * 3600, :second)
+      cutoff = hour
+
+      rollup_half = Rollup.summary_from_rollup(from: from, to: cutoff)
+      raw_half = Logs.cost_summary(%{from: from, to: cutoff})
+      assert rollup_half.request_count == raw_half.request_count
+      assert Decimal.equal?(rollup_half.total_cost_usd, raw_half.total_cost_usd)
+      assert rollup_half.request_count == 6
+
+      # ...so the hybrid read serves the same numbers as raw (no silent
+      # degradation to a full raw window).
+      hybrid = StatsQueries.summary(from: from, to: at)
+      raw = Logs.cost_summary(%{from: from, to: at})
+      assert hybrid.request_count == raw.request_count
+      assert Decimal.equal?(hybrid.total_cost_usd, raw.total_cost_usd)
+    end
+
+    test "the periodic refresh rewrites ONLY the tail the readers do not serve" do
+      test_pid = self()
+
+      start_supervised!(
+        {RollupWorker,
+         name: :w10_tail_worker,
+         enabled: true,
+         boot_backfill: false,
+         interval_ms: 3_600_000,
+         refresh_fun: fn from, to ->
+           send(test_pid, {:refresh_window, from, to})
+           {:ok, 0}
+         end}
+      )
+
+      _ = :sys.get_state(:w10_tail_worker)
+
+      assert {:ok, %{rows: 0}} = RollupWorker.refresh_now(:w10_tail_worker)
+      assert_received {:refresh_window, from, to}
+
+      # The window is the last closed hour plus the open one — not the 3-4h the
+      # old worker rewrote every 60s and nobody read (readers switch to raw
+      # inside the 3h tail).
+      assert from == DateTime.add(floor_hour(to), -3600, :second)
+      assert DateTime.diff(to, from, :second) <= 2 * 3600
+    end
+
+    test "a failing cycle increments the counter, emits the error metric and backs off" do
+      test_pid = self()
+
+      :telemetry.attach(
+        "w10-rollup-refresh",
+        [:tokengate, :rollup, :refresh],
+        fn event, measurements, metadata, pid ->
+          send(pid, {:rollup_metric, event, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach("w10-rollup-refresh") end)
+
+      start_supervised!(
+        {RollupWorker,
+         name: :w10_fail_worker,
+         enabled: true,
+         boot_backfill: false,
+         interval_ms: 60_000,
+         refresh_fun: fn _from, _to -> {:error, :boom} end}
+      )
+
+      _ = :sys.get_state(:w10_fail_worker)
+
+      assert {:error, reason} = RollupWorker.refresh_now(:w10_fail_worker)
+      assert inspect(reason) =~ "boom"
+
+      status = RollupWorker.status(:w10_fail_worker)
+      assert status.consecutive_failures == 1
+      assert status.last_error =~ "boom"
+
+      assert_received {:rollup_metric, [:tokengate, :rollup, :refresh], %{rows: 0},
+                       %{result: :error, failures: 1}}
+
+      # Backoff grows with the failure count (60s → 120s → … capped at 15min).
+      assert RollupWorker.backoff_ms(1) == 60_000
+      assert RollupWorker.backoff_ms(2) == 120_000
+      assert RollupWorker.backoff_ms(50) == 15 * 60_000
+    end
+
+    test "a successful cycle emits the ok metric and resets the counter" do
+      test_pid = self()
+
+      :telemetry.attach(
+        "w10-rollup-ok",
+        [:tokengate, :rollup, :refresh],
+        fn event, measurements, metadata, pid ->
+          send(pid, {:rollup_metric, event, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach("w10-rollup-ok") end)
+
+      start_supervised!(
+        {RollupWorker,
+         name: :w10_ok_worker,
+         enabled: true,
+         boot_backfill: false,
+         interval_ms: 60_000,
+         refresh_fun: fn _from, _to -> {:ok, 3} end}
+      )
+
+      _ = :sys.get_state(:w10_ok_worker)
+
+      assert {:ok, %{rows: 3}} = RollupWorker.refresh_now(:w10_ok_worker)
+      assert RollupWorker.status(:w10_ok_worker).consecutive_failures == 0
+
+      assert_received {:rollup_metric, [:tokengate, :rollup, :refresh], %{rows: 3},
+                       %{result: :ok}}
+    end
+
+    test "the tick is scheduled on a fixed period, not after the work" do
+      # Same deadline: the next tick is exactly one period later.
+      assert RollupWorker.next_deadline(1_000, 900, 60_000) == 1_000
+      assert RollupWorker.next_deadline(1_000, 1_000, 60_000) == 61_000
+
+      # A tick that took 500ms still lands on the grid (61_000, not 61_500).
+      assert RollupWorker.next_deadline(1_000, 1_500, 60_000) == 61_000
+
+      # A suspended process catches up with ONE tick on the original grid.
+      assert RollupWorker.next_deadline(1_000, 200_000, 60_000) == 241_000
+    end
   end
 end

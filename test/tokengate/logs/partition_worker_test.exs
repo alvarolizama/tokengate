@@ -38,6 +38,48 @@ defmodule Tokengate.Logs.PartitionWorkerTest do
     Repo.query!("SELECT count(*) FROM #{table}").rows |> List.flatten() |> hd()
   end
 
+  defp rows_in_parent_between(%Date{} = from_day, %Date{} = to_day) do
+    Repo.query!(
+      "SELECT count(*) FROM request_logs WHERE inserted_at >= $1::timestamp AND inserted_at < $2::timestamp",
+      [DateTime.new!(from_day, ~T[00:00:00]), DateTime.new!(to_day, ~T[00:00:00])]
+    ).rows
+    |> List.flatten()
+    |> hd()
+  end
+
+  defp rows_in_default_between(%Date{} = from_day, %Date{} = to_day) do
+    Repo.query!(
+      """
+      SELECT count(*) FROM request_logs_default
+      WHERE inserted_at >= $1::timestamp AND inserted_at < $2::timestamp
+      """,
+      [DateTime.new!(from_day, ~T[00:00:00]), DateTime.new!(to_day, ~T[00:00:00])]
+    ).rows
+    |> List.flatten()
+    |> hd()
+  end
+
+  defp bulk_log_insert(date, count) do
+    Repo.query!(
+      """
+      INSERT INTO request_logs (id, model_requested, inserted_at)
+      SELECT gen_random_uuid(), 'bulk-model', $1::timestamp + (g || ' seconds')::interval
+      FROM generate_series(1, #{count}) AS g
+      """,
+      [DateTime.new!(date, ~T[00:00:00])]
+    )
+  end
+
+  defp validated_check_constraint?(table, constraint) do
+    Repo.query!(
+      """
+      SELECT convalidated FROM pg_constraint
+      WHERE conrelid = to_regclass($1::text) AND conname = $2 AND contype = 'c'
+      """,
+      ["public." <> table, constraint]
+    ).rows == [[true]]
+  end
+
   describe "partition_name/1" do
     test "formats a date as request_logs_YYYY_MM_DD" do
       assert PartitionWorker.partition_name(~D[2099-03-01]) == "request_logs_2099_03_01"
@@ -95,6 +137,93 @@ defmodule Tokengate.Logs.PartitionWorkerTest do
       refute Enum.any?(results, fn {d, _} -> d == @old end)
       assert rows_in("request_logs_default") == 1
       refute partition_exists?(PartitionWorker.partition_name(@old))
+    end
+  end
+
+  describe "prune_default_partition/1" do
+    test "deletes ONLY expired days and leaves the default partition's recent rows alone" do
+      expired_a = ~D[2020-03-01]
+      expired_b = ~D[2020-03-02]
+      recent = Date.utc_today()
+
+      bulk_log_insert(expired_a, 1_200)
+      bulk_log_insert(expired_b, 800)
+      bulk_log_insert(recent, 300)
+
+      assert rows_in_default_between(expired_a, Date.add(expired_b, 1)) == 2_000
+
+      assert {:ok, %{days: 2, deleted: 2_000}} = PartitionWorker.prune_default_partition()
+
+      # Expired days are gone from BOTH the default partition and the parent.
+      assert rows_in_default_between(expired_a, Date.add(expired_b, 1)) == 0
+      assert rows_in_parent_between(expired_a, Date.add(expired_b, 1)) == 0
+
+      # The day inside retention is untouched.
+      assert rows_in_parent_between(recent, Date.add(recent, 1)) == 300
+    end
+
+    test "measured: the delete is batched (bounded statements), not one giant DELETE" do
+      # 55k rows in one expired day > the 50k batch, so the prune MUST split it
+      # into more than one statement. This is the property the detach/recreate
+      # alternative cannot offer: every statement is bounded, so the lock and
+      # the dead-tuple burst stay bounded too.
+      expired = ~D[2020-04-01]
+      bulk_log_insert(expired, 55_000)
+
+      test_pid = self()
+
+      :telemetry.attach(
+        "w10-prune-batches",
+        [:tokengate, :repo, :query],
+        fn _event, _measurements, metadata, pid ->
+          with %{query: query, result: {:ok, %{num_rows: rows}}} <- metadata,
+               true <- String.starts_with?(query, "DELETE FROM request_logs_default") do
+            send(pid, {:prune_statement, rows})
+          end
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach("w10-prune-batches") end)
+
+      {elapsed_us, {:ok, result}} =
+        :timer.tc(fn -> PartitionWorker.prune_default_partition() end)
+
+      assert %{days: 1, deleted: 55_000} = result
+
+      batches = collect_batches([])
+
+      assert length(batches) >= 2
+      assert Enum.sum(batches) == 55_000
+      assert Enum.max(batches) <= 50_000
+
+      # Sanity bound on the measured cost (a single 55k-row DELETE in a
+      # sandbox transaction is well under this on any dev box; the assertion is
+      # here to catch a regression to per-row round trips).
+      assert elapsed_us < 30_000_000
+    end
+  end
+
+  defp collect_batches(acc) do
+    receive do
+      {:prune_statement, rows} -> collect_batches([rows | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  describe "ATTACH hardening" do
+    test "backfill validates the range CHECK before attaching (no scan under the lock)" do
+      raw_log_insert(@future_a)
+
+      {:ok, _} = PartitionWorker.backfill_default_partitions()
+
+      name = PartitionWorker.partition_name(@future_a)
+
+      # The constraint is what lets ATTACH PARTITION skip the validation scan
+      # of the attached table, and it must be VALIDATED (an unvalidated CHECK
+      # proves nothing to the planner/ATTACH).
+      assert validated_check_constraint?(name, "#{name}_range_check")
     end
   end
 

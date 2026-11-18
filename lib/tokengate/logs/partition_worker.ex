@@ -19,8 +19,41 @@ defmodule Tokengate.Logs.PartitionWorker do
        retention cutoff are deliberately left in the default partition —
        `cleanup_old_partitions/1` would drop them immediately otherwise,
        destroying data.
-    3. `cleanup_old_partitions/1` — drops named partitions older than
-       `@retention_days` (log retention policy).
+    3. `prune_default_partition/1` — deletes the stranded rows those old
+       days left in `request_logs_default` (F42). They are past retention, so
+       nothing will ever move them into a named partition; without the prune
+       they stay forever: the default partition is never dropped, so it
+       becomes the one partition that grows without bound and every
+       `request_logs` scan has to walk it.
+    4. `cleanup_old_partitions/1` — drops named partitions older than
+       `retention_days/0` (log retention policy).
+
+  `prune_default_partition/1` and `cleanup_old_partitions/1` use the SAME
+  cutoff (`retention_days/0`, calendar days, `date < today - retention`), so
+  the raw retention policy has exactly one definition; the rollup prune reads
+  it through `HourlyAggregate.retention_days/0`.
+
+  ### Why DELETE per day instead of DETACH + recreate the default
+
+  DETACH + recreate looks cheaper (one catalog operation, no dead tuples in
+  the default) but it is not safe here:
+
+    * it takes ACCESS EXCLUSIVE on the parent for the whole window, and a
+      default partition must exist at every instant — between DETACH and
+      `CREATE TABLE ... DEFAULT`, any insert whose range has no partition
+      fails (`no partition of relation "request_logs" found for row`);
+    * recreating the default means re-inserting every row it keeps (all of
+      today's strays included), so the work is proportional to the LIVE rows,
+      not to the expired ones;
+    * the expired rows are exactly the ones a partitioned table cannot delete
+      cheaply any other way — a bounded DELETE is the smallest, most
+      interruptible operation.
+
+  The measured decision (see `test/tokengate/logs/partition_worker_test.exs`)
+  is therefore a per-day, per-batch DELETE: each statement is bounded by
+  `@prune_batch_rows` through a `ctid IN (SELECT ... LIMIT n)` sweep, so a
+  day with millions of strays is deleted in resumable chunks instead of one
+  table-wide lock.
 
   ## Scheduling
 
@@ -40,7 +73,15 @@ defmodule Tokengate.Logs.PartitionWorker do
     2. `WITH moved AS (DELETE FROM request_logs_default WHERE inserted_at
        IN range RETURNING *) INSERT INTO x SELECT * FROM moved` — atomic
        move (single statement, runs inside one transaction with step 3).
-    3. `ALTER TABLE request_logs ATTACH PARTITION x FOR VALUES ...` —
+    3. Prove the bounds with a validated CHECK on `x`
+       (`x_range_check`): with it in place `ATTACH PARTITION` does NOT scan
+       `x` while it holds ACCESS EXCLUSIVE on the parent. The scan is the
+       whole cost of an ATTACH on a busy table, and it is pure waste on a
+       table whose bounds we just wrote ourselves. The default partition is
+       still checked (Postgres cannot prove a DEFAULT constraint), but it was
+       emptied for that range by step 2 in the same transaction and the check
+       runs as a range probe over `inserted_at`.
+    4. `ALTER TABLE request_logs ATTACH PARTITION x FOR VALUES ...` —
        succeeds because the range is now empty in the default partition.
 
   Concurrent writers racing between the move and the ATTACH simply land
@@ -60,8 +101,22 @@ defmodule Tokengate.Logs.PartitionWorker do
   # Safety cap: never process more than this many days of default-partition
   # backfill in a single run (a pathological backlog shouldn't wedge cron).
   @backfill_day_cap 2_000
+  # Rows per DELETE statement when pruning the default partition. A stray day
+  # can hold millions of rows; one statement per day would hold a table lock
+  # for as long as it takes to write all those dead tuples.
+  @prune_batch_rows 50_000
 
   @partition_prefix "request_logs_"
+
+  @doc """
+  Retention window in days for `request_logs` — the single definition the raw
+  partitions (`cleanup_old_partitions/1`, `prune_default_partition/1`) and the
+  rollup prune (`HourlyAggregate.retention_days/0`) share.
+  """
+  @spec retention_days() :: non_neg_integer()
+  def retention_days do
+    Application.get_env(:tokengate, :logs_retention_days, @retention_days)
+  end
 
   # ---------------------------------------------------------------------------
   # Oban entry point
@@ -70,8 +125,9 @@ defmodule Tokengate.Logs.PartitionWorker do
   @impl true
   def perform(_job) do
     ensure_upcoming_partitions(@lookahead_days)
-    backfill_default_partitions(retention_days: @retention_days)
-    cleanup_old_partitions(@retention_days)
+    backfill_default_partitions(retention_days: retention_days())
+    prune_default_partition(retention_days: retention_days())
+    cleanup_old_partitions(retention_days())
     :ok
   end
 
@@ -179,7 +235,7 @@ defmodule Tokengate.Logs.PartitionWorker do
   """
   @spec backfill_default_partitions(keyword()) :: {:ok, [{Date.t(), atom()}]}
   def backfill_default_partitions(opts \\ []) do
-    retention_days = Keyword.get(opts, :retention_days, @retention_days)
+    retention_days = Keyword.get_lazy(opts, :retention_days, &retention_days/0)
 
     case Repo.query!(
            "SELECT min(inserted_at)::date, max(inserted_at)::date FROM request_logs_default"
@@ -215,12 +271,14 @@ defmodule Tokengate.Logs.PartitionWorker do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Drops named daily partitions strictly older than `retention_days`. The
-  default partition is never touched. Returns `{:ok, [dropped_names]}`.
+  Drops named daily partitions strictly older than `retention_days`
+  (`retention_days/0` when omitted). The default partition is never touched
+  here — its expired rows are deleted by `prune_default_partition/1`.
+  Returns `{:ok, [dropped_names]}`.
   """
-  @spec cleanup_old_partitions(non_neg_integer()) :: {:ok, [String.t()]}
-  def cleanup_old_partitions(retention_days \\ @retention_days) do
-    cutoff = Date.add(Date.utc_today(), -retention_days)
+  @spec cleanup_old_partitions(non_neg_integer() | nil) :: {:ok, [String.t()]}
+  def cleanup_old_partitions(days \\ nil) do
+    cutoff = Date.add(Date.utc_today(), -(days || retention_days()))
 
     dropped =
       list_partition_names()
@@ -236,6 +294,90 @@ defmodule Tokengate.Logs.PartitionWorker do
       end)
 
     {:ok, dropped}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Prune of the default partition (F42)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Deletes the rows sitting in `request_logs_default` that are already past
+  retention, ONE CALENDAR DAY at a time and in `#{@prune_batch_rows}`-row
+  batches.
+
+  `backfill_default_partitions/1` deliberately leaves days older than the
+  cutoff in the default partition (moving them into a named partition would
+  hand them to `cleanup_old_partitions/1`, destroying data mid-run). Nothing
+  else ever removes them: the default partition cannot be dropped, so without
+  this prune it is the one partition that grows forever and every
+  `request_logs` scan pays for it.
+
+  Returns `{:ok, %{days: n, deleted: n}}`.
+  """
+  @spec prune_default_partition(keyword()) ::
+          {:ok, %{days: non_neg_integer(), deleted: non_neg_integer()}}
+  def prune_default_partition(opts \\ []) do
+    cutoff =
+      Date.add(Date.utc_today(), -Keyword.get_lazy(opts, :retention_days, &retention_days/0))
+
+    case Repo.query!("SELECT min(inserted_at)::date FROM request_logs_default").rows do
+      [[nil]] ->
+        {:ok, %{days: 0, deleted: 0}}
+
+      [[%Date{} = min_day]] ->
+        last_day = Date.add(cutoff, -1)
+
+        if Date.compare(min_day, last_day) == :gt do
+          {:ok, %{days: 0, deleted: 0}}
+        else
+          {days, deleted} =
+            min_day
+            |> Date.range(last_day)
+            |> Enum.take(@backfill_day_cap)
+            |> Enum.reduce({0, 0}, fn day, {days, deleted} ->
+              case delete_default_day(day) do
+                0 -> {days, deleted}
+                n -> {days + 1, deleted + n}
+              end
+            end)
+
+          if deleted > 0 do
+            Logger.info(
+              "PartitionWorker: pruned #{deleted} expired rows from " <>
+                "request_logs_default (#{days} day(s) before #{cutoff})"
+            )
+          end
+
+          {:ok, %{days: days, deleted: deleted}}
+        end
+    end
+  end
+
+  # One day, in batches: `ctid IN (SELECT ... LIMIT n)` bounds every statement
+  # (and therefore the lock and the dead-tuple burst) without needing a
+  # primary key on the default partition. Loops until the day is empty.
+  defp delete_default_day(day) do
+    from_iso = Date.to_iso8601(day)
+    to_iso = Date.to_iso8601(Date.add(day, 1))
+
+    Stream.repeatedly(fn ->
+      %{num_rows: n} =
+        Repo.query!("""
+        DELETE FROM request_logs_default
+        WHERE ctid IN (
+          SELECT ctid FROM request_logs_default
+          WHERE inserted_at >= '#{from_iso}'::timestamp
+            AND inserted_at < '#{to_iso}'::timestamp
+          LIMIT #{@prune_batch_rows}
+        )
+        """)
+
+      n
+    end)
+    |> Enum.reduce_while(0, fn
+      0, acc -> {:halt, acc}
+      n, acc -> {:cont, acc + n}
+    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -299,6 +441,7 @@ defmodule Tokengate.Logs.PartitionWorker do
 
   defp attach_with_backfill(name, date) do
     {from_iso, to_iso} = partition_bounds(date)
+    constraint = "#{name}_range_check"
 
     result =
       Repo.transaction(fn ->
@@ -316,6 +459,22 @@ defmodule Tokengate.Logs.PartitionWorker do
         INSERT INTO #{name}
         SELECT * FROM moved
         """)
+
+        # Validate the bounds on the standalone table BEFORE taking the
+        # ACCESS EXCLUSIVE lock of the ATTACH: `ATTACH PARTITION` skips the
+        # validation scan of the attached table when a validated CHECK already
+        # proves its rows fall inside the partition bounds. Without it, the
+        # parent stays locked while Postgres re-reads every row it is about to
+        # adopt — the only avoidable full scan of the operation.
+        Repo.query!("ALTER TABLE #{name} DROP CONSTRAINT IF EXISTS #{constraint}")
+
+        Repo.query!("""
+        ALTER TABLE #{name}
+        ADD CONSTRAINT #{constraint}
+        CHECK (inserted_at >= '#{from_iso}'::timestamp AND inserted_at < '#{to_iso}'::timestamp)
+        """)
+
+        Repo.query!("ALTER TABLE #{name} VALIDATE CONSTRAINT #{constraint}")
 
         Repo.query!(
           "ALTER TABLE request_logs ATTACH PARTITION #{name} FOR VALUES FROM ('#{from_iso}') TO ('#{to_iso}')"
