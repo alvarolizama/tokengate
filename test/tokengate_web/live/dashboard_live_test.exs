@@ -97,7 +97,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{group: group, owner: owner, member: member, provider: provider, owner_password: password}
   end
 
-  defp group_with_member(opts \\ %{}) do
+  defp group_with_member(_opts \\ %{}) do
     u = unique()
 
     {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
@@ -116,13 +116,34 @@ defmodule TokengateWeb.DashboardLiveTest do
     {:ok, member} =
       Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
 
-    {:ok, _api_key, _token} = Accounts.replace_api_key(member)
+    {:ok, _api_key, token} = Accounts.replace_api_key(member)
 
-    %{group: group, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
+    %{
+      group: group,
+      owner: owner,
+      member: member,
+      owner_password: "password-secret-#{u}1",
+      token: token
+    }
   end
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard")
+  end
+
+  test "mount paints the metrics skeleton before the async bundle lands", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    conn = login(conn, admin, password)
+
+    # The DEAD render is the shape of the first paint: mount no longer computes
+    # the bundle (it is started from handle_params and lands in handle_async),
+    # so the static HTML carries the skeleton, not data.
+    html = conn |> get(~p"/dashboard") |> html_response(200)
+
+    assert html =~ "metrics-skeleton"
+    refute html =~ "kpi-requests"
   end
 
   test "admin sees the dashboard shell and empty state with no traffic", %{conn: conn} do
@@ -130,26 +151,67 @@ defmodule TokengateWeb.DashboardLiveTest do
     Collector.reset()
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard")
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    # Mount is async: the bundle arrives through handle_async/3.
+    html = render_async(view)
 
     assert html =~ "Dashboard"
     assert has_element?(view, "#empty-state")
     assert html =~ "Aún no hay requests"
+    refute has_element?(view, "#metrics-skeleton")
   end
 
-  test "admin sees period selector with all options", %{conn: conn} do
+  test "admin sees the canonical period selector with all options", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard")
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
 
     assert has_element?(view, "#period-selector")
     assert has_element?(view, "#period-today")
-    assert has_element?(view, "#period-7d")
+    assert has_element?(view, "#period-yesterday")
+    assert has_element?(view, "#period-week.btn-primary")
     assert has_element?(view, "#period-30d")
-    assert has_element?(view, "#period-last_month")
-    _ = html
+
+    # The retired windows are gone from the selector (and from the vocabulary):
+    # the href proves the period travels in the URL.
+    refute has_element?(view, "#period-7d")
+    refute has_element?(view, "#period-last_month")
+    assert has_element?(view, "#period-30d[href='/dashboard?period=30d']")
+  end
+
+  test "an out-of-set bookmark degrades to the default period", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    conn = login(conn, admin, password)
+
+    for bogus <- ["month", "last_month", "7d", "basura"] do
+      {:ok, view, _html} = live(recycle(conn), ~p"/dashboard?period=#{bogus}")
+
+      # `normalize_period/2` maps anything outside the canonical set to
+      # `Periods.default_period/0` ("week") instead of raising or reading it as
+      # another window.
+      assert has_element?(view, "#period-week.btn-primary")
+
+      render_async(view)
+    end
+  end
+
+  test "the URL carries the active period on a direct visit", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    group_with_log(%{cost: "0.005", user: admin})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard?period=30d")
+
+    assert has_element?(view, "#period-30d.btn-primary")
+    html = render_async(view)
+    assert html =~ "Costo por día (30d)"
   end
 
   test "admin sees metric cards when there is traffic", %{conn: conn} do
@@ -160,7 +222,9 @@ defmodule TokengateWeb.DashboardLiveTest do
     group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard")
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    html = render_async(view)
 
     refute has_element?(view, "#empty-state")
     assert has_element?(view, "#kpi-requests")
@@ -174,15 +238,18 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    # The delta compares the ACTIVE window with the one right before it. Anchor
+    # the fixtures on the canonical bounds instead of "now minus N hours": a
+    # fixed 8-day offset falls OUTSIDE the previous week when the test runs on
+    # a Monday, and the delta would silently have nothing to compare against.
+    current = Periods.period_bounds("week", "Etc/UTC")
+    previous = Periods.previous_period_bounds("week", "Etc/UTC")
 
-    # Un usuario tiene UNA sub: las dos ventanas se insertan como logs de la
-    # misma membresía, con distinto `inserted_at`.
     fixture =
       group_with_log(%{
         cost: "0.005",
         user: admin,
-        inserted_at: DateTime.add(now, -3600, :second)
+        inserted_at: current.from
       })
 
     {:ok, _log} =
@@ -199,13 +266,12 @@ defmodule TokengateWeb.DashboardLiveTest do
         provider_cost_usd: Decimal.new("0.004"),
         latency_ms: 42,
         streaming: false,
-        inserted_at: DateTime.add(now, -8 * 86_400, :second)
+        inserted_at: DateTime.add(previous.from, 3600, :second)
       })
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
-    view |> element("#period-7d") |> render_click()
     html = render_async(view)
 
     assert has_element?(view, "#kpi-cost")
@@ -222,7 +288,9 @@ defmodule TokengateWeb.DashboardLiveTest do
     group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard")
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    html = render_async(view)
 
     assert has_element?(view, "#empty-state")
     assert html =~ "Aún no hay requests"
@@ -235,6 +303,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
+    render_async(view)
     assert has_element?(view, "#empty-state")
   end
 
@@ -257,11 +326,40 @@ defmodule TokengateWeb.DashboardLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
+    render_async(view)
+
     assert has_element?(view, "#breakdown-tabs")
     assert has_element?(view, "#tab-model")
     assert has_element?(view, "#tab-member")
     # Group breakdown is not shown on the personal dashboard
     refute has_element?(view, "#tab-group")
+  end
+
+  test "the metrics bundle is cached per window and shared by its viewers", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    group_with_log(%{cost: "0.005", user: admin})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    render_async(view)
+
+    # The entry is keyed by WINDOW + SCOPE, not by the socket: it is readable
+    # before a second viewer exists and never by a different scope.
+    assert {:ok, bundle} =
+             Tokengate.Metrics.DashboardCache.fetch(
+               {:dashboard_bundle, "week", "Etc/UTC", [admin.id]}
+             )
+
+    assert bundle.metrics.requests_total == 1
+
+    # A second dashboard of the same scope renders from that entry WITHOUT
+    # waiting on an async task (the assertion is in the mount reply).
+    {:ok, second, _html} = live(login(build_conn(), admin, password), ~p"/dashboard")
+
+    assert has_element?(second, "#kpi-requests")
   end
 
   test "switching breakdown tab shows the right table", %{conn: conn} do
@@ -272,6 +370,8 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    render_async(view)
 
     # Default is model
     html = render(view)
@@ -293,19 +393,22 @@ defmodule TokengateWeb.DashboardLiveTest do
     group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard")
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
 
-    # Default period is today — chart title reflects it
-    assert html =~ "Costo por hora"
+    # Default period is the canonical default (week) — chart title reflects it.
+    html = render_async(view)
+    assert html =~ "Costo por hora (semana)"
 
-    # Switch to 30d — the click replies instantly with a loading state
-    # (micro-spinner on the active button); the bundle lands async.
+    # Switch to 30d: the patch replies instantly with the previous bundle
+    # (dimmed) plus the header spinner; the new bundle lands async.
     html = view |> element("#period-30d") |> render_click()
-    assert html =~ ~s(class="loading loading-spinner loading-xs")
+    assert has_element?(view, "#dashboard-loading")
+    assert html =~ "opacity-60"
 
     html = render_async(view)
     assert html =~ "Costo por día (30d)"
-    refute html =~ ~s(class="loading loading-spinner loading-xs")
+    refute has_element?(view, "#dashboard-loading")
+    refute html =~ "opacity-60"
   end
 
   test "period switch keeps stale data visible while loading", %{conn: conn} do
@@ -317,11 +420,14 @@ defmodule TokengateWeb.DashboardLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
-    # Mid-flight switch: previous bundle stays on screen (dimmed), and the
-    # chart titles still describe the displayed ("today") period.
+    html = render_async(view)
+    assert html =~ "Costo por hora (semana)"
+
+    # Mid-flight switch: the previous bundle stays on screen (dimmed), and the
+    # titles still describe the displayed (week) period.
     html = view |> element("#period-30d") |> render_click()
     assert html =~ "opacity-60"
-    assert html =~ "Costo por hora"
+    assert html =~ "Costo por hora (semana)"
 
     # Once the async bundle lands, titles switch and the dim goes away.
     html = render_async(view)
@@ -345,8 +451,11 @@ defmodule TokengateWeb.DashboardLiveTest do
     })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard")
+    # "Hoy" is an explicit window now (the default is the week): the bookmark
+    # carries it, which is also what the selector patches.
+    {:ok, view, _html} = live(conn, ~p"/dashboard?period=today")
 
+    render_async(view)
     assert has_element?(view, "#empty-state")
   end
 
@@ -359,6 +468,8 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    render_async(view)
 
     # El dashboard es la vista del usuario: el costo va uniforme con el resto
     # de la fila (gasto del período), sin la etiqueta UTC ni el contador del
@@ -393,7 +504,9 @@ defmodule TokengateWeb.DashboardLiveTest do
     group_with_log(%{cost: "0.005", user: admin, inserted_at: inserted_at})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard")
+    {:ok, view, _html} = live(conn, ~p"/dashboard?period=today")
+
+    render_async(view)
 
     refute has_element?(view, "#empty-state")
     assert has_element?(view, "#kpi-requests")
@@ -407,13 +520,15 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{owner_password: _password} = group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard")
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    html = render_async(view)
 
     assert has_element?(view, "#charts-grid")
     assert has_element?(view, "#cost-chart")
     assert has_element?(view, "#requests-chart")
 
-    # Series carry the rollup data (cost + requests)
+    # Series carry the rollup data (cost + requests) for the ACTIVE window
     assert html =~ "Costo por hora"
     assert html =~ "Requests por hora"
 
@@ -431,6 +546,8 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     conn = login(conn, owner, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    render_async(view)
 
     refute has_element?(view, "#empty-state")
     assert has_element?(view, "#kpi-requests")
@@ -455,56 +572,123 @@ defmodule TokengateWeb.DashboardLiveTest do
     _ = member
   end
 
-  test "user can replace their key from dashboard", %{conn: conn} do
-    %{owner: owner, member: member, owner_password: password} =
+  test "revoking issues a new key and shows its token once", %{conn: conn} do
+    %{owner: owner, member: member, owner_password: password, token: old_token} =
       group_with_member()
+
+    loaded = Accounts.get_group_member!(member.id, :with_assoc)
+    old_key_id = loaded.api_key.id
 
     conn = login(conn, owner, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
-    html = view |> element("#replace-#{member.id}") |> render_click()
+    # The card offers the lifecycle ONCE: revoke and delete, no "regenerate".
+    assert has_element?(view, "#revoke-#{member.id}")
+    assert has_element?(view, "#hide-#{member.id}")
+    refute has_element?(view, "#replace-#{member.id}")
 
+    html = view |> element("#revoke-#{member.id}") |> render_click()
+
+    assert html =~ "Clave revocada. Se emitió una nueva"
     assert html =~ "Nueva clave generada"
     assert has_element?(view, "#new-token-alert")
     # Aviso de éxito (clave creada), no de advertencia.
     assert has_element?(view, "#new-token-alert.alert-success")
     assert has_element?(view, "#new-token-value")
+
+    # The old row is REVOKED (kept for attribution), the old token is dead and
+    # a brand-new active row exists for the same user.
+    assert Accounts.get_api_key!(old_key_id).status == "revoked"
+    assert {:error, :not_found} = Accounts.get_group_member_by_api_key(old_token)
+
+    active = Accounts.list_api_keys_for_user(owner.id)
+    assert [replacement] = active
+    assert replacement.id != old_key_id
+    assert replacement.status == "active"
+
+    # The surface audits the lifecycle action against the key that was voided.
+    assert [audit] =
+             Tokengate.Auditing.list_audit_logs(%{
+               action: "api_key.revoke",
+               entity_id: old_key_id
+             })
+
+    assert audit.changes["replacement_id"] == replacement.id
+
+    # The card shows the NEW key and keeps both lifecycle actions.
+    assert has_element?(view, "#revoke-#{member.id}")
+    assert has_element?(view, "#hide-#{member.id}")
+    assert has_element?(view, "#api-key-text-#{member.id}", replacement.key_prefix <> "••••")
   end
 
-  test "user can revoke their key from dashboard", %{conn: conn} do
-    %{owner: owner, member: member, owner_password: password} =
+  test "deleting a key soft-hides it from the card and every listing", %{conn: conn} do
+    %{owner: owner, member: member, owner_password: password, token: token} =
       group_with_member()
+
+    loaded = Accounts.get_group_member!(member.id, :with_assoc)
+    key_id = loaded.api_key.id
 
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
     assert html =~ "Activa"
 
-    html = view |> element("#revoke-#{member.id}") |> render_click()
-    assert html =~ "Revocada"
+    html = view |> element("#hide-#{member.id}") |> render_click()
+
+    assert html =~ "Clave borrada."
+
+    # Soft-hide: the row still exists (attribution survives) but is invisible
+    # everywhere and the token no longer authenticates.
+    hidden = Accounts.get_api_key!(key_id)
+    refute is_nil(hidden.hidden_at)
+    assert hidden.status == "revoked"
+    assert Accounts.list_api_keys_for_user(owner.id) == []
+    assert {:error, :not_found} = Accounts.get_group_member_by_api_key(token)
+
+    # The card falls back to the "no key" state and offers to issue one.
     refute has_element?(view, "#revoke-#{member.id}")
+    refute has_element?(view, "#hide-#{member.id}")
+    assert has_element?(view, "#generate-#{member.id}")
   end
 
-  test "dashboard explains the difference between regenerating and revoking a key", %{conn: conn} do
+  test "dashboard explains the difference between revoking and deleting a key", %{conn: conn} do
     %{owner: owner, member: member, owner_password: password} = group_with_member()
 
     conn = login(conn, owner, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
-    assert has_element?(view, "#replace-#{member.id}")
+    help = view |> element("#key-actions-help-#{member.id}") |> render()
+    assert help =~ "Revocar"
+    assert help =~ "Borrar"
+
+    # Revoking keeps the card populated (with the replacement key): the help
+    # and both actions stay, there is no dead end.
+    view |> element("#revoke-#{member.id}") |> render_click()
+    assert has_element?(view, "#key-actions-help-#{member.id}")
     assert has_element?(view, "#revoke-#{member.id}")
 
-    help = view |> element("#key-actions-help-#{member.id}") |> render()
-    assert help =~ "Regenerar"
-    assert help =~ "Revocar"
-
-    html = view |> element("#revoke-#{member.id}") |> render_click()
-    assert html =~ "Revocada"
-
-    # Sin clave activa no hay nada que revocar: la aclaración desaparece y
-    # queda únicamente la acción de regenerar.
+    # Deleting removes the key: the help disappears and only "generate" stays.
+    view |> element("#hide-#{member.id}") |> render_click()
     refute has_element?(view, "#key-actions-help-#{member.id}")
-    assert has_element?(view, "#replace-#{member.id}")
+    assert has_element?(view, "#generate-#{member.id}")
+  end
+
+  test "the one-time token can be copied from the alert without losing the icon", %{conn: conn} do
+    %{owner: owner, member: member, owner_password: password} = group_with_member()
+
+    conn = login(conn, owner, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    refute has_element?(view, "#new-token-alert")
+
+    view |> element("#revoke-#{member.id}") |> render_click()
+
+    # The copy button targets the VISIBLE token (never a mask) and carries its
+    # own icon + label, so the copy feedback cannot destroy the icon.
+    assert has_element?(view, "#copy-token-btn[data-source='new-token-value']")
+    assert has_element?(view, "#copy-token-btn span.hero-clipboard-document")
+    assert has_element?(view, "#copy-token-btn [data-copy-label]")
+    assert has_element?(view, "#new-token-value")
   end
 
   test "user cannot revoke another member's key from dashboard", %{conn: conn} do
@@ -587,32 +771,28 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#supervised-services-card[href='/services/supervised']")
   end
 
-  ## Group card: copy button next to the API key ----------------------------
+  ## Group card: the masked key, without a copy affordance --------------------
 
-  test "the API key row has a copy button targeting the masked key", %{conn: conn} do
+  # The card only knows the PREFIX (the token is not stored in clear text), so
+  # a copy button there could only copy a mask that does not authenticate —
+  # F20's "Copy API key" lie. The copy affordance lives where the token does:
+  # the one-time alert (`#copy-token-btn`), covered by its own test.
+  test "the API key row shows the masked prefix and offers no mask copy", %{conn: conn} do
     %{group: group, owner: owner, member: member, owner_password: password} =
       group_with_member()
 
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
-    copy_id = "copy-key-#{member.id}"
     text_id = "api-key-text-#{member.id}"
     row_id = "api-key-row-#{member.id}"
 
-    # Ambos en la MISMA fila, y la clave antes del botón: el botón va al lado
-    # de la clave, no junto a la etiqueta "CLAVE API".
     assert has_element?(view, "##{row_id} code##{text_id}")
-    assert has_element?(view, "##{row_id} button##{copy_id}[data-target='#{text_id}']")
-    assert has_element?(view, "##{copy_id}")
-
     # La fila está separada de la etiqueta, no la contiene.
     refute has_element?(view, "##{row_id} p")
+    # No hay botón que "copie" la máscara.
+    refute has_element?(view, "#copy-key-#{member.id}")
 
-    row_html = view |> element("##{row_id}") |> render()
-    assert elem(:binary.match(row_html, text_id), 0) < elem(:binary.match(row_html, copy_id), 0)
-
-    # The masked prefix shown on the card is what the button copies.
     member = Accounts.get_group_member!(member.id, :with_assoc)
     prefix = member.api_key.key_prefix
     assert html =~ "#{prefix}••••"
@@ -768,9 +948,14 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#user-keys-modal")
     assert has_element?(view, "#new-key-form")
 
-    # La llave ya existente del usuario se lista en el panel.
+    # La llave ya existente del usuario se lista en el panel, con las MISMAS
+    # acciones que en servicios: renombrar, revocar (=emitir otra) y borrar.
     member = Accounts.get_group_member!(member.id, :with_assoc)
-    assert has_element?(view, "#key-#{member.api_key.id}")
+    key_id = member.api_key.id
+    assert has_element?(view, "#key-#{key_id}")
+    assert has_element?(view, "#rename-key-#{key_id}")
+    assert has_element?(view, "#revoke-key-#{key_id}")
+    assert has_element?(view, "#hide-key-#{key_id}")
   end
 
   test "el usuario crea y revoca sus llaves desde el dashboard", %{conn: conn} do
@@ -799,8 +984,63 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     view |> render_click("revoke_user_key", %{"key-id" => created.id})
 
-    # Revocada: sale de la lista (solo se listan las activas).
+    # Revocar = emitir otra: la fila vieja sale de la lista (queda revocada) y
+    # el token de la nueva se muestra una vez en el panel.
     refute has_element?(view, "#key-#{created.id}")
+    assert has_element?(view, "#new-key-token")
+    assert Accounts.get_api_key(created.id).status == "revoked"
+
+    replacement =
+      owner.id
+      |> Accounts.list_api_keys_for_user()
+      |> Enum.find(&(&1.label == "laptop"))
+
+    assert replacement
+    assert replacement.id != created.id
+    assert has_element?(view, "#key-#{replacement.id}")
+  end
+
+  test "el panel renombra y borra las llaves del usuario", %{conn: conn} do
+    %{group: group, owner: owner, owner_password: password} = group_with_member()
+
+    key =
+      owner.id
+      |> Accounts.list_api_keys_for_user()
+      |> List.first()
+
+    conn = login(conn, owner, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    view |> element("#manage-keys-#{group.id}") |> render_click()
+
+    # Rename: pencil opens the inline form, submit saves through the context
+    # (which audits `api_key.rename` with the old/new label).
+    view |> element("#rename-key-#{key.id}") |> render_click()
+    assert has_element?(view, "#rename-key-form-#{key.id}")
+
+    view
+    |> form("#rename-key-inline-#{key.id}", %{"key-id" => key.id, key: %{label: "prod"}})
+    |> render_submit()
+
+    assert Accounts.get_api_key(key.id).label == "prod"
+    assert has_element?(view, "#key-#{key.id}", "prod")
+
+    # The context owns the audit: old/new label, same entry services produce.
+    assert [audit] =
+             Tokengate.Auditing.list_audit_logs(%{
+               action: "api_key.rename",
+               entity_id: key.id
+             })
+
+    assert audit.changes["old_label"] == key.label
+    assert audit.changes["new_label"] == "prod"
+
+    # Delete: soft-hide, the row leaves the panel and nothing is listed.
+    view |> element("#hide-key-#{key.id}") |> render_click()
+
+    refute has_element?(view, "#key-#{key.id}")
+    assert Accounts.list_api_keys_for_user(owner.id) == []
+    refute is_nil(Accounts.get_api_key(key.id).hidden_at)
   end
 
   test "un usuario no puede revocar la llave de otro desde el dashboard", %{conn: conn} do
@@ -866,6 +1106,8 @@ defmodule TokengateWeb.DashboardLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
+    render_async(view)
+
     assert has_element?(
              view,
              "#bd-model-mark-#{model.id} img[src='https://logos.test/#{u}.svg']"
@@ -882,6 +1124,8 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    render_async(view)
 
     assert has_element?(view, "#bd-model-mark-unknown")
   end
@@ -931,7 +1175,9 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     Tokengate.Metrics.DashboardCache.invalidate_all()
 
-    view |> element("#period-7d") |> render_click()
+    # Any period patch re-reads the card: 30d is a different window than the
+    # default (week), so `handle_params/3` reloads the personal data.
+    view |> element("#period-30d") |> render_click()
 
     # El número se re-lee junto con la tarjeta. `has_element?` normaliza el
     # `<span>` interno del componente compartido, que separa gasto de techo.
