@@ -516,53 +516,53 @@ defmodule TokengateWeb.ProviderKeysLive do
         </div>
 
         <%!-- Credential form (create / edit) — modal --%>
-        <div :if={@credential_form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_credential" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-2xl">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">
-                {if @editing_credential_id,
-                  do: gettext("Edit credential"),
-                  else: gettext("New credential")}
-              </h2>
-              <.form for={@credential_form} id="credential-form" phx-submit="save_credential">
-                <.input field={@credential_form[:provider_id]} type="hidden" />
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
-                  <.input
-                    field={@credential_form[:name]}
-                    type="text"
-                    label="Alias"
-                    placeholder={gettext("Production")}
-                    hint={gettext("Name to identify this credential.")}
-                  />
-                  <.input
-                    field={@credential_form[:api_key_encrypted]}
-                    type="password"
-                    label={"#{gettext("API key")}#{if @editing_credential_id, do: gettext(" (leave empty = unchanged)"), else: ""}"}
-                    placeholder={
-                      if @editing_credential_id,
-                        do: gettext("sk-... (leave empty to keep)"),
-                        else: "sk-..."
-                    }
-                    hint={
-                      if @editing_credential_id,
-                        do: gettext("Only if you want to change it."),
-                        else: gettext("The token the provider gives you (sk-...).")
-                    }
-                  />
-                </div>
-                <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
-                  <button type="button" phx-click="cancel_credential" class="btn btn-ghost btn-sm">
-                    {gettext("Cancel")}
-                  </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-credential-btn">
-                    {(@editing_credential_id && gettext("Update")) || gettext("Save")}
-                  </button>
-                </div>
-              </.form>
+        <.modal
+          :if={@credential_form}
+          id="credential-form-modal"
+          title={
+            if @editing_credential_id,
+              do: gettext("Edit credential"),
+              else: gettext("New credential")
+          }
+          on_close="cancel_credential"
+          max_w="max-w-2xl"
+        >
+          <.form for={@credential_form} id="credential-form" phx-submit="save_credential">
+            <.input field={@credential_form[:provider_id]} type="hidden" />
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
+              <.input
+                field={@credential_form[:name]}
+                type="text"
+                label="Alias"
+                placeholder={gettext("Production")}
+                hint={gettext("Name to identify this credential.")}
+              />
+              <.input
+                field={@credential_form[:api_key_encrypted]}
+                type="password"
+                label={"#{gettext("API key")}#{if @editing_credential_id, do: gettext(" (leave empty = unchanged)"), else: ""}"}
+                placeholder={
+                  if @editing_credential_id,
+                    do: gettext("sk-... (leave empty to keep)"),
+                    else: "sk-..."
+                }
+                hint={
+                  if @editing_credential_id,
+                    do: gettext("Only if you want to change it."),
+                    else: gettext("The token the provider gives you (sk-...).")
+                }
+              />
             </div>
-          </div>
-        </div>
+            <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
+              <button type="button" phx-click="cancel_credential" class="btn btn-ghost btn-sm">
+                {gettext("Cancel")}
+              </button>
+              <button type="submit" class="btn btn-primary btn-sm" id="save-credential-btn">
+                {(@editing_credential_id && gettext("Update")) || gettext("Save")}
+              </button>
+            </div>
+          </.form>
+        </.modal>
 
         <%!-- Las keys de ESTE proveedor, en tabla: alias, secreto enmascarado,
              modelos, tráfico y breaker. El secreto NUNCA se renderiza

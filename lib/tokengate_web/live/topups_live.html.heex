@@ -53,137 +53,134 @@
     </.header>
 
     <%!-- Form modal --%>
-    <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div class="absolute inset-0 bg-black/50" phx-click="cancel_topup" />
-      <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-        <div class="card-body p-6">
-          <h2 class="text-lg font-semibold mb-4">
-            {if @editing_topup_id, do: gettext("Edit top-up"), else: gettext("New top-up")}
-          </h2>
-          <.form for={@form} id="topup-form" phx-submit="save_topup">
-            <%!-- One-shot submit token: the double-submit guard. Consumed by
+    <.modal
+      :if={@form}
+      id="topup-form-modal"
+      title={if @editing_topup_id, do: gettext("Edit top-up"), else: gettext("New top-up")}
+      on_close="cancel_topup"
+    >
+      <.form for={@form} id="topup-form" phx-submit="save_topup">
+        <%!-- One-shot submit token: the double-submit guard. Consumed by
                  the first save, so a second submit of this form is a no-op. --%>
-            <input
-              type="hidden"
-              name="idempotency_key"
-              id="topup-idempotency-key"
-              value={@form_token}
-            />
-            <div id="topup-owner">
-              <label class="text-xs text-base-content/60 block mb-1">{gettext("Owner")}</label>
+        <input
+          type="hidden"
+          name="idempotency_key"
+          id="topup-idempotency-key"
+          value={@form_token}
+        />
+        <div id="topup-owner">
+          <label class="text-xs text-base-content/60 block mb-1">{gettext("Owner")}</label>
 
-              <div class="flex gap-1 mb-2">
-                <button
-                  type="button"
-                  phx-click="owner_kind"
-                  phx-value-kind="user"
-                  id="owner-kind-user"
-                  class={[
-                    "btn btn-xs",
-                    if(@owner_kind == "user", do: "btn-primary", else: "btn-ghost")
-                  ]}
-                >
-                  {gettext("User")}
-                </button>
-                <button
-                  type="button"
-                  phx-click="owner_kind"
-                  phx-value-kind="service"
-                  id="owner-kind-service"
-                  class={[
-                    "btn btn-xs",
-                    if(@owner_kind == "service", do: "btn-primary", else: "btn-ghost")
-                  ]}
-                >
-                  {gettext("Service")}
-                </button>
+          <div class="flex gap-1 mb-2">
+            <button
+              type="button"
+              phx-click="owner_kind"
+              phx-value-kind="user"
+              id="owner-kind-user"
+              class={[
+                "btn btn-xs",
+                if(@owner_kind == "user", do: "btn-primary", else: "btn-ghost")
+              ]}
+            >
+              {gettext("User")}
+            </button>
+            <button
+              type="button"
+              phx-click="owner_kind"
+              phx-value-kind="service"
+              id="owner-kind-service"
+              class={[
+                "btn btn-xs",
+                if(@owner_kind == "service", do: "btn-primary", else: "btn-ghost")
+              ]}
+            >
+              {gettext("Service")}
+            </button>
+          </div>
+
+          <div :if={@selected_owner} class="mb-2" id="selected-owner">
+            <span class="badge badge-primary badge-sm gap-1">
+              {owner_badge(@selected_owner)}
+            </span>
+          </div>
+
+          <.input
+            type="text"
+            name="owner_query"
+            value={@owner_query}
+            placeholder={
+              if @owner_kind == "user",
+                do: gettext("Search user…"),
+                else: gettext("Search service…")
+            }
+            phx-change="search_owner"
+            phx-debounce="200"
+            id="topup-owner-search"
+            autocomplete="off"
+          />
+
+          <div
+            :if={@owner_query != "" and @owner_results == []}
+            class="text-xs text-base-content/40 mt-2"
+          >
+            {gettext("No matches.")}
+          </div>
+
+          <div
+            :if={@owner_results != []}
+            class="mt-2 max-h-40 overflow-y-auto border border-base-300 rounded-md"
+          >
+            <button
+              :for={o <- @owner_results}
+              type="button"
+              id={"select-owner-#{o.id}"}
+              phx-click="select_owner"
+              phx-value-id={o.id}
+              class="w-full text-left px-3 py-2 text-sm hover:bg-base-100 border-b border-base-300 last:border-b-0"
+            >
+              <div class="font-medium">{subject_primary(o)}</div>
+              <div :if={subject_secondary(o)} class="text-xs text-base-content/60">
+                {subject_secondary(o)}
               </div>
-
-              <div :if={@selected_owner} class="mb-2" id="selected-owner">
-                <span class="badge badge-primary badge-sm gap-1">
-                  {owner_badge(@selected_owner)}
-                </span>
-              </div>
-
-              <.input
-                type="text"
-                name="owner_query"
-                value={@owner_query}
-                placeholder={
-                  if @owner_kind == "user",
-                    do: gettext("Search user…"),
-                    else: gettext("Search service…")
-                }
-                phx-change="search_owner"
-                phx-debounce="200"
-                id="topup-owner-search"
-                autocomplete="off"
-              />
-
-              <div
-                :if={@owner_query != "" and @owner_results == []}
-                class="text-xs text-base-content/40 mt-2"
-              >
-                {gettext("No matches.")}
-              </div>
-
-              <div
-                :if={@owner_results != []}
-                class="mt-2 max-h-40 overflow-y-auto border border-base-300 rounded-md"
-              >
-                <button
-                  :for={o <- @owner_results}
-                  type="button"
-                  id={"select-owner-#{o.id}"}
-                  phx-click="select_owner"
-                  phx-value-id={o.id}
-                  class="w-full text-left px-3 py-2 text-sm hover:bg-base-100 border-b border-base-300 last:border-b-0"
-                >
-                  <div class="font-medium">{subject_primary(o)}</div>
-                  <div :if={subject_secondary(o)} class="text-xs text-base-content/60">
-                    {subject_secondary(o)}
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-              <.input
-                field={@form[:amount_usd]}
-                type="number"
-                step="0.01"
-                min="0.01"
-                label={gettext("Amount (USD)")}
-              />
-              <.input field={@form[:label]} type="text" label={gettext("Label (optional)")} />
-            </div>
-
-            <div class="mt-3">
-              <.input
-                field={@form[:expires_in_days]}
-                type="select"
-                label={gettext("Expiration")}
-                options={expiry_options()}
-                hint={gettext("Counted from its creation")}
-              />
-            </div>
-
-            <div class="mt-3">
-              <.input field={@form[:note]} type="text" label={gettext("Note (optional)")} />
-            </div>
-
-            <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_topup" class="btn btn-ghost btn-sm">
-                {gettext("Cancel")}
-              </button>
-              <button type="submit" class="btn btn-primary btn-sm" id="save-topup-btn">
-                {gettext("Save")}
-              </button>
-            </div>
-          </.form>
+            </button>
+          </div>
         </div>
-      </div>
-    </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+          <.input
+            field={@form[:amount_usd]}
+            type="number"
+            step="0.01"
+            min="0.01"
+            label={gettext("Amount (USD)")}
+          />
+          <.input field={@form[:label]} type="text" label={gettext("Label (optional)")} />
+        </div>
+
+        <div class="mt-3">
+          <.input
+            field={@form[:expires_in_days]}
+            type="select"
+            label={gettext("Expiration")}
+            options={expiry_options()}
+            hint={gettext("Counted from its creation")}
+          />
+        </div>
+
+        <div class="mt-3">
+          <.input field={@form[:note]} type="text" label={gettext("Note (optional)")} />
+        </div>
+
+        <div class="flex gap-2 mt-4 justify-end">
+          <button type="button" phx-click="cancel_topup" class="btn btn-ghost btn-sm">
+            {gettext("Cancel")}
+          </button>
+          <button type="submit" class="btn btn-primary btn-sm" id="save-topup-btn">
+            {gettext("Save")}
+          </button>
+        </div>
+      </.form>
+    </.modal>
 
     <%!-- Listado — una fila por top-up --%>
     <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">

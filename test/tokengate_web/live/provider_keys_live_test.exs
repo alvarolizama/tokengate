@@ -182,6 +182,9 @@ defmodule TokengateWeb.ProviderKeysLiveTest do
 
     assert has_element?(view, "#credential-form")
 
+    # El contenedor es el .modal único: su id va en el div raíz.
+    assert has_element?(view, "#credential-form-modal")
+
     assert has_element?(
              view,
              "#credential-form input[name='credential[provider_id]'][value='#{provider.id}']"
@@ -203,6 +206,9 @@ defmodule TokengateWeb.ProviderKeysLiveTest do
     view |> render_patch(~p"/catalog/providers/#{provider.id}/keys?new=1")
 
     assert has_element?(view, "#credential-form")
+
+    # El contenedor es el .modal único: su id va en el div raíz.
+    assert has_element?(view, "#credential-form-modal")
 
     assert has_element?(
              view,

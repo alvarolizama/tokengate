@@ -317,54 +317,51 @@ defmodule TokengateWeb.ObservabilityLive do
         </.header>
 
         <%!-- Destination form (create / edit) — modal --%>
-        <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">
-                {if @editing_destination_id == :new,
-                  do: gettext("New webhook"),
-                  else: gettext("Edit webhook")}
-              </h2>
-              <.form for={@form} id="destination-form" phx-submit="save_destination">
-                <.input
-                  field={@form[:name]}
-                  type="text"
-                  label={gettext("Name")}
-                  hint={gettext("Identifying name of the webhook. E.g. “Datadog - Production”.")}
-                />
-                <.input
-                  field={@form[:url]}
-                  type="text"
-                  label="URL"
-                  hint={
-                    gettext("HTTPS endpoint where the telemetry data will be sent (OTLP format).")
-                  }
-                />
-                <.input
-                  field={@form[:headers]}
-                  value={headers_to_string(@form[:headers].value)}
-                  type="textarea"
-                  label={gettext("Headers (JSON)")}
-                  placeholder='{"Authorization": "Bearer xxx"}'
-                  hint={
-                    gettext(
-                      "Extra HTTP headers as JSON. Leave it empty when no extra headers are needed."
-                    )
-                  }
-                />
-                <div class="flex gap-2 mt-4 justify-end">
-                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
-                    {gettext("Cancel")}
-                  </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-destination-btn">
-                    {gettext("Save")}
-                  </button>
-                </div>
-              </.form>
+        <.modal
+          :if={@form}
+          id="destination-form-modal"
+          title={
+            if @editing_destination_id == :new,
+              do: gettext("New webhook"),
+              else: gettext("Edit webhook")
+          }
+          on_close="cancel_form"
+        >
+          <.form for={@form} id="destination-form" phx-submit="save_destination">
+            <.input
+              field={@form[:name]}
+              type="text"
+              label={gettext("Name")}
+              hint={gettext("Identifying name of the webhook. E.g. “Datadog - Production”.")}
+            />
+            <.input
+              field={@form[:url]}
+              type="text"
+              label="URL"
+              hint={gettext("HTTPS endpoint where the telemetry data will be sent (OTLP format).")}
+            />
+            <.input
+              field={@form[:headers]}
+              value={headers_to_string(@form[:headers].value)}
+              type="textarea"
+              label={gettext("Headers (JSON)")}
+              placeholder='{"Authorization": "Bearer xxx"}'
+              hint={
+                gettext(
+                  "Extra HTTP headers as JSON. Leave it empty when no extra headers are needed."
+                )
+              }
+            />
+            <div class="flex gap-2 mt-4 justify-end">
+              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
+                {gettext("Cancel")}
+              </button>
+              <button type="submit" class="btn btn-primary btn-sm" id="save-destination-btn">
+                {gettext("Save")}
+              </button>
             </div>
-          </div>
-        </div>
+          </.form>
+        </.modal>
 
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
           <.table

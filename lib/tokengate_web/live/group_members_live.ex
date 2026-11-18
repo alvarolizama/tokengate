@@ -505,78 +505,74 @@ defmodule TokengateWeb.GroupMembersLive do
         </div>
 
         <%!-- Add member modal --%>
-        <div
+        <.modal
           :if={@show_add_modal?}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
           id="add-member-modal"
+          title={gettext("Add member")}
+          on_close="cancel_add_member"
+          max_w="max-w-2xl"
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_add_member" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-2xl">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">{gettext("Add member")}</h2>
-              <.form for={@add_form} id="add-member-form" phx-submit="add_member">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <%!-- Email input with live autocomplete --%>
-                  <div class="sm:col-span-2 relative">
-                    <.input
-                      field={@add_form[:email]}
-                      type="email"
-                      label={gettext("User email")}
-                      placeholder={gettext("user@example.com")}
-                      phx-change="search_email"
-                      phx-debounce="300"
-                    />
-                    <div
-                      :if={@email_suggestions != []}
-                      class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-60 overflow-y-auto"
-                      id="email-suggestions"
-                    >
-                      <button
-                        :for={user <- @email_suggestions}
-                        type="button"
-                        phx-click="select_email"
-                        phx-value-email={user.email}
-                        class="w-full text-left px-3 py-2 hover:bg-base-200 transition-colors flex items-center gap-3 border-b border-base-200 last:border-0"
-                        id={"suggestion-#{user.id}"}
-                      >
-                        <div class="flex-1 min-w-0">
-                          <p class="text-sm font-medium truncate">{user.email}</p>
-                          <p class="text-xs text-base-content/50 truncate">{user.name}</p>
-                        </div>
-                        <span class={["badge", "badge-sm", "badge-ghost"]}>{user.global_role}</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <%!-- Un usuario pertenece a UN solo presupuesto mensual, así que sólo
-                     puede estar en una: si ya tiene otra, el alta falla. --%>
-                <p class="text-xs text-base-content/50 mt-3">
-                  {gettext(
-                    "Each user belongs to a single limit profile. If they already have another, remove them"
-                  )}
-                  {gettext("from it first.")}
-                </p>
-                <p :if={@add_member_error} class="text-sm text-error mt-4" id="add-member-error">
-                  <.icon name="hero-exclamation-circle" class="w-4 h-4 inline mr-1" />
-                  {@add_member_error}
-                </p>
-                <div class="flex gap-2 mt-6 justify-end">
+          <.form for={@add_form} id="add-member-form" phx-submit="add_member">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <%!-- Email input with live autocomplete --%>
+              <div class="sm:col-span-2 relative">
+                <.input
+                  field={@add_form[:email]}
+                  type="email"
+                  label={gettext("User email")}
+                  placeholder={gettext("user@example.com")}
+                  phx-change="search_email"
+                  phx-debounce="300"
+                />
+                <div
+                  :if={@email_suggestions != []}
+                  class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-60 overflow-y-auto"
+                  id="email-suggestions"
+                >
                   <button
+                    :for={user <- @email_suggestions}
                     type="button"
-                    phx-click="cancel_add_member"
-                    class="btn btn-ghost btn-sm"
-                    id="cancel-add-member"
+                    phx-click="select_email"
+                    phx-value-email={user.email}
+                    class="w-full text-left px-3 py-2 hover:bg-base-200 transition-colors flex items-center gap-3 border-b border-base-200 last:border-0"
+                    id={"suggestion-#{user.id}"}
                   >
-                    {gettext("Cancel")}
-                  </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="add-member-btn-submit">
-                    {gettext("Add")}
+                    <div class="flex-1 min-w-0">
+                      <p class="text-sm font-medium truncate">{user.email}</p>
+                      <p class="text-xs text-base-content/50 truncate">{user.name}</p>
+                    </div>
+                    <span class={["badge", "badge-sm", "badge-ghost"]}>{user.global_role}</span>
                   </button>
                 </div>
-              </.form>
+              </div>
             </div>
-          </div>
-        </div>
+            <%!-- Un usuario pertenece a UN solo presupuesto mensual, así que sólo
+                 puede estar en una: si ya tiene otra, el alta falla. --%>
+            <p class="text-xs text-base-content/50 mt-3">
+              {gettext(
+                "Each user belongs to a single limit profile. If they already have another, remove them"
+              )}
+              {gettext("from it first.")}
+            </p>
+            <p :if={@add_member_error} class="text-sm text-error mt-4" id="add-member-error">
+              <.icon name="hero-exclamation-circle" class="w-4 h-4 inline mr-1" />
+              {@add_member_error}
+            </p>
+            <div class="flex gap-2 mt-6 justify-end">
+              <button
+                type="button"
+                phx-click="cancel_add_member"
+                class="btn btn-ghost btn-sm"
+                id="cancel-add-member"
+              >
+                {gettext("Cancel")}
+              </button>
+              <button type="submit" class="btn btn-primary btn-sm" id="add-member-btn-submit">
+                {gettext("Add")}
+              </button>
+            </div>
+          </.form>
+        </.modal>
 
         <%!-- Resumen del perfil de límites — fila compacta --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="group-config">
@@ -723,52 +719,45 @@ defmodule TokengateWeb.GroupMembersLive do
         </div>
 
         <%!-- Member details modal — modelos --%>
-        <div
-          :if={@editing_details_member_id}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        <% member = Map.get(@members_by_id, @editing_details_member_id) %>
+        <.modal
+          :if={member}
           id={"member-details-#{@editing_details_member_id}"}
+          title={member.user.email}
+          on_close="close_details"
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="close_details" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <% member = Map.get(@members_by_id, @editing_details_member_id) %>
-              <div :if={member}>
-                <h2 class="text-lg font-semibold mb-1">{member.user.email}</h2>
-                <p class="text-xs text-base-content/50 mb-4">{member.user.name}</p>
+          <p class="text-xs text-base-content/50 mb-4">{member.user.name}</p>
 
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">
-                    {gettext("Models")}
-                  </p>
-                  <p class="text-xs text-base-content/40 mb-2">
-                    {gettext("The limit profile models are granted to every member; the extras are")}
-                    {gettext("per member.")}
-                  </p>
-                  <.model_picker
-                    id={"model-picker-member-#{member.id}"}
-                    models={@org_models}
-                    granted_ids={MapSet.to_list(@group_alias_ids)}
-                    extra_ids={extra_model_ids(@extra_models, member.id)}
-                    denied_ids={denied_model_ids(@denied_models, member.id)}
-                    toggle_event="toggle_extra_model"
-                    target_value={member.id}
-                  />
-                </div>
-
-                <div class="flex justify-end mt-4">
-                  <button
-                    type="button"
-                    phx-click="close_details"
-                    class="btn btn-primary btn-sm"
-                    id="close-details-btn"
-                  >
-                    {gettext("Close")}
-                  </button>
-                </div>
-              </div>
-            </div>
+          <div>
+            <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">
+              {gettext("Models")}
+            </p>
+            <p class="text-xs text-base-content/40 mb-2">
+              {gettext("The limit profile models are granted to every member; the extras are")}
+              {gettext("per member.")}
+            </p>
+            <.model_picker
+              id={"model-picker-member-#{member.id}"}
+              models={@org_models}
+              granted_ids={MapSet.to_list(@group_alias_ids)}
+              extra_ids={extra_model_ids(@extra_models, member.id)}
+              denied_ids={denied_model_ids(@denied_models, member.id)}
+              toggle_event="toggle_extra_model"
+              target_value={member.id}
+            />
           </div>
-        </div>
+
+          <:footer>
+            <button
+              type="button"
+              phx-click="close_details"
+              class="btn btn-primary btn-sm"
+              id="close-details-btn"
+            >
+              {gettext("Close")}
+            </button>
+          </:footer>
+        </.modal>
       </div>
     </Layouts.dashboard>
     """

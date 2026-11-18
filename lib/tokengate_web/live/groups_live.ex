@@ -393,105 +393,99 @@ defmodule TokengateWeb.GroupsLive do
         </.header>
 
         <%!-- Group form (create / edit) — modal --%>
-        <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">
-                {if @editing_group_id == :new,
-                  do: gettext("New limit profile"),
-                  else: gettext("Edit limit profile")}
-              </h2>
-              <.form for={@form} id="group-form" phx-submit="save_group">
-                <.input
-                  field={@form[:name]}
-                  type="text"
-                  label={gettext("Name")}
-                  hint={gettext("Identifying name of the limit profile.")}
-                />
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <.input
-                    field={@form[:default_concurrency_limit]}
-                    type="number"
-                    label={gettext("Concurrency")}
-                    hint={
-                      gettext(
-                        "Concurrency per member. Each member can have an extra on top of this value."
-                      )
-                    }
-                  />
-                  <.input
-                    field={@form[:default_rpm_limit]}
-                    type="number"
-                    label="RPM"
-                    hint={gettext("Requests per minute per member.")}
-                  />
-                </div>
-                <%!-- El techo mensual del presupuesto es el que heredan sus
-                     miembros cuando no definen el suyo. --%>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-                  <.input
-                    field={@form[:monthly_spend_limit_usd]}
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    label={gettext("Monthly limit (USD)")}
-                    hint={
-                      gettext(
-                        "Monthly cap of the limit profile. 0 = zero (cannot spend). Empty = no budget (top-ups only)."
-                      )
-                    }
-                  />
-                  <.input
-                    field={@form[:unlimited_spend]}
-                    type="checkbox"
-                    label={gettext("Unlimited")}
-                    hint={gettext("Only path to unlimited; wins over the limit.")}
-                  />
-                </div>
-                <div class="flex gap-2 mt-4 justify-end">
-                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
-                    {gettext("Cancel")}
-                  </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-group-btn">
-                    {gettext("Save")}
-                  </button>
-                </div>
-              </.form>
+        <.modal
+          :if={@form}
+          id="group-form-modal"
+          title={
+            if @editing_group_id == :new,
+              do: gettext("New limit profile"),
+              else: gettext("Edit limit profile")
+          }
+          on_close="cancel_form"
+        >
+          <.form for={@form} id="group-form" phx-submit="save_group">
+            <.input
+              field={@form[:name]}
+              type="text"
+              label={gettext("Name")}
+              hint={gettext("Identifying name of the limit profile.")}
+            />
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <.input
+                field={@form[:default_concurrency_limit]}
+                type="number"
+                label={gettext("Concurrency")}
+                hint={
+                  gettext(
+                    "Concurrency per member. Each member can have an extra on top of this value."
+                  )
+                }
+              />
+              <.input
+                field={@form[:default_rpm_limit]}
+                type="number"
+                label="RPM"
+                hint={gettext("Requests per minute per member.")}
+              />
             </div>
-          </div>
-        </div>
+            <%!-- El techo mensual del presupuesto es el que heredan sus
+                 miembros cuando no definen el suyo. --%>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+              <.input
+                field={@form[:monthly_spend_limit_usd]}
+                type="number"
+                step="0.01"
+                min="0"
+                label={gettext("Monthly limit (USD)")}
+                hint={
+                  gettext(
+                    "Monthly cap of the limit profile. 0 = zero (cannot spend). Empty = no budget (top-ups only)."
+                  )
+                }
+              />
+              <.input
+                field={@form[:unlimited_spend]}
+                type="checkbox"
+                label={gettext("Unlimited")}
+                hint={gettext("Only path to unlimited; wins over the limit.")}
+              />
+            </div>
+            <div class="flex gap-2 mt-4 justify-end">
+              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
+                {gettext("Cancel")}
+              </button>
+              <button type="submit" class="btn btn-primary btn-sm" id="save-group-btn">
+                {gettext("Save")}
+              </button>
+            </div>
+          </.form>
+        </.modal>
 
         <%!-- Models modal — manage model grants per group --%>
-        <div
+        <.modal
           :if={@editing_models_group_id}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
           id={"models-modal-#{@editing_models_group_id}"}
+          title={gettext("Limit profile models")}
+          on_close="close_models"
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="close_models" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">{gettext("Limit profile models")}</h2>
-              <.model_picker
-                id={"model-picker-#{@editing_models_group_id}"}
-                models={Map.get(@models_by_org, "all", [])}
-                granted_ids={Map.get(@granted_models, @editing_models_group_id, [])}
-                toggle_event="toggle_model"
-                target_value={@editing_models_group_id}
-              />
-              <div class="flex justify-end mt-4">
-                <button
-                  type="button"
-                  phx-click="close_models"
-                  class="btn btn-primary btn-sm"
-                  id="close-models-btn"
-                >
-                  Listo
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+          <.model_picker
+            id={"model-picker-#{@editing_models_group_id}"}
+            models={Map.get(@models_by_org, "all", [])}
+            granted_ids={Map.get(@granted_models, @editing_models_group_id, [])}
+            toggle_event="toggle_model"
+            target_value={@editing_models_group_id}
+          />
+          <:footer>
+            <button
+              type="button"
+              phx-click="close_models"
+              class="btn btn-primary btn-sm"
+              id="close-models-btn"
+            >
+              Listo
+            </button>
+          </:footer>
+        </.modal>
 
         <%!-- Listado: una fila por perfil de límites (antes eran cards). --%>
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">

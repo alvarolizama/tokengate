@@ -339,78 +339,81 @@ defmodule TokengateWeb.MaintenanceLive do
       </div>
 
       <%!-- Confirmation modal: full reset (usage + unused catalog) --%>
-      <div :if={@confirm_full_reset} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-black/50" phx-click="cancel_full_reset" />
-        <div class="relative card bg-base-100 border border-error/50 shadow-xl w-full max-w-md">
-          <div class="card-body">
-            <h3 class="card-title text-error flex items-center gap-2">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5" />
-              {gettext("Leave everything at zero?")}
-            </h3>
-            <p class="text-sm text-base-content/70 mt-2">
+      <.modal
+        :if={@confirm_full_reset}
+        id="confirm-full-reset-modal"
+        title={gettext("Leave everything at zero?")}
+        on_close="cancel_full_reset"
+        max_w="max-w-md"
+      >
+        <div class="flex items-start gap-2 text-sm text-base-content/70">
+          <.icon name="hero-exclamation-triangle" class="w-5 h-5 text-error shrink-0" />
+          <div class="space-y-2">
+            <p>
               {gettext("Deletes")} <strong>{gettext("permanently")}</strong>
               {gettext(
                 "all usage history (logs, hourly metrics, budget counters, sticky routes) AND catalog records with no deployment: models without deployments and providers without credentials."
               )}
               {gettext("They cannot be recovered.")}
             </p>
-            <p class="text-sm text-base-content/70">
+            <p>
               {gettext(
                 "Users, services, API keys, limit profiles, models with deployments and providers with credentials are kept."
               )}
             </p>
-            <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_full_reset" class="btn btn-ghost btn-sm">
-                {gettext("Cancel")}
-              </button>
-              <button
-                type="button"
-                phx-click="reset_all_usage"
-                class="btn btn-error btn-sm"
-                id="confirm-reset-all-usage-btn"
-              >
-                {gettext("Yes, leave everything at zero")}
-              </button>
-            </div>
           </div>
         </div>
-      </div>
+        <:footer>
+          <button type="button" phx-click="cancel_full_reset" class="btn btn-ghost btn-sm">
+            {gettext("Cancel")}
+          </button>
+          <button
+            type="button"
+            phx-click="reset_all_usage"
+            class="btn btn-error btn-sm"
+            id="confirm-reset-all-usage-btn"
+          >
+            {gettext("Yes, leave everything at zero")}
+          </button>
+        </:footer>
+      </.modal>
 
       <%!-- Confirmation modal: reset sticky sessions --%>
-      <div :if={@confirm_sticky_reset} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-black/50" phx-click="cancel_sticky_reset" />
-        <div class="relative card bg-base-100 border border-warning/50 shadow-xl w-full max-w-md">
-          <div class="card-body">
-            <h3 class="card-title text-warning flex items-center gap-2">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> {gettext(
-                "Reset sticky sessions?"
-              )}
-            </h3>
-            <p class="text-sm text-base-content/70 mt-2">
+      <.modal
+        :if={@confirm_sticky_reset}
+        id="confirm-sticky-reset-modal"
+        title={gettext("Reset sticky sessions?")}
+        on_close="cancel_sticky_reset"
+        max_w="max-w-md"
+      >
+        <div class="flex items-start gap-2 text-sm text-base-content/70">
+          <.icon name="hero-exclamation-triangle" class="w-5 h-5 text-warning shrink-0" />
+          <div class="space-y-2">
+            <p>
               {gettext("This deletes")}
               <strong>{gettext("all")}</strong> {gettext("API key to provider assignments.")}
               {gettext("The next requests will be re-routed from scratch,")}
               {gettext("without preserving the cache affinity.")}
             </p>
-            <p class="text-sm text-base-content/70">
+            <p>
               {gettext("Models, providers and API keys are not affected.")}
             </p>
-            <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_sticky_reset" class="btn btn-ghost btn-sm">
-                {gettext("Cancel")}
-              </button>
-              <button
-                type="button"
-                phx-click="reset_sticky_sessions"
-                class="btn btn-warning btn-sm"
-                id="confirm-reset-sticky-btn"
-              >
-                {gettext("Yes, reset stickies")}
-              </button>
-            </div>
           </div>
         </div>
-      </div>
+        <:footer>
+          <button type="button" phx-click="cancel_sticky_reset" class="btn btn-ghost btn-sm">
+            {gettext("Cancel")}
+          </button>
+          <button
+            type="button"
+            phx-click="reset_sticky_sessions"
+            class="btn btn-warning btn-sm"
+            id="confirm-reset-sticky-btn"
+          >
+            {gettext("Yes, reset stickies")}
+          </button>
+        </:footer>
+      </.modal>
     </Layouts.dashboard>
     """
   end

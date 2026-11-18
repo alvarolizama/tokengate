@@ -128,6 +128,8 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     {:ok, view, _html} = live(conn, ~p"/operations/observability")
 
     view |> element("#new-destination-btn") |> render_click()
+    # El contenedor es el .modal único: su id va en el div raíz.
+    assert has_element?(view, "#destination-form-modal")
     assert has_element?(view, "#destination-form")
   end
 

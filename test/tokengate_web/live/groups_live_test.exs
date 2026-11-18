@@ -121,6 +121,8 @@ defmodule TokengateWeb.GroupsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/budget/profiles")
 
     view |> element("#new-group-btn") |> render_click()
+    # El contenedor es el .modal único: su id va en el div raíz.
+    assert has_element?(view, "#group-form-modal")
     assert has_element?(view, "#group-form")
 
     html =

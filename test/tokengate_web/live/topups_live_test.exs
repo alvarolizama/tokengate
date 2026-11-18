@@ -216,6 +216,9 @@ defmodule TokengateWeb.TopupsLiveTest do
       view |> element("#new-topup-btn") |> render_click()
       view |> element("#select-owner-#{user.id}") |> render_click()
 
+      # El contenedor es el .modal único: su id va en el div raíz.
+      assert has_element?(view, "#topup-form-modal")
+
       html =
         view
         |> form("#topup-form", %{

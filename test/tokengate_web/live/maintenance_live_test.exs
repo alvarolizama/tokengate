@@ -183,6 +183,8 @@ defmodule TokengateWeb.SettingsLiveTest do
 
       # Click reset sticky → confirmation modal appears
       view |> element("#reset-sticky-btn") |> render_click()
+      # El contenedor es el .modal único: su id va en el div raíz.
+      assert has_element?(view, "#confirm-sticky-reset-modal")
       assert has_element?(view, "#confirm-reset-sticky-btn")
 
       # Confirm reset
@@ -205,6 +207,8 @@ defmodule TokengateWeb.SettingsLiveTest do
 
       # El borrado sigue ocurriendo dentro del reset total, que es lo que queda.
       view |> element("#reset-all-usage-btn") |> render_click()
+      # El contenedor es el .modal único: su id va en el div raíz.
+      assert has_element?(view, "#confirm-full-reset-modal")
       assert has_element?(view, "#confirm-reset-all-usage-btn")
 
       view |> element("#confirm-reset-all-usage-btn") |> render_click()
