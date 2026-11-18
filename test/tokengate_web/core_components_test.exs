@@ -94,4 +94,34 @@ defmodule TokengateWeb.CoreComponentsTest do
       assert html =~ ~s{value="8b0e5c1a-0000-4000-8000-000000000000"}
     end
   end
+
+  describe "steps/1 wizard indicator" do
+    test "renders one crumb per step and highlights the current one" do
+      html =
+        render_component(&CoreComponents.steps/1, %{
+          steps: [{"credential", "Credential"}, {"routing", "Routing"}, {"pricing", "Pricing"}],
+          current: "routing",
+          id: "lane-wizard-steps"
+        })
+
+      assert html =~ ~s{id="lane-wizard-steps"}
+      assert html =~ ~s{id="wizard-crumb-credential"}
+      assert html =~ ~s{id="wizard-crumb-routing"}
+      assert html =~ ~s{id="wizard-crumb-pricing"}
+      assert html =~ "Credential"
+      assert html =~ "Routing"
+      assert html =~ "Pricing"
+      assert html =~ ~r/wizard-crumb-routing[^>]*border-primary/
+    end
+
+    test "no crumb is highlighted when current matches no step" do
+      html =
+        render_component(&CoreComponents.steps/1, %{
+          steps: [{"a", "A"}, {"b", "B"}],
+          current: "zzz"
+        })
+
+      refute html =~ "border-primary"
+    end
+  end
 end

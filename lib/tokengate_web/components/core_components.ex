@@ -835,7 +835,14 @@ defmodule TokengateWeb.CoreComponents do
   attr :title, :string, required: true
   attr :on_close, :string, required: true, doc: "evento LiveView del ✕, Escape y click-away"
   attr :max_w, :string, default: "max-w-lg", doc: "ancho máximo del card (max-w-md|lg|2xl…)"
+
+  attr :steps, :list,
+    default: nil,
+    doc: "wizard steps [{key, label}] — renderiza el indicador de pasos"
+
+  attr :current_step, :string, default: nil, doc: "key del paso activo del wizard"
   slot :inner_block, required: true
+  slot :footer, doc: "footer opcional (Back/Next/Save) bajo el cuerpo, separado por borde"
 
   def modal(assigns) do
     ~H"""
@@ -859,9 +866,50 @@ defmodule TokengateWeb.CoreComponents do
               <.icon name="hero-x-mark" class="size-4" />
             </button>
           </div>
+          <.steps :if={@steps} steps={@steps} current={@current_step} id={@id <> "-steps"} />
           {render_slot(@inner_block)}
+          <div
+            :if={@footer != []}
+            class="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-base-200"
+          >
+            {render_slot(@footer)}
+          </div>
         </div>
       </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Indicador de pasos de un wizard: una pill por paso, la activa resaltada.
+  Extraído del wizard de alta de modelo para reutilizar en todos los formularios
+  partidos en pasos. Los crumbs no son clicables (el avance lo valida el LiveView
+  con Back/Next); `current` marca el paso activo.
+
+  ## Ejemplo
+
+      <.steps steps={[{"credential", "Credential"}, {"routing", "Routing"}]} current="credential" />
+  """
+  attr :steps, :list, required: true, doc: "lista ordenada de {key, label}"
+  attr :current, :string, required: true, doc: "key del paso activo"
+  attr :id, :string, default: "wizard-steps"
+
+  def steps(assigns) do
+    ~H"""
+    <div class="flex items-center gap-2 mb-4 text-xs flex-wrap" id={@id}>
+      <span
+        :for={{key, label} <- @steps}
+        id={"wizard-crumb-#{key}"}
+        class={[
+          "px-2 py-0.5 rounded-full border",
+          if(@current == key,
+            do: "border-primary bg-primary/10 text-primary font-medium",
+            else: "border-base-300 text-base-content/50"
+          )
+        ]}
+      >
+        {label}
+      </span>
     </div>
     """
   end
