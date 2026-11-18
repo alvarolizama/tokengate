@@ -315,6 +315,7 @@ msgid "API key"
 msgstr ""
 
 #: lib/tokengate_web/components/keys_panel.ex:204
+#: lib/tokengate_web/live/dashboard_live.ex:1076
 #: lib/tokengate_web/live/model_providers_live.ex:2275
 #: lib/tokengate_web/live/providers_live.ex:1272
 #: lib/tokengate_web/live/users_live.ex:1279
@@ -832,6 +833,7 @@ msgstr ""
 #: lib/tokengate_web/components/keys_panel.ex:204
 #: lib/tokengate_web/components/keys_panel.ex:286
 #: lib/tokengate_web/components/service_stats_body.ex:91
+#: lib/tokengate_web/live/dashboard_live.ex:1077
 #, elixir-autogen, elixir-format
 msgid "Revoked"
 msgstr ""
