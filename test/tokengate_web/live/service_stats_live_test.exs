@@ -302,8 +302,8 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       assert cell_text(view, "#api-key-row-#{key.id} td:nth-child(3)") == "1"
       assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*1\s*</
 
-      # Click a "month": el log de hoy también cae dentro.
-      view |> element("#period-month") |> render_click()
+      # Click a "30d": el log de hoy también cae dentro de la ventana móvil.
+      view |> element("#period-30d") |> render_click()
 
       assert has_element?(view, "#api-key-row-#{key.id}")
 
