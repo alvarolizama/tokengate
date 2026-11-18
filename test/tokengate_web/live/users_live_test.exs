@@ -289,7 +289,7 @@ defmodule TokengateWeb.UsersLiveTest do
 
       # El default de la tabla es por nombre (rich se registró primero), así
       # que hay que pedir el orden por crédito: desc = más consumo primero.
-      html = view |> element("#sort-credit") |> render_click()
+      html = view |> element("th button[phx-value-field='credit']") |> render_click()
 
       rich_first? = fn html ->
         Regex.scan(~r/id="user-([0-9a-f-]+)"/, html)
@@ -369,11 +369,11 @@ defmodule TokengateWeb.UsersLiveTest do
     assert row_order.(view) == ["user-#{alpha.id}", "user-#{zeta.id}"]
 
     # Toggle to desc → Zeta first.
-    view |> element("#sort-name") |> render_click()
+    view |> element("th button[phx-value-field='name']") |> render_click()
     assert row_order.(view) == ["user-#{zeta.id}", "user-#{alpha.id}"]
 
     # Toggle back to asc.
-    view |> element("#sort-name") |> render_click()
+    view |> element("th button[phx-value-field='name']") |> render_click()
     assert row_order.(view) == ["user-#{alpha.id}", "user-#{zeta.id}"]
   end
 
@@ -413,44 +413,44 @@ defmodule TokengateWeb.UsersLiveTest do
 
     # Rol: asc = "admin" primero (legítimo); desc = "user", desempatado por
     # nombre → Ana. Antes el admin quedaba anclado arriba en ambas.
-    html = view |> element("#sort-role") |> render_click()
+    html = view |> element("th button[phx-value-field='role']") |> render_click()
     assert first_row.(html) == to_string(admin.id)
 
-    html = view |> element("#sort-role") |> render_click()
+    html = view |> element("th button[phx-value-field='role']") |> render_click()
     assert first_row.(html) == to_string(ana.id)
 
     # Estado: asc = activos primero (desempate por nombre → Ana); desc =
     # suspendidas primero (Carla).
-    html = view |> element("#sort-status") |> render_click()
+    html = view |> element("th button[phx-value-field='status']") |> render_click()
     assert first_row.(html) == to_string(ana.id)
 
-    html = view |> element("#sort-status") |> render_click()
+    html = view |> element("th button[phx-value-field='status']") |> render_click()
     assert first_row.(html) == to_string(carla.id)
 
     # Perfiles de límites: desc por nombre de grupo → Zeta (Ana) arriba.
-    html = view |> element("#sort-groups") |> render_click()
-    html = view |> element("#sort-groups") |> render_click()
+    html = view |> element("th button[phx-value-field='groups']") |> render_click()
+    html = view |> element("th button[phx-value-field='groups']") |> render_click()
     assert first_row.(html) == to_string(ana.id)
 
     # Techo mensual: el orden es por CONSUMO → Beto (40 de 50) antes que Ana
     # (10 de 200).
-    html = view |> element("#sort-credit") |> render_click()
+    html = view |> element("th button[phx-value-field='credit']") |> render_click()
     assert first_row.(html) == to_string(beto.id)
 
     # Gasto del mes: desc → Beto (40) antes que Ana (10).
-    html = view |> element("#sort-monthly_spend") |> render_click()
+    html = view |> element("th button[phx-value-field='monthly_spend']") |> render_click()
     assert first_row.(html) == to_string(beto.id)
 
     # Gasto total: desc → Beto.
-    html = view |> element("#sort-total_spend") |> render_click()
+    html = view |> element("th button[phx-value-field='total_spend']") |> render_click()
     assert first_row.(html) == to_string(beto.id)
 
     # Creado: desc → el admin, que se registró ahora mismo.
-    html = view |> element("#sort-inserted_at") |> render_click()
+    html = view |> element("th button[phx-value-field='inserted_at']") |> render_click()
     assert first_row.(html) == to_string(admin.id)
 
     # Creado: asc → Carla (la más antigua), con el admin al final y no anclado.
-    html = view |> element("#sort-inserted_at") |> render_click()
+    html = view |> element("th button[phx-value-field='inserted_at']") |> render_click()
     assert first_row.(html) == to_string(carla.id)
   end
 
@@ -890,6 +890,22 @@ defmodule TokengateWeb.UsersLiveTest do
       refute has_element?(view, "#users-pagination-page-2")
     end
 
+    test "a search with no matches shows the table's empty state", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      assert has_element?(view, "#users")
+
+      view |> element("#search-form") |> render_change(%{"q" => "sin-coincidencias-12345"})
+
+      # El componente `.table` oculta la tabla y rinde su empty-state con el id
+      # del tbody (`#users-empty`), así que no queda un tbody vacío colgado.
+      assert has_element?(view, "#users-empty", "No hay usuarios todavía.")
+      refute has_element?(view, "#users")
+    end
+
     test "sorting brings the table back to page 1", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       _users = bulk_users(35)
@@ -900,7 +916,7 @@ defmodule TokengateWeb.UsersLiveTest do
       view |> element("#users-pagination-next") |> render_click()
       assert has_element?(view, "#users-pagination-range", "31–36 de 36")
 
-      view |> element("#sort-name") |> render_click()
+      view |> element("th button[phx-value-field='name']") |> render_click()
 
       assert has_element?(view, "#users-pagination-range", "1–30 de 36")
     end

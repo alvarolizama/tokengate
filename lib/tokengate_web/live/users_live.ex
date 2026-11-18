@@ -1345,112 +1345,171 @@ defmodule TokengateWeb.UsersLive do
         </.modal>
 
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
-          <table class="table table-sm">
-            <thead>
-              <tr>
-                <%!-- Orden: identidad → campos QUE COMPARTE con Servicios (mismo
-                     orden en ambas tablas) → resto de campos propios → Creado →
-                     acciones. --%>
-                <th>
-                  <.sort_button
-                    event="sort_users"
-                    field={:name}
-                    label={gettext("User")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                  />
-                </th>
-                <th>{gettext("Keys")}</th>
-                <th>
-                  <.sort_button
-                    event="sort_users"
-                    field={:credit}
-                    label={gettext("Monthly cap (UTC month)")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                  />
-                </th>
-                <th class="text-right">
-                  <.sort_button
-                    event="sort_users"
-                    field={:monthly_spend}
-                    label={gettext("Monthly spend")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                    align="right"
-                  />
-                </th>
-                <th class="text-right">
-                  <.sort_button
-                    event="sort_users"
-                    field={:total_spend}
-                    label={gettext("Total spend")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                    align="right"
-                  />
-                </th>
-                <th>
-                  <.sort_button
-                    event="sort_users"
-                    field={:role}
-                    label={gettext("Role")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                  />
-                </th>
-                <th>
-                  <.sort_button
-                    event="sort_users"
-                    field={:status}
-                    label={gettext("Status")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                  />
-                </th>
-                <th>
-                  <.sort_button
-                    event="sort_users"
-                    field={:groups}
-                    label={gettext("Limit profiles")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                  />
-                </th>
-                <th>Google</th>
-                <th>
-                  <.sort_button
-                    event="sort_users"
-                    field={:inserted_at}
-                    label={gettext("Created")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                  />
-                </th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="users" phx-update="stream">
-              <tr :for={{id, user} <- @streams.users} id={id}>
-                <.user_row
-                  user={user}
-                  user_groups={@user_groups}
-                  spend_by_user={@spend_by_user}
-                  total_spend_by_user={@total_spend_by_user}
-                  users_credit={@users_credit}
-                  keys_counts={@keys_counts}
-                  current_user={@current_user}
-                  timezone={@timezone}
+          <%!-- Orden: identidad → campos QUE COMPARTE con Servicios (mismo
+               orden en ambas tablas) → resto de campos propios → Creado →
+               acciones. --%>
+          <.table
+            id="users"
+            rows={@streams.users}
+            row_item={fn {_id, user} -> user end}
+            row_class="align-top"
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
+            sort_event="sort_users"
+            empty?={@users_empty?}
+          >
+            <:col :let={user} label={gettext("User")} field={:name}>
+              <.admin_identity initials={initials(user)} title={user.name} subtitle={user.email} />
+            </:col>
+            <:col :let={user} label={gettext("Keys")}>
+              <.keys_badge
+                subject_id={user.id}
+                count={Map.get(@keys_counts, user.id, 0)}
+                open_event="manage_keys"
+              />
+            </:col>
+            <:col :let={user} label={gettext("Monthly cap (UTC month)")} field={:credit}>
+              <div id={"credit-#{user.id}"} class="min-w-[150px]">
+                <.budget_cell credit={Map.get(@users_credit, user.id)} />
+              </div>
+            </:col>
+            <:col :let={user} label={gettext("Monthly spend")} field={:monthly_spend} align="right">
+              <div id={"spend-#{user.id}"} class="text-xs font-mono">
+                ${format_usd(user_monthly_spend(@spend_by_user, user.id))}
+              </div>
+            </:col>
+            <:col :let={user} label={gettext("Total spend")} field={:total_spend} align="right">
+              <div id={"total-spend-#{user.id}"} class="text-xs font-mono">
+                ${format_usd(Map.get(@total_spend_by_user, user.id, Decimal.new(0)))}
+              </div>
+            </:col>
+            <:col :let={user} label={gettext("Role")} field={:role}>
+              <span class={["badge", "badge-sm", role_badge(user.global_role)]}>
+                {user.global_role}
+              </span>
+            </:col>
+            <:col :let={user} label={gettext("Status")} field={:status}>
+              <span class={["badge", "badge-sm", status_badge(user.status)]}>
+                {if user.status == "active", do: gettext("Active"), else: gettext("Suspended")}
+              </span>
+            </:col>
+            <:col :let={user} label={gettext("Limit profiles")} field={:groups}>
+              <div class="flex flex-wrap items-center gap-1">
+                <%= for group <- Map.get(@user_groups, user.id, []) do %>
+                  <span class="badge badge-xs badge-outline">{group.name}</span>
+                <% end %>
+                <button
+                  phx-click="view_groups"
+                  phx-value-id={user.id}
+                  class="btn btn-xs btn-ghost"
+                  id={"groups-#{user.id}"}
+                  title={gettext("View the user's limit profiles")}
+                >
+                  <.icon name="hero-eye" class="w-3 h-3" />
+                </button>
+              </div>
+            </:col>
+            <:col :let={user} label="Google">
+              <%= if google_badge(user) do %>
+                <span class="badge badge-sm badge-ghost">
+                  <.icon name="hero-globe-alt" class="w-3 h-3" /> Google
+                </span>
+              <% else %>
+                <span class="text-xs text-base-content/30">—</span>
+              <% end %>
+            </:col>
+            <:col :let={user} label={gettext("Created")} field={:inserted_at}>
+              <span class="text-xs text-base-content/50">
+                {format_date(user.inserted_at, @timezone)}
+              </span>
+            </:col>
+            <:action :let={user}>
+              <.link
+                navigate={~p"/stats/users/#{user.id}"}
+                class="btn btn-xs btn-ghost"
+                id={"stats-#{user.id}"}
+                title={gettext("View this user's consolidated stats")}
+                aria-label={gettext("View the user's stats")}
+              >
+                <.icon name="hero-chart-bar" class="w-3 h-3" />
+              </.link>
+              <button
+                phx-click="edit_user"
+                phx-value-id={user.id}
+                class="btn btn-xs btn-ghost"
+                id={"edit-#{user.id}"}
+                title={gettext("Edit user")}
+                aria-label={gettext("Edit user")}
+              >
+                <.icon name="hero-pencil" class="w-3 h-3" />
+              </button>
+              <button
+                phx-click="reset_password"
+                phx-value-id={user.id}
+                class="btn btn-xs btn-ghost"
+                id={"pwd-#{user.id}"}
+                title={gettext("Reset password")}
+                aria-label={gettext("Reset password")}
+              >
+                <.icon name="hero-arrow-path" class="w-3 h-3" />
+              </button>
+              <.link
+                :if={user.id != @current_user.id && !root_admin?(user)}
+                href={~p"/impersonate/#{user.id}"}
+                method="post"
+                class="btn btn-xs btn-ghost"
+                id={"impersonate-#{user.id}"}
+                data-confirm={gettext("View the dashboard as %{email}?", email: user.email)}
+                title={gettext("View as this user")}
+                aria-label={gettext("View as this user")}
+              >
+                <.icon name="hero-identification" class="w-3 h-3" />
+              </.link>
+              <button
+                phx-click="toggle_status"
+                phx-value-id={user.id}
+                class="btn btn-xs btn-ghost"
+                id={"status-#{user.id}"}
+                title={
+                  if user.status == "active",
+                    do: gettext("Suspend user"),
+                    else: gettext("Activate user")
+                }
+                aria-label={
+                  if user.status == "active",
+                    do: gettext("Suspend user"),
+                    else: gettext("Activate user")
+                }
+                data-confirm={
+                  if user.status == "active",
+                    do: gettext("Suspend user?"),
+                    else: gettext("Activate user?")
+                }
+              >
+                <.icon
+                  name={if user.status == "active", do: "hero-lock-closed", else: "hero-lock-open"}
+                  class="w-3 h-3"
                 />
-              </tr>
-            </tbody>
-          </table>
-          <.empty_state
-            :if={@users_empty?}
-            id="users-empty"
-            icon="hero-users"
-            title={gettext("No users yet.")}
-          />
+              </button>
+              <%!-- Delete button: opens modal, not data-confirm (too destructive) --%>
+              <button
+                :if={user.id != @current_user.id && !root_admin?(user)}
+                phx-click="open_delete_modal"
+                phx-value-id={user.id}
+                phx-value-email={user.email}
+                class="btn btn-xs btn-ghost text-error"
+                id={"delete-#{user.id}"}
+                title={gettext("Delete user")}
+                aria-label={gettext("Delete user")}
+              >
+                <.icon name="hero-trash" class="w-3 h-3" />
+              </button>
+            </:action>
+            <:empty>
+              <.icon name="hero-users" class="size-10 mb-2 opacity-40 text-base-content/40" />
+              <p class="text-sm font-medium text-base-content/60">{gettext("No users yet.")}</p>
+            </:empty>
+          </.table>
           <.admin_pagination
             id="users-pagination"
             page={@page}
@@ -1597,158 +1656,4 @@ defmodule TokengateWeb.UsersLive do
   # Remanente del techo: nunca negativo (un gasto por encima del techo —top-ups
   # o un techo bajado a mitad de ciclo— deja 0, no un saldo en contra).
   defp max_decimal(a, b), do: if(Decimal.compare(a, b) == :lt, do: b, else: a)
-
-  ## Components ---------------------------------------------------------------
-
-  attr :user, :map, required: true
-  attr :user_groups, :map, required: true
-  attr :spend_by_user, :map, required: true
-  attr :total_spend_by_user, :map, required: true
-  attr :users_credit, :map, required: true
-  attr :keys_counts, :map, required: true
-  attr :current_user, :map, required: true
-  attr :timezone, :string, required: true
-
-  defp user_row(assigns) do
-    ~H"""
-    <td>
-      <.admin_identity initials={initials(@user)} title={@user.name} subtitle={@user.email} />
-    </td>
-    <td>
-      <.keys_badge
-        subject_id={@user.id}
-        count={Map.get(@keys_counts, @user.id, 0)}
-        open_event="manage_keys"
-      />
-    </td>
-    <td id={"credit-#{@user.id}"} class="min-w-[150px]">
-      <.budget_cell credit={Map.get(@users_credit, @user.id)} />
-    </td>
-    <td id={"spend-#{@user.id}"} class="text-right">
-      <div class="text-xs font-mono">
-        ${format_usd(user_monthly_spend(@spend_by_user, @user.id))}
-      </div>
-    </td>
-    <td id={"total-spend-#{@user.id}"} class="text-right">
-      <div class="text-xs font-mono">
-        ${format_usd(Map.get(@total_spend_by_user, @user.id, Decimal.new(0)))}
-      </div>
-    </td>
-    <td>
-      <span class={["badge", "badge-sm", role_badge(@user.global_role)]}>{@user.global_role}</span>
-    </td>
-    <td>
-      <span class={["badge", "badge-sm", status_badge(@user.status)]}>
-        {if @user.status == "active", do: gettext("Active"), else: gettext("Suspended")}
-      </span>
-    </td>
-    <td>
-      <div class="flex flex-wrap items-center gap-1">
-        <%= for group <- Map.get(@user_groups, @user.id, []) do %>
-          <span class="badge badge-xs badge-outline">{group.name}</span>
-        <% end %>
-        <button
-          phx-click="view_groups"
-          phx-value-id={@user.id}
-          class="btn btn-xs btn-ghost"
-          id={"groups-#{@user.id}"}
-          title={gettext("View the user's limit profiles")}
-        >
-          <.icon name="hero-eye" class="w-3 h-3" />
-        </button>
-      </div>
-    </td>
-    <td>
-      <%= if google_badge(@user) do %>
-        <span class="badge badge-sm badge-ghost"><.icon name="hero-globe-alt" class="w-3 h-3" />
-        Google</span>
-      <% else %>
-        <span class="text-xs text-base-content/30">—</span>
-      <% end %>
-    </td>
-    <td class="text-xs text-base-content/50">
-      {format_date(@user.inserted_at, @timezone)}
-    </td>
-    <td>
-      <div class="flex gap-1">
-        <.link
-          navigate={~p"/stats/users/#{@user.id}"}
-          class="btn btn-xs btn-ghost"
-          id={"stats-#{@user.id}"}
-          title={gettext("View this user's consolidated stats")}
-          aria-label={gettext("View the user's stats")}
-        >
-          <.icon name="hero-chart-bar" class="w-3 h-3" />
-        </.link>
-        <button
-          phx-click="edit_user"
-          phx-value-id={@user.id}
-          class="btn btn-xs btn-ghost"
-          id={"edit-#{@user.id}"}
-          title={gettext("Edit user")}
-          aria-label={gettext("Edit user")}
-        >
-          <.icon name="hero-pencil" class="w-3 h-3" />
-        </button>
-        <button
-          phx-click="reset_password"
-          phx-value-id={@user.id}
-          class="btn btn-xs btn-ghost"
-          id={"pwd-#{@user.id}"}
-          title={gettext("Reset password")}
-          aria-label={gettext("Reset password")}
-        >
-          <.icon name="hero-arrow-path" class="w-3 h-3" />
-        </button>
-        <.link
-          :if={@user.id != @current_user.id && !root_admin?(@user)}
-          href={~p"/impersonate/#{@user.id}"}
-          method="post"
-          class="btn btn-xs btn-ghost"
-          id={"impersonate-#{@user.id}"}
-          data-confirm={gettext("View the dashboard as %{email}?", email: @user.email)}
-          title={gettext("View as this user")}
-          aria-label={gettext("View as this user")}
-        >
-          <.icon name="hero-identification" class="w-3 h-3" />
-        </.link>
-        <button
-          phx-click="toggle_status"
-          phx-value-id={@user.id}
-          class="btn btn-xs btn-ghost"
-          id={"status-#{@user.id}"}
-          title={
-            if @user.status == "active", do: gettext("Suspend user"), else: gettext("Activate user")
-          }
-          aria-label={
-            if @user.status == "active", do: gettext("Suspend user"), else: gettext("Activate user")
-          }
-          data-confirm={
-            if @user.status == "active",
-              do: gettext("Suspend user?"),
-              else: gettext("Activate user?")
-          }
-        >
-          <.icon
-            name={if @user.status == "active", do: "hero-lock-closed", else: "hero-lock-open"}
-            class="w-3 h-3"
-          />
-        </button>
-        <%!-- Delete button: opens modal, not data-confirm (too destructive) --%>
-        <button
-          :if={@user.id != @current_user.id && !root_admin?(@user)}
-          phx-click="open_delete_modal"
-          phx-value-id={@user.id}
-          phx-value-email={@user.email}
-          class="btn btn-xs btn-ghost text-error"
-          id={"delete-#{@user.id}"}
-          title={gettext("Delete user")}
-          aria-label={gettext("Delete user")}
-        >
-          <.icon name="hero-trash" class="w-3 h-3" />
-        </button>
-      </div>
-    </td>
-    """
-  end
 end
