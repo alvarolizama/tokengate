@@ -20,8 +20,6 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
     Provider
   }
 
-  @port 42391
-
   defmodule TestPlug do
     @moduledoc false
     import Plug.Conn
@@ -69,17 +67,24 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
     :ok
   end
 
-  # One Bandit on @port serves BOTH endpoints, distinguished by path. A single
+  # One Bandit per test serves BOTH endpoints, distinguished by path. A single
   # origin also matches production: `labs_url/0` derives `/models.json` from
   # the provider URL's origin, so pointing the refresh at the test server moves
-  # both halves together.
+  # both halves together. The port is ephemeral: two test servers in the same
+  # file never share an address.
   defp serve!(routes, status \\ 200) when is_map(routes) do
     default = Enum.map(routes, fn {path, payload} -> {path, {Jason.encode!(payload), status}} end)
     :persistent_term.put({TestPlug, :routes}, Map.new(default))
-    start_supervised!({Bandit, plug: TestPlug, scheme: :http, ip: :loopback, port: @port})
-    Application.put_env(:tokengate, :catalog_refresh_url, "http://127.0.0.1:#{@port}/api.json")
+    port = Tokengate.TestPort.free_port()
+    :persistent_term.put({__MODULE__, :port}, port)
+    start_supervised!({Bandit, plug: TestPlug, scheme: :http, ip: :loopback, port: port})
+    Application.put_env(:tokengate, :catalog_refresh_url, refresh_url())
     Application.delete_env(:tokengate, :labs_refresh_url)
     :ok
+  end
+
+  defp refresh_url(path \\ "/api.json") do
+    "http://127.0.0.1:#{:persistent_term.get({__MODULE__, :port})}#{path}"
   end
 
   defp re_route!(path, payload) do
@@ -302,13 +307,16 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
 
   describe "failure" do
     test "a fetch error records itself and marks NOTHING stale" do
+      # A port nobody listens on: the failure has to come from the transport,
+      # not from a 4xx. Allocated per test (never the file's shared number).
+      closed_port = Tokengate.TestPort.free_port()
+
       Application.put_env(
         :tokengate,
         :catalog_refresh_url,
-        "http://127.0.0.1:#{@port}/api.json"
+        "http://127.0.0.1:#{closed_port}/api.json"
       )
 
-      # No server was started on @port for this test.
       assert {:error, reason} = perform()
       assert reason =~ "could not download"
 

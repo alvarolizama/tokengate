@@ -403,9 +403,16 @@ defmodule TokengateWeb.DashboardLiveTest do
     # Switch to 30d: the patch replies instantly with the previous bundle
     # (dimmed) plus the header spinner; the new bundle lands async.
     html = view |> element("#period-30d") |> render_click()
-    assert has_element?(view, "#dashboard-loading")
+
+    # Assert on the click's OWN reply: it is the render right after the
+    # handler, so the spinner is guaranteed to still be armed there. A later
+    # `has_element?/2` renders again and can race the async task, which may
+    # have already cleared the flag.
+    assert html =~ ~s(id="dashboard-loading")
     assert html =~ "opacity-60"
 
+    # `render_async` waits for the bundle itself, so the loaded state below is
+    # deterministic (no clock, no sleep).
     html = render_async(view)
     assert html =~ "Costo por día (30d)"
     refute has_element?(view, "#dashboard-loading")

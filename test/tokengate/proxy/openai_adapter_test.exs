@@ -8,7 +8,6 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
   use ExUnit.Case, async: false
   alias Tokengate.Proxy.OpenAIAdapter
 
-  @port 41234
   @boundary "tok-boundary-test"
 
   # A real multipart/form-data body: one form field plus a file part with
@@ -200,19 +199,28 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
 
   setup do
     :persistent_term.put({TestPlug, :test_pid}, self())
-    start_supervised!({Bandit, plug: TestPlug, scheme: :http, ip: :loopback, port: @port})
+    port = Tokengate.TestPort.free_port()
+    :persistent_term.put({__MODULE__, :port}, port)
+    start_supervised!({Bandit, plug: TestPlug, scheme: :http, ip: :loopback, port: port})
 
-    provider = %{base_url: "http://localhost:#{@port}"}
+    provider = %{base_url: base_url()}
     credential = %{api_key_encrypted: "sk-test-key"}
 
     {:ok, provider: provider, credential: credential}
+  end
+
+  # Base URL of THIS test's listener: the setup binds an ephemeral port (never
+  # a fixed one), and tests that build their own provider instead of taking the
+  # `provider` context read it from here.
+  defp base_url(marker \\ "") do
+    "http://localhost:#{:persistent_term.get({__MODULE__, :port})}#{marker}"
   end
 
   defp provider_to(marker) do
     # The adapter appends /chat/completions (or /models) to base_url, so
     # special routes are triggered by marker segments in the path: the plug
     # matches on conn.path_info containing the marker.
-    %{base_url: "http://localhost:#{@port}#{marker}"}
+    %{base_url: base_url(marker)}
   end
 
   describe "chat_completion/4" do
@@ -312,7 +320,7 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
     # sees: base_url + the override, not base_url + the adapter default.
     test "honours the provider's own path override", %{credential: credential} do
       provider = %{
-        base_url: "http://localhost:#{@port}",
+        base_url: base_url(),
         path_overrides: %{"chat" => "/custom/chat/completions"}
       }
 

@@ -198,29 +198,76 @@ defmodule Tokengate.Routing.CircuitBreakerTest do
   end
 
   describe ":rate_limited uses the short cooldown" do
-    test "trips with rate_limit_cooldown_ms, ~3x faster than server_error cooldown",
+    test "trips with rate_limit_cooldown_ms, not the server_error cooldown",
          %{breaker: breaker} do
-      # Trip with rate_limited.
       for _ <- 1..@threshold do
         CircuitBreaker.record_failure(breaker, :rate_limited)
       end
 
       sync(breaker)
-      assert CircuitBreaker.status(breaker) == :open
 
-      # The short cooldown is 20ms vs the long 50ms; measure the time to reach
-      # half_open and confirm it's well under the long cooldown.
-      {elapsed_us, :ok} =
-        :timer.tc(fn ->
-          assert_eventually(fn -> CircuitBreaker.status(breaker) == :half_open end)
-        end)
+      # The breaker's own state carries the policy inputs: the trip recorded
+      # :rate_limited as `last_reason` and the two configured windows differ,
+      # so `cooldown_for/2` arms the SHORT one (20ms) instead of 50ms. The old
+      # assertion timed the transition to :half_open and required it under
+      # 50ms — that measured scheduler placement under load (poll + jitter),
+      # not the policy, and flaked while the breaker was behaving correctly.
+      assert {:open, data} = :sys.get_state(breaker)
+      assert data.last_reason == :rate_limited
+      assert data.rate_limit_cooldown_ms == @rate_limit_cooldown_ms
+      assert data.cooldown_ms == @cooldown_ms
+      assert %DateTime{} = data.opened_at
 
-      elapsed_ms = elapsed_us / 1000
+      # Recovery still happens; no wall-clock bound on it.
+      assert_eventually(fn -> CircuitBreaker.status(breaker) == :half_open end)
+    end
 
-      # Should be roughly the short cooldown, definitely less than the long one.
-      # We give generous headroom for CI scheduler jitter.
-      assert elapsed_ms < @cooldown_ms,
-             "rate_limited recovery took #{elapsed_ms}ms, expected < #{@cooldown_ms}ms"
+    test "the trip reason selects the window: 60s for :server_error, short for :rate_limited" do
+      # Two breakers over the SAME 60s window so the only difference is the
+      # reason. If :rate_limited did NOT use the short window, it could not
+      # reach :half_open inside the ~2s polling budget; if the selection were
+      # ignored for :server_error, it would flip too — the contrast fails in
+      # both directions and needs no wall-clock measurement of its own.
+      limited =
+        start_supervised!(
+          Supervisor.child_spec(
+            {CircuitBreaker,
+             credential_id: "policy-rate-limited",
+             threshold: 1,
+             cooldown_ms: 60_000,
+             rate_limit_cooldown_ms: @rate_limit_cooldown_ms},
+            id: :policy_rate_limited
+          )
+        )
+
+      server =
+        start_supervised!(
+          Supervisor.child_spec(
+            {CircuitBreaker,
+             credential_id: "policy-server-error",
+             threshold: 1,
+             cooldown_ms: 60_000,
+             rate_limit_cooldown_ms: @rate_limit_cooldown_ms},
+            id: :policy_server_error
+          )
+        )
+
+      CircuitBreaker.record_failure(limited, :rate_limited)
+      CircuitBreaker.record_failure(server, :server_error)
+      sync(limited)
+      sync(server)
+
+      assert {:open, limited_data} = :sys.get_state(limited)
+      assert {:open, server_data} = :sys.get_state(server)
+      assert limited_data.last_reason == :rate_limited
+      assert server_data.last_reason == :server_error
+      assert limited_data.cooldown_ms == server_data.cooldown_ms
+
+      assert_eventually(fn -> CircuitBreaker.status(limited) == :half_open end)
+
+      # Same instant, same 60s window: the long one cannot have elapsed, so this
+      # is a policy assertion, not a race.
+      assert CircuitBreaker.status(server) == :open
     end
 
     test "rate_limited keeps the same trip threshold as server_error",

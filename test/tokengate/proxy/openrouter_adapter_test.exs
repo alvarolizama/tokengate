@@ -10,7 +10,6 @@ defmodule Tokengate.Proxy.OpenRouterAdapterTest do
   alias Tokengate.Proxy.OpenRouterAdapter
   alias Tokengate.Proxy.RawResponse
 
-  @port 41235
   @boundary "or-boundary-test"
   @audio <<0x52, 0x49, 0xFF, 0x00, 0x46, 0x4D>>
 
@@ -42,10 +41,11 @@ defmodule Tokengate.Proxy.OpenRouterAdapterTest do
 
   setup do
     :persistent_term.put({TestPlug, :test_pid}, self())
-    start_supervised!({Bandit, plug: TestPlug, scheme: :http, ip: :loopback, port: @port})
+    port = Tokengate.TestPort.free_port()
+    start_supervised!({Bandit, plug: TestPlug, scheme: :http, ip: :loopback, port: port})
 
     {:ok,
-     provider: %{base_url: "http://localhost:#{@port}"},
+     provider: %{base_url: "http://localhost:#{port}"},
      credential: %{api_key_encrypted: "sk-or-test"}}
   end
 

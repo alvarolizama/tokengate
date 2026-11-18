@@ -82,14 +82,28 @@ defmodule Tokengate.CacheTest do
 
     test "a holder killed by an external exit signal releases the lock via monitor" do
       key = {:cache_single_flight_exit, System.unique_integer([:positive])}
+      test_pid = self()
 
-      holder = spawn(fn -> Cache.fetch(key, 60_000, fn -> Process.sleep(10_000) end) end)
+      # The holder announces itself from INSIDE the compute fun: the
+      # placeholder is inserted before the fun runs, so the message proves the
+      # lock is in ETS without a polling loop guessing at it.
+      holder =
+        spawn(fn ->
+          Cache.fetch(key, 60_000, fn ->
+            send(test_pid, :holder_computing)
+            Process.sleep(10_000)
+          end)
+        end)
 
-      wait_until(fn ->
-        match?([_], :ets.lookup(Cache.table(), {:__computing__, key}))
-      end)
+      assert_receive :holder_computing, 5_000
+      assert match?([_], :ets.lookup(Cache.table(), {:__computing__, key}))
 
+      # Monitor first, then kill: the DOWN proves the holder is gone before the
+      # recovery fetch starts, so a slow scheduler cannot make the fetch see a
+      # live owner and burn its capped wait window.
+      ref = Process.monitor(holder)
       Process.exit(holder, {:shutdown, :cancel})
+      assert_receive {:DOWN, ^ref, :process, ^holder, _reason}, 5_000
 
       {elapsed, value} =
         :timer.tc(fn -> Cache.fetch(key, 60_000, fn -> %{recovered: true} end) end)
@@ -119,13 +133,5 @@ defmodule Tokengate.CacheTest do
       assert Cache.fetch(key, 1_000, compute) == :value
       assert :counters.get(call_count, 1) == 2
     end
-  end
-
-  defp wait_until(fun, tries \\ 100)
-
-  defp wait_until(_fun, 0), do: flunk("condition never became true")
-
-  defp wait_until(fun, tries) do
-    if fun.(), do: :ok, else: Process.sleep(5) && wait_until(fun, tries - 1)
   end
 end

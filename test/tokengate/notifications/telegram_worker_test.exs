@@ -13,8 +13,6 @@ defmodule Tokengate.Notifications.TelegramWorkerTest do
   alias Tokengate.Notifications.Notification
   alias Tokengate.Notifications.TelegramWorker
 
-  @port 41335
-
   defmodule TestPlug do
     @moduledoc false
     import Plug.Conn
@@ -61,13 +59,15 @@ defmodule Tokengate.Notifications.TelegramWorkerTest do
   setup do
     original_token = Application.get_env(:tokengate, :telegram_bot_token)
     original_base = Application.get_env(:tokengate, :telegram_api_base)
+    port = Tokengate.TestPort.free_port()
+    :persistent_term.put({__MODULE__, :port}, port)
 
     Application.put_env(:tokengate, :telegram_bot_token, "test-token")
-    Application.put_env(:tokengate, :telegram_api_base, "http://localhost:#{@port}")
+    Application.put_env(:tokengate, :telegram_api_base, api_base())
     :persistent_term.put({TestPlug, :test_pid}, self())
     :persistent_term.put({TestPlug, :fail_chats}, true)
 
-    start_supervised!({Bandit, plug: TestPlug, scheme: :http, ip: :loopback, port: @port})
+    start_supervised!({Bandit, plug: TestPlug, scheme: :http, ip: :loopback, port: port})
     Notifications.clear_throttle()
 
     on_exit(fn ->
@@ -77,6 +77,13 @@ defmodule Tokengate.Notifications.TelegramWorkerTest do
     end)
 
     :ok
+  end
+
+  # The Bot API stand-in for THIS test: setup binds an ephemeral port per test
+  # and points `:telegram_api_base` at it. Tests that exercise error paths
+  # append their marker ("/bad", "/broken") instead of re-hardcoding a port.
+  defp api_base(path \\ "") do
+    "http://localhost:#{:persistent_term.get({__MODULE__, :port})}#{path}"
   end
 
   defp notification_fixture(attrs \\ %{}) do
@@ -125,7 +132,7 @@ defmodule Tokengate.Notifications.TelegramWorkerTest do
   end
 
   test "discards when Telegram rejects the message (4xx / ok:false)" do
-    Application.put_env(:tokengate, :telegram_api_base, "http://localhost:#{@port}/bad")
+    Application.put_env(:tokengate, :telegram_api_base, api_base("/bad"))
     {:ok, _} = Notifications.create_link(%{"chat_id" => "555"})
     n = notification_fixture()
 
@@ -134,7 +141,7 @@ defmodule Tokengate.Notifications.TelegramWorkerTest do
   end
 
   test "retries on a 5xx" do
-    Application.put_env(:tokengate, :telegram_api_base, "http://localhost:#{@port}/broken")
+    Application.put_env(:tokengate, :telegram_api_base, api_base("/broken"))
     {:ok, _} = Notifications.create_link(%{"chat_id" => "555"})
     n = notification_fixture()
 
@@ -227,7 +234,7 @@ defmodule Tokengate.Notifications.TelegramWorkerTest do
     test "un reenvío manual reintenta el chat rechazado (status pending + error nil)" do
       # Base limpio: el caso "400 terminal" de más arriba apunta a /bad y este
       # test necesita que el destino ya funcione.
-      Application.put_env(:tokengate, :telegram_api_base, "http://localhost:#{@port}")
+      Application.put_env(:tokengate, :telegram_api_base, api_base())
       :persistent_term.put({TestPlug, :fail_chats}, false)
 
       {:ok, _} = Notifications.create_link(%{"chat_id" => "bad-chat"})

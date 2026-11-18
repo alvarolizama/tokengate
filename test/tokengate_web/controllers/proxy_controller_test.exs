@@ -18,7 +18,6 @@ defmodule TokengateWeb.ProxyControllerTest do
   alias Tokengate.Proxy.ResponseCache
   alias Tokengate.Routing.CircuitBreakerManager
 
-  @port 41236
   @boundary "tg-upload-boundary"
 
   # A real multipart/form-data body for the stt surface: a form field plus a
@@ -647,8 +646,17 @@ defmodule TokengateWeb.ProxyControllerTest do
   setup do
     :persistent_term.put({ProviderPlug, :test_pid}, self())
     :persistent_term.put({ProviderPlug, :reject_body_fields}, [])
-    start_supervised!({Bandit, plug: ProviderPlug, scheme: :http, ip: :loopback, port: @port})
+    port = Tokengate.TestPort.free_port()
+    :persistent_term.put({__MODULE__, :port}, port)
+    start_supervised!({Bandit, plug: ProviderPlug, scheme: :http, ip: :loopback, port: port})
     :ok
+  end
+
+  # The main fake upstream for THIS test. Its port is ephemeral (bound in
+  # setup): fixtures and tests that need a provider URL ask here instead of
+  # sharing one hardcoded number with every other test in the file.
+  defp upstream_url(path \\ "") do
+    "http://localhost:#{:persistent_term.get({__MODULE__, :port})}#{path}"
   end
 
   ## Fixtures ##################################################################
@@ -707,13 +715,13 @@ defmodule TokengateWeb.ProxyControllerTest do
           url
 
         Map.get(opts, :down) ->
-          "http://localhost:#{@port}/down"
+          upstream_url("/down")
 
         segment = Map.get(opts, :provider_path) ->
-          "http://localhost:#{@port}/#{segment}"
+          upstream_url("/#{segment}")
 
         true ->
-          "http://localhost:#{@port}"
+          upstream_url()
       end
 
     {:ok, provider} =
@@ -1096,7 +1104,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, provider2} =
       Providers.create_provider(%{
         name: "Healthy #{u}",
-        base_url: "http://localhost:#{@port}"
+        base_url: upstream_url()
       })
 
     {:ok, cred2} =
@@ -1126,7 +1134,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, provider2} =
       Providers.create_provider(%{
         name: "Healthy #{u}",
-        base_url: "http://localhost:#{@port}"
+        base_url: upstream_url()
       })
 
     {:ok, cred2} =
@@ -1210,7 +1218,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, provider2} =
       Providers.create_provider(%{
         name: "Healthy #{u}",
-        base_url: "http://localhost:#{@port}"
+        base_url: upstream_url()
       })
 
     {:ok, cred2} =
@@ -1277,7 +1285,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _provider} =
       Providers.update_provider(model_provider.credential.provider, %{
-        base_url: "http://localhost:#{@port}/badrequest"
+        base_url: upstream_url("/badrequest")
       })
 
     model_provider.credential_id
@@ -1331,7 +1339,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       %{key: catalog_key}
       |> then(fn
         attrs when is_binary(path_suffix) ->
-          Map.put(attrs, :base_url, "http://localhost:#{@port}#{path_suffix}")
+          Map.put(attrs, :base_url, upstream_url(path_suffix))
 
         attrs ->
           attrs
@@ -2554,7 +2562,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, provider2} =
       Providers.create_provider(%{
         name: "Healthy #{u}",
-        base_url: "http://localhost:#{@port}",
+        base_url: upstream_url(),
         max_concurrent: 5
       })
 
@@ -2941,7 +2949,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _provider} =
       Providers.update_provider(model_provider.credential.provider, %{
-        base_url: "http://localhost:#{@port}/slowstream"
+        base_url: upstream_url("/slowstream")
       })
 
     conn =
@@ -3049,7 +3057,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _provider} =
       Providers.update_provider(model_provider.credential.provider, %{
-        base_url: "http://localhost:#{@port}/notfound"
+        base_url: upstream_url("/notfound")
       })
 
     conn =
@@ -3085,7 +3093,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _provider} =
       Providers.update_provider(first.credential.provider, %{
-        base_url: "http://localhost:#{@port}/notfound"
+        base_url: upstream_url("/notfound")
       })
 
     conn =
@@ -3112,7 +3120,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     Providers.list_model_providers(model.id)
     |> Enum.each(fn mp ->
       Providers.update_provider(mp.credential.provider, %{
-        base_url: "http://localhost:#{@port}/notfound"
+        base_url: upstream_url("/notfound")
       })
     end)
 
@@ -3139,7 +3147,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _provider} =
       Providers.update_provider(first.credential.provider, %{
-        base_url: "http://localhost:#{@port}/notfound"
+        base_url: upstream_url("/notfound")
       })
 
     conn =
@@ -3235,7 +3243,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _provider} =
       Providers.update_provider(model_provider.credential.provider, %{
-        base_url: "http://localhost:#{@port}/slowstream"
+        base_url: upstream_url("/slowstream")
       })
 
     add_healthy_fallback(model, u)

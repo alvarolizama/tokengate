@@ -10,8 +10,6 @@ defmodule TokengateWeb.OAuth.GoogleTest do
 
   alias TokengateWeb.OAuth.Google
 
-  @port 41337
-
   defmodule UserinfoPlug do
     @moduledoc false
     import Plug.Conn
@@ -29,15 +27,16 @@ defmodule TokengateWeb.OAuth.GoogleTest do
 
   setup do
     original = Application.get_env(:tokengate, :google_oauth)
+    port = Tokengate.TestPort.free_port()
 
     Application.put_env(
       :tokengate,
       :google_oauth,
       original
-      |> Keyword.put(:userinfo_url, "http://localhost:#{@port}/userinfo")
+      |> Keyword.put(:userinfo_url, "http://localhost:#{port}/userinfo")
     )
 
-    start_supervised!({Bandit, plug: UserinfoPlug, scheme: :http, ip: :loopback, port: @port})
+    start_supervised!({Bandit, plug: UserinfoPlug, scheme: :http, ip: :loopback, port: port})
 
     on_exit(fn ->
       Application.put_env(:tokengate, :google_oauth, original)

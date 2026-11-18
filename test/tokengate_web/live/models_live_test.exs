@@ -2220,21 +2220,20 @@ defmodule TokengateWeb.ModelsLiveTest do
   # -- El paso 3: lo que el proveedor publica para el tipo elegido -------------
 
   describe "el listado del proveedor por tipo" do
-    @port 42399
-
     setup do
       %{url: serve_listing!()}
     end
 
     # El upstream de mentira: el catálogo GENERAL (`/models`) trae un chat y un
     # embedding; el POR SERVICIO (`?output_modalities=…`) trae un id que ningún
-    # patrón clasificaría, así que sólo puede llegar por esa puerta.
+    # patrón clasificaría, así que sólo puede llegar por esa puerta. Ephemeral
+    # port: the listener lives only for this test.
     defp serve_listing! do
-      start_supervised!(
-        {Bandit, plug: &listing_plug/2, scheme: :http, ip: :loopback, port: @port}
-      )
+      port = Tokengate.TestPort.free_port()
 
-      "http://127.0.0.1:#{@port}/v1"
+      start_supervised!({Bandit, plug: &listing_plug/2, scheme: :http, ip: :loopback, port: port})
+
+      "http://127.0.0.1:#{port}/v1"
     end
 
     defp listing_plug(conn, _opts) do

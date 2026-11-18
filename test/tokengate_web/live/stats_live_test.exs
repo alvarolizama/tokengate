@@ -92,9 +92,14 @@ defmodule TokengateWeb.StatsLiveTest do
 
   defp wait_counters_loaded(_view, 0), do: raise("stats counters never loaded")
 
-  # Suma `n` requests extra al sujeto del fixture, para que los rankings tengan
-  # conteos distintos y el orden (los puestos 1º/2º/3º) sea determinista.
-  defp log_extra(%{member: member, provider: provider, model: model}, n) when n > 0 do
+  # Suma `n` requests extra al sujeto del fixture. `latency_ms` decides the
+  # provider/model ranking (score = reliability + speed), which needs at least
+  # 10 requests to be scored at all; the cost of each extra log also feeds the
+  # consumption-ordered tables.
+  defp log_extra(fixture, n, latency_ms \\ 42)
+
+  defp log_extra(%{member: member, provider: provider, model: model}, n, latency_ms)
+       when n > 0 do
     Enum.each(1..n//1, fn _ ->
       {:ok, _} =
         Logs.log_request(%{
@@ -107,7 +112,7 @@ defmodule TokengateWeb.StatsLiveTest do
           prompt_tokens: 10,
           completion_tokens: 5,
           provider_cost_usd: "0.005",
-          latency_ms: 42,
+          latency_ms: latency_ms,
           streaming: false,
           inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
         })
@@ -116,7 +121,7 @@ defmodule TokengateWeb.StatsLiveTest do
     :ok
   end
 
-  defp log_extra(_fixture, _n), do: :ok
+  defp log_extra(_fixture, _n, _latency_ms), do: :ok
 
   # Suma `n` filas al desglose del detalle de un proveedor o de un modelo:
   # `:models` crea modelos nuevos servidos por el MISMO proveedor del fixture,
@@ -1468,16 +1473,30 @@ defmodule TokengateWeb.StatsLiveTest do
     test "providers: tabla única con medallas en el podio y liga al detalle", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
-      # Reliability/speed score ranking: distinct latencies avoid ties.
+      # Reliability/speed score ranking: the score only exists from 10 requests
+      # per provider on, and its speed half is the period's min latency over the
+      # provider's average. Below that floor every score is nil and the order
+      # falls back to the provider NAME, which is what made the podium depend on
+      # where the suite's unique counter sat. 11 requests at a distinct latency
+      # each → 100 / 80 / 65, a strict order on the tested dimension.
       [a, b, c] =
         for latency <- [10, 20, 80], do: group_with_log(%{cost: "0.005", latency_ms: latency})
 
-      log_extra(a, 2)
-      log_extra(b, 1)
+      for {fixture, latency} <- [{a, 10}, {b, 20}, {c, 80}], do: log_extra(fixture, 10, latency)
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/stats/providers")
       view = wait_stats_loaded(view)
+
+      # The podium IS the score order: assert the scores themselves are
+      # strictly decreasing and tie-free, not merely that three rows rendered.
+      scores =
+        :sys.get_state(view.pid).socket.assigns.provider_ranking
+        |> Enum.map(& &1.score)
+
+      assert length(scores) == 3
+      assert scores == Enum.sort(scores, :desc)
+      assert length(Enum.uniq(scores)) == 3
 
       # Tabla única (no listado), con buscador y la información básica en columnas.
       assert has_element?(view, "table #provider-table")
@@ -1486,7 +1505,7 @@ defmodule TokengateWeb.StatsLiveTest do
       assert has_element?(view, "#provider-ranking table thead th", "Requests")
       assert has_element?(view, "#provider-ranking table thead th", "Latencia")
 
-      # Podio: medalla (icono) en 1º/2º/3º con su color; el 1º (más requests) manda.
+      # Podium: icon medal for 1st/2nd/3rd with its color; the best score leads.
       assert has_element?(
                view,
                "#provider-ranking-row-#{a.provider.id} span[aria-label='Puesto 1'][class*='warning'] .hero-trophy"
@@ -1707,8 +1726,12 @@ defmodule TokengateWeb.StatsLiveTest do
     test "models: la pestaña es la tabla de consumo con buscador", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
-      [a, b] = for _ <- 1..2, do: group_with_log(%{cost: "0.005"})
-      log_extra(a, 1)
+      # The model tab ranks the breakdown by request_count in the period (see
+      # stats/models.ex), so the fixture must make the counts DISTINCT: a tie is
+      # resolved by the arbitrary order the aggregate returns. 11 vs 10 requests.
+      [a, b] = for latency <- [10, 20], do: group_with_log(%{cost: "0.005", latency_ms: latency})
+      log_extra(a, 10, 10)
+      log_extra(b, 9, 20)
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/stats/models")
@@ -1720,8 +1743,8 @@ defmodule TokengateWeb.StatsLiveTest do
       # Una sola tabla: el listado rankeado ya no existe.
       refute has_element?(view, "#model-list")
 
-      # El puesto es la posición por consumo del período: `a` tiene más
-      # requests, así que va 1º con medalla de oro.
+      # Rank = position by request_count: `a` has one request more than `b`, so
+      # it takes first place with the gold medal.
       assert has_element?(
                view,
                "#model-ranking-row-#{a.model.id} span[aria-label='Puesto 1'][class*='warning'] .hero-trophy"

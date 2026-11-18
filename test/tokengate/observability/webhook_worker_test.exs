@@ -13,8 +13,6 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
   alias Tokengate.Observability
   alias Tokengate.Observability.WebhookWorker
 
-  @port 41334
-
   # ---------------------------------------------------------------------------
   # Bandit test plug — captures request details and routes by marker path
   # ---------------------------------------------------------------------------
@@ -157,11 +155,17 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
 
   setup do
     :persistent_term.put({TestPlug, :test_pid}, self())
-    start_supervised!({Bandit, plug: TestPlug, scheme: :http, ip: :loopback, port: @port})
+    port = Tokengate.TestPort.free_port()
+    :persistent_term.put({__MODULE__, :port}, port)
+    start_supervised!({Bandit, plug: TestPlug, scheme: :http, ip: :loopback, port: port})
     :ok
   end
 
-  defp base_url(marker \\ ""), do: "http://localhost:#{@port}#{marker}"
+  # This test's own listener (ephemeral port, bound in setup). Tests build the
+  # destination URL here instead of sharing one fixed port across the module.
+  defp base_url(marker \\ "") do
+    "http://localhost:#{:persistent_term.get({__MODULE__, :port})}#{marker}"
+  end
 
   # ---------------------------------------------------------------------------
   # perform/1 — HTTP delivery
