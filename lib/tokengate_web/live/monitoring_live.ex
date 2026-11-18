@@ -10,6 +10,11 @@ defmodule TokengateWeb.MonitoringLive do
   alias Tokengate.Providers
 
   @page_size 50
+  # Hard cap on the rows the feed keeps in the DOM AND in the LiveView state.
+  # A session left open used to accumulate every log of the deployment: the
+  # socket, the stream state and the client DOM grew with uptime, not with
+  # what the operator can look at. New arrivals push the oldest rows out.
+  @max_stream_rows 500
   @pubsub Tokengate.PubSub
   @logs_topic "logs:new"
   @summary_refresh_interval_ms 2_000
@@ -40,6 +45,7 @@ defmodule TokengateWeb.MonitoringLive do
       |> assign(:summary_refresh_scheduled, false)
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
       |> assign(:pending, [])
+      |> assign(:stream_rows, 0)
       |> assign(:model_options, model_options())
       |> assign(:group_options, group_options())
       |> assign(:api_key_options, api_key_options())
@@ -66,7 +72,7 @@ defmodule TokengateWeb.MonitoringLive do
       # Insert existing pending entries at the top of the logs stream
       socket =
         Enum.reduce(pending, socket, fn entry, acc ->
-          stream_insert(acc, :logs, pending_entry_to_log(entry), at: 0)
+          prepend_log(acc, pending_entry_to_log(entry))
         end)
 
       {:ok, socket}
@@ -99,7 +105,7 @@ defmodule TokengateWeb.MonitoringLive do
          log_matches_filters?(log, socket.assigns[:filters], timezone) do
       socket =
         socket
-        |> stream_insert(:logs, log, at: 0)
+        |> prepend_log(log)
         |> assign(:last_seen_at, max_datetime(log.inserted_at, socket.assigns[:last_seen_at]))
 
       {:noreply, schedule_summary_refresh(socket)}
@@ -129,7 +135,7 @@ defmodule TokengateWeb.MonitoringLive do
       socket =
         socket
         |> assign(:pending, [entry | socket.assigns[:pending]])
-        |> stream_insert(:logs, pending_entry_to_log(entry), at: 0)
+        |> prepend_log(pending_entry_to_log(entry))
 
       {:noreply, socket}
     else
@@ -256,6 +262,13 @@ defmodule TokengateWeb.MonitoringLive do
     |> maybe_put_filter(filters, "streaming", :streaming)
     |> maybe_put_filter(filters, "error_reason", :error_reason)
     |> maybe_put_filter(filters, "api_key_id", :api_key_id)
+    |> maybe_put_filter(filters, "status_class", :status_class)
+    |> maybe_put_filter(filters, "subject_type", :subject_type)
+    # Date bounds travel as the raw strings the form holds: `Logs` casts them
+    # (and ignores what it cannot parse). Without them the cards ranked rows
+    # the table was hiding.
+    |> maybe_put_filter(filters, "from", :from)
+    |> maybe_put_filter(filters, "to", :to)
   end
 
   defp maybe_put_filter(acc, filters, key, field) do
@@ -438,6 +451,18 @@ defmodule TokengateWeb.MonitoringLive do
     socket |> assign(:summary, summary_for(socket))
   end
 
+  # Every insert at the top of the feed goes through here: `limit:` makes
+  # LiveView prune the OLDEST item server-side and emit its DOM delete, so the
+  # stream state and the client DOM stay bounded by @max_stream_rows however
+  # long the session lives.
+  defp prepend_log(socket, log) do
+    rows = socket.assigns[:stream_rows] || 0
+
+    socket
+    |> stream_insert(:logs, log, at: 0, limit: @max_stream_rows)
+    |> assign(:stream_rows, min(rows + 1, @max_stream_rows))
+  end
+
   # El resumen (ventana de 5 min con el scope/filtros del visor) se comparte
   # entre visores con la misma forma de filtros: N monitores = 1 cálculo por
   # ventana de TTL, no N. La clave lleva los filtros completos, así que dos
@@ -475,23 +500,34 @@ defmodule TokengateWeb.MonitoringLive do
     pending = socket.assigns[:pending] || []
 
     Enum.reduce(pending, socket, fn entry, acc ->
-      stream_insert(acc, :logs, pending_entry_to_log(entry), at: 0)
+      prepend_log(acc, pending_entry_to_log(entry))
     end)
   end
 
   defp load_logs(socket, mode) do
-    list_filters = build_filters(socket, include_cursor: mode == :more)
+    page_size = page_size_for(socket, mode)
+    list_filters = build_filters(socket, include_cursor: mode == :more, limit: page_size)
 
-    logs = Logs.list_logs(list_filters)
+    # `list_feed/1` bounds the window (F39): without it every filter change
+    # walked the ~90 retained partitions until it collected a page.
+    logs = Logs.list_feed(list_filters)
 
     summary = summary_for(socket)
 
-    has_more = length(logs) == @page_size
+    stream_rows =
+      case mode do
+        :reset -> length(logs)
+        :more -> min((socket.assigns[:stream_rows] || 0) + length(logs), @max_stream_rows)
+      end
+
+    has_more =
+      length(logs) == page_size and stream_rows < @max_stream_rows
 
     socket =
       socket
       |> assign(:summary, summary)
       |> assign(:has_more, has_more)
+      |> assign(:stream_rows, stream_rows)
 
     socket =
       case mode do
@@ -510,6 +546,15 @@ defmodule TokengateWeb.MonitoringLive do
         # and service_stats_body).
         assign(socket, :cursor, {oldest.inserted_at, oldest.id})
     end
+  end
+
+  # Page the feed can still hold: "load more" never fetches past the cap, so
+  # the stream cannot grow beyond @max_stream_rows through the UI either.
+  defp page_size_for(_socket, :reset), do: @page_size
+
+  defp page_size_for(socket, :more) do
+    max(@max_stream_rows - (socket.assigns[:stream_rows] || 0), 0)
+    |> min(@page_size)
   end
 
   ## Filter building -------------------------------------------------------
@@ -531,6 +576,7 @@ defmodule TokengateWeb.MonitoringLive do
   defp build_filters(socket, opts) do
     include_cursor = Keyword.get(opts, :include_cursor, false)
     include_limit = Keyword.get(opts, :include_limit, true)
+    limit = Keyword.get(opts, :limit) || @page_size
     form_filters = socket.assigns[:filters]
     timezone = socket.assigns[:timezone] || "Etc/UTC"
 
@@ -554,7 +600,7 @@ defmodule TokengateWeb.MonitoringLive do
         base
       end
 
-    if include_limit, do: Map.put(base, :limit, @page_size), else: base
+    if include_limit, do: Map.put(base, :limit, limit), else: base
   end
 
   defp maybe_put(map, _key, nil), do: map
@@ -653,20 +699,24 @@ defmodule TokengateWeb.MonitoringLive do
   end
 
   def handle_event("load_more", _params, socket) do
-    if socket.assigns[:has_more] do
+    if socket.assigns[:has_more] and page_size_for(socket, :more) > 0 do
       {:noreply, load_logs(socket, :more)}
     else
       {:noreply, socket}
     end
   end
 
-  # Detail del error de una fila: abre el modal con el mensaje completo del
-  # upstream (en la tabla va truncado a 220px) y el contexto de la petición.
-  # Lectura por PK con los mismos preloads que la tabla — es un click, no
-  # hot path, y así el modal no depende de que la fila siga en el stream.
-  def handle_event("show_error", %{"log-id" => log_id}, socket) do
-    {:noreply, assign(socket, :error_detail, Logs.get_log(log_id))}
+  # Error detail for one row: opens the modal with the upstream's full message
+  # (truncated to 220px in the table) plus the request context. Read by PK
+  # (`id` + `inserted_at`, the partition key the row carries) with the same
+  # preloads as the table — it is a click, not a hot path, so the modal does
+  # not depend on the row still being in the stream, and the lookup no longer
+  # probes ~90 partitions (F49).
+  def handle_event("show_error", %{"log-id" => log_id} = params, socket) do
+    {:noreply, assign(socket, :error_detail, Logs.get_log(log_id, params["inserted-at"]))}
   end
+
+  def handle_event("show_error", _params, socket), do: {:noreply, socket}
 
   def handle_event("close_error", _params, socket) do
     {:noreply, assign(socket, :error_detail, nil)}
@@ -1002,11 +1052,11 @@ defmodule TokengateWeb.MonitoringLive do
             <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Logs 30d
           </.link>
           <.link
-            href="/stats/export?type=logs&period=last_month"
+            href="/stats/export?type=logs&period=yesterday"
             class="btn btn-sm btn-ghost"
-            id="csv-logs-last-month"
+            id="csv-logs-yesterday"
           >
-            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Logs (mes pasado)
+            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Logs (ayer)
           </.link>
           <.link
             href="/stats/export?type=errors"
@@ -1186,6 +1236,7 @@ defmodule TokengateWeb.MonitoringLive do
                         class="badge badge-sm badge-error cursor-pointer hover:badge-error/80 transition-colors"
                         phx-click="show_error"
                         phx-value-log-id={log.id}
+                        phx-value-inserted-at={DateTime.to_iso8601(log.inserted_at)}
                         title={gettext("View full error detail")}
                         aria-label={gettext("View full error detail")}
                       >
@@ -1197,6 +1248,7 @@ defmodule TokengateWeb.MonitoringLive do
                         class="text-left text-xs text-base-content/60 max-w-[220px] truncate cursor-pointer hover:text-base-content transition-colors"
                         phx-click="show_error"
                         phx-value-log-id={log.id}
+                        phx-value-inserted-at={DateTime.to_iso8601(log.inserted_at)}
                         title={log.error_message}
                       >
                         {log.error_message}

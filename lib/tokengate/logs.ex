@@ -23,9 +23,13 @@ defmodule Tokengate.Logs do
 
   @default_limit 50
   @max_limit 500
-  # CSV exports need far more rows than the paginated UI; a dedicated cap
-  # keeps `list_logs/1` bounded at 500 while exports can stream up to 50k.
-  @export_limit 50_000
+
+  # Default look-back of the real-time feed (`list_feed/1`). With ~90 live
+  # partitions, an unbounded "newest first" read walks every partition until
+  # it collects a page — on each filter change. Two days keeps "yesterday"
+  # inside the feed at any hour while bounding the walk to a couple of
+  # partitions.
+  @feed_window_hours 48
 
   # Hours the RollupWorker re-aggregates on every tick: buckets newer than this
   # may be missing rows in `request_metrics_hourly`, so the hybrid lifetime
@@ -140,11 +144,17 @@ defmodule Tokengate.Logs do
   (member + user + group, service + api_key, provider) so the error-detail
   modal in MonitoringLive can render the row's full context. Returns `nil`
   when no row matches.
+
+  `inserted_at` is optional and comes from the row the caller already has:
+  it is the PARTITION KEY, so passing it pins the lookup to that day's
+  partition instead of probing every partition kept by retention. Callers
+  without the timestamp keep working (a wider, slower read).
   """
-  def get_log(id) do
+  def get_log(id, inserted_at \\ nil) do
     with {:ok, uuid} <- Ecto.UUID.cast(id) do
       RequestLog
       |> where([rl], rl.id == ^uuid)
+      |> where_partition(inserted_at)
       |> preload(group_member: [:user, :group])
       |> preload(service: [:api_key])
       |> preload(:provider)
@@ -153,6 +163,25 @@ defmodule Tokengate.Logs do
       _ -> nil
     end
   end
+
+  defp where_partition(query, nil), do: query
+
+  defp where_partition(query, inserted_at) when is_binary(inserted_at) do
+    case DateTime.from_iso8601(inserted_at) do
+      {:ok, dt, _offset} -> where_partition(query, dt)
+      _ -> query
+    end
+  end
+
+  defp where_partition(query, %DateTime{} = inserted_at) do
+    where(query, [rl], rl.inserted_at == ^DateTime.truncate(inserted_at, :second))
+  end
+
+  defp where_partition(query, %NaiveDateTime{} = inserted_at) do
+    where_partition(query, DateTime.from_naive!(inserted_at, "Etc/UTC"))
+  end
+
+  defp where_partition(query, _), do: query
 
   @doc """
   Lists request logs with optional filters.
@@ -166,9 +195,15 @@ defmodule Tokengate.Logs do
     * `:agent_type` — exact match
     * `:status_code` — exact match
     * `:streaming` — boolean
-    * `:from` — `inserted_at >= from` (DateTime)
-    * `:to` — `inserted_at <= to` (DateTime)
+    * `:from` — `inserted_at >= from` (`DateTime`)
+    * `:to` — `inserted_at <= to` (`DateTime`)
     * `:limit` — default 50, max 500
+
+  Date bounds are TOLERANT: an ISO-8601 string (`"2026-11-01"` or
+  `"2026-11-01T00:00:00Z"`) is cast, a `Date` covers its whole day, and a
+  value that cannot be understood is DROPPED instead of raising
+  `Ecto.Query.CastError` — a date filter typed by an operator must never kill
+  the LiveView holding it.
   """
   def list_logs(filters \\ %{}) do
     limit = clamp_limit(Map.get(filters, :limit) || Map.get(filters, "limit"))
@@ -189,31 +224,93 @@ defmodule Tokengate.Logs do
   end
 
   @doc """
-  Lists request logs for CSV export with a much higher row cap than the
-  paginated UI (`list_logs/1` is capped at #{@max_limit}).
+  The real-time log feed: `list_logs/1` with a DEFAULT look-back window.
 
-  Same filters as `list_logs/1`. The cap is `#{@export_limit}` rows — an
-  explicit `:limit` filter is honored up to that bound.
+  `request_logs` is partitioned by day and retention keeps ~90 of them, so an
+  unbounded "newest first" page has to walk partition after partition until
+  it fills 50 rows — once per filter change, per viewer. This entry point
+  bounds the walk to #{@feed_window_hours}h (1-2 partitions) unless the caller
+  passes its own `:from`.
 
-  NOTE: the preload of user/group makes this expensive at scale; it is only
-  meant for one-off export requests, never the paginated UI path.
+  An explicit `:from` always wins (the operator picked a date range), and the
+  keyset `:before` cursor pages INSIDE that window, so "load more" stays
+  bounded instead of drifting into the whole history.
   """
-  def list_logs_for_export(filters \\ %{}) do
-    limit =
-      case Map.get(filters, :limit) || Map.get(filters, "limit") do
-        nil -> @export_limit
-        n when is_integer(n) and n > 0 -> min(n, @export_limit)
-        _ -> @export_limit
-      end
+  def list_feed(filters \\ %{}) do
+    filters
+    |> put_feed_window()
+    |> list_logs()
+  end
 
+  defp put_feed_window(filters) do
+    explicit_from = Map.get(filters, :from) || Map.get(filters, "from")
+
+    cond do
+      not is_nil(explicit_from) -> filters
+      # An explicit cursor-only read is the `list_logs_after/2` shape; it
+      # already carries its own bound (`after`), so leave it alone.
+      not is_nil(Map.get(filters, :after) || Map.get(filters, "after")) -> filters
+      true -> Map.put(filters, :from, feed_window_start())
+    end
+  end
+
+  defp feed_window_start do
+    DateTime.utc_now()
+    |> DateTime.add(-@feed_window_hours * 3600, :second)
+    |> DateTime.truncate(:second)
+  end
+
+  @doc """
+  Query feeding the CSV exports, meant for `Repo.stream/2` inside a
+  `Repo.transaction/2`.
+
+  Returns a **flat row per log** (a plain map, no struct, NO preloads): the
+  associations the CSV needs — member email, group name, provider name — are
+  left joins resolved by the database in the same statement, so an export
+  issues ONE cursor query instead of the seven round-trips the preload-based
+  version spent per 50k rows.
+
+  The caller streams it in chunks and maps each row to CSV cells; nothing
+  holds the whole window in memory, and there is no row cap that would
+  silently drop the tail of the export.
+
+  Same filters as `list_logs/1`.
+  """
+  def stream_logs_for_export(filters \\ %{}) do
     RequestLog
     |> apply_log_filters(filters)
-    |> order_by([rl], desc: rl.inserted_at)
-    |> limit(^limit)
-    |> preload(group_member: [:user, :group])
-    |> preload(service: [:api_key])
-    |> preload(:provider)
-    |> Repo.all()
+    |> join(:left, [rl], gm in assoc(rl, :group_member))
+    |> join(:left, [rl, gm], u in assoc(gm, :user))
+    |> join(:left, [rl, gm], g in assoc(gm, :group))
+    |> join(:left, [rl], p in assoc(rl, :provider))
+    |> order_by([rl], desc: rl.inserted_at, desc: rl.id)
+    |> select([rl, gm, u, g, p], %{
+      inserted_at: rl.inserted_at,
+      status_code: rl.status_code,
+      model_requested: rl.model_requested,
+      model_responded: rl.model_responded,
+      user_email: u.email,
+      group_name: g.name,
+      client_agent: rl.client_agent,
+      api_key_id: rl.api_key_id,
+      api_key_prefix: rl.api_key_prefix,
+      provider_name: p.name,
+      provider_key_prefix: rl.provider_key_prefix,
+      provider_status_code: rl.provider_status_code,
+      error_reason: rl.error_reason,
+      error_message: rl.error_message,
+      streaming: rl.streaming,
+      think: rl.think,
+      effort: rl.effort,
+      effort_applied: rl.effort_applied,
+      prompt_tokens: rl.prompt_tokens,
+      completion_tokens: rl.completion_tokens,
+      cache_read_tokens: rl.cache_read_tokens,
+      cache_creation_tokens: rl.cache_creation_tokens,
+      latency_ms: rl.latency_ms,
+      ttft_ms: rl.ttft_ms,
+      provider_cost_usd: rl.provider_cost_usd
+    })
   end
 
   @doc """
@@ -397,18 +494,58 @@ defmodule Tokengate.Logs do
   end
 
   defp maybe_from(query, filters) do
-    case Map.get(filters, :from) || Map.get(filters, "from") do
+    case normalize_bound(Map.get(filters, :from) || Map.get(filters, "from"), :start) do
       nil -> query
       from -> where(query, [rl], rl.inserted_at >= ^from)
     end
   end
 
   defp maybe_to(query, filters) do
-    case Map.get(filters, :to) || Map.get(filters, "to") do
+    case normalize_bound(Map.get(filters, :to) || Map.get(filters, "to"), :end) do
       nil -> query
       to -> where(query, [rl], rl.inserted_at <= ^to)
     end
   end
+
+  # Date bounds come from HTTP params: a live filter, a CSV query string, or a
+  # caller that hands over a plain string. Handing the raw value to Ecto raised
+  # `Ecto.Query.CastError` and killed whatever LiveView/socket was holding it
+  # (`F17`/`P15`: "string → datetime o filtro ignorado, nunca socket muerto").
+  # This normalizes what it can and DROPS what it cannot understand.
+  defp normalize_bound(nil, _edge), do: nil
+
+  defp normalize_bound(%DateTime{} = dt, _edge), do: dt
+
+  defp normalize_bound(%NaiveDateTime{} = ndt, _edge), do: DateTime.from_naive!(ndt, "Etc/UTC")
+
+  defp normalize_bound(%Date{} = date, edge), do: day_edge(date, edge)
+
+  defp normalize_bound(value, edge) when is_binary(value) do
+    case String.trim(value) do
+      "" ->
+        nil
+
+      trimmed ->
+        case DateTime.from_iso8601(trimmed) do
+          {:ok, dt, _offset} -> dt
+          _ -> normalize_date_string(trimmed, edge)
+        end
+    end
+  end
+
+  defp normalize_bound(_value, _edge), do: nil
+
+  defp normalize_date_string(value, edge) do
+    case Date.from_iso8601(value) do
+      {:ok, date} -> day_edge(date, edge)
+      _ -> nil
+    end
+  end
+
+  # A bare date spans its whole UTC day: the lower edge is 00:00:00 and the
+  # upper edge is 23:59:59 (`inserted_at` is timestamp(0)).
+  defp day_edge(date, :start), do: DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+  defp day_edge(date, :end), do: DateTime.new!(date, ~T[23:59:59], "Etc/UTC")
 
   # Keyset cursor for the paginated feeds. `inserted_at` is `timestamp(0)`, so
   # a timestamp-only cursor either repeats or skips the rows that share the
@@ -436,11 +573,17 @@ defmodule Tokengate.Logs do
 
       %DateTime{} = before ->
         where(query, [rl], rl.inserted_at < ^before)
+
+      other ->
+        case normalize_bound(other, :end) do
+          nil -> query
+          before -> where(query, [rl], rl.inserted_at < ^before)
+        end
     end
   end
 
   defp maybe_after(query, filters) do
-    case Map.get(filters, :after) || Map.get(filters, "after") do
+    case normalize_bound(Map.get(filters, :after) || Map.get(filters, "after"), :start) do
       nil -> query
       after_dt -> where(query, [rl], rl.inserted_at > ^after_dt)
     end
@@ -1176,15 +1319,34 @@ defmodule Tokengate.Logs do
   end
 
   @doc """
-  Per-service total historical spend. Returns `%{service_id => Decimal.t()}`
-  — the sum of `provider_cost_usd` (the real cost) from all `request_logs`
-  grouped by service. Used by the admin services page for the "Gasto total"
-  column. Mirror of `total_spend_by_user/0`.
+  Per-service total spend. Returns `%{service_id => Decimal.t()}` — the sum of
+  `provider_cost_usd` (the real cost) from `request_logs` grouped by service.
+  Used by the admin services page for the "Gasto total" column.
+
+  ## Why there is no rollup half here
+
+  `total_spend_by_user/0` is hybrid because `request_metrics_hourly` carries
+  `user_id`. It does NOT carry `service_id` (its dimensions are
+  user/member/model/provider), so a per-service aggregate CANNOT be served
+  from the rollup — any "hybrid" on this axis would silently under-count. The
+  raw grouped scan stays, bounded by two things:
+
+    * `:from` / `:to` — an explicit window. A caller that only renders a
+      recent window pays only for that window's partitions; without them the
+      read spans the retained history, which is what the column means.
+    * the caller's shared cache. `services_live` reads this through
+      `DashboardCache` (5s TTL), so N operators cost ONE scan per TTL. The
+      per-service dimension belongs to the rollup only if `service_id` gets a
+      column there (routed to the rollup phase, not invented here).
   """
-  @spec total_spend_by_service() :: %{term() => Decimal.t()}
-  def total_spend_by_service do
+  @spec total_spend_by_service(keyword() | map()) :: %{term() => Decimal.t()}
+  def total_spend_by_service(opts \\ []) do
+    {from, to} = spend_window(opts)
+
     RequestLog
     |> where([rl], not is_nil(rl.service_id))
+    |> maybe_spend_from(from)
+    |> maybe_spend_to(to)
     |> group_by([rl], rl.service_id)
     |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
     # Full-partition-spanning aggregate over a growing table: needs the
@@ -1192,6 +1354,20 @@ defmodule Tokengate.Logs do
     |> Repo.all(timeout: stats_timeout())
     |> Map.new(fn {service_id, cost} -> {service_id, Decimal.new(to_string(cost))} end)
   end
+
+  defp spend_window(opts) when is_list(opts), do: spend_window(Map.new(opts))
+
+  defp spend_window(opts) when is_map(opts) do
+    from = normalize_bound(Map.get(opts, :from) || Map.get(opts, "from"), :start)
+    to = normalize_bound(Map.get(opts, :to) || Map.get(opts, "to"), :end)
+    {from, to}
+  end
+
+  defp maybe_spend_from(query, nil), do: query
+  defp maybe_spend_from(query, from), do: where(query, [rl], rl.inserted_at >= ^from)
+
+  defp maybe_spend_to(query, nil), do: query
+  defp maybe_spend_to(query, to), do: where(query, [rl], rl.inserted_at <= ^to)
 
   @doc """
   Truncates all request logs. This is a **destructive operation** that
