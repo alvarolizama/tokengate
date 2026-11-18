@@ -730,4 +730,169 @@ defmodule TokengateWeb.ModelProvidersLiveTest do
 
     assert has_element?(view, "input[name='model_provider[service_tier_priority]']")
   end
+
+  ## W5 — ids del cliente, atomicidad y phx-change ---------------------------
+
+  # Un id que llega por el socket (no por la URL) tampoco puede tumbar la
+  # LiveView: no-UUID y UUID inexistente son no-ops, no CastError/NoResultsError.
+  test "a forged or unknown lane id is a no-op, never a crash", %{conn: conn} do
+    model = create_model()
+    lane = create_lane(model, create_provider())
+    other = create_model()
+    foreign = create_lane(other, create_provider())
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    for bad <- ["no-es-un-uuid", "2f1c2b1e-0000-4000-8000-000000000000"] do
+      render_hook(view, "toggle_model_provider", %{"id" => bad})
+      render_hook(view, "delete_model_provider", %{"id" => bad})
+      render_hook(view, "edit_model_provider", %{"id" => bad})
+    end
+
+    # El lane de OTRO modelo tampoco se toca desde esta página.
+    render_hook(view, "toggle_model_provider", %{"id" => foreign.id})
+    render_hook(view, "delete_model_provider", %{"id" => foreign.id})
+
+    assert Providers.get_model_provider!(lane.id).enabled
+    assert Providers.get_model_provider(foreign.id) != nil
+    assert Providers.get_model_provider(foreign.id).enabled
+    refute has_element?(view, "#model-provider-form")
+  end
+
+  # `new_model_provider` acepta `model_id` del cliente: solo abre el modal si el
+  # id está EN EL CATÁLOGO (cast + fila real).
+  test "new_model_provider with an id outside the catalog opens nothing", %{conn: conn} do
+    model = create_model()
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    render_hook(view, "new_model_provider", %{"model_id" => "no-es-un-uuid"})
+    refute has_element?(view, "#model-provider-form")
+    assert render(view) =~ "Modelo no encontrado."
+
+    render_hook(view, "new_model_provider", %{
+      "model_id" => "2f1c2b1e-0000-4000-8000-000000000000"
+    })
+
+    refute has_element?(view, "#model-provider-form")
+  end
+
+  # `?edit=` con el lane de otro modelo no abre el modal de ESTA página.
+  test "editing another model's lane from this page does not open the form", %{conn: conn} do
+    model = create_model()
+    other = create_model()
+    foreign = create_lane(other, create_provider(), %{provider_model: "upstream/ajeno"})
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}?edit=#{foreign.id}")
+
+    refute has_element?(view, "#model-provider-form")
+
+    render_hook(view, "edit_model_provider", %{"id" => foreign.id})
+    refute has_element?(view, "#model-provider-form")
+    assert Providers.get_model_provider!(foreign.id).provider_model == "upstream/ajeno"
+  end
+
+  # El pool nuevo se crea DENTRO de la transacción del lane: si el lane no se
+  # puede insertar, el pool (y su nombre) desaparecen con él.
+  test "a new pool rolls back when the lane itself cannot be saved", %{conn: conn} do
+    model = create_model()
+    provider = create_provider()
+    c1 = create_credential(provider)
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    view |> element("#new-ap-#{model.id}") |> render_click()
+    pick_provider(view, provider)
+    switch_to_pool(view)
+    view |> element("#new-pool-toggle") |> render_click()
+
+    html =
+      view
+      |> form("#model-provider-form",
+        model_provider: %{
+          source: "pool",
+          new_pool_name: "Pool Huérfano",
+          new_pool_member_ids: [c1.id],
+          provider_model: "upstream/rollback",
+          # Prioridad negativa: el changeset del lane la rechaza (-1 está
+          # reservado para los exclusivos), así que el insert falla DESPUÉS de
+          # crear el pool.
+          priority: "-1"
+        }
+      )
+      |> render_submit()
+
+    assert html =~ "No se pudo asignar"
+    assert Providers.list_model_providers(model.id) == []
+    assert Providers.list_pools_for_provider(provider.id) == []
+  end
+
+  # El reorder escribe TODO el orden en una sola sentencia (no un UPDATE por
+  # fila): con tres lanes, un solo UPDATE sobre model_providers.
+  test "reorder writes the whole order in one statement", %{conn: conn} do
+    model = create_model()
+    provider = create_provider()
+    a = create_lane(model, provider, %{priority: 1})
+    b = create_lane(model, provider, %{priority: 2})
+    c = create_lane(model, provider, %{priority: 3})
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    parent = self()
+    handler_id = "w5-reorder-#{unique()}"
+
+    :telemetry.attach(
+      handler_id,
+      [:tokengate, :repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        if is_binary(metadata[:query]) and metadata[:query] =~ ~s(UPDATE "model_providers") do
+          send(parent, {:lane_update, metadata[:query]})
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    render_hook(view, "reorder_providers", %{
+      "model_id" => model.id,
+      "ids" => [c.id, a.id, b.id]
+    })
+
+    assert_receive {:lane_update, _query}
+    refute_receive {:lane_update, _query}, 100
+
+    assert Providers.get_model_provider!(c.id).priority == 1
+    assert Providers.get_model_provider!(a.id).priority == 2
+    assert Providers.get_model_provider!(b.id).priority == 3
+  end
+
+  # Un `phx-change` que no cambia nada más (key sin elegir) NO puede revertir lo
+  # tecleado: antes el re-render salía del changeset viejo.
+  test "a phx-change keeps the typed provider model", %{conn: conn} do
+    model = create_model()
+    provider = create_provider()
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    view |> element("#new-ap-#{model.id}") |> render_click()
+    pick_provider(view, provider)
+
+    view
+    |> form("#model-provider-form",
+      model_provider: %{provider_model: "upstream/tecleado", credential_id: ""}
+    )
+    |> render_change()
+
+    assert has_element?(
+             view,
+             "#model-provider-form input[name='model_provider[provider_model]'][value='upstream/tecleado']"
+           )
+  end
 end

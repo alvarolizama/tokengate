@@ -105,6 +105,31 @@ defmodule TokengateWeb.ModelProvidersLive do
     Ecto.Query.CastError -> nil
   end
 
+  # The catalog is the only source of VALID model ids: cast first (an id that is
+  # not even a UUID never reaches Repo) and then a real row. Every event that
+  # takes a `model_id` from the client goes through here.
+  defp fetch_catalog_model(model_id) do
+    with {:ok, id} <- Ecto.UUID.cast(model_id),
+         %Model{} = model <- Providers.get_model(id) do
+      {:ok, model}
+    else
+      _ -> :error
+    end
+  end
+
+  # A lane addressed by a client id is only usable when it exists AND belongs to
+  # the model of this page: editing or deleting another model's lane from here
+  # would be a cross-model write triggered by a forged payload.
+  defp fetch_lane(socket, ap_id) do
+    with {:ok, id} <- Ecto.UUID.cast(ap_id),
+         %ModelProvider{model_id: model_id} = ap <- Providers.get_model_provider(id),
+         true <- model_id == socket.assigns.model.id do
+      ap
+    else
+      _ -> nil
+    end
+  end
+
   # `?edit=<ap_id>` viene del "Change" del modal del modelo (el índice ya no
   # edita lanes en línea) y `?new=1` de cualquier enlace que quiera el alta
   # abierta. Cualquier otro id es un no-op.
@@ -199,50 +224,64 @@ defmodule TokengateWeb.ModelProvidersLive do
   ## Events — model_provider management -------------------------------------
 
   def handle_event("new_model_provider", %{"model_id" => model_id}, socket) do
-    if socket.assigns.is_admin do
-      # La unidad de precio nace con la del TIPO del modelo: un lane de imagen
-      # abre en «por imagen» y uno de voz en «por 1k caracteres», no en tokens.
-      # El operador la cambia si su proveedor cobra distinto.
-      unit = Pricing.default_unit_for_type(model_type_for(model_id))
+    cond do
+      not socket.assigns.is_admin ->
+        {:noreply,
+         put_flash(socket, :error, gettext("You do not have permission for this action."))}
 
-      changeset =
-        Providers.change_model_provider(%ModelProvider{
-          model_id: model_id,
-          enabled: true,
-          pricing_unit: unit
-        })
+      true ->
+        case fetch_catalog_model(model_id) do
+          {:ok, model} ->
+            # La unidad de precio nace con la del TIPO del modelo: un lane de
+            # imagen abre en «por imagen» y uno de voz en «por 1k caracteres»,
+            # no en tokens. El operador la cambia si su proveedor cobra
+            # distinto.
+            unit = Pricing.default_unit_for_type(model.model_type || "llm")
 
-      {:noreply,
-       socket
-       |> assign(:provider_form_model_id, model_id)
-       |> assign(:provider_form, to_form(changeset, as: :model_provider))
-       |> assign(:editing_ap_id, :new)
-       |> assign(:current_scope, "global")
-       |> assign(:current_scope_group_ids, [])
-       |> assign(:current_scope_member_ids, [])
-       |> assign(:scope_group_search, "")
-       |> assign(:scope_member_search, "")
-       |> assign(:scope_group_open, false)
-       |> assign(:scope_member_open, false)
-       |> assign(:provider_form_provider_key, nil)
-       |> assign(:provider_form_credential_id, nil)
-       |> assign(:provider_form_is_fireworks, false)
-       |> assign(:provider_form_pricing_unit, unit)
-       |> assign(:credential_form, nil)
-       |> assign(:provider_models, [])
-       # A fresh modal has no fetch in flight: the flag of the previous session
-       # otherwise shows a spinner (and hides the suggestions) forever.
-       |> assign(:provider_models_loading, false)
-       |> assign(:provider_model_search, "")
-       |> build_provider_choices(model_id)
-       |> assign(:provider_credentials, nil)
-       |> reset_lane_source()
-       |> assign_credential_choices()}
-    else
-      {:noreply,
-       put_flash(socket, :error, gettext("You do not have permission for this action."))}
+            changeset =
+              Providers.change_model_provider(%ModelProvider{
+                model_id: model.id,
+                enabled: true,
+                pricing_unit: unit
+              })
+
+            {:noreply,
+             socket
+             |> assign(:provider_form_model_id, model.id)
+             |> assign(:provider_form, to_form(changeset, as: :model_provider))
+             |> assign(:editing_ap_id, :new)
+             |> assign(:current_scope, "global")
+             |> assign(:current_scope_group_ids, [])
+             |> assign(:current_scope_member_ids, [])
+             |> assign(:scope_group_search, "")
+             |> assign(:scope_member_search, "")
+             |> assign(:scope_group_open, false)
+             |> assign(:scope_member_open, false)
+             |> assign(:provider_form_provider_key, nil)
+             |> assign(:provider_form_credential_id, nil)
+             |> assign(:provider_form_is_fireworks, false)
+             |> assign(:provider_form_pricing_unit, unit)
+             |> assign(:credential_form, nil)
+             |> assign(:provider_models, [])
+             # A fresh modal has no fetch in flight: the flag of the previous
+             # session otherwise shows a spinner (and hides the suggestions)
+             # forever.
+             |> assign(:provider_models_loading, false)
+             |> assign(:provider_model_search, "")
+             |> build_provider_choices(model.id)
+             |> assign(:provider_credentials, nil)
+             |> reset_lane_source()
+             |> assign_credential_choices()}
+
+          # Id forjado o de un modelo que no está en el catálogo: no se abre
+          # ningún form (el lane nacería apuntando a la nada).
+          :error ->
+            {:noreply, put_flash(socket, :error, gettext("Model not found."))}
+        end
     end
   end
+
+  def handle_event("new_model_provider", _params, socket), do: {:noreply, socket}
 
   ## Events — provider + API key ---------------------------------------------
 
@@ -468,6 +507,11 @@ defmodule TokengateWeb.ModelProvidersLive do
       socket =
         socket
         |> assign(:provider_model_search, model_search)
+        # Lo tecleado manda: el re-render de un phx-change sale del changeset,
+        # así que sin recastar lo que acaba de llegar el form devolvía los
+        # valores viejos y borraba lo escrito (mismo mecanismo que el picker de
+        # icono de labs).
+        |> sync_submitted_form(ap_params)
         |> maybe_switch_lane_source(ap_params)
 
       cond do
@@ -632,8 +676,8 @@ defmodule TokengateWeb.ModelProvidersLive do
   end
 
   def handle_event("toggle_model_provider", %{"id" => ap_id}, socket) do
-    if socket.assigns.is_admin do
-      ap = Providers.get_model_provider!(ap_id)
+    with true <- socket.assigns.is_admin,
+         %ModelProvider{} = ap <- fetch_lane(socket, ap_id) do
       new_enabled = !ap.enabled
 
       case Providers.update_model_provider(ap, %{enabled: new_enabled}) do
@@ -658,15 +702,21 @@ defmodule TokengateWeb.ModelProvidersLive do
           {:noreply, put_flash(socket, :error, gettext("Could not update the provider."))}
       end
     else
-      {:noreply,
-       put_flash(socket, :error, gettext("You do not have permission for this action."))}
+      false ->
+        {:noreply,
+         put_flash(socket, :error, gettext("You do not have permission for this action."))}
+
+      # Id forjado, lane inexistente o de otro modelo: no-op.
+      nil ->
+        {:noreply, socket}
     end
   end
 
-  def handle_event("delete_model_provider", %{"id" => ap_id}, socket) do
-    if socket.assigns.is_admin do
-      ap = Providers.get_model_provider!(ap_id)
+  def handle_event("toggle_model_provider", _params, socket), do: {:noreply, socket}
 
+  def handle_event("delete_model_provider", %{"id" => ap_id}, socket) do
+    with true <- socket.assigns.is_admin,
+         %ModelProvider{} = ap <- fetch_lane(socket, ap_id) do
       case Providers.delete_model_provider(ap) do
         {:ok, _} ->
           audit(socket, "model_provider.delete", "model_provider", ap.id, %{
@@ -682,10 +732,17 @@ defmodule TokengateWeb.ModelProvidersLive do
           {:noreply, put_flash(socket, :error, gettext("Could not delete the provider."))}
       end
     else
-      {:noreply,
-       put_flash(socket, :error, gettext("You do not have permission for this action."))}
+      false ->
+        {:noreply,
+         put_flash(socket, :error, gettext("You do not have permission for this action."))}
+
+      # Id forjado, lane inexistente o de otro modelo: no-op.
+      nil ->
+        {:noreply, socket}
     end
   end
+
+  def handle_event("delete_model_provider", _params, socket), do: {:noreply, socket}
 
   def handle_event("delete_pool", %{"id" => pool_id}, socket) do
     with true <- socket.assigns.is_admin,
@@ -729,26 +786,34 @@ defmodule TokengateWeb.ModelProvidersLive do
   def handle_event("delete_pool", _params, socket), do: {:noreply, socket}
 
   def handle_event("reorder_providers", %{"model_id" => model_id, "ids" => ids}, socket) do
-    if socket.assigns.is_admin do
+    with true <- socket.assigns.is_admin,
+         {:ok, model_id} <- Ecto.UUID.cast(model_id),
+         # El orden que llega es el de ESTA página: un model_id de otro modelo
+         # (o forjado) no reordena nada.
+         true <- model_id == socket.assigns.model.id do
       valid_ids =
         from(ap in ModelProvider, where: ap.model_id == ^model_id, select: ap.id)
         |> Repo.all()
         |> MapSet.new()
 
       if is_list(ids) and ids != [] and Enum.all?(ids, &MapSet.member?(valid_ids, &1)) do
+        # UNA sentencia para todo el orden: `priority` sale de la POSICIÓN del id
+        # en la lista. Un UPDATE por fila dentro de la transacción eran N round
+        # trips (y N re-escrituras de los mismos índices) por un drag & drop.
+        now = DateTime.truncate(DateTime.utc_now(), :second)
+
         {:ok, _} =
           Repo.transaction(fn ->
-            ids
-            |> Enum.with_index(1)
-            |> Enum.each(fn {ap_id, priority} ->
-              from(ap in ModelProvider, where: ap.id == ^ap_id)
-              |> Repo.update_all(
+            from(ap in ModelProvider,
+              where: ap.model_id == ^model_id and ap.id in ^ids,
+              update: [
                 set: [
-                  priority: priority,
-                  updated_at: DateTime.truncate(DateTime.utc_now(), :second)
+                  priority: fragment("array_position(?::text[], ?::text)", ^ids, ap.id),
+                  updated_at: ^now
                 ]
-              )
-            end)
+              ]
+            )
+            |> Repo.update_all([])
           end)
 
         audit(socket, "model_provider.reorder", "model", model_id, %{"ids" => ids})
@@ -758,10 +823,17 @@ defmodule TokengateWeb.ModelProvidersLive do
         {:noreply, put_flash(socket, :error, gettext("Invalid order for this model."))}
       end
     else
-      {:noreply,
-       put_flash(socket, :error, gettext("You do not have permission for this action."))}
+      false ->
+        {:noreply,
+         put_flash(socket, :error, gettext("You do not have permission for this action."))}
+
+      # model_id forjado (no UUID) o de otro modelo: no-op.
+      _ ->
+        {:noreply, socket}
     end
   end
+
+  def handle_event("reorder_providers", _params, socket), do: {:noreply, socket}
 
   ## Events — pools de credenciales ------------------------------------------
 
@@ -887,132 +959,137 @@ defmodule TokengateWeb.ModelProvidersLive do
   def handle_event("add_pool_member", _params, socket), do: {:noreply, socket}
 
   # Abre el modal de un lane existente. `?edit=<id>` — el "Change" del modal del
-  # modelo, que vive en el índice — entra por aquí también.
+  # modelo, que vive en el índice — entra por aquí también. Un id que no es de
+  # este modelo no abre nada: la página se queda como está en vez de reventar.
   defp open_lane_modal(socket, ap_id) do
-    if socket.assigns.is_admin do
-      ap = Providers.get_model_provider!(ap_id)
-      changeset = Providers.change_model_provider(ap)
-
-      scope =
-        cond do
-          ap.exclusive_to_group_member_id != nil -> "member"
-          ap.exclusive_to_group_id != nil -> "group"
-          true -> "global"
-        end
-
-      # Prefill the search inputs with the current selection's label so the
-      # user sees which group / member is bound to the provider.
-      group_label =
-        if ap.exclusive_to_group_id do
-          group =
-            Enum.find(
-              socket.assigns.groups_for_select || [],
-              &(&1.id == ap.exclusive_to_group_id)
-            )
-
-          if group, do: group.name, else: ""
-        else
-          ""
-        end
-
-      member_label =
-        if ap.exclusive_to_group_member_id do
-          member =
-            Enum.find(
-              socket.assigns.members_for_select || [],
-              &(&1.id == ap.exclusive_to_group_member_id)
-            )
-
-          if member && member.user, do: member.user.email, else: ""
-        else
-          ""
-        end
-
-      provider_key = provider_key_of_credential(socket, ap.credential_id)
-
-      # Un lane de pool no tiene credencial propia: la fuente es el pool, con
-      # sus miembros. Se carga con `list_pool_members/1` (preload de credencial
-      # y proveedor) para resolver de ahí el proveedor del modal — el mismo
-      # criterio que `provider_key_of_credential/2` con una key.
-      lane_pool = lane_pool(ap)
-      pool_provider = lane_pool && pool_provider(lane_pool)
-      provider_key = if pool_provider, do: provider_ref(pool_provider), else: provider_key
-
-      # Prefill the service_tier checkbox from the stored extra_body (the
-      # raw override virtuals are no longer part of the form). The provider is
-      # already identified by the row's credential; el `provider_model` y los
-      # precios manuales los escribe el operador (la lista viva del proveedor
-      # es la que sugiere el id).
-      changeset =
-        changeset
-        |> Ecto.Changeset.put_change(
-          :service_tier_priority,
-          Map.get(ap.extra_body || %{}, "service_tier") == "priority"
-        )
-
-      # The credential list is narrowed to the row's own provider, so editing an
-      # assignment shows the keys that can actually serve it. The row's own key
-      # is kept in the list even when it is not `active`: without it the select
-      # could not represent the stored credential and the save failed on the
-      # required field.
-      lane_credential = credential_for_lane(socket, ap.credential_id)
-
-      provider_credentials =
-        cond do
-          pool_provider ->
-            credentials_of(socket, pool_provider.id)
-
-          match?(%{provider_id: _}, lane_credential) ->
-            %{provider_id: provider_id} = lane_credential
-            credentials = credentials_of(socket, provider_id)
-
-            if Enum.any?(credentials, &(&1.id == lane_credential.id)) do
-              credentials
-            else
-              credentials ++ [lane_credential]
-            end
-
-          true ->
-            []
-        end
-
-      # La lista viva del proveedor también aplica a un lane de pool: la key que
-      # se usa para pedirla es un miembro cualquiera (todos son del proveedor
-      # del pool), no la fuente del lane.
-      fetch_credential_id =
-        if lane_pool do
-          lane_pool.members |> List.wrap() |> Enum.find_value(&member_credential_id/1)
-        else
-          ap.credential_id
-        end
-
-      socket
-      |> assign(:provider_form, to_form(changeset, as: :model_provider))
-      |> assign(:editing_ap_id, ap.id)
-      |> assign(:provider_form_model_id, ap.model_id)
-      |> assign(:provider_form_credential_id, fetch_credential_id)
-      |> assign(:provider_form_is_fireworks, pool_fireworks?(pool_provider, ap, socket))
-      |> assign(:provider_form_pricing_unit, ap.pricing_unit || Pricing.default_unit())
-      |> assign(:provider_form_provider_key, provider_key)
-      |> assign(:provider_credentials, provider_credentials)
-      |> assign(:lane_source, if(lane_pool, do: "pool", else: "key"))
-      |> assign(:lane_pool_id, ap.pool_id)
-      |> assign(:lane_pool_error, nil)
-      |> assign(:lane_new_pool_open, false)
-      |> assign(:provider_pools, lane_pool_pools(lane_pool))
-      |> assign(:credential_form, nil)
-      |> assign(:current_scope, scope)
-      |> assign(:current_scope_group_id, ap.exclusive_to_group_id)
-      |> assign(:current_scope_member_id, ap.exclusive_to_group_member_id)
-      |> assign(:scope_group_search, group_label)
-      |> assign(:scope_member_search, member_label)
-      |> assign(:provider_models_loading, is_binary(fetch_credential_id))
-      |> build_provider_choices(ap.model_id)
-      |> assign_credential_choices()
-      |> fetch_provider_models(fetch_credential_id)
+    with true <- socket.assigns.is_admin,
+         %ModelProvider{} = ap <- fetch_lane(socket, ap_id) do
+      open_lane_form(socket, ap)
     else
-      put_flash(socket, :error, gettext("You do not have permission for this action."))
+      _ -> socket
     end
+  end
+
+  defp open_lane_form(socket, ap) do
+    changeset = Providers.change_model_provider(ap)
+
+    scope =
+      cond do
+        ap.exclusive_to_group_member_id != nil -> "member"
+        ap.exclusive_to_group_id != nil -> "group"
+        true -> "global"
+      end
+
+    # Prefill the search inputs with the current selection's label so the
+    # user sees which group / member is bound to the provider.
+    group_label =
+      if ap.exclusive_to_group_id do
+        group =
+          Enum.find(
+            socket.assigns.groups_for_select || [],
+            &(&1.id == ap.exclusive_to_group_id)
+          )
+
+        if group, do: group.name, else: ""
+      else
+        ""
+      end
+
+    member_label =
+      if ap.exclusive_to_group_member_id do
+        member =
+          Enum.find(
+            socket.assigns.members_for_select || [],
+            &(&1.id == ap.exclusive_to_group_member_id)
+          )
+
+        if member && member.user, do: member.user.email, else: ""
+      else
+        ""
+      end
+
+    provider_key = provider_key_of_credential(socket, ap.credential_id)
+
+    # Un lane de pool no tiene credencial propia: la fuente es el pool, con
+    # sus miembros. Se carga con `list_pool_members/1` (preload de credencial
+    # y proveedor) para resolver de ahí el proveedor del modal — el mismo
+    # criterio que `provider_key_of_credential/2` con una key.
+    lane_pool = lane_pool(ap)
+    pool_provider = lane_pool && pool_provider(lane_pool)
+    provider_key = if pool_provider, do: provider_ref(pool_provider), else: provider_key
+
+    # Prefill the service_tier checkbox from the stored extra_body (the
+    # raw override virtuals are no longer part of the form). The provider is
+    # already identified by the row's credential; el `provider_model` y los
+    # precios manuales los escribe el operador (la lista viva del proveedor
+    # es la que sugiere el id).
+    changeset =
+      changeset
+      |> Ecto.Changeset.put_change(
+        :service_tier_priority,
+        Map.get(ap.extra_body || %{}, "service_tier") == "priority"
+      )
+
+    # The credential list is narrowed to the row's own provider, so editing an
+    # assignment shows the keys that can actually serve it. The row's own key
+    # is kept in the list even when it is not `active`: without it the select
+    # could not represent the stored credential and the save failed on the
+    # required field.
+    lane_credential = credential_for_lane(socket, ap.credential_id)
+
+    provider_credentials =
+      cond do
+        pool_provider ->
+          credentials_of(socket, pool_provider.id)
+
+        match?(%{provider_id: _}, lane_credential) ->
+          %{provider_id: provider_id} = lane_credential
+          credentials = credentials_of(socket, provider_id)
+
+          if Enum.any?(credentials, &(&1.id == lane_credential.id)) do
+            credentials
+          else
+            credentials ++ [lane_credential]
+          end
+
+        true ->
+          []
+      end
+
+    # La lista viva del proveedor también aplica a un lane de pool: la key que
+    # se usa para pedirla es un miembro cualquiera (todos son del proveedor
+    # del pool), no la fuente del lane.
+    fetch_credential_id =
+      if lane_pool do
+        lane_pool.members |> List.wrap() |> Enum.find_value(&member_credential_id/1)
+      else
+        ap.credential_id
+      end
+
+    socket
+    |> assign(:provider_form, to_form(changeset, as: :model_provider))
+    |> assign(:editing_ap_id, ap.id)
+    |> assign(:provider_form_model_id, ap.model_id)
+    |> assign(:provider_form_credential_id, fetch_credential_id)
+    |> assign(:provider_form_is_fireworks, pool_fireworks?(pool_provider, ap, socket))
+    |> assign(:provider_form_pricing_unit, ap.pricing_unit || Pricing.default_unit())
+    |> assign(:provider_form_provider_key, provider_key)
+    |> assign(:provider_credentials, provider_credentials)
+    |> assign(:lane_source, if(lane_pool, do: "pool", else: "key"))
+    |> assign(:lane_pool_id, ap.pool_id)
+    |> assign(:lane_pool_error, nil)
+    |> assign(:lane_new_pool_open, false)
+    |> assign(:provider_pools, lane_pool_pools(lane_pool))
+    |> assign(:credential_form, nil)
+    |> assign(:current_scope, scope)
+    |> assign(:current_scope_group_id, ap.exclusive_to_group_id)
+    |> assign(:current_scope_member_id, ap.exclusive_to_group_member_id)
+    |> assign(:scope_group_search, group_label)
+    |> assign(:scope_member_search, member_label)
+    |> assign(:provider_models_loading, is_binary(fetch_credential_id))
+    |> build_provider_choices(ap.model_id)
+    |> assign_credential_choices()
+    |> fetch_provider_models(fetch_credential_id)
   end
 
   ## Async: catálogo del proveedor --------------------------------------
@@ -1174,47 +1251,91 @@ defmodule TokengateWeb.ModelProvidersLive do
          gettext("Select at least one limit profile or user for the exclusive scope.")
        )}
     else
-      # El pool se resuelve (o se crea con sus miembros) ANTES de armar los
-      # targets: el `pool_id` que viaja al insert es el del pool real, no el
-      # nombre que escribió el operador.
-      case prepare_lane_source(socket, ap_params) do
-        {:ok, ap_params} ->
-          insert_model_provider_targets(socket, scope, ap_params, group_ids, member_ids)
+      # La fuente (con su pool NUEVO, si lo hay) se materializa DENTRO de la
+      # transacción del insert: un lane que no se puede guardar no deja atrás un
+      # pool huérfano con el nombre ya ocupado.
+      case write_lane(socket, ap_params, fn resolved ->
+             create_lane_targets(resolved, group_ids, member_ids)
+           end) do
+        {:ok, count} ->
+          lane_created(socket, scope, count)
 
-        {:error, message} ->
+        {:error, {:source, message}} ->
           lane_source_error(socket, ap_params, message)
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:noreply,
+           socket
+           |> put_flash(
+             :error,
+             gettext("Could not assign: %{errors}",
+               errors: Enum.map_join(changeset.errors, ", ", fn {_f, {m, _}} -> m end)
+             )
+           )
+           |> assign(:lane_pool_error, lane_error_in_modal(socket, changeset))
+           |> assign(:provider_form, to_form(changeset, as: :model_provider))}
+
+        {:error, reason} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             gettext("Could not assign: %{errors}", errors: inspect(reason))
+           )}
       end
     end
   end
 
   # L38 — un id de edición stale (doble submit, submit encolado detrás de
   # Cancelar) es un no-op: sin esta cláusula revienta con FunctionClauseError y
-  # se lleva el LiveView y el formulario por delante.
+  # se lleva la LiveView y el formulario por delante.
   defp save_model_provider(socket, nil, _ap_params), do: {:noreply, socket}
 
   defp save_model_provider(socket, ap_id, ap_params) when is_binary(ap_id) do
     scope = socket.assigns[:current_scope] || "global"
+    # Lane borrado o de otro modelo entre el render y el submit: no-op (nunca un
+    # NoResultsError, ni una escritura cruzada).
+    lane = fetch_lane(socket, ap_id)
 
     # L37 en edición: cambiar el scope a group/member sin elegir destino
     # guardaría el lane como global (ambos FKs nil). Mismo rechazo que en alta.
-    if exclusive_scope?(scope) and blank_id?(Map.get(ap_params, exclusive_scope_key(scope))) do
-      {:noreply,
-       put_flash(
-         socket,
-         :error,
-         gettext("Select at least one limit profile or user for the exclusive scope.")
-       )}
-    else
-      case prepare_lane_source(socket, ap_params) do
-        {:ok, ap_params} -> update_model_provider(socket, ap_id, ap_params)
-        {:error, message} -> lane_source_error(socket, ap_params, message)
-      end
+    cond do
+      exclusive_scope?(scope) and blank_id?(Map.get(ap_params, exclusive_scope_key(scope))) ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Select at least one limit profile or user for the exclusive scope.")
+         )}
+
+      is_nil(lane) ->
+        {:noreply, socket}
+
+      true ->
+        case write_lane(socket, ap_params, fn resolved ->
+               Providers.update_model_provider(lane, apply_provider_defaults(resolved, socket))
+             end) do
+          {:ok, updated_ap} ->
+            lane_updated(socket, updated_ap, ap_params)
+
+          {:error, {:source, message}} ->
+            lane_source_error(socket, ap_params, message)
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:noreply,
+             socket
+             |> assign(:lane_pool_error, lane_error_in_modal(socket, changeset))
+             |> assign(:provider_form, to_form(changeset, as: :model_provider))}
+
+          {:error, _reason} ->
+            {:noreply, socket}
+        end
     end
   end
 
-  defp insert_model_provider_targets(socket, scope, ap_params, group_ids, member_ids) do
-    # Build the list of insert targets: one set of params per group/member.
-    # Global scope = single insert with no exclusive FK.
+  # Los targets del alta: un set de params por grupo/usuario exclusivo, o uno
+  # solo global.
+  defp create_lane_targets(ap_params, group_ids, member_ids) do
     targets =
       cond do
         group_ids != [] ->
@@ -1242,88 +1363,79 @@ defmodule TokengateWeb.ModelProvidersLive do
     # índice de exclusividad única (mismo modelo+target ya tiene dueño),
     # no debe quedar un estado parcial con la mitad de los targets
     # asignados. O entran todos, o ninguno.
-    results =
-      Providers.create_model_providers_transactional(targets)
-
-    case results do
-      {:ok, count} ->
-        msg =
-          if count == 1,
-            do: gettext("Provider assigned to the model."),
-            else: gettext("%{count} providers assigned to the model.", count: count)
-
-        audit(
-          socket,
-          "model_provider.create",
-          "model",
-          socket.assigns.provider_form_model_id,
-          %{
-            "count" => count,
-            "scope" => scope
-          }
-        )
-
-        {:noreply,
-         socket
-         |> put_flash(:info, msg)
-         |> assign(:provider_form, nil)
-         |> assign(:editing_ap_id, nil)
-         # The modal is closing: nothing is in flight anymore, so the spinner
-         # must not leak into the next one.
-         |> assign(:provider_models_loading, false)
-         |> assign(:lane_pool_error, nil)
-         |> reset_lane_source()
-         |> load_lanes()}
-
-      {:error, changeset} ->
-        {:noreply,
-         socket
-         |> put_flash(
-           :error,
-           gettext("Could not assign: %{errors}",
-             errors: Enum.map_join(changeset.errors, ", ", fn {_f, {m, _}} -> m end)
-           )
-         )
-         |> assign(:lane_pool_error, lane_error_in_modal(socket, changeset))
-         |> assign(:provider_form, to_form(changeset, as: :model_provider))}
-    end
+    Providers.create_model_providers_transactional(targets)
   end
 
-  defp update_model_provider(socket, ap_id, ap_params) do
-    ap = Providers.get_model_provider!(ap_id)
-    ap_params = apply_provider_defaults(ap_params, socket)
+  defp lane_created(socket, scope, count) do
+    msg =
+      if count == 1,
+        do: gettext("Provider assigned to the model."),
+        else: gettext("%{count} providers assigned to the model.", count: count)
 
-    case Providers.update_model_provider(ap, ap_params) do
-      {:ok, updated_ap} ->
-        audit(socket, "model_provider.update", "model_provider", updated_ap.id, %{
-          "model_id" => updated_ap.model_id,
-          "changes" =>
-            Map.take(ap_params, [
-              "provider_model",
-              "enabled",
-              "priority",
-              "exclusive_to_group_id",
-              "exclusive_to_group_member_id"
-            ])
-        })
+    audit(
+      socket,
+      "model_provider.create",
+      "model",
+      socket.assigns.provider_form_model_id,
+      %{
+        "count" => count,
+        "scope" => scope
+      }
+    )
 
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Provider updated."))
-         |> assign(:provider_form, nil)
-         |> assign(:editing_ap_id, nil)
-         # Same as the create path: closing the modal ends any listing state.
-         |> assign(:provider_models_loading, false)
-         |> assign(:lane_pool_error, nil)
-         |> reset_lane_source()
-         |> load_lanes()}
+    {:noreply,
+     socket
+     |> put_flash(:info, msg)
+     |> assign(:provider_form, nil)
+     |> assign(:editing_ap_id, nil)
+     # The modal is closing: nothing is in flight anymore, so the spinner
+     # must not leak into the next one.
+     |> assign(:provider_models_loading, false)
+     |> assign(:lane_pool_error, nil)
+     |> reset_lane_source()
+     |> load_lanes()}
+  end
 
-      {:error, changeset} ->
-        {:noreply,
-         socket
-         |> assign(:lane_pool_error, lane_error_in_modal(socket, changeset))
-         |> assign(:provider_form, to_form(changeset, as: :model_provider))}
-    end
+  defp lane_updated(socket, updated_ap, ap_params) do
+    audit(socket, "model_provider.update", "model_provider", updated_ap.id, %{
+      "model_id" => updated_ap.model_id,
+      "changes" =>
+        Map.take(ap_params, [
+          "provider_model",
+          "enabled",
+          "priority",
+          "exclusive_to_group_id",
+          "exclusive_to_group_member_id"
+        ])
+    })
+
+    {:noreply,
+     socket
+     |> put_flash(:info, gettext("Provider updated."))
+     |> assign(:provider_form, nil)
+     |> assign(:editing_ap_id, nil)
+     # Same as the create path: closing the modal ends any listing state.
+     |> assign(:provider_models_loading, false)
+     |> assign(:lane_pool_error, nil)
+     |> reset_lane_source()
+     |> load_lanes()}
+  end
+
+  # Toda escritura de un lane va en UNA transacción con la materialización de su
+  # fuente: el pool nuevo se crea DENTRO, así que un lane rechazado no deja un
+  # pool huérfano (ni su nombre ocupado para el reintento).
+  defp write_lane(socket, ap_params, write) do
+    Repo.transaction(fn ->
+      with {:ok, source} <- plan_lane_source(socket, ap_params),
+           {:ok, resolved} <- materialize_lane_source(source),
+           {:ok, value} <- write.(resolved) do
+        value
+      else
+        {:error, %Ecto.Changeset{} = changeset} -> Repo.rollback(changeset)
+        {:error, message} when is_binary(message) -> Repo.rollback({:source, message})
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   ## Private helpers — pools de credenciales --------------------------------
@@ -1513,26 +1625,28 @@ defmodule TokengateWeb.ModelProvidersLive do
     )
   end
 
-  # Traduce la fuente elegida en el modal a los attrs del lane. El pool NUEVO se
-  # crea aquí (con sus miembros) porque el lane necesita su id: el form trae un
-  # nombre y el insert necesita un UUID.
-  defp prepare_lane_source(socket, ap_params) do
+  # Traduce la fuente elegida en el modal a un PLAN de escritura. Aquí NO se
+  # escribe nada: el pool nuevo se materializa dentro de la transacción del lane
+  # (`write_lane/3`), para que un lane que no se puede guardar no deje un pool
+  # huérfano con el nombre ya ocupado.
+  defp plan_lane_source(socket, ap_params) do
     case lane_source_param(ap_params, socket.assigns[:lane_source]) do
       "pool" ->
-        resolve_pool_source(socket, ap_params)
+        plan_pool_source(socket, ap_params)
 
       _key ->
         # Convertir un lane de pool a lane de una key LIMPIA el pool: `nil`
         # explícito, no `Map.drop` (el changeset re-lee la fila de la DB, donde
         # pool_id sigue puesto, y el XOR rechazaría las dos fuentes).
         {:ok,
-         ap_params
-         |> Map.put("pool_id", nil)
-         |> Map.drop(["new_pool_name", "new_pool_member_ids"])}
+         {:key,
+          ap_params
+          |> Map.put("pool_id", nil)
+          |> Map.drop(["new_pool_name", "new_pool_member_ids"])}}
     end
   end
 
-  defp resolve_pool_source(socket, ap_params) do
+  defp plan_pool_source(socket, ap_params) do
     new_name = (ap_params["new_pool_name"] || "") |> to_string() |> String.trim()
     member_ids = ap_params["new_pool_member_ids"] |> List.wrap() |> Enum.reject(&blank_id?/1)
     pool_id = blank_to_nil(ap_params["pool_id"])
@@ -1543,15 +1657,12 @@ defmodule TokengateWeb.ModelProvidersLive do
 
     cond do
       new_name != "" ->
-        case selected_provider(socket) do
-          %Provider{} = provider ->
-            case create_pool_with_members(provider, new_name, member_ids) do
-              {:ok, pool} -> {:ok, Map.put(ap_params, "pool_id", pool.id)}
-              {:error, message} -> {:error, message}
-            end
-
-          _ ->
-            {:error, gettext("Pick the provider the pool belongs to first.")}
+        with %Provider{} = provider <- selected_provider(socket),
+             {:ok, member_ids} <- pool_member_ids(provider, member_ids) do
+          {:ok, {:new_pool, provider, new_name, member_ids, ap_params}}
+        else
+          nil -> {:error, gettext("Pick the provider the pool belongs to first.")}
+          {:error, message} -> {:error, message}
         end
 
       is_nil(pool_id) ->
@@ -1559,46 +1670,63 @@ defmodule TokengateWeb.ModelProvidersLive do
 
       true ->
         case Enum.find(socket.assigns[:provider_pools] || [], &(&1.id == pool_id)) do
-          %CredentialPool{} -> {:ok, ap_params}
+          %CredentialPool{} -> {:ok, {:existing_pool, Map.put(ap_params, "pool_id", pool_id)}}
           _ -> {:error, gettext("Pick an existing pool or create a new one.")}
         end
     end
   end
 
-  defp create_pool_with_members(provider, name, member_ids) do
-    if member_ids == [] do
-      {:error, gettext("Select at least one API key for the new pool.")}
+  # Los ids del pool nuevo se validan CONTRA el proveedor elegido antes de
+  # escribir nada: una credencial borrada entre el render y el submit (o forjada)
+  # es un rechazo entero, no un pool con la mitad de las keys.
+  defp pool_member_ids(_provider, []),
+    do: {:error, gettext("Select at least one API key for the new pool.")}
+
+  defp pool_member_ids(provider, member_ids) do
+    ids =
+      Enum.flat_map(member_ids, fn credential_id ->
+        case Ecto.UUID.cast(credential_id) do
+          {:ok, id} -> [id]
+          :error -> []
+        end
+      end)
+
+    valid_ids =
+      from(c in Credential,
+        where: c.provider_id == ^provider.id and c.id in ^ids,
+        select: c.id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    cond do
+      ids == [] ->
+        {:error, gettext("Select at least one API key for the new pool.")}
+
+      not Enum.all?(ids, &MapSet.member?(valid_ids, &1)) ->
+        {:error, gettext("One of the selected API keys is not valid for this pool.")}
+
+      true ->
+        {:ok, ids}
+    end
+  end
+
+  # Materializa el plan dentro de la transacción del lane: el pool nuevo (y su
+  # membresía) nacen ahí, así que un fallo posterior en el lane los revierte.
+  defp materialize_lane_source({:key, ap_params}), do: {:ok, ap_params}
+  defp materialize_lane_source({:existing_pool, ap_params}), do: {:ok, ap_params}
+
+  defp materialize_lane_source({:new_pool, provider, name, member_ids, ap_params}) do
+    with {:ok, pool} <- Providers.create_pool(provider, %{"name" => name}),
+         :ok <- add_members_to_pool(pool, member_ids) do
+      {:ok, Map.put(ap_params, "pool_id", pool.id)}
     else
-      # Pool + membresía en una sola transacción: si una credencial forjada deja
-      # el pool vacío, o falla un insert, no queda un pool a medias con nombre
-      # ocupado que estorbe en el reintento.
-      result =
-        Repo.transaction(fn ->
-          with {:ok, pool} <- Providers.create_pool(provider, %{"name" => name}),
-               :ok <- add_members_to_pool(pool, member_ids),
-               [_ | _] <- Providers.list_pool_members(pool) do
-            pool
-          else
-            [] -> Repo.rollback(:no_members)
-            :error -> Repo.rollback(:invalid_member)
-            {:error, reason} -> Repo.rollback(reason)
-          end
-        end)
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error,
+         gettext("Could not create the pool: %{errors}", errors: error_messages(changeset))}
 
-      case result do
-        {:ok, %CredentialPool{} = pool} ->
-          {:ok, pool}
-
-        {:error, %Ecto.Changeset{} = changeset} ->
-          {:error,
-           gettext("Could not create the pool: %{errors}", errors: error_messages(changeset))}
-
-        {:error, :invalid_member} ->
-          {:error, gettext("One of the selected API keys is not valid for this pool.")}
-
-        {:error, _reason} ->
-          {:error, gettext("Select at least one API key for the new pool.")}
-      end
+      {:error, _reason} ->
+        {:error, gettext("One of the selected API keys is not valid for this pool.")}
     end
   end
 
@@ -1989,6 +2117,17 @@ defmodule TokengateWeb.ModelProvidersLive do
       |> Enum.filter(&Map.has_key?(params, Atom.to_string(&1)))
 
     Ecto.Changeset.cast(changeset, params, fields)
+  end
+
+  # Rearma el changeset del form abierto con lo que acaba de llegar del cliente.
+  # Es lo que hace que el re-render de un `phx-change` NO revierta los campos
+  # tecleados cuando el evento no cambia nada más (una key sin elegir, un evento
+  # que no toca la fuente); sin form abierto es un no-op.
+  defp sync_submitted_form(%{assigns: %{provider_form: nil}} = socket, _ap_params), do: socket
+
+  defp sync_submitted_form(socket, ap_params) do
+    changeset = carry_submitted_params(socket.assigns.provider_form.source, ap_params)
+    assign(socket, :provider_form, to_form(changeset, as: :model_provider))
   end
 
   # The credentials the modal's select lists: just the selected provider's keys
