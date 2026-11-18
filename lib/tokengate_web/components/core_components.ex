@@ -396,7 +396,18 @@ defmodule TokengateWeb.CoreComponents do
   attr :rows, :list, required: true
   attr :row_id, :any, default: nil, doc: "the function for generating the row id"
   attr :row_click, :any, default: nil, doc: "the function for handling phx-click on each row"
-  attr :row_class, :string, default: nil, doc: "extra class for every body row (e.g. align-top)"
+
+  attr :row_class, :any,
+    default: nil,
+    doc: "static class string, or a function row -> class for per-row styling"
+
+  attr :row_attrs, :any,
+    default: nil,
+    doc: "function row -> keyword list of extra <tr> attributes (draggable, data-id, ...)"
+
+  attr :tbody_attrs, :any,
+    default: nil,
+    doc: "keyword list of extra <tbody> attributes (e.g. phx-hook for drag sorting)"
 
   attr :row_item, :any,
     default: &Function.identity/1,
@@ -470,8 +481,13 @@ defmodule TokengateWeb.CoreComponents do
           </th>
         </tr>
       </thead>
-      <tbody id={@id} phx-update={@stream? && "stream"}>
-        <tr :for={row <- @rows} id={@row_id && @row_id.(row)} class={@row_class}>
+      <tbody id={@id} phx-update={@stream? && "stream"} {...(@tbody_attrs || [])}>
+        <tr
+          :for={row <- @rows}
+          id={@row_id && @row_id.(row)}
+          class={row_class_for(@row_class, row)}
+          {...((@row_attrs && @row_attrs.(row)) || [])}
+        >
           <td
             :for={col <- @col}
             phx-click={@row_click && @row_click.(row)}
@@ -495,6 +511,9 @@ defmodule TokengateWeb.CoreComponents do
   defp align_class("right"), do: "text-right"
   defp align_class("center"), do: "text-center"
   defp align_class(_), do: nil
+
+  defp row_class_for(fun, row) when is_function(fun, 1), do: fun.(row)
+  defp row_class_for(class, _row), do: class
 
   @doc """
   Renders a data list.
