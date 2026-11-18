@@ -50,20 +50,26 @@ defmodule Tokengate.Accounts.ServiceApiKeysTest do
     assert found2.api_key.key_prefix == k2.key_prefix
   end
 
-  test "revocar una clave no afecta a las demás" do
+  test "revocar una clave emite una nueva y no afecta a las demás" do
     service = service_fixture()
     {t1, k1} = key_fixture(service, "revocar")
     {t2, _k2} = key_fixture(service, "seguir")
 
-    assert {:ok, _} = Accounts.revoke_service_api_key(k1)
+    # Revocar = generar una nueva y anular la anterior, igual que en usuarios.
+    assert {:ok, nueva, t_nueva} = Accounts.revoke_and_replace_api_key(k1)
+    assert nueva.service_id == service.id
+    assert nueva.label == "revocar"
 
+    # El token viejo muere, el nuevo autentica y la otra clave sigue intacta.
     assert Accounts.get_service_by_api_key(t1) == {:error, :not_found}
+    assert {:ok, found} = Accounts.get_service_by_api_key(t_nueva)
+    assert found.api_key.id == nueva.id
     assert {:ok, _service} = Accounts.get_service_by_api_key(t2)
 
     labels =
-      Accounts.list_api_keys_for_service(service.id) |> Enum.map(& &1.label)
+      Accounts.list_api_keys_for_service(service.id) |> Enum.map(& &1.label) |> Enum.sort()
 
-    assert labels == ["seguir"]
+    assert labels == ["revocar", "seguir"]
   end
 
   test "borrar el servicio borra todas sus claves" do

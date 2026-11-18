@@ -89,6 +89,26 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
     assert :error = Accounts.resolve_auth_by_api_key(token)
   end
 
+  test "revoke_and_replace_api_key/1 kills the old token and serves the new one" do
+    %{token: old_token} = member_with_key()
+
+    assert %{member: _} = Accounts.resolve_auth_by_api_key(old_token)
+
+    key =
+      Tokengate.Repo.one(
+        from ak in Tokengate.Accounts.ApiKey,
+          where: ak.key_hash == ^Accounts.hash_api_key(old_token)
+      )
+
+    assert {:ok, _new_key, new_token} = Accounts.revoke_and_replace_api_key(key)
+
+    # El entry viejo se tira por hash (no se sirve hasta el TTL) y el token
+    # viejo ya no resuelve.
+    assert :ets.lookup(ApiKeyCache.table(), key.key_hash) == []
+    assert :error = Accounts.resolve_auth_by_api_key(old_token)
+    assert %{member: _} = Accounts.resolve_auth_by_api_key(new_token)
+  end
+
   test "update_group_member/1 drops the cached entry (status/limits change)" do
     %{member: member, token: token} = member_with_key()
 
@@ -166,6 +186,9 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
     end
   end
 
+  # Reemplaza el test viejo de degradación a los 50ms: con single-flight real
+  # el waiter ya no duplica la consulta cuando el holder tarda.
+
   describe "single-flight" do
     test "concurrent misses on the same hash run the lookup once" do
       # Force a miss on a hash nobody else touches.
@@ -188,8 +211,8 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
 
       assert Enum.uniq(results) == [%{member: %{id: "member-single-flight"}}]
       assert :counters.get(call_count, 1) == 1
-      # The placeholder is gone once the value is published.
-      assert :ets.lookup(ApiKeyCache.table(), {:__computing__, key_hash}) == []
+      # The lock is gone once the value is published.
+      assert :ets.lookup(ApiKeyCache.lock_table(), key_hash) == []
       assert [{^key_hash, %{member: _}, _exp}] = :ets.lookup(ApiKeyCache.table(), key_hash)
     end
 
@@ -209,45 +232,78 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
       assert :ets.lookup(ApiKeyCache.table(), key_hash) == []
     end
 
-    test "a waiter computes locally when the holder overruns the wait window" do
+    test "a waiter waits for a slow holder instead of duplicating the lookup" do
       key_hash =
         :crypto.hash(:sha256, "slow-#{System.unique_integer([:positive])}")
         |> Base.encode16(case: :lower)
 
-      # The holder blocks past the 50ms wait cap → the waiter degrades to its
-      # own lookup instead of raising or stalling the request.
+      test_pid = self()
+
+      # The holder is slower than the old 50ms cap (the bug: the waiter gave up
+      # and ran its own query right when the DB was saturated). With real
+      # single-flight the waiter must wait and receive the holder's value. The
+      # holder parks inside its lookup until the test releases it, so the
+      # overlap is deterministic (no sleeps for synchronization).
       holder =
         Task.async(fn ->
           ApiKeyCache.fetch(key_hash, fn ->
-            Process.sleep(80)
-            %{member: %{id: "slow-holder"}}
+            send(test_pid, :holder_holds_the_lock)
+
+            receive do
+              :release_holder -> %{member: %{id: "slow-holder"}}
+            end
           end)
         end)
 
-      wait_until(fn ->
-        match?([_], :ets.lookup(ApiKeyCache.table(), {:__computing__, key_hash}))
-      end)
+      assert_receive :holder_holds_the_lock, 1_000
+      assert :ets.lookup(ApiKeyCache.lock_table(), key_hash) != []
 
-      {elapsed, entry} =
-        :timer.tc(fn ->
-          ApiKeyCache.fetch(key_hash, fn -> %{member: %{id: "local"}} end)
+      call_count = :counters.new(1, [:atomics])
+
+      waiter =
+        Task.async(fn ->
+          ApiKeyCache.fetch(key_hash, fn ->
+            :counters.add(call_count, 1, 1)
+            %{member: %{id: "duplicado"}}
+          end)
         end)
 
-      assert %{member: %{id: "local"}} = entry
-      # :timer.tc measures microseconds; the bound is loose on purpose — the
-      # behavior assert above (the waiter's OWN value, not the holder's) is
-      # what proves degradation. This only rules out waiting out the holder.
-      assert div(elapsed, 1000) < 500
+      send(holder.pid, :release_holder)
 
+      assert %{member: %{id: "slow-holder"}} = Task.await(waiter, 5_000)
       assert %{member: %{id: "slow-holder"}} = Task.await(holder, 5_000)
+
+      # The waiter never ran its own lookup.
+      assert :counters.get(call_count, 1) == 0
     end
-  end
 
-  defp wait_until(fun, tries \\ 100)
+    test "an expired lock is taken over by exactly one waiter" do
+      key_hash =
+        :crypto.hash(:sha256, "expired-#{System.unique_integer([:positive])}")
+        |> Base.encode16(case: :lower)
 
-  defp wait_until(_fun, 0), do: flunk("condition never became true")
+      call_count = :counters.new(1, [:atomics])
 
-  defp wait_until(fun, tries) do
-    if fun.(), do: :ok, else: Process.sleep(5) && wait_until(fun, tries - 1)
+      # A live holder that overran its window: its lock is already expired.
+      holder = start_supervised!({Task, fn -> Process.sleep(:infinity) end})
+      expired = System.monotonic_time(:millisecond) - 1
+      :ets.insert(ApiKeyCache.lock_table(), {key_hash, holder, expired})
+
+      fun = fn ->
+        :counters.add(call_count, 1, 1)
+        Process.sleep(20)
+        %{member: %{id: "taken-over"}}
+      end
+
+      results =
+        1..8
+        |> Enum.map(fn _ -> Task.async(fn -> ApiKeyCache.fetch(key_hash, fun) end) end)
+        |> Task.await_many(5_000)
+
+      assert Enum.uniq(results) == [%{member: %{id: "taken-over"}}]
+      # One takeover, one lookup: the rest waited for the winner.
+      assert :counters.get(call_count, 1) == 1
+      assert :ets.lookup(ApiKeyCache.lock_table(), key_hash) == []
+    end
   end
 end

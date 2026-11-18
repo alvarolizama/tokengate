@@ -56,9 +56,12 @@ defmodule Tokengate.Accounts do
   def delete_group(%Group{} = group) do
     alias Tokengate.Providers.{GroupModel, GroupMemberExtraModel}
 
-    group = Repo.preload(group, group_members: :api_key)
-
     Repo.transaction(fn ->
+      # The preload runs inside the transaction: it reads the memberships and
+      # their keys through the same connection, so a concurrent membership
+      # change cannot slip between the read and the deletes below.
+      group = Repo.preload(group, group_members: :api_key)
+
       # Delete group_models (FK group_id)
       from(t in GroupModel, where: t.group_id == ^group.id)
       |> Repo.delete_all()
@@ -774,29 +777,35 @@ defmodule Tokengate.Accounts do
   end
 
   def delete_group_member(%GroupMember{} = group_member) do
-    alias Tokengate.Providers.GroupMemberExtraModel
-
     group_member = Repo.preload(group_member, :api_key)
 
-    Repo.transaction(fn ->
-      if group_member.api_key, do: Repo.delete!(group_member.api_key)
-
-      from(t in GroupMemberExtraModel, where: t.group_member_id == ^group_member.id)
-      |> Repo.delete_all()
-
-      group_member
-      |> Ecto.Changeset.change()
-      |> Ecto.Changeset.foreign_key_constraint(:group_member_id,
-        name: "request_logs_group_member_id_fkey",
-        message: "el miembro tiene logs de uso y no se puede eliminar"
-      )
-      |> Repo.delete()
-      |> case do
-        {:ok, member} -> member
-        {:error, changeset} -> Repo.rollback(changeset)
-      end
-    end)
+    Repo.transaction(fn -> do_delete_group_member(group_member) end)
     |> invalidate_member_auth_cache(group_member.id)
+  end
+
+  # Body of the membership delete, expected to run **inside** a transaction
+  # (either its own, from `delete_group_member/1`, or the caller's, from
+  # `sync_user_sub/2`). Returns the deleted struct or rolls the whole
+  # transaction back with the offending changeset.
+  defp do_delete_group_member(%GroupMember{} = group_member) do
+    alias Tokengate.Providers.GroupMemberExtraModel
+
+    if group_member.api_key, do: Repo.delete!(group_member.api_key)
+
+    from(t in GroupMemberExtraModel, where: t.group_member_id == ^group_member.id)
+    |> Repo.delete_all()
+
+    group_member
+    |> Ecto.Changeset.change()
+    |> Ecto.Changeset.foreign_key_constraint(:group_member_id,
+      name: "request_logs_group_member_id_fkey",
+      message: "el miembro tiene logs de uso y no se puede eliminar"
+    )
+    |> Repo.delete()
+    |> case do
+      {:ok, member} -> member
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
   end
 
   def change_group_member(%GroupMember{} = group_member, attrs \\ %{}) do
@@ -817,40 +826,70 @@ defmodule Tokengate.Accounts do
   """
   @spec sync_user_sub(term(), term() | nil) :: :ok | {:error, String.t()}
   def sync_user_sub(user_id, sub_id) do
-    current = list_group_members_for_user(user_id)
+    # One transaction for the whole move: the read of the current memberships,
+    # the teardown of the previous one(s) and the insert of the new one either
+    # all land or none do. Previously a failure mid-way left the user with no
+    # membership (and no key) and the data unrecoverable from the caller.
+    #
+    # The body returns the ids of the memberships it removed so their auth and
+    # routing entries can be dropped after the commit (a cached entry carries
+    # the old member id, its group and its limits).
+    result =
+      Repo.transaction(fn ->
+        # Preload inside the transaction: same connection, consistent snapshot.
+        current = list_group_members_for_user(user_id)
+        removed_ids = Enum.map(current, & &1.id)
 
-    cond do
-      sub_id == nil ->
-        delete_memberships(current)
+        cond do
+          sub_id == nil ->
+            delete_memberships(current)
+            removed_ids
 
-      Enum.any?(current, &(&1.group_id == sub_id)) ->
-        :ok
+          Enum.any?(current, &(&1.group_id == sub_id)) ->
+            []
 
-      true ->
-        case delete_memberships(current) do
-          :ok ->
+          true ->
+            delete_memberships(current)
+
             case create_group_member(%{
                    user_id: user_id,
                    group_id: sub_id,
                    status: "active"
                  }) do
-              {:ok, _member} -> :ok
-              {:error, changeset} -> {:error, format_membership_errors(changeset)}
+              {:ok, _member} -> removed_ids
+              {:error, changeset} -> Repo.rollback(format_membership_errors(changeset))
             end
-
-          {:error, _} = error ->
-            error
         end
+      end)
+
+    case result do
+      {:ok, removed_ids} ->
+        Enum.each(removed_ids, &invalidate_removed_membership/1)
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp delete_memberships(memberships) do
-    Enum.reduce_while(memberships, :ok, fn member, :ok ->
-      case delete_group_member(member) do
-        {:ok, _} -> {:cont, :ok}
-        {:error, _} -> {:halt, {:error, "no se pudo quitar la membresía anterior"}}
-      end
+  # A membership that no longer exists cannot be reached by `invalidate_member`
+  # through a write on the row, so drop its entries explicitly: by member (the
+  # cached member struct) and by member for the accessible-models routing cache.
+  defp invalidate_removed_membership(member_id) do
+    safe_invalidate(fn -> ApiKeyCache.invalidate_member(member_id) end)
+
+    safe_invalidate(fn ->
+      Tokengate.Routing.Cache.invalidate_accessible_models(nil, member_id)
     end)
+
+    :ok
+  end
+
+  defp delete_memberships(memberships) do
+    # `do_delete_group_member/1` rolls the surrounding transaction back on
+    # failure, so a plain iteration is enough: no partial teardown survives.
+    Enum.each(memberships, &do_delete_group_member/1)
+    :ok
   end
 
   defp format_membership_errors(changeset) do
@@ -887,7 +926,8 @@ defmodule Tokengate.Accounts do
            Repo.one(
              from ak in ApiKey,
                where: ak.key_hash == ^key_hash and ak.status == "active",
-               where: ak.subject_type == "member"
+               where: ak.subject_type == "member",
+               where: is_nil(ak.hidden_at)
            ),
          %GroupMember{} = member <- member_for_key(api_key),
          :ok <- owner_active(member) do
@@ -954,6 +994,14 @@ defmodule Tokengate.Accounts do
   y para la resolución del plug. Sin `user_id`, una key creada aquí sería
   invisible a `list_api_keys_for_user/1` (el panel de claves del usuario).
   Returns `{:ok, api_key, new_token}` or `{:error, changeset}`.
+
+  ## Deprecated
+
+  Esta es la rotación **en la misma fila** (el hash viejo se pisa): destruye la
+  atribución histórica de `request_logs` hacia esa key y ya no es el contrato
+  del producto. Se conserva sólo para los llamadores viejos que todavía no
+  migran; las superficies deben usar `revoke_and_replace_api_key/1` (fila nueva
+  + fila vieja `revoked`, en transacción, token emitido una sola vez).
   """
   def replace_api_key(%GroupMember{id: group_member_id} = group_member) do
     {new_token, new_hash, new_prefix} = generate_api_key_material()
@@ -1004,6 +1052,17 @@ defmodule Tokengate.Accounts do
     result
   end
 
+  @doc """
+  Revokes a key **without** issuing a replacement (low-level primitive).
+
+  Flips `status` to `"revoked"`: the token stops authenticating but the row
+  (and its hash/prefix) stays, so the `request_logs` attribution survives.
+
+  This is the inner step of `revoke_and_replace_api_key/1`; the product
+  lifecycle is *revoke = generate a new one*, so surfaces must call that
+  function instead of this one (revoking without a replacement leaves the
+  subject without a working key).
+  """
   def revoke_api_key(%ApiKey{} = api_key) do
     api_key
     |> ApiKey.changeset(%{status: "revoked"})
@@ -1012,7 +1071,194 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
+  Revokes a key by issuing a new one: the single lifecycle for user keys and
+  service keys alike.
+
+  Both writes run in one transaction:
+
+    1. a new `api_keys` row is inserted for the same subject (same
+       `subject_type`, `user_id`/`group_member_id` or `service_id`, same
+       `label`) with a freshly generated hash;
+    2. the previous row is flipped to `status: "revoked"`.
+
+  The previous row keeps its hash, so `request_logs` rows that point at it
+  stay attributed to it — this is the difference with `replace_api_key/1`
+  (in-place rotation, deprecated). The plaintext token is generated here,
+  returned once and never stored.
+
+  The row is locked (`FOR UPDATE`) first, so two concurrent revokes of the
+  same key cannot mint two replacements: the loser sees `:not_active`.
+
+  Returns `{:ok, new_api_key, new_token}`,
+  `{:error, :not_found}` (key gone or hidden) or `{:error, :not_active}`
+  (already revoked).
+  """
+  @spec revoke_and_replace_api_key(ApiKey.t()) ::
+          {:ok, ApiKey.t(), String.t()}
+          | {:error, :not_found | :not_active | Ecto.Changeset.t()}
+  def revoke_and_replace_api_key(%ApiKey{id: key_id}) do
+    {new_token, new_hash, new_prefix} = generate_api_key_material()
+
+    result =
+      Repo.transaction(fn ->
+        case lock_key(key_id) do
+          nil ->
+            Repo.rollback(:not_found)
+
+          %ApiKey{hidden_at: hidden_at} when not is_nil(hidden_at) ->
+            Repo.rollback(:not_found)
+
+          %ApiKey{status: status} when status != "active" ->
+            Repo.rollback(:not_active)
+
+          %ApiKey{} = current ->
+            case insert_replacement_key(current, new_hash, new_prefix) do
+              {:ok, replacement} ->
+                case mark_key_revoked(current) do
+                  {:ok, revoked} -> {revoked, replacement}
+                  {:error, changeset} -> Repo.rollback(changeset)
+                end
+
+              {:error, changeset} ->
+                Repo.rollback(changeset)
+            end
+        end
+      end)
+
+    case result do
+      {:ok, {revoked, replacement}} ->
+        safe_invalidate(fn ->
+          ApiKeyCache.invalidate_hash(revoked.key_hash)
+          ApiKeyCache.invalidate_hash(replacement.key_hash)
+          invalidate_key_subject(revoked)
+        end)
+
+        {:ok, replacement, new_token}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp lock_key(key_id) do
+    Repo.one(from ak in ApiKey, where: ak.id == ^key_id, lock: "FOR UPDATE")
+  end
+
+  defp insert_replacement_key(%ApiKey{} = current, key_hash, key_prefix) do
+    %ApiKey{}
+    |> ApiKey.changeset(%{
+      "subject_type" => current.subject_type,
+      "user_id" => current.user_id,
+      "group_member_id" => current.group_member_id,
+      "service_id" => current.service_id,
+      "label" => current.label,
+      "key_hash" => key_hash,
+      "key_prefix" => key_prefix,
+      "status" => "active"
+    })
+    |> Repo.insert()
+  end
+
+  defp mark_key_revoked(%ApiKey{} = key) do
+    key
+    |> Ecto.Changeset.change()
+    |> Ecto.Changeset.force_change(:status, "revoked")
+    |> Repo.update()
+  end
+
+  @doc """
+  Deletes a key the way the product defines it: **soft-hide**.
+
+  Sets `hidden_at` (and revokes the key in the same write), so the row
+  disappears from every listing (`list_api_keys_for_user/1`,
+  `list_api_keys_for_service/1`, their `_all` mirrors,
+  `list_api_keys_for_services/1`, `count_active_api_keys_by_user/1`) and from
+  `spend_by_api_key/2`, while `request_logs.api_key_id` keeps its attribution
+  (that table has no FK to `api_keys`).
+
+  Returns `{:ok, api_key}` or `{:error, changeset}`.
+  """
+  @spec hide_api_key(ApiKey.t()) :: {:ok, ApiKey.t()} | {:error, Ecto.Changeset.t()}
+  def hide_api_key(%ApiKey{} = api_key) do
+    api_key
+    |> ApiKey.hide_changeset()
+    |> Repo.update()
+    |> tap_invalidate_hidden_key(api_key)
+  end
+
+  @doc """
+  Renames the label of a key, with the ownership check living in the context.
+
+  Options:
+
+    * `:user_id` / `:service_id` — the subject the caller is operating on.
+      When present, a key owned by somebody else returns `{:error, :not_found}`
+      (same shape as a missing key: the surface never learns whether the id
+      exists). A surface must always pass the subject it opened the panel for.
+    * `:actor` — `%User{}` or user id for the audit trail (`nil` = system).
+
+  Audits `api_key.rename` with `old_label`/`new_label` for both subjects, so
+  users and services produce the same entry without each surface repeating it.
+  Hidden keys are not renamable (`{:error, :not_found}`).
+
+  Returns `{:ok, api_key}`, `{:error, :not_found}` or `{:error, changeset}`
+  (e.g. label over 64 chars).
+  """
+  @spec rename_api_key(ApiKey.t(), String.t() | nil, keyword()) ::
+          {:ok, ApiKey.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def rename_api_key(%ApiKey{id: key_id}, label, opts \\ []) do
+    label = if is_binary(label), do: String.trim(label)
+
+    # Reload: the caller's struct may be stale (a key hidden or revoked after
+    # it was listed must not be renamable, and a deleted row is not found).
+    with %ApiKey{} = current <- Repo.get(ApiKey, key_id) || {:error, :not_found},
+         :ok <- check_key_visible(current),
+         :ok <- check_key_ownership(current, opts),
+         {:ok, renamed} <- update_api_key(current, %{"label" => label}) do
+      audit_key_rename(current, renamed, opts)
+      {:ok, renamed}
+    end
+  end
+
+  defp check_key_visible(%ApiKey{hidden_at: nil}), do: :ok
+  defp check_key_visible(%ApiKey{}), do: {:error, :not_found}
+
+  defp check_key_ownership(%ApiKey{} = api_key, opts) do
+    cond do
+      user_id = Keyword.get(opts, :user_id) ->
+        if api_key.user_id == user_id, do: :ok, else: {:error, :not_found}
+
+      service_id = Keyword.get(opts, :service_id) ->
+        if api_key.service_id == service_id, do: :ok, else: {:error, :not_found}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp audit_key_rename(%ApiKey{} = before_key, %ApiKey{} = after_key, opts) do
+    Tokengate.Auditing.audit(
+      Keyword.get(opts, :actor),
+      "api_key.rename",
+      "api_key",
+      after_key.id,
+      %{
+        "old_label" => before_key.label,
+        "new_label" => after_key.label,
+        "subject_type" => after_key.subject_type,
+        "user_id" => after_key.user_id,
+        "service_id" => after_key.service_id
+      }
+    )
+  end
+
+  @doc """
   Reactiva una API key revocada (vuelve a `status: "active"`).
+
+  **Deprecated.** No forma parte del ciclo de vida del producto: revocar es
+  emitir una nueva (`revoke_and_replace_api_key/1`), no resucitar el token
+  viejo. Se conserva sólo mientras las superficies viejas que aún la cablean se
+  migran (W6/W7); ninguna UI debe ofrecerlo.
 
   Revocar no borra la fila ni la key material: el hash sigue siendo el mismo,
   así que reactivar es simplemente devolver el status a `active`. Lo que SÍ
@@ -1051,49 +1297,52 @@ defmodule Tokengate.Accounts do
   end
 
   # Keys activas de un usuario (con label), más recientes primero.
+  # Soft-hide: las filas con `hidden_at` no existen para ninguna superficie.
   @doc "Lista las keys activas de un usuario (N keys con label)."
   def list_api_keys_for_user(user_id) do
     Repo.all(
       from ak in ApiKey,
-        where: ak.user_id == ^user_id and ak.status == "active",
+        where: ak.user_id == ^user_id and ak.status == "active" and is_nil(ak.hidden_at),
         order_by: [desc: ak.inserted_at]
     )
   end
 
   @doc """
-  Lista **todas** las keys de un usuario —activas y revocadas—, más recientes
-  primero. Espejo de `list_api_keys_for_service_all/1`: el panel de claves
-  muestra las revocadas para poder reactivarlas.
+  Lista **todas** las keys visibles de un usuario —activas y revocadas—, más
+  recientes primero. Espejo de `list_api_keys_for_service_all/1`: las revocadas
+  se conservan (revocar no borra la fila) para que el histórico y el consumo
+  sigan siendo atribuibles. Las ocultas (soft-hide) no aparecen.
   """
   def list_api_keys_for_user_all(user_id) do
     Repo.all(
       from ak in ApiKey,
-        where: ak.user_id == ^user_id,
+        where: ak.user_id == ^user_id and is_nil(ak.hidden_at),
         order_by: [desc: ak.inserted_at]
     )
   end
 
-  @doc "Lista las keys activas de un servicio (N keys con label)."
+  @doc "Lista las keys activas de un servicio (N keys con label); las ocultas no cuentan."
   def list_api_keys_for_service(service_id) do
     Repo.all(
       from ak in ApiKey,
-        where: ak.service_id == ^service_id and ak.status == "active",
+        where: ak.service_id == ^service_id and ak.status == "active" and is_nil(ak.hidden_at),
         order_by: [desc: ak.inserted_at]
     )
   end
 
   @doc """
-  Lista **todas** las keys de un servicio —activas y revocadas—, más recientes
-  primero.
+  Lista **todas** las keys visibles de un servicio —activas y revocadas—, más
+  recientes primero.
 
   A diferencia de `list_api_keys_for_service/1` no filtra por status: revocar
   no borra la fila (sólo cambia `status`), así que su histórico sigue siendo
-  atribuible y la página de stats del servicio las muestra con su badge.
+  atribuible y la página de stats del servicio las muestra con su badge. Las
+  ocultas (soft-hide) quedan fuera.
   """
   def list_api_keys_for_service_all(service_id) do
     Repo.all(
       from ak in ApiKey,
-        where: ak.service_id == ^service_id,
+        where: ak.service_id == ^service_id and is_nil(ak.hidden_at),
         order_by: [desc: ak.inserted_at]
     )
   end
@@ -1110,7 +1359,9 @@ defmodule Tokengate.Accounts do
     else
       Repo.all(
         from ak in ApiKey,
-          where: ak.service_id in ^service_ids and ak.status == "active",
+          where:
+            ak.service_id in ^service_ids and ak.status == "active" and
+              is_nil(ak.hidden_at),
           order_by: [desc: ak.inserted_at]
       )
       |> Enum.group_by(& &1.service_id)
@@ -1121,14 +1372,14 @@ defmodule Tokengate.Accounts do
   Cuenta de keys activas por usuario, en lote (una sola query).
 
   Alimenta la columna «Claves» de la tabla de usuarios — mismo dato y misma
-  columna que en servicios.
+  columna que en servicios. Las ocultas (soft-hide) no cuentan.
   """
   def count_active_api_keys_by_user(user_ids) when is_list(user_ids) do
     if user_ids == [] do
       %{}
     else
       from(ak in ApiKey,
-        where: ak.user_id in ^user_ids and ak.status == "active",
+        where: ak.user_id in ^user_ids and ak.status == "active" and is_nil(ak.hidden_at),
         group_by: ak.user_id,
         select: {ak.user_id, count(ak.id)}
       )
@@ -1142,11 +1393,18 @@ defmodule Tokengate.Accounts do
 
   Solo cuenta el histórico con `api_key_id` (las filas viejas se agrupan por
   `api_key_prefix`). `from` acota la ventana; `nil` = todo el histórico.
+
+  Las keys con soft-hide (`hidden_at`) quedan fuera aunque su id venga en la
+  lista: borrar oculta la fila en todas las superficies, incluida ésta. La
+  atribución cruda en `request_logs` no se toca (esa tabla no tiene FK).
   """
   def spend_by_api_key(api_key_ids, from \\ nil) when is_list(api_key_ids) do
+    hidden_keys = from ak in ApiKey, where: not is_nil(ak.hidden_at), select: ak.id
+
     query =
       from rl in RequestLog,
         where: rl.api_key_id in ^api_key_ids,
+        where: rl.api_key_id not in subquery(hidden_keys),
         group_by: rl.api_key_id,
         select:
           {rl.api_key_id, count(rl.id), fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)}
@@ -1171,9 +1429,15 @@ defmodule Tokengate.Accounts do
     |> Repo.update()
   end
 
-  def delete_api_key(%ApiKey{} = api_key) do
-    Repo.delete(api_key)
-  end
+  @doc """
+  Deletes a key: **soft-hide**, identical to `hide_api_key/1`.
+
+  Kept as the name the callers already use. It no longer removes the row — the
+  row must survive so `request_logs` keeps its attribution — it sets
+  `hidden_at` and revokes it, which removes it from every listing and from
+  `spend_by_api_key/2`.
+  """
+  def delete_api_key(%ApiKey{} = api_key), do: hide_api_key(api_key)
 
   @doc """
   Limpia las sticky routes de un **usuario** — todas sus keys, no una sola.
@@ -1290,7 +1554,8 @@ defmodule Tokengate.Accounts do
            Repo.one(
              from ak in ApiKey,
                where: ak.key_hash == ^key_hash and ak.status == "active",
-               where: ak.subject_type == "service"
+               where: ak.subject_type == "service",
+               where: is_nil(ak.hidden_at)
            ),
          %Service{} = service <-
            Repo.one(from s in Service, where: s.id == ^service_id) do
@@ -1776,6 +2041,19 @@ defmodule Tokengate.Accounts do
   end
 
   defp tap_invalidate_api_key(result, _key), do: result
+
+  # Soft-hide kills the presented token: drop the entry by the OLD hash and by
+  # the subject owner (a hidden key must not keep authenticating until the TTL).
+  defp tap_invalidate_hidden_key({:ok, %ApiKey{} = key} = result, %ApiKey{} = previous) do
+    safe_invalidate(fn ->
+      ApiKeyCache.invalidate_hash(previous.key_hash)
+      invalidate_key_subject(key)
+    end)
+
+    result
+  end
+
+  defp tap_invalidate_hidden_key(result, _previous), do: result
 
   # Al crear o reactivar una key hay que tumbar el cache por hash y por sujeto
   # dueño: el entry guarda la key resuelta y el plan, así que una key nueva (o
