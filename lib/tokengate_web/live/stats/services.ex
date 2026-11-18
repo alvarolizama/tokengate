@@ -8,8 +8,6 @@ defmodule TokengateWeb.StatsLive.Services do
 
   alias TokengateWeb.StatsHelpers, as: Stats
 
-  import TokengateWeb.StatsHelpers, only: [sort_icon: 1]
-
   attr :breakdown_service, :any, required: true
   attr :service_budgets, :any, default: []
   attr :list_search, :any, default: ""
@@ -59,186 +57,114 @@ defmodule TokengateWeb.StatsLive.Services do
                 placeholder={gettext("Filter by service…")}
               />
             </div>
-            <%= if rows == [] do %>
-              <p class="text-sm text-base-content/40 py-6 text-center" id="service-list-empty">
-                {gettext("No matches.")}
-              </p>
-            <% else %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm" id="service-table">
-                  <thead>
-                    <tr>
-                      <th>
-                        <button
-                          phx-click="sort"
-                          phx-value-field="service_name"
-                          class="flex items-center gap-1 hover:text-primary"
-                        >
-                          {gettext("Service")}
-                          <.sort_icon
-                            field={:service_name}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="request_count"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Requests")}
-                          <.sort_icon
-                            field={:request_count}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="cost_usd"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Cost")}
-                          <.sort_icon
-                            field={:cost_usd}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="prompt_tokens"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Tokens in")}
-                          <.sort_icon
-                            field={:prompt_tokens}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="completion_tokens"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Tokens out")}
-                          <.sort_icon
-                            field={:completion_tokens}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th
-                        class="text-right"
-                        title={gettext("Percentage of prompt tokens with cache hit")}
-                      >
-                        {gettext("Cache %")}
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="avg_tps"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("TPS")}
-                          <.sort_icon
-                            field={:avg_tps}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th title={gettext("Calendar-month spend vs the service monthly cap")}>
-                        {gettext("Budget · month")}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr :for={row <- list_rows} id={"bd-service-#{row.service_id}"}>
-                      <td class="font-medium">
-                        <.link
-                          navigate={~p"/stats/services/#{row.service_id}"}
-                          class="link link-hover"
-                          id={"service-link-#{row.service_id}"}
-                          title={gettext("Open the service full stats page")}
-                        >{row.service_name}</.link>
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.cache_hit_pct(
-                          row.prompt_tokens,
-                          Map.get(row, :cache_read_tokens, 0)
-                        )}
-                      </td>
-                      <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                      <td class="min-w-[150px]">
-                        <%= if budget = service_budget_for(@service_budgets, row.service_id) do %>
-                          <div class="flex items-center gap-2">
-                            <Stats.budget_bar
-                              compact
-                              spend={budget.monthly_spend_usd}
-                              limit={budget.monthly_limit_usd}
-                              pct={budget.monthly_pct}
-                            />
-                            <Stats.budget_badge pct={budget.monthly_pct} />
-                          </div>
-                        <% else %>
-                          <span class="text-base-content/30">—</span>
-                        <% end %>
-                      </td>
-                    </tr>
-                  </tbody>
-                  <tfoot>
-                    <tr class="font-bold bg-base-200">
-                      <td>
-                        {gettext("Total · %{count} services", count: length(@breakdown_service))}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(service_total.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(service_total.cost_usd)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(service_total.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(service_total.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.cache_hit_pct(
-                          service_total.prompt_tokens,
-                          service_total.cache_read_tokens
-                        )}
-                      </td>
-                      <td></td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                </table>
+            <div class="mt-3 overflow-x-auto">
+              <.table
+                id="service-table"
+                rows={list_rows}
+                row_id={fn row -> "bd-service-#{row.service_id}" end}
+                sort_field={@sort_field}
+                sort_direction={@sort_direction}
+                sort_event="sort"
+              >
+                <:col :let={row} label={gettext("Service")} field={:service_name}>
+                  <.link
+                    navigate={~p"/stats/services/#{row.service_id}"}
+                    class="link link-hover font-medium"
+                    id={"service-link-#{row.service_id}"}
+                    title={gettext("Open the service full stats page")}
+                  >
+                    {row.service_name}
+                  </.link>
+                </:col>
+                <:col :let={row} label={gettext("Requests")} field={:request_count} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
+                  <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Tokens in")} field={:prompt_tokens} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
+                </:col>
+                <:col
+                  :let={row}
+                  label={gettext("Tokens out")}
+                  field={:completion_tokens}
+                  align="right"
+                >
+                  <span class="font-mono tabular-nums">{Stats.format_number(row.completion_tokens)}</span>
+                </:col>
+                <:col
+                  :let={row}
+                  label={gettext("Cache %")}
+                  align="right"
+                  tooltip={gettext("Percentage of prompt tokens with cache hit")}
+                >
+                  <span class="font-mono tabular-nums">
+                    {Stats.cache_hit_pct(row.prompt_tokens, Map.get(row, :cache_read_tokens, 0))}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                </:col>
+                <:col
+                  :let={row}
+                  label={gettext("Budget · month")}
+                  tooltip={gettext("Calendar-month spend vs the service monthly cap")}
+                >
+                  <%= if budget = service_budget_for(@service_budgets, row.service_id) do %>
+                    <div class="flex items-center gap-2 min-w-[150px]">
+                      <Stats.budget_bar
+                        compact
+                        spend={budget.monthly_spend_usd}
+                        limit={budget.monthly_limit_usd}
+                        pct={budget.monthly_pct}
+                      />
+                      <Stats.budget_badge pct={budget.monthly_pct} />
+                    </div>
+                  <% else %>
+                    <span class="text-base-content/30">—</span>
+                  <% end %>
+                </:col>
+                <:empty>
+                  <div id="service-list-empty">
+                    <.icon name="hero-magnifying-glass" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                    <p>{gettext("No matches.")}</p>
+                  </div>
+                </:empty>
+              </.table>
+            </div>
+            <div
+              id="service-table-totals"
+              class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+            >
+              <span class="font-semibold text-base-content/70">
+                {gettext("Total · %{count} services", count: length(@breakdown_service))}
+              </span>
+              <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                <span>
+                  <span class="text-base-content/40">{gettext("Requests")}</span>
+                  <span class="ml-1">{Stats.format_number(service_total.request_count)}</span>
+                </span>
+                <span>
+                  <span class="text-base-content/40">{gettext("Cost")}</span>
+                  <span class="ml-1">${Stats.format_decimal(service_total.cost_usd)}</span>
+                </span>
+                <span>
+                  <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                  <span class="ml-1">{Stats.format_number(service_total.prompt_tokens)}</span>
+                </span>
+                <span>
+                  <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                  <span class="ml-1">{Stats.format_number(service_total.completion_tokens)}</span>
+                </span>
+                <span>
+                  <span class="text-base-content/40">{gettext("Cache %")}</span>
+                  <span class="ml-1">
+                    {Stats.cache_hit_pct(service_total.prompt_tokens, service_total.cache_read_tokens)}
+                  </span>
+                </span>
               </div>
-            <% end %>
+            </div>
             <Stats.show_more
               key="service-list"
               id="service-list-more"

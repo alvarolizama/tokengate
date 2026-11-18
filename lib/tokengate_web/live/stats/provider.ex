@@ -151,71 +151,66 @@ defmodule TokengateWeb.StatsLive.Provider do
               <% model_total = Stats.breakdown_total(@breakdown_model) %>
               <% model_rows =
                 Stats.shown_rows(@breakdown_model, "provider-models", @shown_counts, @per_page) %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm" id="provider-models">
-                  <thead>
-                    <tr>
-                      <th>{gettext("Model")}</th>
-                      <th class="text-right">{gettext("Requests")}</th>
-                      <th class="text-right">{gettext("Tokens in")}</th>
-                      <th class="text-right">{gettext("Tokens out")}</th>
-                      <th class="text-right">{gettext("TPS")}</th>
-                      <th class="text-right">{gettext("Cost")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr
-                      :for={row <- model_rows}
-                      id={"provider-model-#{row.model_id || "unknown"}"}
-                    >
-                      <td class="font-medium">
-                        <%= if row.model_id do %>
-                          <.link
-                            patch={~p"/stats/models?period=#{@period}&model_id=#{row.model_id}"}
-                            class="link link-hover"
-                          >
-                            {row.model_name}
-                          </.link>
-                        <% else %>
-                          {row.model_name}
-                        <% end %>
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(row.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(row.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_tps(row.avg_tps)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </td>
-                    </tr>
-                  </tbody>
-                  <tfoot>
-                    <tr class="font-bold bg-base-200">
-                      <td>{gettext("Total · %{count} models", count: length(@breakdown_model))}</td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(model_total.request_count)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(model_total.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(model_total.completion_tokens)}
-                      </td>
-                      <td></td>
-                      <td class="text-right font-mono tabular-nums">
-                        ${Stats.format_decimal(model_total.cost_usd)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
+              <div class="mt-3 overflow-x-auto">
+                <.table
+                  id="provider-models"
+                  rows={model_rows}
+                  row_id={fn row -> "provider-model-#{row.model_id || "unknown"}" end}
+                >
+                  <:col :let={row} label={gettext("Model")}>
+                    <%= if row.model_id do %>
+                      <.link
+                        patch={~p"/stats/models?period=#{@period}&model_id=#{row.model_id}"}
+                        class="link link-hover font-medium"
+                      >
+                        {row.model_name}
+                      </.link>
+                    <% else %>
+                      <span class="font-medium">{row.model_name}</span>
+                    <% end %>
+                  </:col>
+                  <:col :let={row} label={gettext("Requests")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Tokens in")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Tokens out")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.completion_tokens)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("TPS")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Cost")} align="right">
+                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  </:col>
+                </.table>
+              </div>
+              <div
+                id="provider-models-totals"
+                class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+              >
+                <span class="font-semibold text-base-content/70">
+                  {gettext("Total · %{count} models", count: length(@breakdown_model))}
+                </span>
+                <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                  <span>
+                    <span class="text-base-content/40">{gettext("Requests")}</span>
+                    <span class="ml-1">{Stats.format_number(model_total.request_count)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                    <span class="ml-1">{Stats.format_number(model_total.prompt_tokens)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                    <span class="ml-1">{Stats.format_number(model_total.completion_tokens)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Cost")}</span>
+                    <span class="ml-1">${Stats.format_decimal(model_total.cost_usd)}</span>
+                  </span>
+                </div>
               </div>
               <Stats.show_more
                 key="provider-models"
@@ -243,78 +238,77 @@ defmodule TokengateWeb.StatsLive.Provider do
               <% user_total = Stats.breakdown_total(@breakdown_user) %>
               <% user_rows =
                 Stats.shown_rows(@breakdown_user, "provider-users", @shown_counts, @per_page) %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm" id="provider-users">
-                  <thead>
-                    <tr>
-                      <th>{gettext("User")}</th>
-                      <th>{gettext("Limit profiles")}</th>
-                      <th class="text-right">{gettext("Requests")}</th>
-                      <th class="text-right">{gettext("Tokens in")}</th>
-                      <th class="text-right">{gettext("Tokens out")}</th>
-                      <th class="text-right">{gettext("TPS")}</th>
-                      <th class="text-right">{gettext("Cost")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr :for={row <- user_rows} id={"provider-user-#{row.user_id}"}>
-                      <td class="font-medium">
-                        <.link navigate={~p"/stats/users/#{row.user_id}"} class="link link-hover">
-                          {row.user_name || row.user_email}
-                        </.link>
-                        <div :if={row.user_name} class="text-xs text-base-content/50">
-                          {row.user_email}
-                        </div>
-                      </td>
-                      <td class="text-xs text-base-content/60">
-                        <div class="flex flex-wrap gap-1">
-                          <Stats.group_link
-                            :for={group <- row.groups}
-                            group_id={group.id}
-                            name={group.name}
-                            period={@period}
-                            id={"provider-user-group-#{row.user_id}-#{group.id}"}
-                          />
-                          <span :if={row.groups == []} class="text-base-content/30">—</span>
-                        </div>
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(row.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(row.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_tps(row.avg_tps)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </td>
-                    </tr>
-                  </tbody>
-                  <tfoot>
-                    <tr class="font-bold bg-base-200">
-                      <td>{gettext("Total · %{count} users", count: length(@breakdown_user))}</td>
-                      <td></td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(user_total.request_count)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(user_total.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(user_total.completion_tokens)}
-                      </td>
-                      <td></td>
-                      <td class="text-right font-mono tabular-nums">
-                        ${Stats.format_decimal(user_total.cost_usd)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
+              <div class="mt-3 overflow-x-auto">
+                <.table
+                  id="provider-users"
+                  rows={user_rows}
+                  row_id={fn row -> "provider-user-#{row.user_id}" end}
+                >
+                  <:col :let={row} label={gettext("User")}>
+                    <.link
+                      navigate={~p"/stats/users/#{row.user_id}"}
+                      class="link link-hover font-medium"
+                    >
+                      {row.user_name || row.user_email}
+                    </.link>
+                    <div :if={row.user_name} class="text-xs text-base-content/50">
+                      {row.user_email}
+                    </div>
+                  </:col>
+                  <:col :let={row} label={gettext("Limit profiles")}>
+                    <div class="flex flex-wrap gap-1 text-xs text-base-content/60">
+                      <Stats.group_link
+                        :for={group <- row.groups}
+                        group_id={group.id}
+                        name={group.name}
+                        period={@period}
+                        id={"provider-user-group-#{row.user_id}-#{group.id}"}
+                      />
+                      <span :if={row.groups == []} class="text-base-content/30">—</span>
+                    </div>
+                  </:col>
+                  <:col :let={row} label={gettext("Requests")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Tokens in")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Tokens out")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.completion_tokens)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("TPS")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Cost")} align="right">
+                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  </:col>
+                </.table>
+              </div>
+              <div
+                id="provider-users-totals"
+                class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+              >
+                <span class="font-semibold text-base-content/70">
+                  {gettext("Total · %{count} users", count: length(@breakdown_user))}
+                </span>
+                <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                  <span>
+                    <span class="text-base-content/40">{gettext("Requests")}</span>
+                    <span class="ml-1">{Stats.format_number(user_total.request_count)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                    <span class="ml-1">{Stats.format_number(user_total.prompt_tokens)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                    <span class="ml-1">{Stats.format_number(user_total.completion_tokens)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Cost")}</span>
+                    <span class="ml-1">${Stats.format_decimal(user_total.cost_usd)}</span>
+                  </span>
+                </div>
               </div>
               <Stats.show_more
                 key="provider-users"
@@ -347,66 +341,62 @@ defmodule TokengateWeb.StatsLive.Provider do
                     @shown_counts,
                     @per_page
                   ) %>
-                <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm" id="provider-services">
-                    <thead>
-                      <tr>
-                        <th>{gettext("Service")}</th>
-                        <th class="text-right">{gettext("Requests")}</th>
-                        <th class="text-right">{gettext("Tokens in")}</th>
-                        <th class="text-right">{gettext("Tokens out")}</th>
-                        <th class="text-right">{gettext("TPS")}</th>
-                        <th class="text-right">{gettext("Cost")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr :for={row <- service_rows} id={"provider-service-#{row.service_id}"}>
-                        <td class="font-medium">
-                          <.link
-                            navigate={~p"/stats/services/#{row.service_id}"}
-                            class="link link-hover"
-                          >
-                            {row.service_name}
-                          </.link>
-                        </td>
-                        <td class="text-right font-mono tabular-nums">
-                          {Stats.format_number(row.request_count)}
-                        </td>
-                        <td class="text-right font-mono tabular-nums">
-                          {Stats.format_number(row.prompt_tokens)}
-                        </td>
-                        <td class="text-right font-mono tabular-nums">
-                          {Stats.format_number(row.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono tabular-nums">
-                          {Stats.format_tps(row.avg_tps)}
-                        </td>
-                        <td class="text-right font-mono tabular-nums">
-                          ${Stats.format_decimal(row.cost_usd)}
-                        </td>
-                      </tr>
-                    </tbody>
-                    <tfoot>
-                      <tr class="font-bold bg-base-200">
-                        <td>
-                          {gettext("Total · %{count} services", count: length(@breakdown_service))}
-                        </td>
-                        <td class="text-right font-mono tabular-nums">
-                          {Stats.format_number(service_total.request_count)}
-                        </td>
-                        <td class="text-right font-mono tabular-nums">
-                          {Stats.format_number(service_total.prompt_tokens)}
-                        </td>
-                        <td class="text-right font-mono tabular-nums">
-                          {Stats.format_number(service_total.completion_tokens)}
-                        </td>
-                        <td></td>
-                        <td class="text-right font-mono tabular-nums">
-                          ${Stats.format_decimal(service_total.cost_usd)}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
+                <div class="mt-3 overflow-x-auto">
+                  <.table
+                    id="provider-services"
+                    rows={service_rows}
+                    row_id={fn row -> "provider-service-#{row.service_id}" end}
+                  >
+                    <:col :let={row} label={gettext("Service")}>
+                      <.link
+                        navigate={~p"/stats/services/#{row.service_id}"}
+                        class="link link-hover font-medium"
+                      >
+                        {row.service_name}
+                      </.link>
+                    </:col>
+                    <:col :let={row} label={gettext("Requests")} align="right">
+                      <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                    </:col>
+                    <:col :let={row} label={gettext("Tokens in")} align="right">
+                      <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
+                    </:col>
+                    <:col :let={row} label={gettext("Tokens out")} align="right">
+                      <span class="font-mono tabular-nums">{Stats.format_number(row.completion_tokens)}</span>
+                    </:col>
+                    <:col :let={row} label={gettext("TPS")} align="right">
+                      <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                    </:col>
+                    <:col :let={row} label={gettext("Cost")} align="right">
+                      <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    </:col>
+                  </.table>
+                </div>
+                <div
+                  id="provider-services-totals"
+                  class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+                >
+                  <span class="font-semibold text-base-content/70">
+                    {gettext("Total · %{count} services", count: length(@breakdown_service))}
+                  </span>
+                  <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                    <span>
+                      <span class="text-base-content/40">{gettext("Requests")}</span>
+                      <span class="ml-1">{Stats.format_number(service_total.request_count)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                      <span class="ml-1">{Stats.format_number(service_total.prompt_tokens)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                      <span class="ml-1">{Stats.format_number(service_total.completion_tokens)}</span>
+                    </span>
+                    <span>
+                      <span class="text-base-content/40">{gettext("Cost")}</span>
+                      <span class="ml-1">${Stats.format_decimal(service_total.cost_usd)}</span>
+                    </span>
+                  </div>
                 </div>
                 <Stats.show_more
                   key="provider-services"
@@ -434,66 +424,62 @@ defmodule TokengateWeb.StatsLive.Provider do
               <% group_total = Stats.breakdown_total(@breakdown_group) %>
               <% group_rows =
                 Stats.shown_rows(@breakdown_group, "provider-groups", @shown_counts, @per_page) %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm" id="provider-groups">
-                  <thead>
-                    <tr>
-                      <th>{gettext("Limit profile")}</th>
-                      <th class="text-right">{gettext("Requests")}</th>
-                      <th class="text-right">{gettext("Tokens in")}</th>
-                      <th class="text-right">{gettext("Tokens out")}</th>
-                      <th class="text-right">{gettext("TPS")}</th>
-                      <th class="text-right">{gettext("Cost")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr :for={row <- group_rows} id={"provider-group-#{row.group_id}"}>
-                      <td class="font-medium">
-                        <.link
-                          patch={~p"/stats/profiles/#{row.group_id}?period=#{@period}"}
-                          class="link link-hover"
-                        >
-                          {row.group_name}
-                        </.link>
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(row.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(row.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_tps(row.avg_tps)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </td>
-                    </tr>
-                  </tbody>
-                  <tfoot>
-                    <tr class="font-bold bg-base-200">
-                      <td>
-                        {gettext("Total · %{count} limit profiles", count: length(@breakdown_group))}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(group_total.request_count)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(group_total.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono tabular-nums">
-                        {Stats.format_number(group_total.completion_tokens)}
-                      </td>
-                      <td></td>
-                      <td class="text-right font-mono tabular-nums">
-                        ${Stats.format_decimal(group_total.cost_usd)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
+              <div class="mt-3 overflow-x-auto">
+                <.table
+                  id="provider-groups"
+                  rows={group_rows}
+                  row_id={fn row -> "provider-group-#{row.group_id}" end}
+                >
+                  <:col :let={row} label={gettext("Limit profile")}>
+                    <.link
+                      patch={~p"/stats/profiles/#{row.group_id}?period=#{@period}"}
+                      class="link link-hover font-medium"
+                    >
+                      {row.group_name}
+                    </.link>
+                  </:col>
+                  <:col :let={row} label={gettext("Requests")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Tokens in")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Tokens out")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_number(row.completion_tokens)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("TPS")} align="right">
+                    <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                  </:col>
+                  <:col :let={row} label={gettext("Cost")} align="right">
+                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  </:col>
+                </.table>
+              </div>
+              <div
+                id="provider-groups-totals"
+                class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+              >
+                <span class="font-semibold text-base-content/70">
+                  {gettext("Total · %{count} limit profiles", count: length(@breakdown_group))}
+                </span>
+                <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                  <span>
+                    <span class="text-base-content/40">{gettext("Requests")}</span>
+                    <span class="ml-1">{Stats.format_number(group_total.request_count)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                    <span class="ml-1">{Stats.format_number(group_total.prompt_tokens)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                    <span class="ml-1">{Stats.format_number(group_total.completion_tokens)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Cost")}</span>
+                    <span class="ml-1">${Stats.format_decimal(group_total.cost_usd)}</span>
+                  </span>
+                </div>
               </div>
               <Stats.show_more
                 key="provider-groups"

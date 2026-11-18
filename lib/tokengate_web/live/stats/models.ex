@@ -17,8 +17,6 @@ defmodule TokengateWeb.StatsLive.Models do
 
   alias TokengateWeb.StatsHelpers, as: Stats
 
-  import TokengateWeb.StatsHelpers, only: [sort_icon: 1]
-
   attr :breakdown_model, :any, required: true
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
@@ -72,189 +70,117 @@ defmodule TokengateWeb.StatsLive.Models do
                 placeholder={gettext("Filter by model…")}
               />
             </div>
-            <%= if rows == [] do %>
-              <p class="text-sm text-base-content/40 py-6 text-center" id="model-list-empty">
-                {gettext("No matches.")}
-              </p>
-            <% else %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm" id="model-table">
-                  <thead>
-                    <tr>
-                      <th class="w-12">{gettext("Rank")}</th>
-                      <th>
-                        <button
-                          phx-click="sort"
-                          phx-value-field="model_name"
-                          class="flex items-center gap-1 hover:text-primary"
-                        >
-                          {gettext("Model")}
-                          <.sort_icon
-                            field={:model_name}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="request_count"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Requests")}
-                          <.sort_icon
-                            field={:request_count}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="cost_usd"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Cost")}
-                          <.sort_icon
-                            field={:cost_usd}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="prompt_tokens"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Tokens in")}
-                          <.sort_icon
-                            field={:prompt_tokens}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="completion_tokens"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("Tokens out")}
-                          <.sort_icon
-                            field={:completion_tokens}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th
-                        class="text-right"
-                        title={gettext("Percentage of prompt tokens with cache hit")}
-                      >
-                        {gettext("Cache %")}
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="avg_tps"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          {gettext("TPS")}
-                          <.sort_icon
-                            field={:avg_tps}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr
-                      :for={row <- list_rows}
-                      id={"model-ranking-row-#{row.model_id || "unknown"}"}
+            <div class="mt-3 overflow-x-auto">
+              <.table
+                id="model-table"
+                rows={list_rows}
+                row_id={fn row -> "model-ranking-row-#{row.model_id || "unknown"}" end}
+                sort_field={@sort_field}
+                sort_direction={@sort_direction}
+                sort_event="sort"
+              >
+                <:col :let={row} label={gettext("Rank")} align="center">
+                  <span class="inline-flex w-6 justify-center">
+                    <%= if rank = Map.get(ranks, row.model_id) do %>
+                      <Stats.medal rank={rank} />
+                    <% end %>
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Model")} field={:model_name}>
+                  <%= if row.model_id do %>
+                    <.link
+                      patch={~p"/stats/models/#{row.model_id}?period=#{@period}"}
+                      class="link link-hover font-medium inline-flex items-center gap-1"
+                      id={"model-link-#{row.model_id}"}
                     >
-                      <td>
-                        <%= if rank = Map.get(ranks, row.model_id) do %>
-                          <Stats.medal rank={rank} />
-                        <% end %>
-                      </td>
-                      <td class="font-medium">
-                        <%= if row.model_id do %>
-                          <.link
-                            patch={~p"/stats/models/#{row.model_id}?period=#{@period}"}
-                            class="link link-hover inline-flex items-center gap-1"
-                            id={"model-link-#{row.model_id}"}
-                          >
-                            {row.model_name}
-                            <.icon name="hero-chevron-right" class="w-3.5 h-3.5 text-base-content/40" />
-                          </.link>
-                        <% else %>
-                          {row.model_name}
-                        <% end %>
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.cache_hit_pct(
-                          row.prompt_tokens,
-                          Map.get(row, :cache_read_tokens, 0)
-                        )}
-                      </td>
-                      <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                    </tr>
-                  </tbody>
-                  <tfoot>
-                    <tr class="font-bold bg-base-200">
-                      <td></td>
-                      <td>{gettext("Total · %{count} models", count: length(rows))}</td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(model_total.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(model_total.cost_usd)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(model_total.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(model_total.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.cache_hit_pct(
-                          model_total.prompt_tokens,
-                          Enum.reduce(@breakdown_model, 0, fn r, acc ->
-                            acc + (Map.get(r, :cache_read_tokens, 0) || 0)
-                          end)
-                        )}
-                      </td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                </table>
+                      {row.model_name}
+                      <.icon name="hero-chevron-right" class="w-3.5 h-3.5 text-base-content/40" />
+                    </.link>
+                  <% else %>
+                    <span class="font-medium">{row.model_name}</span>
+                  <% end %>
+                </:col>
+                <:col :let={row} label={gettext("Requests")} field={:request_count} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
+                  <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Tokens in")} field={:prompt_tokens} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
+                </:col>
+                <:col
+                  :let={row}
+                  label={gettext("Tokens out")}
+                  field={:completion_tokens}
+                  align="right"
+                >
+                  <span class="font-mono tabular-nums">{Stats.format_number(row.completion_tokens)}</span>
+                </:col>
+                <:col
+                  :let={row}
+                  label={gettext("Cache %")}
+                  align="right"
+                  tooltip={gettext("Percentage of prompt tokens with cache hit")}
+                >
+                  <span class="font-mono tabular-nums">
+                    {Stats.cache_hit_pct(row.prompt_tokens, Map.get(row, :cache_read_tokens, 0))}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
+                </:col>
+                <:empty>
+                  <div id="model-list-empty">
+                    <.icon name="hero-magnifying-glass" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                    <p>{gettext("No matches.")}</p>
+                  </div>
+                </:empty>
+              </.table>
+            </div>
+            <div
+              id="model-table-totals"
+              class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+            >
+              <span class="font-semibold text-base-content/70">
+                {gettext("Total · %{count} models", count: length(rows))}
+              </span>
+              <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                <span>
+                  <span class="text-base-content/40">{gettext("Requests")}</span>
+                  <span class="ml-1">{Stats.format_number(model_total.request_count)}</span>
+                </span>
+                <span>
+                  <span class="text-base-content/40">{gettext("Cost")}</span>
+                  <span class="ml-1">${Stats.format_decimal(model_total.cost_usd)}</span>
+                </span>
+                <span>
+                  <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                  <span class="ml-1">{Stats.format_number(model_total.prompt_tokens)}</span>
+                </span>
+                <span>
+                  <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                  <span class="ml-1">{Stats.format_number(model_total.completion_tokens)}</span>
+                </span>
+                <span>
+                  <span class="text-base-content/40">{gettext("Cache %")}</span>
+                  <span class="ml-1">
+                    {Stats.cache_hit_pct(
+                      model_total.prompt_tokens,
+                      Enum.reduce(@breakdown_model, 0, fn r, acc ->
+                        acc + (Map.get(r, :cache_read_tokens, 0) || 0)
+                      end)
+                    )}
+                  </span>
+                </span>
               </div>
-              <Stats.show_more
-                key="model-list"
-                id="model-list-more"
-                top={length(list_rows)}
-                total={length(rows)}
-              />
-            <% end %>
+            </div>
+            <Stats.show_more
+              key="model-list"
+              id="model-list-more"
+              top={length(list_rows)}
+              total={length(rows)}
+            />
           <% else %>
             <p class="text-sm text-base-content/40 py-6 text-center">
               {gettext("No data for this period.")}
