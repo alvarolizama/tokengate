@@ -44,6 +44,14 @@ defmodule TokengateWeb.ProxyControllerTest do
     ])
   end
 
+  # The model part of a multipart body travels as the CLIENT wrote it, so the
+  # gateway maps it to the lane's upstream id (`AudioMultipart.rewrite_model/3`).
+  # The fixture's lanes answer as `gpt-4o-real-<unique>`.
+  defp assert_mapped_model(raw, client_model) do
+    assert raw =~ ~s(name="model"\r\n\r\ngpt-4o-real-)
+    refute raw =~ client_model
+  end
+
   defmodule ProviderPlug do
     @moduledoc false
     import Plug.Conn
@@ -3239,7 +3247,9 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert json_body(conn)["text"] == "hola mundo"
     assert_receive {:provider_request_path, "/audio/transcriptions"}
-    assert_receive {:provider_raw_body, ^body, _headers}
+
+    assert_receive {:provider_raw_body, received, _headers}
+    assert_mapped_model(received, model.name)
 
     assert %{success: 1} = Oban.drain_queue(queue: :logs)
     log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
@@ -3609,7 +3619,8 @@ defmodule TokengateWeb.ProxyControllerTest do
   # answer with audio bytes. Both are transport, not routing: the bytes must
   # cross the gateway untouched. See `TokengateWeb.Plugs.MediaBodyParser`.
 
-  test "multipart /v1/audio/transcriptions reaches the upstream byte-for-byte", %{conn: conn} do
+  test "multipart /v1/audio/transcriptions reaches the upstream with the client's audio and the lane's model",
+       %{conn: conn} do
     %{token: token, model: model, member: member} = proxy_fixture(%{model_type: "stt"})
     body = multipart_body(model.name)
 
@@ -3621,16 +3632,41 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert json_response(conn, 200)["text"] == "hola mundo"
 
-    # The wire saw the client's exact bytes and its original content-type —
-    # the boundary included, or the upstream could not parse the body.
-    assert_receive {:provider_raw_body, ^body, headers}
-    assert {"content-type", "multipart/form-data; boundary=#{@boundary}"} in headers
+    # The audio and the other parts travel as sent; the `model` VALUE is mapped to
+    # the lane's upstream id, exactly like every JSON surface gets from
+    # `execute_simple` — so the body is re-encoded under a gateway boundary.
+    assert_receive {:provider_raw_body, received, headers}
+
+    assert {"content-type", "multipart/form-data; boundary=tokengate-" <> _} =
+             List.keyfind(headers, "content-type", 0)
+
+    assert_mapped_model(received, model.name)
+    assert :binary.match(received, <<0x52, 0x49, 0xFF, 0x00, 0x46, 0x4D>>) != :nomatch
 
     assert %{success: 1} = Oban.drain_queue(queue: :logs)
 
     log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
     assert log.request_type == "stt"
     assert log.status_code == 200
+  end
+
+  # The common case: the lane serves the model under the same id the client sent.
+  # There is nothing to map, so the bytes and the client's boundary travel
+  # untouched.
+  test "a multipart whose model already matches the lane crosses byte-for-byte", %{conn: conn} do
+    %{token: token, model: model, model_provider: lane} = proxy_fixture(%{model_type: "stt"})
+    {:ok, _lane} = Providers.update_model_provider(lane, %{provider_model: model.name})
+    body = multipart_body(model.name)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", body)
+
+    assert json_response(conn, 200)["text"] == "hola mundo"
+    assert_receive {:provider_raw_body, ^body, headers}
+    assert {"content-type", "multipart/form-data; boundary=#{@boundary}"} in headers
   end
 
   test "two different multipart uploads are not one cache entry", %{conn: conn} do
@@ -3649,7 +3685,8 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> post(~p"/v1/audio/transcriptions", first)
 
     assert json_response(conn, 200)
-    assert_receive {:provider_raw_body, ^first, _headers}
+    assert_receive {:provider_raw_body, received_first, _headers}
+    assert received_first =~ "uno.wav"
 
     conn =
       conn
@@ -3660,7 +3697,9 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert json_response(conn, 200)
     assert get_resp_header(conn, "x-tokengate-cache") == []
-    assert_receive {:provider_raw_body, ^second, _headers}
+    assert_receive {:provider_raw_body, received_second, _headers}
+    assert received_second =~ "dos.wav"
+    refute received_first == received_second
   end
 
   # A client that sends the audio as JSON + base64 (or as a text field) used to
@@ -3860,7 +3899,9 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert json_response(conn, 200)
     assert_receive {:provider_request_path, "/custom/transcriptions"}
-    assert_receive {:provider_raw_body, ^body, _headers}
+
+    assert_receive {:provider_raw_body, received, _headers}
+    assert_mapped_model(received, model.name)
   end
 
   # Drives one of the six services end to end and returns the conn: the

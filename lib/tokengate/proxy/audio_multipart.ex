@@ -131,29 +131,81 @@ defmodule Tokengate.Proxy.AudioMultipart do
   end
 
   defp rebuild(parts, audio_part, bytes, filename) do
-    boundary = new_boundary()
-
     # A `file` part that is not the one being rebuilt is dropped: leaving an
     # empty/foreign `file` before the real one would make the upstream take the
     # wrong part.
     parts = Enum.reject(parts, &(&1.name == "file" and &1 != audio_part))
-    index = Enum.find_index(parts, &(&1 == audio_part))
     filename = if present?(filename), do: filename, else: "audio." <> extension(bytes)
+
+    parts =
+      Enum.map(parts, fn part ->
+        if part == audio_part do
+          %{
+            part
+            | name: "file",
+              filename: filename,
+              content_type: part.content_type || mime(filename),
+              value: bytes
+          }
+        else
+          part
+        end
+      end)
+
+    {body, content_type} = encode(parts)
+    {:ok, body, content_type, :rebuilt}
+  end
+
+  @doc """
+  Replaces the `model` part when the body carries a different one.
+
+  A canonical multipart is forwarded byte-for-byte, so its `model` field is the
+  CLIENT's string: the payload rewrite every JSON surface gets never reaches the
+  wire. When the lane's upstream id differs from the name the client sent, this
+  swaps that one value so STT maps the model like chat/TTS/embeddings do — same
+  parts, same bytes, one field corrected.
+
+  Returns the body untouched when it already carries `model`, when the
+  content-type is not multipart, or when the body cannot be parsed.
+  """
+  @spec rewrite_model(binary() | nil, String.t() | nil, String.t() | nil) ::
+          {binary() | nil, String.t() | nil}
+  def rewrite_model(raw_body, content_type, model)
+      when is_binary(raw_body) and is_binary(model) do
+    with {:ok, boundary} <- boundary(content_type),
+         parts when parts != [] <- parse(raw_body, boundary),
+         false <- carries_model?(parts, model) do
+      encode(replace_model(parts, model))
+    else
+      _ -> {raw_body, content_type}
+    end
+  end
+
+  def rewrite_model(raw_body, content_type, _model), do: {raw_body, content_type}
+
+  defp carries_model?(parts, model) do
+    Enum.any?(parts, &(&1.name == "model" and &1.value == model))
+  end
+
+  defp replace_model(parts, model) do
+    case Enum.find_index(parts, &(&1.name == "model")) do
+      nil -> parts ++ [%{name: "model", filename: nil, content_type: nil, value: model}]
+      index -> List.update_at(parts, index, &%{&1 | value: model})
+    end
+  end
+
+  defp encode(parts) do
+    boundary = new_boundary()
 
     body =
       parts
-      |> Enum.with_index()
-      |> Enum.map(fn {part, position} ->
-        if position == index do
-          encode_part(boundary, "file", filename, part.content_type || mime(filename), bytes)
-        else
-          encode_part(boundary, part.name, part.filename, part.content_type, part.value)
-        end
+      |> Enum.map(fn part ->
+        encode_part(boundary, part.name, part.filename, part.content_type, part.value)
       end)
       |> Enum.concat([["--", boundary, "--\r\n"]])
       |> IO.iodata_to_binary()
 
-    {:ok, body, "multipart/form-data; boundary=#{boundary}", :rebuilt}
+    {body, "multipart/form-data; boundary=#{boundary}"}
   end
 
   ## Parsed fields (JSON / urlencoded) #########################################

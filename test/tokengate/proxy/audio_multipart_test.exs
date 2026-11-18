@@ -291,6 +291,52 @@ defmodule Tokengate.Proxy.AudioMultipartTest do
     end
   end
 
+  describe "rewrite_model/3" do
+    test "replaces the model value and keeps every other part and the audio bytes" do
+      {body, content_type} =
+        multipart([
+          {"model", value: "whisper-gateway"},
+          {"language", value: "es"},
+          {"file", filename: "nota.ogg", content_type: "audio/ogg", value: @ogg}
+        ])
+
+      {rebuilt, rebuilt_type} = AudioMultipart.rewrite_model(body, content_type, "whisper")
+
+      assert rebuilt_type =~ "multipart/form-data; boundary=tokengate-"
+      assert rebuilt =~ ~s(name="model"\r\n\r\nwhisper)
+      assert rebuilt =~ ~s(name="language"\r\n\r\nes)
+      assert rebuilt =~ ~s(name="file"; filename="nota.ogg")
+      assert contains?(rebuilt, @ogg)
+      refute rebuilt =~ "whisper-gateway"
+    end
+
+    test "leaves the body untouched when it already carries the model" do
+      {body, content_type} =
+        multipart([
+          {"model", value: "whisper"},
+          {"file", filename: "nota.ogg", content_type: "audio/ogg", value: @ogg}
+        ])
+
+      assert {^body, ^content_type} = AudioMultipart.rewrite_model(body, content_type, "whisper")
+    end
+
+    test "leaves a non-multipart body untouched" do
+      assert {~s({"model":"x"}), "application/json"} =
+               AudioMultipart.rewrite_model(~s({"model":"x"}), "application/json", "whisper")
+
+      assert {nil, nil} = AudioMultipart.rewrite_model(nil, nil, "whisper")
+    end
+
+    test "adds the model part to a body that has none" do
+      {body, content_type} =
+        multipart([{"file", filename: "nota.ogg", content_type: "audio/ogg", value: @ogg}])
+
+      {rebuilt, _content_type} = AudioMultipart.rewrite_model(body, content_type, "whisper")
+      assert rebuilt =~ ~s(name="model"\r\n\r\nwhisper)
+      assert contains?(rebuilt, @ogg)
+    end
+  end
+
   describe "multipart_upload?/1" do
     test "only the dialects that post the body as multipart" do
       assert AudioMultipart.multipart_upload?("openai")

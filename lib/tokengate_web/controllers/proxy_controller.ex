@@ -271,7 +271,11 @@ defmodule TokengateWeb.ProxyController do
     raw_content_type = conn.private[MediaBodyParser.raw_content_type_key()]
 
     if AudioMultipart.multipart_upload?(provider.dialect) do
-      case AudioMultipart.canonicalize(raw_body, raw_content_type, conn.body_params) do
+      # A rebuilt body is built from the payload, so it takes the lane's upstream
+      # id — same rule the JSON surfaces get from `execute_simple`.
+      payload = Map.put(conn.body_params, "model", route.model_responded)
+
+      case AudioMultipart.canonicalize(raw_body, raw_content_type, payload) do
         {:ok, body, content_type, :unchanged} ->
           {:ok, conn, media_opts(body, content_type)}
 
@@ -429,6 +433,24 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
+  # A multipart body travels byte-for-byte, so its `model` field is the CLIENT's
+  # string and the payload rewrite above never reaches the wire. When the lane's
+  # upstream id differs, replace just that part — STT then maps the model exactly
+  # like chat/TTS/embeddings do. A body that already names it is left untouched,
+  # so the byte-for-byte passthrough survives the common case.
+  defp retarget_model(opts, client_model, upstream_model) do
+    with raw when is_binary(raw) <- Keyword.get(opts, :raw_body),
+         true <- is_binary(client_model) and is_binary(upstream_model),
+         true <- client_model != upstream_model do
+      {body, content_type} =
+        AudioMultipart.rewrite_model(raw, Keyword.get(opts, :content_type), upstream_model)
+
+      Keyword.merge(opts, raw_body: body, content_type: content_type)
+    else
+      _ -> opts
+    end
+  end
+
   # Non-streaming execution with the same fallback matrix as chat's
   # execute/6: auth errors disable the credential, other 4xx surface
   # without burning the breaker, everything else retries across credentials.
@@ -501,7 +523,9 @@ defmodule TokengateWeb.ProxyController do
         [
           receive_timeout: receive_timeout,
           forwarded_headers: extract_forwarded_headers(conn, route)
-        ] ++ Keyword.take(route_opts, [:raw_body, :content_type])
+        ]
+        |> Keyword.merge(Keyword.take(route_opts, [:raw_body, :content_type]))
+        |> retarget_model(conn.body_params["model"], route.model_responded)
 
       case adapter_fun.(provider, route.credential, payload, adapter_opts) do
         {:ok, body, latency_ms, resp_headers} ->
