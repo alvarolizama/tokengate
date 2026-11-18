@@ -144,9 +144,9 @@ defmodule TokengateWeb.AuditLive do
     >
       <div class="space-y-6">
         <.header>
-          Auditoría
+          {gettext("Audit")}
           <:subtitle>
-            Quién hizo qué, sobre qué y cuándo — retención de 90 días
+            {gettext("Who did what, to what, and when — 90-day retention")}
           </:subtitle>
           <:actions>
             <a
@@ -154,7 +154,7 @@ defmodule TokengateWeb.AuditLive do
               href={"/operations/audit/export?" <> @export_query}
               class="btn btn-sm btn-neutral"
             >
-              <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> Exportar CSV
+              <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> {gettext("Export CSV")}
             </a>
           </:actions>
         </.header>
@@ -163,11 +163,11 @@ defmodule TokengateWeb.AuditLive do
           <div class="card bg-base-100 border border-base-300 mb-4">
             <div class="card-body grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
               <.input field={@form[:actor_email]} type="text" label={gettext("Actor (email)")} />
-              <.input field={@form[:entity_type]} type="text" label="Entidad" />
+              <.input field={@form[:entity_type]} type="text" label={gettext("Entity")} />
               <.input field={@form[:action]} type="text" label={gettext("Action")} />
               <.input field={@form[:ip]} type="text" label="IP" />
-              <.input field={@form[:from]} type="date" label="Desde" />
-              <.input field={@form[:to]} type="date" label="Hasta" />
+              <.input field={@form[:from]} type="date" label={gettext("From")} />
+              <.input field={@form[:to]} type="date" label={gettext("To")} />
             </div>
           </div>
         </.form>
@@ -206,7 +206,7 @@ defmodule TokengateWeb.AuditLive do
                 <td>
                   <div class="font-medium">{log.actor_email || "—"}</div>
                   <div class="text-xs text-base-content/50">
-                    {if log.user_id, do: log.actor_role || "user", else: "sistema"}
+                    {if log.user_id, do: log.actor_role || "user", else: gettext("system")}
                   </div>
                 </td>
                 <td>
@@ -248,7 +248,7 @@ defmodule TokengateWeb.AuditLive do
             disabled={@page <= 1}
             class="btn btn-sm"
           >
-            Anterior
+            {gettext("Previous")}
           </button>
           <button
             id="audit-next"
@@ -257,7 +257,7 @@ defmodule TokengateWeb.AuditLive do
             disabled={@page >= @total_pages}
             class="btn btn-sm"
           >
-            Siguiente
+            {gettext("Next")}
           </button>
         </div>
       </div>

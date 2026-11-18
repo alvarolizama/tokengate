@@ -7,10 +7,10 @@
           <img src={~p"/images/logo.svg"} width="40" alt="TokenGate" />
         </div>
         <h1 class="text-3xl font-bold tracking-tight text-base-content">
-          Primer arranque
+          {gettext("First run")}
         </h1>
         <p class="mt-2 text-sm text-base-content/50">
-          Esta instancia todavía no tiene usuarios. Crea la cuenta de administrador y entra.
+          {gettext("This instance has no users yet. Create the admin account and sign in.")}
         </p>
       </div>
 
@@ -21,8 +21,8 @@
             <.input
               field={@form[:name]}
               type="text"
-              label="Nombre"
-              placeholder="Tu nombre"
+              label={gettext("Name")}
+              placeholder={gettext("Your name")}
               required="true"
               autofocus="true"
             />
@@ -30,21 +30,21 @@
             <.input
               field={@form[:email]}
               type="email"
-              label="Correo electrónico"
-              placeholder="tu@empresa.com"
+              label={gettext("Email address")}
+              placeholder={gettext("you@company.com")}
               required="true"
             />
 
             <.input
               field={@form[:password]}
               type="password"
-              label="Contraseña"
+              label={gettext("Password")}
               placeholder="••••••••"
               required="true"
             />
 
             <p class="text-xs text-base-content/50">
-              Mínimo 12 caracteres, con al menos una letra y un dígito.
+              {gettext("Minimum 12 characters, with at least one letter and a digit.")}
             </p>
 
             <button
@@ -52,14 +52,14 @@
               class="btn btn-primary w-full mt-2 shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-shadow"
               id="onboarding-submit"
             >
-              <.icon name="hero-check-circle" class="w-5 h-5" /> Crear administrador
+              <.icon name="hero-check-circle" class="w-5 h-5" /> {gettext("Create administrator")}
             </button>
           </.form>
         </div>
       </div>
 
       <p class="text-center text-xs text-base-content/40 mt-8">
-        La primera cuenta de esta pantalla es el administrador de la instancia.
+        {gettext("The first account on this screen is the instance administrator.")}
       </p>
     </div>
   </div>

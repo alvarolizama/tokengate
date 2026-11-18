@@ -7,7 +7,7 @@
   <div class="space-y-6">
     <.header>
       Top-ups
-      <:subtitle>Crédito de un solo uso, por usuario o servicio</:subtitle>
+      <:subtitle>{gettext("One-off credit, per user or service")}</:subtitle>
       <:actions>
         <div class="flex items-center gap-3">
           <.form
@@ -33,7 +33,7 @@
             </div>
           </.form>
           <.button phx-click="new_topup" id="new-topup-btn">
-            <.icon name="hero-plus" class="w-4 h-4" /> Nuevo top-up
+            <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New top-up")}
           </.button>
           <button
             :if={@archived_count > 0}
@@ -43,9 +43,9 @@
           >
             <.icon name="hero-archive-box-arrow-down" class="w-4 h-4" />
             <%= if @show_archived do %>
-              Ocultar archivados
+              {gettext("Hide archived")}
             <% else %>
-              Ver archivados ({@archived_count})
+              {gettext("Show archived (%{count})", count: @archived_count)}
             <% end %>
           </button>
         </div>
@@ -70,7 +70,7 @@
               value={@form_token}
             />
             <div id="topup-owner">
-              <label class="text-xs text-base-content/60 block mb-1">Dueño</label>
+              <label class="text-xs text-base-content/60 block mb-1">{gettext("Owner")}</label>
 
               <div class="flex gap-1 mb-2">
                 <button
@@ -83,7 +83,7 @@
                     if(@owner_kind == "user", do: "btn-primary", else: "btn-ghost")
                   ]}
                 >
-                  Usuario
+                  {gettext("User")}
                 </button>
                 <button
                   type="button"
@@ -95,7 +95,7 @@
                     if(@owner_kind == "service", do: "btn-primary", else: "btn-ghost")
                   ]}
                 >
-                  Servicio
+                  {gettext("Service")}
                 </button>
               </div>
 
@@ -109,7 +109,11 @@
                 type="text"
                 name="owner_query"
                 value={@owner_query}
-                placeholder={"Buscar #{if @owner_kind == "user", do: "usuario", else: "servicio"}…"}
+                placeholder={
+                  if @owner_kind == "user",
+                    do: gettext("Search user…"),
+                    else: gettext("Search service…")
+                }
                 phx-change="search_owner"
                 phx-debounce="200"
                 id="topup-owner-search"
@@ -120,7 +124,7 @@
                 :if={@owner_query != "" and @owner_results == []}
                 class="text-xs text-base-content/40 mt-2"
               >
-                Sin coincidencias.
+                {gettext("No matches.")}
               </div>
 
               <div
@@ -149,9 +153,9 @@
                 type="number"
                 step="0.01"
                 min="0.01"
-                label="Monto (USD)"
+                label={gettext("Amount (USD)")}
               />
-              <.input field={@form[:label]} type="text" label="Etiqueta (opcional)" />
+              <.input field={@form[:label]} type="text" label={gettext("Label (optional)")} />
             </div>
 
             <div class="mt-3">
@@ -165,15 +169,15 @@
             </div>
 
             <div class="mt-3">
-              <.input field={@form[:note]} type="text" label="Nota (opcional)" />
+              <.input field={@form[:note]} type="text" label={gettext("Note (optional)")} />
             </div>
 
             <div class="flex gap-2 mt-4 justify-end">
               <button type="button" phx-click="cancel_topup" class="btn btn-ghost btn-sm">
-                Cancelar
+                {gettext("Cancel")}
               </button>
               <button type="submit" class="btn btn-primary btn-sm" id="save-topup-btn">
-                Guardar
+                {gettext("Save")}
               </button>
             </div>
           </.form>
@@ -197,16 +201,16 @@
             <th class="text-right">
               <.sort_button
                 field={:amount}
-                label="Monto"
+                label={gettext("Amount")}
                 sort_field={@sort_field}
                 sort_direction={@sort_direction}
               />
             </th>
-            <th class="text-right">Consumo</th>
+            <th class="text-right">{gettext("Consumption")}</th>
             <th>
               <.sort_button
                 field={:expires_at}
-                label="Vence"
+                label={gettext("Expires")}
                 sort_field={@sort_field}
                 sort_direction={@sort_direction}
               />
@@ -244,7 +248,7 @@
                 <span class="text-xs font-mono">{usd(Topups.consumed_usd(topup))}</span>
               </div>
               <div :if={state(topup) == :revoked} class="text-[10px] text-warning mt-0.5">
-                saldo revocado
+                {gettext("balance revoked")}
               </div>
             </td>
             <td class="text-xs">{expires_label(topup.expires_at)}</td>
@@ -263,7 +267,7 @@
                   class="btn btn-ghost btn-xs"
                   id={"edit-topup-#{topup.id}"}
                 >
-                  Editar
+                  {gettext("Edit")}
                 </button>
                 <button
                   phx-click="toggle_topup_status"
@@ -284,7 +288,7 @@
                   class="btn btn-ghost btn-xs text-error"
                   id={"revoke-topup-#{topup.id}"}
                 >
-                  <.icon name="hero-trash" class="w-4 h-4" /> Revocar
+                  <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Revoke")}
                 </button>
               </div>
             </td>
@@ -297,7 +301,7 @@
         id="topups-empty"
       >
         <.icon name="hero-arrow-up-circle" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-        <p>No hay top-ups — ningún sujeto tiene crédito de un solo uso.</p>
+        <p>{gettext("No top-ups — no subject has one-off credit.")}</p>
       </div>
     </div>
   </div>

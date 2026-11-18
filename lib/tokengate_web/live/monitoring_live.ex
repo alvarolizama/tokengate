@@ -89,7 +89,7 @@ defmodule TokengateWeb.MonitoringLive do
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "No autorizado.")}
+        {:halt, put_flash(socket, :error, gettext("Not authorized."))}
       end
     end)
   end
@@ -877,7 +877,7 @@ defmodule TokengateWeb.MonitoringLive do
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Top 3 modelos · último minuto
+                  {gettext("Top 3 models · last minute")}
                 </p>
                 <.icon name="hero-cpu-chip" class="w-4 h-4 text-base-content/40" />
               </div>
@@ -896,7 +896,7 @@ defmodule TokengateWeb.MonitoringLive do
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Top 3 usuarios · último minuto
+                  {gettext("Top 3 users · last minute")}
                 </p>
                 <.icon name="hero-users" class="w-4 h-4 text-base-content/40" />
               </div>
@@ -978,49 +978,49 @@ defmodule TokengateWeb.MonitoringLive do
           <.input
             field={@form[:status_class]}
             type="select"
-            prompt="Todos"
+            prompt={gettext("All")}
             options={[{"2xx", "2xx"}, {"4xx", "4xx"}, {"5xx", "5xx"}]}
             label={gettext("Status")}
           />
           <.input
             field={@form[:streaming]}
             type="select"
-            prompt="Todos"
+            prompt={gettext("All")}
             options={[{gettext("Yes"), "true"}, {gettext("No"), "false"}]}
             label="Streaming"
           />
           <.input
             field={@form[:model_search]}
             type="select"
-            prompt="Todos"
+            prompt={gettext("All")}
             options={@model_options}
             label={gettext("Model")}
           />
           <.input
             field={@form[:group_id]}
             type="select"
-            prompt="Todos"
+            prompt={gettext("All")}
             options={@group_options}
             label={gettext("Limit profile")}
           />
           <.input
             field={@form[:subject_type]}
             type="select"
-            prompt="Todos"
+            prompt={gettext("All")}
             options={[{gettext("User"), "user"}, {gettext("Service"), "service"}]}
-            label="Tipo"
+            label={gettext("Type")}
           />
           <.input
             field={@form[:api_key_id]}
             type="select"
-            prompt="Todas"
+            prompt={gettext("All keys")}
             options={@api_key_options}
             label="API Key"
           />
           <.input
             field={@form[:error_reason]}
             type="select"
-            prompt="Todos"
+            prompt={gettext("All")}
             options={[
               {"rate_limited", "rate_limited"},
               {"timeout", "timeout"},
@@ -1034,12 +1034,12 @@ defmodule TokengateWeb.MonitoringLive do
           <.input
             field={@form[:from]}
             type="date"
-            label="Desde"
+            label={gettext("From")}
           />
           <.input
             field={@form[:to]}
             type="date"
-            label="Hasta"
+            label={gettext("To")}
           />
         </.form>
 
@@ -1056,14 +1056,14 @@ defmodule TokengateWeb.MonitoringLive do
             class="btn btn-sm btn-ghost"
             id="csv-logs-yesterday"
           >
-            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Logs (ayer)
+            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> {gettext("CSV Logs (yesterday)")}
           </.link>
           <.link
             href="/stats/export?type=errors"
             class="btn btn-sm btn-ghost"
             id="csv-errors"
           >
-            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Errores
+            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> {gettext("CSV Errors")}
           </.link>
         </div>
 
@@ -1323,7 +1323,7 @@ defmodule TokengateWeb.MonitoringLive do
             class="btn btn-primary btn-sm"
             id="load-more-btn"
           >
-            <.icon name="hero-chevron-down" class="w-4 h-4" /> Cargar más
+            <.icon name="hero-chevron-down" class="w-4 h-4" /> {gettext("Load more")}
           </button>
         </div>
       </div>

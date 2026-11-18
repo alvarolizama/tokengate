@@ -57,9 +57,8 @@ defmodule TokengateWeb.StatsLive.Index do
                   {Stats.format_number(@peak_concurrency.max_concurrent)}
                 </p>
                 <p class="text-xs text-base-content/40 mt-1">
-                  requests simultáneos · {format_bucket(
-                    @peak_concurrency.at,
-                    @timezone
+                  {gettext("concurrent requests · %{bucket}",
+                    bucket: format_bucket(@peak_concurrency.at, @timezone)
                   )}
                 </p>
               <% else %>
@@ -152,10 +151,11 @@ defmodule TokengateWeb.StatsLive.Index do
           <div class="card-body p-4 gap-2">
             <div class="flex items-center justify-between gap-2">
               <h2 class="card-title text-base">
-                <.icon name="hero-server-stack" class="w-5 h-5 text-base-content/60" /> Por proveedor
+                <.icon name="hero-server-stack" class="w-5 h-5 text-base-content/60" />
+                {gettext("By provider")}
               </h2>
               <span class="text-[10px] text-base-content/40 hidden sm:inline">
-                reparto de {Stats.period_label(@period)} por requests
+                {gettext("share of %{period} by requests", period: Stats.period_label(@period))}
               </span>
             </div>
 
@@ -176,12 +176,12 @@ defmodule TokengateWeb.StatsLive.Index do
                       value={Stats.format_number(row.requests)}
                     />
                     <Stats.metric_cell
-                      label="Reparto"
+                      label={gettext("Distribution")}
                       value={"#{Stats.share_pct(row.requests, total_requests)}%"}
                     />
                     <%= if Decimal.compare(row.cost_usd, Decimal.new(0)) == :gt do %>
                       <Stats.metric_cell
-                        label="Costo"
+                        label={gettext("Cost")}
                         value={"$" <> Stats.format_decimal(row.cost_usd)}
                         class="text-warning"
                       />
@@ -206,10 +206,11 @@ defmodule TokengateWeb.StatsLive.Index do
           <div class="card-body p-4 gap-2">
             <div class="flex items-center justify-between gap-2">
               <h2 class="card-title text-base">
-                <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" /> Por modelo
+                <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
+                {gettext("By model")}
               </h2>
               <span class="text-[10px] text-base-content/40 hidden sm:inline">
-                top {length(model_rows)} por requests
+                {gettext("top %{count} by requests", count: length(model_rows))}
               </span>
             </div>
 
@@ -227,16 +228,16 @@ defmodule TokengateWeb.StatsLive.Index do
                       value={Stats.format_number(row.requests)}
                     />
                     <Stats.metric_cell
-                      label="Reparto"
+                      label={gettext("Distribution")}
                       value={"#{Stats.share_pct(row.requests, total_requests)}%"}
                     />
                     <Stats.metric_cell
-                      label="Proveedores"
+                      label={gettext("Providers")}
                       value={Stats.format_number(row.provider_count)}
                     />
                     <%= if Decimal.compare(row.cost_usd, Decimal.new(0)) == :gt do %>
                       <Stats.metric_cell
-                        label="Costo"
+                        label={gettext("Cost")}
                         value={"$" <> Stats.format_decimal(row.cost_usd)}
                         class="text-warning"
                       />
@@ -280,7 +281,7 @@ defmodule TokengateWeb.StatsLive.Index do
                   "stacked bars · 1 bar = 1 hour of the day · color = provider · hour in your local time · period aggregate"
                 )
           }
-          hour_suffix={if today?, do: "UTC", else: "hora local"}
+          hour_suffix={if today?, do: "UTC", else: gettext("local time")}
           empty_note={
             if today?,
               do: gettext("no traffic in the UTC day yet"),

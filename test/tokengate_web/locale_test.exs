@@ -152,6 +152,30 @@ defmodule TokengateWeb.LocaleTest do
     assert Accounts.get_user!(admin.id).locale == "es"
   end
 
+  test "las superficies residuales siguen el contrato EN/ES", %{conn: conn} do
+    %{user: admin, password: password} = register()
+    conn = login(conn, admin, password)
+
+    # /stats: msgids en inglés por defecto (el español hardcodeado del
+    # segundo barrido se movió a es/default.po).
+    {:ok, view_en, page_en} = live(conn, ~p"/stats")
+
+    assert page_en =~ "Statistics"
+    assert page_en =~ "Live · auto-refresh"
+    assert has_element?(view_en, "#nav-overview", "Overview")
+    refute page_en =~ "Estadísticas"
+    refute page_en =~ "En vivo"
+
+    # Y con locale es, el mismo catálogo devuelve el texto de siempre.
+    {:ok, _admin} = Accounts.update_user_locale(admin, "es")
+    {:ok, view_es, page_es} = live(recycle(conn), ~p"/stats")
+
+    assert page_es =~ "Estadísticas"
+    assert page_es =~ "En vivo · actualización automática"
+    assert has_element?(view_es, "#nav-overview", "Resumen")
+    refute page_es =~ "Statistics"
+  end
+
   # Los msgids del bloque manual de errors.po no pasan por el extractor
   # (gettext dinámico en changesets), así que extract+merge los borra sin
   # ver que siguen citados en lib/. Si esta prueba falla, alguien purgó el

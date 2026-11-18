@@ -36,9 +36,20 @@ defmodule TokengateWeb.AuditLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/operations/audit")
 
-    assert html =~ "Auditoría"
+    # Default UI language is English: the msgid is rendered as-is.
+    assert html =~ "Audit"
+    assert html =~ "Who did what, to what, and when"
+    refute html =~ "Auditoría"
     assert html =~ "model.create"
     assert html =~ admin.email
+
+    # And the Spanish catalog still renders the same screen in Spanish.
+    {:ok, _admin} = Accounts.update_user_locale(admin, "es")
+    {:ok, _view_es, html_es} = live(recycle(conn), ~p"/operations/audit")
+
+    assert html_es =~ "Auditoría"
+    assert html_es =~ "Quién hizo qué"
+    refute html_es =~ "Who did what"
   end
 
   test "filtering by action narrows the table", %{conn: conn} do

@@ -9,7 +9,7 @@
          calendar-day/month counters, not a rolling window) --%>
     <div class="flex items-center justify-between flex-wrap gap-4">
       <.header>
-        Estadísticas
+        {gettext("Statistics")}
         <:subtitle>
           <span class="inline-flex items-center gap-2">
             <.icon name="hero-funnel" class="w-4 h-4 text-base-content/50" />
@@ -26,7 +26,7 @@
           :if={@stats_loading}
           class="loading loading-spinner loading-sm text-primary"
           id="stats-loading"
-          title="Actualizando estadísticas…"
+          title={gettext("Updating statistics…")}
         ></span>
         <.period_selector target={period_target(assigns)} period={@period} id="period-selector" />
       </div>
@@ -42,7 +42,7 @@
           <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
         </span>
         <span class="text-base-content/60">
-          En vivo · actualización automática
+          {gettext("Live · auto-refresh")}
         </span>
         <span class="text-base-content/40 tabular-nums" id="live-last-sync">
           {Stats.format_dt(@last_sync_at)}
@@ -63,7 +63,7 @@
         <span class="relative inline-flex w-4 h-4 items-center justify-center">
           <span class="absolute w-2 h-2 rounded-full bg-success animate-pulse"></span>
         </span>
-        En vivo
+        {gettext("Live")}
       </.link>
       <.link
         patch={~p"/stats/overview?period=#{@period}"}
@@ -73,7 +73,7 @@
         ]}
         id="nav-overview"
       >
-        <.icon name="hero-chart-bar-square" class="w-4 h-4" /> Resumen
+        <.icon name="hero-chart-bar-square" class="w-4 h-4" /> {gettext("Overview")}
       </.link>
       <.link
         patch={~p"/stats/providers?period=#{@period}"}
@@ -83,7 +83,7 @@
         ]}
         id="nav-providers"
       >
-        <.icon name="hero-server-stack" class="w-4 h-4" /> Proveedores
+        <.icon name="hero-server-stack" class="w-4 h-4" /> {gettext("Providers")}
       </.link>
       <.link
         patch={~p"/stats/models?period=#{@period}"}
@@ -93,7 +93,7 @@
         ]}
         id="nav-models"
       >
-        <.icon name="hero-rectangle-stack" class="w-4 h-4" /> Modelos
+        <.icon name="hero-rectangle-stack" class="w-4 h-4" /> {gettext("Models")}
       </.link>
       <.link
         patch={~p"/stats/profiles?period=#{@period}"}
@@ -103,7 +103,7 @@
         ]}
         id="nav-groups"
       >
-        <.icon name="hero-user-group" class="w-4 h-4" /> Perfiles de límites
+        <.icon name="hero-user-group" class="w-4 h-4" /> {gettext("Limit profiles")}
       </.link>
       <.link
         patch={~p"/stats/users?period=#{@period}"}
@@ -113,7 +113,7 @@
         ]}
         id="nav-users"
       >
-        <.icon name="hero-users" class="w-4 h-4" /> Usuarios
+        <.icon name="hero-users" class="w-4 h-4" /> {gettext("Users")}
       </.link>
       <.link
         patch={~p"/stats/services?period=#{@period}"}
@@ -123,7 +123,7 @@
         ]}
         id="nav-services"
       >
-        <.icon name="hero-wrench-screwdriver" class="w-4 h-4" /> Servicios
+        <.icon name="hero-wrench-screwdriver" class="w-4 h-4" /> {gettext("Services")}
       </.link>
     </div>
 

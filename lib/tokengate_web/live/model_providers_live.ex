@@ -144,7 +144,7 @@ defmodule TokengateWeb.ModelProvidersLive do
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "No autorizado.")}
+        {:halt, put_flash(socket, :error, gettext("Not authorized."))}
       end
     end)
   end
@@ -406,7 +406,7 @@ defmodule TokengateWeb.ModelProvidersLive do
                changeset,
                credential.id
              )
-             |> put_flash(:info, "API key creada y seleccionada.")}
+             |> put_flash(:info, gettext("API key created and selected."))}
 
           {:error, changeset} ->
             {:noreply, assign(socket, :credential_form, to_form(changeset, as: :credential))}
@@ -2183,7 +2183,7 @@ defmodule TokengateWeb.ModelProvidersLive do
         if group, do: group.name, else: gettext("Limit profile")
 
       true ->
-        "Todos"
+        gettext("All")
     end
   end
 
@@ -2302,7 +2302,10 @@ defmodule TokengateWeb.ModelProvidersLive do
   def provider_active?(_), do: true
 
   def credential_status_label(%{credential: %{status: "active"}}), do: nil
-  def credential_status_label(%{credential: %{status: "disabled"}}), do: "credential desactivada"
+
+  def credential_status_label(%{credential: %{status: "disabled"}}),
+    do: gettext("disabled credential")
+
   # El estado de un pool se ve en sus miembros, no en una credencial del lane.
   def credential_status_label(%{pool: %{members: members}}) when is_list(members), do: nil
   def credential_status_label(%{credential: nil}), do: gettext("no credential")
@@ -2316,7 +2319,7 @@ defmodule TokengateWeb.ModelProvidersLive do
   defp toggle_title_effective(ap) do
     if provider_active?(ap),
       do: gettext("Disable"),
-      else: "Credential desactivada — activa en /catalog/providers"
+      else: gettext("Credential disabled — enable it in /catalog/providers")
   end
 
   def group_options(groups) do
@@ -2824,7 +2827,7 @@ defmodule TokengateWeb.ModelProvidersLive do
                         <span
                           :if={length(choice.provider.credentials) > 0}
                           class="badge badge-xs badge-success shrink-0"
-                          title="Ya tiene API keys dadas de alta"
+                          title={gettext("It already has API keys registered")}
                         >
                           {length(choice.provider.credentials)} key(s)
                         </span>
@@ -3419,8 +3422,8 @@ defmodule TokengateWeb.ModelProvidersLive do
                       <.input
                         field={@provider_form[:priority]}
                         type="number"
-                        label="Prioridad"
-                        hint="Menor = se intenta primero."
+                        label={gettext("Priority")}
+                        hint={gettext("Lower = tried first.")}
                       />
                       <%!-- El sticky es de lanes de UNA key: el router no lo
                            consulta ni lo escribe en un lane de pool (ahí la
@@ -3429,7 +3432,7 @@ defmodule TokengateWeb.ModelProvidersLive do
                         <.input
                           field={@provider_form[:sticky_ttl_seconds]}
                           type="number"
-                          label="TTL sticky (segundos)"
+                          label={gettext("Sticky TTL (seconds)")}
                           hint={
                             gettext(
                               "Empty uses the config default (180 s / 3 min) for every credential, regardless of billing. If you set a value, that one is always used. Minimum 1 s, maximum 86400 s (24 h). It is stored in milliseconds."
@@ -3584,7 +3587,7 @@ defmodule TokengateWeb.ModelProvidersLive do
                     <.input
                       field={@provider_form[:enabled]}
                       type="checkbox"
-                      label="Habilitado"
+                      label={gettext("Enabled for this model")}
                       hint={gettext("If it is off, this provider gets no traffic for the model.")}
                     />
                   </div>
@@ -3611,7 +3614,7 @@ defmodule TokengateWeb.ModelProvidersLive do
                   id="inline-credential-form"
                 >
                   <h3 class="text-sm font-semibold mb-1">
-                    Nueva API key
+                    {gettext("New API key")}
                     <%= if @provider_form_provider_key do %>
                       <span class="text-xs font-normal text-base-content/60">
                         para {provider_label(@provider_choices, @provider_form_provider_key)}

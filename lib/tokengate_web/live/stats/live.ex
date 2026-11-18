@@ -50,7 +50,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-org-budget">
           <div class="card-body p-5">
             <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              Gasto del día UTC
+              {gettext("Today's spend (UTC)")}
             </span>
             <p
               class="mt-2 text-2xl font-bold text-base-content tabular-nums"
@@ -59,7 +59,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
               ${Stats.format_decimal(@org_budget.daily_spend_usd)}
             </p>
             <p class="text-xs text-base-content/40 mt-1">
-              todos los sujetos · ventana 00:00–24:00 UTC
+              {gettext("all subjects · 00:00–24:00 UTC window")}
             </p>
           </div>
         </div>
@@ -127,8 +127,9 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           {Stats.format_number(@today_metrics.requests_total)}
           <:sub>
             <span id="live-today-latency">
-              latencia {Stats.format_ms(@today_metrics.avg_latency_ms)} · p95: {Stats.format_ms(
-                @today_metrics.p95_latency_ms
+              {gettext("latency %{avg} · p95: %{p95}",
+                avg: Stats.format_ms(@today_metrics.avg_latency_ms),
+                p95: Stats.format_ms(@today_metrics.p95_latency_ms)
               )}
             </span>
           </:sub>
@@ -146,22 +147,28 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           title={gettext("Rolling 5-minute window")}
         >
           {@pulse.req_per_min}
-          <:sub>ventana 5 min · {Stats.format_number(@pulse.request_count)} requests</:sub>
+          <:sub>
+            {gettext("%{count} requests · 5-min window",
+              count: Stats.format_number(@pulse.request_count)
+            )}
+          </:sub>
         </.kpi_card>
 
         <.kpi_card
           id="live-errors"
-          label="Tasa de error"
+          label={gettext("Error rate")}
           icon="hero-exclamation-triangle"
           accent="error"
         >
           {@pulse.error_rate}%
-          <:sub>{Stats.format_number(@pulse.error_count)} errores en 5 min</:sub>
+          <:sub>
+            {gettext("%{count} errors in 5 min", count: Stats.format_number(@pulse.error_count))}
+          </:sub>
         </.kpi_card>
 
         <.kpi_card
           id="live-inflight"
-          label="En vuelo"
+          label={gettext("In flight")}
           icon="hero-paper-airplane"
           accent="accent"
         >
@@ -243,14 +250,16 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           <div class="card-body p-4 lg:absolute lg:inset-0">
             <div class="flex items-center justify-between">
               <h2 class="card-title text-base">
-                <.icon name="hero-signal" class="w-5 h-5 text-base-content/60" /> Últimos requests
+                <.icon name="hero-signal" class="w-5 h-5 text-base-content/60" /> {gettext(
+                  "Last requests"
+                )}
               </h2>
               <.link
                 navigate={~p"/operations/monitoring"}
                 class="btn btn-xs btn-ghost"
                 id="live-feed-all"
               >
-                Ver todos <.icon name="hero-arrow-right" class="w-3 h-3" />
+                {gettext("View all")} <.icon name="hero-arrow-right" class="w-3 h-3" />
               </.link>
             </div>
             <div
@@ -291,7 +300,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
                 </span>
                 <span
                   class={["shrink-0 font-mono", status_class(log.status_code)]}
-                  title="Status devuelto al cliente"
+                  title={gettext("Status returned to the client")}
                 >
                   {log.status_code}
                 </span>
@@ -370,7 +379,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         <%!-- Tipo de gráfica y unidad explícitos: son barras, una por minuto,
              sobre la ventana fija de 60 min. --%>
         <p class="text-[10px] text-base-content/40" id={"#{@id}-hint"}>
-          barras · 1 barra = 1 min · últimos 60 min
+          {gettext("bars · 1 bar = 1 min · last 60 min")}
         </p>
 
         <div class="flex items-end gap-px h-40 mt-2">

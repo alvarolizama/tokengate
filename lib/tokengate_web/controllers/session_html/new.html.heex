@@ -7,10 +7,10 @@
           <img src={~p"/images/logo.svg"} width="40" alt="TokenGate" />
         </div>
         <h1 class="text-3xl font-bold tracking-tight text-base-content">
-          Bienvenido
+          {gettext("Welcome")}
         </h1>
         <p class="mt-2 text-sm text-base-content/50">
-          Accede al panel de control del proxy LLM.
+          {gettext("Access the LLM proxy control panel.")}
         </p>
       </div>
 
@@ -28,8 +28,8 @@
             <.input
               field={f[:email]}
               type="email"
-              label="Correo electrónico"
-              placeholder="tu@empresa.com"
+              label={gettext("Email address")}
+              placeholder={gettext("you@company.com")}
               required="true"
               autofocus="true"
             />
@@ -37,7 +37,7 @@
             <.input
               field={f[:password]}
               type="password"
-              label="Contraseña"
+              label={gettext("Password")}
               placeholder="••••••••"
               required="true"
             />
@@ -47,11 +47,11 @@
               class="btn btn-primary w-full mt-2 shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-shadow"
               id="login-submit"
             >
-              <.icon name="hero-arrow-right-on-rectangle" class="w-5 h-5" /> Entrar
+              <.icon name="hero-arrow-right-on-rectangle" class="w-5 h-5" /> {gettext("Enter")}
             </button>
 
             <%= if assigns[:google_oauth_configured] do %>
-              <div class="divider text-xs text-base-content/40">o</div>
+              <div class="divider text-xs text-base-content/40">{gettext("or")}</div>
 
               <a
                 href="/auth/google"
@@ -76,7 +76,7 @@
                     fill="#EA4335"
                   />
                 </svg>
-                Entrar con Google
+                {gettext("Sign in with Google")}
               </a>
             <% end %>
           </.form>
@@ -84,7 +84,7 @@
       </div>
 
       <p class="text-center text-xs text-base-content/40 mt-8">
-        ¿Problemas para acceder? Contacta a tu administrador.
+        {gettext("Trouble signing in? Contact your administrator.")}
       </p>
     </div>
   </div>
