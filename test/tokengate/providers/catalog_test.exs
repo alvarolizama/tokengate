@@ -74,16 +74,16 @@ defmodule Tokengate.Providers.CatalogTest do
   describe "code customizations" do
     test "capabilities are declared per provider, in code" do
       # Fireworks: decisions en shape OpenAI nativo (rune sólo sirve esa API).
-      assert Catalog.capabilities("fireworks-ai") == ~w(llm embedding decision)
+      assert Catalog.capabilities("fireworks-ai") == ~w(llm embedding decision rerank)
 
       # Alibaba (DashScope): image en compatible-mode y stt/tts nativos
       # traducidos por el adaptador dashscope — ambos, intl y cn.
       assert Catalog.capabilities("alibaba") == ~w(llm embedding image stt tts)
       assert Catalog.capabilities("alibaba-cn") == ~w(llm embedding image stt tts)
 
-      # NaN: las cinco superficies que el gateway sirve (su `rerank` no, que
-      # la ruta /v1/rerank se retiró en 887a1a9).
-      assert Catalog.capabilities("nan") == ~w(llm embedding stt tts image)
+      # NaN: las superficies que el gateway sirve, incluido `rerank` (la ruta
+      # /v1/rerank se restauró en W14 con contrato canónico propio).
+      assert Catalog.capabilities("nan") == ~w(llm embedding rerank stt tts image)
       assert Catalog.declares?("nan", "stt")
       assert Catalog.declares?("nan", "tts")
       refute Catalog.declares?("nan", "decision")
@@ -101,9 +101,9 @@ defmodule Tokengate.Providers.CatalogTest do
 
     # F21/F61 — una capability es una promesa que solo es honesta si el gateway
     # tiene una RUTA que la sirva. El vocabulario es exactamente el de las
-    # superficies /v1 y ningún proveedor declara algo fuera de él: `rerank` no
-    # se declara (ni en NaN ni en Helmcode) hasta que exista su ruta (W14), y
-    # una capability sin ruta se cae del set efectivo aunque esté escrita.
+    # superficies /v1 y ningún proveedor declara algo fuera de él: `rerank` se
+    # declara desde W14 (ruta /v1/rerank con contrato canónico propio), y una
+    # capability sin ruta se cae del set efectivo aunque esté escrita.
     test "capabilities are narrowed to the types the gateway can route" do
       served = Catalog.served_capabilities()
       assert served == Catalog.capabilities()
@@ -112,10 +112,10 @@ defmodule Tokengate.Providers.CatalogTest do
         assert Catalog.capabilities(key) -- served == []
       end
 
-      refute Catalog.declares?("nan", "rerank")
-      refute Catalog.declares?("helmcode", "rerank")
-      refute Catalog.declares?("openrouter", "rerank")
-      assert Catalog.capabilities("nan") == ~w(llm embedding stt tts image)
+      assert Catalog.declares?("nan", "rerank")
+      assert Catalog.declares?("helmcode", "rerank")
+      assert Catalog.declares?("openrouter", "rerank")
+      assert Catalog.capabilities("nan") == ~w(llm embedding rerank stt tts image)
     end
 
     test "decisions: el shape del wire se declara por proveedor" do
@@ -139,7 +139,7 @@ defmodule Tokengate.Providers.CatalogTest do
 
     test "the vocabulary covers the modalities the catalog publishes" do
       assert Catalog.capabilities() ==
-               ~w(llm embedding decision stt tts image)
+               ~w(llm embedding decision rerank stt tts image)
     end
 
     test "dialect resolves from npm, and a code customization wins over it" do
@@ -278,7 +278,7 @@ defmodule Tokengate.Providers.CatalogTest do
       assert hc.logo_url == "https://helmcode.com/favicon.ico"
       assert hc.status == "active"
       assert Catalog.dialect(hc) == {:ok, "openai"}
-      assert Catalog.capabilities("helmcode") == ~w(llm embedding stt tts image)
+      assert Catalog.capabilities("helmcode") == ~w(llm embedding rerank stt tts image)
 
       # Y la key es consultable para que el refresh no la barra a stale.
       assert Catalog.code_provider_keys() == ["helmcode", "typesafe"]
