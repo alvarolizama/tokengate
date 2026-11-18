@@ -276,6 +276,47 @@ defmodule Tokengate.LogsTest do
       assert log.cache_creation_tokens == 0
     end
 
+    # F44: the broadcast used to serialize five preloaded structs (each one
+    # dragging its own NotLoaded associations) for every subscriber. The feeds
+    # only pattern match on association FIELDS, so the event carries exactly
+    # those shapes — one message per request, with the identity the table
+    # renders.
+    test "broadcasts one lean payload with the association fields the feed reads" do
+      {group_member, group} = group_member_fixture()
+
+      {:ok, provider} =
+        Tokengate.Providers.create_provider(%{
+          name: "Prov broadcast",
+          base_url: "http://localhost:1"
+        })
+
+      args = %{
+        "group_member_id" => group_member.id,
+        "provider_id" => provider.id,
+        "model_requested" => "deepseek-chat",
+        "prompt_tokens" => 1,
+        "completion_tokens" => 1,
+        "inserted_at" => "2026-11-08T12:00:00Z"
+      }
+
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
+
+      assert :ok = Tokengate.Logs.WriteWorker.perform(%Oban.Job{id: 7777, args: args})
+
+      assert_receive {:new_log, log}
+
+      assert log.id
+      assert log.provider == %{name: "Prov broadcast", logo_url: nil}
+      assert log.service == nil
+      assert %{user: %{email: email}, group: %{name: group_name, id: group_id}} = log.group_member
+      assert is_binary(email) and String.contains?(email, "@")
+      assert group_name == group.name
+      assert group_id == group.id
+
+      # One event per request on this topic.
+      refute_receive {:new_log, _}, 20
+    end
+
     test "retried job: one row, and the fan-out is re-run (dispatch idempotent, broadcast tolerated)" do
       {group_member, _group} = group_member_fixture()
 
@@ -598,6 +639,228 @@ defmodule Tokengate.LogsTest do
       # Requesting more than 500 should not raise — clamps to 500
       logs = Logs.list_logs(%{group_member_id: tm.id, limit: 1000})
       assert length(logs) == 1
+    end
+
+    # F17/P15: the date bounds arrive as HTTP strings. A raw string handed to
+    # Ecto raised `Ecto.Query.CastError` and killed the LiveView; now the bound
+    # is cast when it can be and IGNORED when it cannot.
+    test "tolerates ISO date strings as bounds" do
+      {group_member, _} = group_member_fixture()
+
+      {:ok, inside} =
+        Logs.log_request(%{
+          group_member_id: group_member.id,
+          model_requested: "gpt-4",
+          inserted_at: ~U[2026-07-26 12:00:00Z]
+        })
+
+      {:ok, _outside} =
+        Logs.log_request(%{
+          group_member_id: group_member.id,
+          model_requested: "gpt-4",
+          inserted_at: ~U[2026-07-20 12:00:00Z]
+        })
+
+      # A bare date covers its whole UTC day.
+      logs =
+        Logs.list_logs(%{
+          group_member_id: group_member.id,
+          from: "2026-07-26",
+          to: "2026-07-26"
+        })
+
+      assert Enum.map(logs, & &1.id) == [inside.id]
+
+      # A full ISO-8601 timestamp works too, string-keyed map included.
+      logs =
+        Logs.list_logs(%{
+          "group_member_id" => group_member.id,
+          "from" => "2026-07-26T00:00:00Z",
+          "to" => "2026-07-26T23:59:59Z"
+        })
+
+      assert Enum.map(logs, & &1.id) == [inside.id]
+
+      # Garbage is dropped, never raised: both rows come back.
+      logs = Logs.list_logs(%{group_member_id: group_member.id, from: "no-es-fecha"})
+      assert length(logs) == 2
+    end
+
+    test "tolerates Date structs and NaiveDateTime bounds" do
+      {group_member, _} = group_member_fixture()
+
+      {:ok, log} =
+        Logs.log_request(%{
+          group_member_id: group_member.id,
+          model_requested: "gpt-4",
+          inserted_at: ~U[2026-07-26 12:00:00Z]
+        })
+
+      assert [%{id: id}] =
+               Logs.list_logs(%{
+                 group_member_id: group_member.id,
+                 from: ~D[2026-07-26],
+                 to: ~D[2026-07-26]
+               })
+
+      assert id == log.id
+
+      assert [%{id: ^id}] =
+               Logs.list_logs(%{
+                 group_member_id: group_member.id,
+                 from: ~N[2026-07-26 00:00:00]
+               })
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # get_log/2 — partition-pinned lookup (F49)
+  # ---------------------------------------------------------------------------
+
+  describe "get_log/2" do
+    test "pins the partition with the row's inserted_at" do
+      {log, _} = log_fixture()
+
+      assert %{id: id} = Logs.get_log(log.id, log.inserted_at)
+      assert id == log.id
+
+      # Same id, wrong day: the lookup is pinned to that partition, so the row
+      # is not there — no ~90-partition probe needed to prove it.
+      other_day = DateTime.add(log.inserted_at, -3 * 86_400, :second)
+      assert Logs.get_log(log.id, other_day) == nil
+
+      # The ISO string the LiveView carries works too, and a forged one is
+      # ignored instead of raising.
+      assert %{id: ^id} = Logs.get_log(log.id, DateTime.to_iso8601(log.inserted_at))
+      assert %{id: ^id} = Logs.get_log(log.id, "not-a-date")
+
+      # Non-UUID ids stay a miss (no CastError).
+      assert Logs.get_log("not-a-uuid") == nil
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # list_feed/1 — the real-time feed's default window (F39)
+  # ---------------------------------------------------------------------------
+
+  describe "list_feed/1" do
+    test "bounds the window by default and honors an explicit from" do
+      {group_member, _} = group_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      old = DateTime.add(now, -5 * 86_400, :second)
+
+      {:ok, recent} =
+        Logs.log_request(%{
+          group_member_id: group_member.id,
+          model_requested: "gpt-4",
+          inserted_at: now
+        })
+
+      {:ok, old_log} =
+        Logs.log_request(%{
+          group_member_id: group_member.id,
+          model_requested: "gpt-4",
+          inserted_at: old
+        })
+
+      # No window asked for → the feed's look-back (~2 days) applies: the
+      # 5-day-old row is not even probed.
+      assert Enum.map(Logs.list_feed(%{group_member_id: group_member.id}), & &1.id) == [
+               recent.id
+             ]
+
+      # An explicit window always wins.
+      feed =
+        Logs.list_feed(%{
+          group_member_id: group_member.id,
+          from: DateTime.add(now, -10 * 86_400, :second)
+        })
+
+      assert Enum.sort(Enum.map(feed, & &1.id)) == Enum.sort([recent.id, old_log.id])
+    end
+
+    test "pages inside the window with the keyset cursor" do
+      {group_member, _} = group_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      ids =
+        for i <- 1..3 do
+          {:ok, log} =
+            Logs.log_request(%{
+              group_member_id: group_member.id,
+              model_requested: "gpt-#{i}",
+              inserted_at: DateTime.add(now, -i, :second)
+            })
+
+          log.id
+        end
+
+      first = Logs.list_feed(%{group_member_id: group_member.id, limit: 2})
+      oldest = List.last(first)
+
+      second =
+        Logs.list_feed(%{
+          group_member_id: group_member.id,
+          limit: 2,
+          before: {oldest.inserted_at, oldest.id}
+        })
+
+      assert Enum.sort(Enum.map(first ++ second, & &1.id)) == Enum.sort(ids)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # total_spend_by_service/1 — explicit window (F38)
+  # ---------------------------------------------------------------------------
+
+  describe "total_spend_by_service/1" do
+    test "sums per service and honors an explicit window" do
+      service = service_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      old = DateTime.add(now, -10 * 86_400, :second)
+
+      service_log_fixture(service, %{provider_cost_usd: "0.500000", inserted_at: now})
+      service_log_fixture(service, %{provider_cost_usd: "0.250000", inserted_at: old})
+
+      lifetime = Logs.total_spend_by_service()
+      assert Decimal.equal?(Map.fetch!(lifetime, service.id), Decimal.new("0.750000"))
+
+      # The bounded read only touches the window's partitions.
+      windowed =
+        Logs.total_spend_by_service(from: DateTime.add(now, -86_400, :second))
+
+      assert Decimal.equal?(Map.fetch!(windowed, service.id), Decimal.new("0.500000"))
+
+      assert Logs.total_spend_by_service(from: "no-es-fecha")[service.id] ==
+               Map.fetch!(lifetime, service.id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # stream_logs_for_export/1 — flat rows for the streaming CSV (F40)
+  # ---------------------------------------------------------------------------
+
+  describe "stream_logs_for_export/1" do
+    test "returns flat rows with the joined identity and no preloads" do
+      {log, group_member} = log_fixture()
+
+      rows =
+        Tokengate.Repo.transaction(fn ->
+          Logs.stream_logs_for_export(%{group_member_id: group_member.id})
+          |> Tokengate.Repo.stream()
+          |> Enum.to_list()
+        end)
+        |> elem(1)
+
+      assert [row] = rows
+      assert row.inserted_at == log.inserted_at
+      assert row.status_code == 200
+      assert row.model_requested == "gpt-4"
+      assert is_binary(row.user_email) and String.contains?(row.user_email, "@")
+      # No provider_id on the fixture: the LEFT JOIN keeps the row and leaves
+      # the cell empty instead of dropping it.
+      assert row.provider_name == nil
+      assert row.provider_cost_usd |> Decimal.equal?(Decimal.new("1.000000"))
     end
   end
 

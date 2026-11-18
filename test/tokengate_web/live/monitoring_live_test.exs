@@ -264,6 +264,83 @@ defmodule TokengateWeb.MonitoringLiveTest do
     refute html =~ anchor
   end
 
+  # F39: the feed had no default window, so every filter change walked the
+  # ~90 retained partitions until it collected a page. The feed is now bounded
+  # (2 days) unless the operator picks a date range — which then wins.
+  test "the feed is windowed by default and an explicit from overrides it", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    five_days_ago =
+      DateTime.utc_now() |> DateTime.add(-5 * 86_400, :second) |> DateTime.truncate(:second)
+
+    %{owner: owner} = member_with_log(inserted_at: five_days_ago)
+
+    anchor = owner.email
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/operations/monitoring")
+
+    # Outside the default window: the row reaches neither the DOM nor the state.
+    refute html =~ anchor
+
+    from = Periods.local_today("Etc/UTC") |> Date.add(-6) |> Date.to_iso8601()
+
+    view
+    |> form("#logs-filter-form", filter: %{from: from})
+    |> render_change()
+
+    assert render(view) =~ anchor
+  end
+
+  # W1 dropped `last_month` from the canonical set: the export link can no longer
+  # ask for a period the controller degrades to the default (a button that lies
+  # about the window it downloads).
+  test "CSV log links use the canonical period set", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    assert element(view, "#csv-logs-30d") |> render() =~ "period=30d"
+    assert element(view, "#csv-logs-yesterday") |> render() =~ "period=yesterday"
+
+    refute has_element?(view, "[href*='period=last_month']")
+    refute has_element?(view, "[href*='period=month']")
+  end
+
+  # Anexo UI#12 (optional, local fix): the Top 3 cards ranked rows the table was
+  # hiding because the filter map carried no status or subject type.
+  test "top-model card respects the active status filter", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{member: member, model: model} = member_with_log()
+
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        model_requested: "failing-model",
+        model_responded: "failing-model",
+        status_code: 500,
+        agent_type: "api",
+        prompt_tokens: 1,
+        completion_tokens: 1,
+        latency_ms: 5,
+        streaming: false,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/operations/monitoring")
+
+    assert html =~ "failing-model"
+
+    view
+    |> form("#logs-filter-form", filter: %{status_class: "5xx"})
+    |> render_change()
+
+    assert has_element?(view, "#top-models-list", "failing-model")
+    refute has_element?(view, "#top-models-list", model.name)
+  end
+
   ## Realtime KPI cards (rolling 5-minute window) ---------------------------------
 
   test "KPI cards show rolling-window metrics, not lifetime totals", %{conn: conn} do

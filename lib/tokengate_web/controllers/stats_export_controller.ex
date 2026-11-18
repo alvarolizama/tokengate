@@ -12,17 +12,44 @@ defmodule TokengateWeb.StatsExportController do
 
   Unknown types fall through to the models CSV — see `build_csv/5`.
 
+  ## Streaming
+
+  The response is written with `send_chunked/2` as the rows are produced:
+
+    * the log/error exports go through `Logs.stream_logs_for_export/1` — ONE
+      cursor query (`Repo.stream/2`) with the member/group/provider identity
+      resolved by joins, so a 30d window no longer materializes up to 50k rows
+      (plus every preloaded association) in memory;
+    * the aggregate exports (models, groups, providers, services) are already
+      one row per dimension, so they are chunked from the list the rollup
+      returns.
+
+  There is no row cap: a cap made the file LOOK complete while it silently
+  dropped the tail. The window (`period`) is the bound, and the DB cursor and
+  its transaction carry an explicit budget (ten minutes) so a long window is
+  not aborted mid-file by the default DBConnection timeout.
+
   Returns a CSV file download with `Content-Disposition: attachment`.
   """
 
   use TokengateWeb, :controller
   import Ecto.Query
+  require Logger
+
   alias Tokengate.Accounts
   alias Tokengate.Accounts.ApiKey
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
   alias Tokengate.Repo
+
+  # Rows per DB cursor fetch, and lines per socket chunk.
+  @chunk_rows 500
+
+  # Explicit budget for one export: the cursor fetch and the transaction that
+  # owns it. The default 15s DBConnection timeout aborts a long window halfway
+  # through the file.
+  @export_timeout_ms 600_000
 
   def export(conn, params) do
     user = conn.assigns[:current_user]
@@ -35,11 +62,8 @@ defmodule TokengateWeb.StatsExportController do
     type = params["type"] || "models"
 
     case build_csv(user, type, params, opts, timezone) do
-      {:ok, {filename, csv_content}} ->
-        conn
-        |> put_resp_content_type("text/csv", "utf-8")
-        |> put_resp_header("content-disposition", "attachment; filename=\"#{filename}\"")
-        |> send_resp(200, csv_content)
+      {:ok, {filename, header, source}} ->
+        stream_csv(conn, filename, header, source)
 
       {:error, :forbidden} ->
         conn
@@ -47,6 +71,108 @@ defmodule TokengateWeb.StatsExportController do
         |> send_resp(403, Jason.encode!(%{"error" => "no autorizado"}))
     end
   end
+
+  ## Chunked CSV writer -----------------------------------------------------
+
+  # Each export is `{:ok, {filename, header_cells, source}}` where source is
+  # either a DB cursor (`{:db, query, row_fun}`) or an in-memory list already
+  # bounded by its dimension (`{:mem, rows, row_fun}`). `row_fun` takes
+  # `(row, api_key_labels)` and returns the CSV cells for that row.
+  defp stream_csv(conn, filename, header, source) do
+    conn =
+      conn
+      |> put_resp_content_type("text/csv", "utf-8")
+      |> put_resp_header("content-disposition", "attachment; filename=\"#{filename}\"")
+      |> send_chunked(200)
+
+    conn = chunk_line(conn, header)
+
+    case source do
+      {:db, query, row_fun} ->
+        transaction =
+          Repo.transaction(
+            fn ->
+              stream = Repo.stream(query, max_rows: @chunk_rows, timeout: @export_timeout_ms)
+              write_rows(conn, stream, row_fun)
+            end,
+            timeout: @export_timeout_ms
+          )
+
+        case transaction do
+          {:ok, conn} ->
+            conn
+
+          {:error, reason} ->
+            # The status and the first rows are already on the wire: the file
+            # is truncated and there is no way to turn it into an error page.
+            # Log it loudly — a half CSV that nobody notices is the old silent
+            # truncation in a new dress.
+            Logger.error("stats export failed mid-stream: #{inspect(reason)}")
+            conn
+        end
+
+      {:mem, rows, row_fun} ->
+        write_rows(conn, rows, row_fun)
+    end
+  end
+
+  defp write_rows(conn, rows, row_fun) do
+    {conn, _labels} =
+      rows
+      |> Stream.chunk_every(@chunk_rows)
+      |> Enum.reduce_while({conn, %{}}, fn batch, {conn, labels} ->
+        labels = merge_api_key_labels(batch, labels)
+
+        chunk =
+          batch
+          |> Enum.map(fn row -> row_fun.(row, labels) end)
+          |> Enum.map_join("\n", &Enum.join(&1, ","))
+
+        case Plug.Conn.chunk(conn, chunk <> "\n") do
+          {:ok, conn} -> {:cont, {conn, labels}}
+          {:error, _reason} -> {:halt, {conn, labels}}
+        end
+      end)
+
+    conn
+  end
+
+  defp chunk_line(conn, cells) do
+    case Plug.Conn.chunk(conn, Enum.join(cells, ",") <> "\n") do
+      {:ok, conn} -> conn
+      {:error, _reason} -> conn
+    end
+  end
+
+  # The `api_key` column names the key that authenticated the request: the live
+  # key's label when `api_key_id` is set, and the historical prefix when the log
+  # predates the id column. ONE query per batch of new ids — never one per row,
+  # and the cache survives the cursor's batches.
+  defp merge_api_key_labels(rows, labels) do
+    ids =
+      rows
+      |> Enum.map(&Map.get(&1, :api_key_id))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.reject(&Map.has_key?(labels, &1))
+
+    case ids do
+      [] -> labels
+      ids -> Map.merge(labels, api_key_labels_by_id(ids))
+    end
+  end
+
+  defp api_key_labels_by_id(ids) do
+    Repo.all(from ak in ApiKey, where: ak.id in ^ids, select: {ak.id, ak.label, ak.key_prefix})
+    |> Map.new(fn {id, label, prefix} -> {id, label || prefix || id} end)
+  end
+
+  defp csv_api_key(%{api_key_id: id} = row, key_labels) do
+    label = id && Map.get(key_labels, id)
+    csv_escape(label || Map.get(row, :api_key_prefix))
+  end
+
+  defp csv_api_key(row, _key_labels), do: csv_escape(Map.get(row, :api_key_prefix))
 
   defp build_csv(user, "groups", params, opts, timezone) do
     group_id = params["group_id"]
@@ -116,15 +242,11 @@ defmodule TokengateWeb.StatsExportController do
 
     header = ~w(proveedor tier score requests fallos latencia_ms p95_ms ttft_ms)
 
-    csv =
-      [header | Enum.map(rows, &row_to_csv_provider/1)]
-      |> Enum.map(&Enum.join(&1, ","))
-      |> Enum.join("\n")
-
-    {"estadisticas_proveedores_#{Periods.local_today(timezone)}.csv", csv}
+    {"estadisticas_proveedores_#{Periods.local_today(timezone)}.csv", header,
+     {:mem, rows, &row_to_csv_provider/2}}
   end
 
-  defp row_to_csv_provider(row) do
+  defp row_to_csv_provider(row, _labels) do
     [
       csv_escape(row.provider_name),
       csv_escape(Map.get(row, :tier, "—")),
@@ -158,15 +280,11 @@ defmodule TokengateWeb.StatsExportController do
 
     header = ~w(servicio requests costo tokens_in tokens_out tps latencia_ms)
 
-    csv =
-      [header | Enum.map(rows, &row_to_csv_service/1)]
-      |> Enum.map(&Enum.join(&1, ","))
-      |> Enum.join("\n")
-
-    {"estadisticas_servicios_#{Periods.local_today(timezone)}.csv", csv}
+    {"estadisticas_servicios_#{Periods.local_today(timezone)}.csv", header,
+     {:mem, rows, &row_to_csv_service/2}}
   end
 
-  defp row_to_csv_service(row) do
+  defp row_to_csv_service(row, _labels) do
     [
       csv_escape(row.service_name),
       row.request_count,
@@ -211,13 +329,10 @@ defmodule TokengateWeb.StatsExportController do
         ~w(modelo requests costo tokens_in tokens_out tps)
       end
 
-    csv =
-      [header | Enum.map(rows, &row_to_csv/1)]
-      |> Enum.map(&Enum.join(&1, ","))
-      |> Enum.join("\n")
-
     suffix = if model_id, do: "_modelo", else: ""
-    {"estadisticas_models#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
+
+    {"estadisticas_models#{suffix}_#{Periods.local_today(timezone)}.csv", header,
+     {:mem, rows, &row_to_csv/2}}
   end
 
   ## Groups CSV ------------------------------------------------------------
@@ -239,13 +354,10 @@ defmodule TokengateWeb.StatsExportController do
         ~w(perfil requests costo tokens_in tokens_out tps)
       end
 
-    csv =
-      [header | Enum.map(rows, &row_to_csv_group/1)]
-      |> Enum.map(&Enum.join(&1, ","))
-      |> Enum.join("\n")
-
     suffix = if group_id, do: "_perfil_limites", else: ""
-    {"estadisticas_perfiles#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
+
+    {"estadisticas_perfiles#{suffix}_#{Periods.local_today(timezone)}.csv", header,
+     {:mem, rows, &row_to_csv_group/2}}
   end
 
   ## Errors CSV -----------------------------------------------------------
@@ -255,21 +367,13 @@ defmodule TokengateWeb.StatsExportController do
       opts
       |> Map.new()
       |> Map.put(:status_class, "errors")
-      |> Map.put(:limit, 50_000)
       |> Map.put(:group_member_ids, Accounts.scope_member_ids(user))
-
-    rows = Logs.list_logs_for_export(filters)
-    key_labels = api_key_labels(rows)
 
     header =
       ~w(fecha estado modelo proveedor usuario perfil api_key error_reason prov_status latencia_ms costo_usd)
 
-    csv =
-      [header | Enum.map(rows, &row_to_csv_error(&1, key_labels))]
-      |> Enum.map(&Enum.join(&1, ","))
-      |> Enum.join("\n")
-
-    {"errores_#{Periods.local_today(timezone)}.csv", csv}
+    {"errores_#{Periods.local_today(timezone)}.csv", header,
+     {:db, Logs.stream_logs_for_export(filters), &row_to_csv_error/2}}
   end
 
   ## Logs CSV (full export) -----------------------------------------------
@@ -278,45 +382,13 @@ defmodule TokengateWeb.StatsExportController do
     filters =
       opts
       |> Map.new()
-      |> Map.put(:limit, 50_000)
       |> Map.put(:group_member_ids, Accounts.scope_member_ids(user))
-
-    rows = Logs.list_logs_for_export(filters)
-    key_labels = api_key_labels(rows)
 
     header =
       ~w(fecha estado modelo usuario perfil agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort effort_applied tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
 
-    csv =
-      [header | Enum.map(rows, &row_to_csv_log(&1, key_labels))]
-      |> Enum.map(&Enum.join(&1, ","))
-      |> Enum.join("\n")
-
-    {"logs_#{Periods.local_today(timezone)}.csv", csv}
-  end
-
-  # La columna `api_key` nombra la key que autenticó el request: el label de la
-  # key viva cuando `api_key_id` está seteado, y el prefijo histórico cuando el
-  # log viene de antes de que se guardara el id. Una sola query por lote de ids
-  # — nunca una por fila.
-  defp api_key_labels(rows) do
-    rows
-    |> Enum.map(& &1.api_key_id)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-    |> api_key_labels_by_id()
-  end
-
-  defp api_key_labels_by_id([]), do: %{}
-
-  defp api_key_labels_by_id(ids) do
-    Repo.all(from ak in ApiKey, where: ak.id in ^ids, select: {ak.id, ak.label, ak.key_prefix})
-    |> Map.new(fn {id, label, prefix} -> {id, label || prefix || id} end)
-  end
-
-  defp csv_api_key(log, key_labels) do
-    label = log.api_key_id && Map.get(key_labels, log.api_key_id)
-    csv_escape(label || log.api_key_prefix)
+    {"logs_#{Periods.local_today(timezone)}.csv", header,
+     {:db, Logs.stream_logs_for_export(filters), &row_to_csv_log/2}}
   end
 
   defp row_to_csv_log(log, key_labels) do
@@ -324,11 +396,11 @@ defmodule TokengateWeb.StatsExportController do
       csv_escape(format_datetime_csv(log.inserted_at)),
       log.status_code,
       csv_escape(model_display_csv(log.model_requested, log.model_responded)),
-      csv_escape(log.group_member && log.group_member.user && log.group_member.user.email),
-      csv_escape(log.group_member && log.group_member.group && log.group_member.group.name),
+      csv_escape(log.user_email),
+      csv_escape(log.group_name),
       csv_escape(log.client_agent),
       csv_api_key(log, key_labels),
-      csv_escape(log.provider && log.provider.name),
+      csv_escape(log.provider_name),
       csv_escape(log.provider_key_prefix),
       log.provider_status_code,
       csv_escape(log.error_reason),
@@ -356,9 +428,9 @@ defmodule TokengateWeb.StatsExportController do
       csv_escape(format_datetime_csv(log.inserted_at)),
       log.status_code,
       csv_escape(log.model_requested),
-      csv_escape(log.provider && log.provider.name),
-      csv_escape(log.group_member && log.group_member.user && log.group_member.user.email),
-      csv_escape(log.group_member && log.group_member.group && log.group_member.group.name),
+      csv_escape(log.provider_name),
+      csv_escape(log.user_email),
+      csv_escape(log.group_name),
       csv_api_key(log, key_labels),
       csv_escape(log.error_reason),
       log.provider_status_code,
@@ -371,9 +443,13 @@ defmodule TokengateWeb.StatsExportController do
     Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S UTC")
   end
 
+  defp format_datetime_csv(%NaiveDateTime{} = ndt) do
+    ndt |> DateTime.from_naive!("Etc/UTC") |> format_datetime_csv()
+  end
+
   ## Row serialization ----------------------------------------------------
 
-  defp row_to_csv(row) do
+  defp row_to_csv(row, _labels) do
     [
       csv_escape(row_label(row)),
       row.request_count,
@@ -393,7 +469,7 @@ defmodule TokengateWeb.StatsExportController do
   defp row_label(row),
     do: Map.get(row, :provider_name) || Map.get(row, :model_name) || "—"
 
-  defp row_to_csv_group(row) do
+  defp row_to_csv_group(row, _labels) do
     # When group_id is set, rows are members (have user_email).
     # When group_id is nil, rows are groups (have group_name).
     has_email = Map.has_key?(row, :user_email)

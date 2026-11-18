@@ -50,6 +50,17 @@ defmodule Tokengate.Logs.WriteWorker do
 
   `insert_fun` lets tests force the failure branch; production always uses
   `Oban.insert/1`.
+
+  ## Where the insert runs (F52)
+
+  `Oban.insert/1` stays IN the request process on purpose. On the Basic
+  engine it is a single INSERT on the pool the request already holds — moving
+  it behind a buffer/GenServer would ADD a message hop to the hot path, and a
+  cast is not durable enough to be worth it: the client already has its
+  response by then, so the only thing a hop buys is losing the row when the
+  buffer dies. The multi-round-trip part of the write path — the identity
+  join used for delivery and the per-destination webhook fan-out — already
+  runs in THIS worker's process, off the request.
   """
   @spec enqueue(
           Ecto.Changeset.t() | Oban.Job.t(),
@@ -290,7 +301,43 @@ defmodule Tokengate.Logs.WriteWorker do
     end
   end
 
+  # One message per request on `logs:new`, carrying only what the feeds READ.
+  #
+  # The broadcast used to serialize the five preloaded structs — provider,
+  # service, member, its user and its group, each one dragging its own
+  # `NotLoaded` associations — for every subscriber. The feeds only pattern
+  # match on the association FIELDS (`provider.name`, `service.name`,
+  # `group_member.user.email`, `group_member.group.{id,name}`), so the event
+  # now ships the log struct plus those three shapes. The webhook fan-out
+  # still runs on the FULL reloaded struct: it needs the real associations.
   defp broadcast_new_log(log) do
-    Phoenix.PubSub.broadcast(@pubsub, @logs_topic, {:new_log, log})
+    Phoenix.PubSub.broadcast(@pubsub, @logs_topic, {:new_log, feed_payload(log)})
   end
+
+  defp feed_payload(%RequestLog{} = log) do
+    %{
+      log
+      | provider: name_shape(log.provider),
+        service: name_shape(log.service),
+        group_member: member_shape(log.group_member)
+    }
+  end
+
+  defp name_shape(%{name: name} = source) do
+    %{name: name, logo_url: Map.get(source, :logo_url)}
+  end
+
+  defp name_shape(_), do: nil
+
+  defp member_shape(%{user: %{email: email}} = member) do
+    group =
+      case Map.get(member, :group) do
+        %{name: name} = source -> %{name: name, id: Map.get(source, :id)}
+        _ -> nil
+      end
+
+    %{user: %{email: email}, group: group}
+  end
+
+  defp member_shape(_), do: nil
 end

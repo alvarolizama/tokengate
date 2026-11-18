@@ -455,6 +455,29 @@ defmodule TokengateWeb.StatsExportControllerTest do
   end
 
   describe "logs export period coverage" do
+    # F40: the export used to build the whole CSV in memory (up to 50k rows plus
+    # preloads) and silently drop the tail past the cap. It now streams: the
+    # response is chunked and fed by a `Repo.stream/2` cursor.
+    test "streams the file in chunks and keeps every row of the window", %{conn: conn} do
+      %{owner: owner, owner_password: password} = group_with_log()
+
+      conn =
+        conn
+        |> login(owner, password)
+        |> get(~p"/stats/export?type=logs&period=today")
+
+      # `:chunked` is what `send_chunked/2` leaves on the conn: the body was
+      # produced chunk by chunk, never as one buffered string.
+      assert conn.state == :chunked
+
+      body = response(conn, 200)
+      [header | rows] = body |> String.split("\n") |> Enum.reject(&(&1 == ""))
+
+      assert header =~ "fecha,estado"
+      assert length(rows) == 1
+      refute body =~ "TRUNCADO"
+    end
+
     # The UI list is capped at 500 rows; exports must NOT be, otherwise a
     # busy day alone would eat the whole CSV and 30d exports would only
     # contain today's data.

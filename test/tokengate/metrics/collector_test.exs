@@ -51,7 +51,7 @@ defmodule Tokengate.Metrics.CollectorTest do
       assert snap.requests_total == 3
     end
 
-    test "increments per-dimension counters" do
+    test "increments the bounded agent dimension and nothing else" do
       Collector.record_request(attrs(%{model_id: "a1", provider_id: "p1", agent_type: "api"}))
 
       Collector.record_request(attrs(%{model_id: "a1", provider_id: "p2", agent_type: "sdk"}))
@@ -60,9 +60,47 @@ defmodule Tokengate.Metrics.CollectorTest do
 
       snap = Collector.snapshot()
 
-      assert snap.by_model == %{"a1" => 2, "a2" => 1}
-      assert snap.by_provider == %{"p1" => 2, "p2" => 1}
+      # `agent_type` is the only client-controlled dimension and it is the only
+      # one still tallied (the per-model / per-provider counters were written
+      # on every request and read by nothing).
       assert snap.by_agent == %{"api" => 2, "sdk" => 1}
+      refute Map.has_key?(snap, :by_model)
+      refute Map.has_key?(snap, :by_provider)
+    end
+
+    # `X-Agent-Type` is free text from the client: it used to mint a permanent
+    # ETS entry per distinct value (F43). Anything outside the allowlist now
+    # collapses into ONE overflow bucket, so N distinct strings cost 1 key.
+    test "collapses an out-of-vocabulary x-agent-type into one overflow key" do
+      for i <- 1..50 do
+        Collector.record_request(attrs(%{agent_type: "custom-agent-#{i}"}))
+      end
+
+      snap = Collector.snapshot()
+
+      assert snap.by_agent == %{"other" => 50}
+      assert map_size(snap.by_agent) == 1
+    end
+
+    test "keeps a known agent type as its own key" do
+      Collector.record_request(attrs(%{agent_type: "cli"}))
+      Collector.record_request(attrs(%{agent_type: "made-up"}))
+
+      assert Collector.snapshot().by_agent == %{"cli" => 1, "other" => 1}
+    end
+
+    # Self-heal: a key minted by an older version (or by a code path that
+    # forgot the allowlist) is pruned on the next sweep, without touching the
+    # legitimate buckets.
+    test "the sweep drops agent keys outside the vocabulary" do
+      Collector.record_request(attrs(%{agent_type: "api"}))
+      :ets.insert(:tokengate_metrics, {{:requests, {:agent, "legacy-flood"}}, 9})
+
+      pid = Process.whereis(Collector)
+      send(pid, :sweep)
+      _ = :sys.get_state(pid)
+
+      assert Collector.snapshot().by_agent == %{"api" => 1}
     end
 
     test "increments prompt and completion tokens" do
@@ -240,6 +278,29 @@ defmodule Tokengate.Metrics.CollectorTest do
       assert lite.errors_total == 0
     end
 
+    # F44: a broadcast per proxied request woke EVERY connected LiveView (and
+    # the payload was rebuilt each time). The event is only a dirty flag, so
+    # it is coalesced to one per interval — the stamp lives in ETS, so the
+    # test ages it instead of sleeping.
+    test "coalesces the broadcast to at most one per interval" do
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, "metrics:updated")
+
+      Collector.record_request(attrs())
+      assert_receive {:metrics_updated, %{requests_total: 1}}
+
+      Collector.record_request(attrs())
+      Collector.record_request(attrs())
+      refute_receive {:metrics_updated, _lite}, 20
+
+      # Age the stamp past the interval: the next record claims the slot, and
+      # its payload carries the counters of every coalesced request.
+      aged = System.monotonic_time(:millisecond) - 10_000
+      :ets.insert(:tokengate_metrics, {{:broadcast, :last_ms}, aged})
+
+      Collector.record_request(attrs())
+      assert_receive {:metrics_updated, %{requests_total: 4}}
+    end
+
     test "snapshot_lite contains only requests_total and errors_total" do
       lite = Collector.snapshot_lite()
       assert Map.keys(lite) |> Enum.sort() == [:errors_total, :requests_total]
@@ -268,8 +329,6 @@ defmodule Tokengate.Metrics.CollectorTest do
       assert Map.has_key?(snap, :requests_total)
       assert Map.has_key?(snap, :errors_total)
       assert Map.has_key?(snap, :error_rate)
-      assert Map.has_key?(snap, :by_model)
-      assert Map.has_key?(snap, :by_provider)
       assert Map.has_key?(snap, :by_agent)
       assert Map.has_key?(snap, :prompt_tokens)
       assert Map.has_key?(snap, :completion_tokens)
@@ -299,7 +358,7 @@ defmodule Tokengate.Metrics.CollectorTest do
       assert snap.requests_total == 0
       assert snap.errors_total == 0
       assert snap.latency.count == 0
-      assert snap.by_model == %{}
+      assert snap.by_agent == %{}
     end
   end
 end

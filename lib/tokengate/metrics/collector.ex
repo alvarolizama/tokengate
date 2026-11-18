@@ -20,22 +20,39 @@ defmodule Tokengate.Metrics.Collector do
 
     * `{:requests, :total}`            — total request count
     * `{:requests, :errors}`           — count of requests with status >= 400
-    * `{:requests, {:model, id}}`     — per `model_id`
-    * `{:requests, {:provider, id}}`   — per `provider_id`
-    * `{:requests, {:agent, type}}`   — per `agent_type`
+    * `{:requests, {:agent, type}}`    — per `agent_type`, bounded (see below)
     * `{:tokens, :prompt}`             — total prompt tokens
     * `{:tokens, :completion}`         — total completion tokens
     * `{:cost_micro, :total}`          — total cost in micro-USD (Decimal → integer)
-    * `{:savings_micro, :total}`       — total savings in micro-USD
     * `{:latency, :sum}`               — sum of all latency samples (ms)
     * `{:latency, :count}`             — number of latency samples
     * `{:latency, {:bucket, upper}}`   — histogram bucket counters (atomic)
+
+  ## Cardinality
+
+  `agent_type` is the ONE dimension that comes from client input
+  (`X-Agent-Type` is free text), so it is the only one that could grow the
+  table forever: a client sending a unique value per request used to mint a
+  permanent ETS entry each time. Writes collapse it onto a fixed vocabulary
+  (`@agent_types`) plus an `"other"` bucket, which caps the key set at a
+  constant; the periodic sweep below removes any key outside it (legacy rows
+  written before the allowlist existed).
+
+  The per-model / per-provider tallies were removed: nothing read them, and
+  they were a write per request plus an ETS key per dimension value.
 
   Latency is a fixed-bucket histogram instead of the old prepend-and-trim
   list: each request atomically increments its bucket with
   `:ets.update_counter/4`, so there is no read-modify-write race between
   concurrent proxy processes. p95 is approximated from the histogram with
   nearest-rank interpolation; avg is `sum / count` exact.
+
+  ## Broadcast coalescing
+
+  Dashboards only need the event as a "something changed" trigger, so
+  `record_request/1` broadcasts AT MOST once per `@broadcast_interval_ms`
+  instead of one PubSub message per proxied request (`F44`: two broadcasts per
+  request woke every connected LiveView).
 
   Micro-USD: `round(cost_usd * 1_000_000)` so $1.500000 → 1_500_000.
   """
@@ -51,6 +68,21 @@ defmodule Tokengate.Metrics.Collector do
   # catches everything above the last finite bound. Ordered ascending for
   # nearest-rank p95 computation.
   @latency_buckets [50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 30_000, :infinity]
+
+  # Fixed vocabulary for the ONE client-controlled dimension (`X-Agent-Type`).
+  # Anything else collapses into @agent_overflow, so the ETS key set cannot
+  # grow with traffic.
+  @agent_types ~w(api sdk cli curl browser ide unknown)
+  @agent_overflow "other"
+
+  # Minimum spacing between `metrics:updated` broadcasts: dashboards treat the
+  # event as a dirty flag, so one per second is plenty and one per request
+  # storms every connected LiveView.
+  @broadcast_interval_ms 1_000
+  @broadcast_key {:broadcast, :last_ms}
+
+  # Cadence of the stray-key sweep.
+  @sweep_interval_ms 60_000
 
   ## Public API ---------------------------------------------------------------
 
@@ -69,9 +101,11 @@ defmodule Tokengate.Metrics.Collector do
 
   `attrs` keys:
 
-    * `model_id`  — term (usually binary id)
-    * `provider_id`     — term
-    * `agent_type`      — string
+    * `model_id`  — term (usually binary id); accepted, NOT tallied (see
+      "Cardinality": the per-model counters were written on every request and
+      read by nothing)
+    * `provider_id`     — term; accepted, NOT tallied (same reason)
+    * `agent_type`      — string; collapsed onto the fixed vocabulary
     * `status`          — integer HTTP status
     * `latency_ms`      — integer
     * `prompt_tokens`    — integer
@@ -87,8 +121,6 @@ defmodule Tokengate.Metrics.Collector do
   """
   @spec record_request(map()) :: :ok
   def record_request(attrs) do
-    model_id = Map.get(attrs, :model_id)
-    provider_id = Map.get(attrs, :provider_id)
     agent_type = Map.get(attrs, :agent_type)
     status = Map.get(attrs, :status, 0)
     latency_ms = Map.get(attrs, :latency_ms, 0)
@@ -101,16 +133,11 @@ defmodule Tokengate.Metrics.Collector do
     # Counters
     incr({:requests, :total})
 
-    unless is_nil(model_id) do
-      incr({:requests, {:model, model_id}})
-    end
-
-    unless is_nil(provider_id) do
-      incr({:requests, {:provider, provider_id}})
-    end
-
-    unless is_nil(agent_type) do
-      incr({:requests, {:agent, agent_type}})
+    # The only dimension that comes from client input: collapse it onto the
+    # fixed vocabulary so the table cannot grow with traffic.
+    case agent_bucket(agent_type) do
+      nil -> :ok
+      bucket -> incr({:requests, {:agent, bucket}})
     end
 
     if status >= 400 do
@@ -124,11 +151,18 @@ defmodule Tokengate.Metrics.Collector do
     # Latency histogram: atomic bucket increment + running sum/count.
     record_latency(latency_ms)
 
-    lite = snapshot_lite()
-    PubSub.broadcast(@pubsub, @topic, {:metrics_updated, lite})
+    broadcast_metrics_updated()
 
     :ok
   end
+
+  # `nil` (unknown caller) writes nothing; a known type passes through; any
+  # other client-supplied string becomes the overflow bucket. Bounded at 8
+  # possible keys, forever.
+  defp agent_bucket(nil), do: nil
+  defp agent_bucket(type) when type in @agent_types, do: type
+  defp agent_bucket(type) when is_binary(type) or is_atom(type), do: @agent_overflow
+  defp agent_bucket(_), do: nil
 
   @doc """
   Returns the current in-memory snapshot.
@@ -139,8 +173,6 @@ defmodule Tokengate.Metrics.Collector do
         requests_total: non_neg_integer(),
         errors_total: non_neg_integer(),
         error_rate: float(),
-        by_model: %{id => n},
-        by_provider: %{id => n},
         by_agent: %{type => n},
         prompt_tokens: non_neg_integer(),
         completion_tokens: non_neg_integer(),
@@ -148,6 +180,7 @@ defmodule Tokengate.Metrics.Collector do
         latency: %{count: non_neg_integer(), avg_ms: float(), p95_ms: number()}
       }
 
+  `by_agent` is keyed by the bounded vocabulary (see "Cardinality").
   `error_rate` is `0.0` when there are no requests. `cost_usd` is
   reconstructed from the micro-USD integer counter as `Decimal` with 6
   decimal places. `avg_ms` is exact (`sum / count`). `p95_ms` is the
@@ -158,9 +191,7 @@ defmodule Tokengate.Metrics.Collector do
     requests_total = read_counter({:requests, :total})
     errors_total = read_counter({:requests, :errors})
 
-    by_model = read_dimension({:requests, {:model, :_}})
-    by_provider = read_dimension({:requests, {:provider, :_}})
-    by_agent = read_dimension({:requests, {:agent, :_}})
+    by_agent = select_dim(:agent)
 
     prompt_tokens = read_counter({:tokens, :prompt})
     completion_tokens = read_counter({:tokens, :completion})
@@ -173,8 +204,6 @@ defmodule Tokengate.Metrics.Collector do
       requests_total: requests_total,
       errors_total: errors_total,
       error_rate: error_rate(requests_total, errors_total),
-      by_model: by_model,
-      by_provider: by_provider,
       by_agent: by_agent,
       prompt_tokens: prompt_tokens,
       completion_tokens: completion_tokens,
@@ -213,8 +242,18 @@ defmodule Tokengate.Metrics.Collector do
   @impl true
   def init(_opts) do
     ensure_table()
+    schedule_sweep()
     {:ok, %{}}
   end
+
+  @impl true
+  def handle_info(:sweep, state) do
+    prune_dimensions()
+    schedule_sweep()
+    {:noreply, state}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
 
   ## Internals ----------------------------------------------------------------
 
@@ -226,6 +265,58 @@ defmodule Tokengate.Metrics.Collector do
         :named_table,
         write_concurrency: true
       ])
+    end
+  end
+
+  defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
+
+  # Removes any agent key outside the fixed vocabulary. With the write-time
+  # allowlist this is a no-op in steady state; it is the self-heal for keys
+  # minted by an older version (or by a future code path that forgets the
+  # allowlist), so an unbounded dimension can never survive a deploy.
+  defp prune_dimensions do
+    allowed = MapSet.new(@agent_types ++ [@agent_overflow])
+
+    @table
+    |> :ets.select([{{{:requests, {:agent, :"$1"}}, :_}, [], [:"$1"]}])
+    |> Enum.uniq()
+    |> Enum.reject(&MapSet.member?(allowed, &1))
+    |> Enum.each(&:ets.delete(@table, {:requests, {:agent, &1}}))
+
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
+  # Coalesced dirty flag: at most one `metrics:updated` per interval, no
+  # matter how many proxy processes record a request concurrently.
+  defp broadcast_metrics_updated do
+    if claim_broadcast_slot(System.monotonic_time(:millisecond)) do
+      PubSub.broadcast(@pubsub, @topic, {:metrics_updated, snapshot_lite()})
+    end
+
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
+  # Claims the broadcast slot: `insert_new` takes the FIRST slot after a reset,
+  # and the interval slot is claimed by DELETING the stale stamp (only one
+  # caller can delete the same ETS object) and re-stamping it.
+  defp claim_broadcast_slot(now) do
+    if :ets.insert_new(@table, {@broadcast_key, now}) do
+      true
+    else
+      stale = [
+        {{@broadcast_key, :"$1"}, [{:>=, now, {:+, :"$1", @broadcast_interval_ms}}], [true]}
+      ]
+
+      if :ets.select_delete(@table, stale) == 1 do
+        :ets.insert(@table, {@broadcast_key, now})
+        true
+      else
+        false
+      end
     end
   end
 
@@ -248,18 +339,6 @@ defmodule Tokengate.Metrics.Collector do
   # Reads all counter keys matching the pattern `{:requests, {dim, _}}` and
   # returns a map of `value => count`. Builds the match spec per-dimension
   # because ETS match specs don't support runtime-bound atoms via ^pin.
-  defp read_dimension({:requests, {:model, :_}}) do
-    select_dim(:model)
-  end
-
-  defp read_dimension({:requests, {:provider, :_}}) do
-    select_dim(:provider)
-  end
-
-  defp read_dimension({:requests, {:agent, :_}}) do
-    select_dim(:agent)
-  end
-
   defp select_dim(dim) do
     match_spec = [
       {{{:requests, {dim, :"$1"}}, :"$2"}, [], [{{:"$1", :"$2"}}]}
