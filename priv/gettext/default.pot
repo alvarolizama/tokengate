@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 
-#: lib/tokengate_web/components/core_components.ex:485
+#: lib/tokengate_web/components/core_components.ex:488
 #, elixir-autogen, elixir-format
 msgid "Actions"
 msgstr ""
@@ -394,7 +394,7 @@ msgstr ""
 msgid "Catalog providers cannot be deleted — deactivate it to take it out of the routing (it is recreated on boot)."
 msgstr ""
 
-#: lib/tokengate_web/components/core_components.ex:854
+#: lib/tokengate_web/components/core_components.ex:857
 #: lib/tokengate_web/live/dashboard_live.html.heex:71
 #: lib/tokengate_web/live/dashboard_live.html.heex:637
 #: lib/tokengate_web/live/group_members_live.ex:765
@@ -4708,7 +4708,7 @@ msgstr ""
 msgid "user"
 msgstr ""
 
-#: lib/tokengate_web/components/core_components.ex:637
+#: lib/tokengate_web/components/core_components.ex:640
 #, elixir-autogen, elixir-format
 msgid "Granted by your limit profile"
 msgstr ""
@@ -4719,7 +4719,7 @@ msgstr ""
 msgid "Member exclusive"
 msgstr ""
 
-#: lib/tokengate_web/components/core_components.ex:638
+#: lib/tokengate_web/components/core_components.ex:641
 #, elixir-autogen, elixir-format
 msgid "Removed for this member (click to restore)"
 msgstr ""
@@ -5916,7 +5916,7 @@ msgstr ""
 msgid "In"
 msgstr ""
 
-#: lib/tokengate_web/components/core_components.ex:639
+#: lib/tokengate_web/components/core_components.ex:642
 #, elixir-autogen, elixir-format
 msgid "Individual extra"
 msgstr ""
@@ -6005,7 +6005,7 @@ msgstr ""
 msgid "No data for this model in the selected period."
 msgstr ""
 
-#: lib/tokengate_web/components/core_components.ex:647
+#: lib/tokengate_web/components/core_components.ex:650
 #, elixir-autogen, elixir-format
 msgid "No models available."
 msgstr ""
