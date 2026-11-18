@@ -525,7 +525,7 @@ defmodule TokengateWeb.CoreComponents do
   attr :locked_ids, :list, default: []
   attr :extra_ids, :list, default: []
   attr :denied_ids, :list, default: []
-  attr :empty_text, :string, default: "No hay modelos disponibles."
+  attr :empty_text, :string, default: nil
 
   def model_picker(assigns) do
     ~H"""
@@ -552,7 +552,7 @@ defmodule TokengateWeb.CoreComponents do
           cond do
             model.id in @locked_ids -> gettext("Granted by your limit profile")
             model.id in @denied_ids -> gettext("Removed for this member (click to restore)")
-            model.id in @extra_ids -> "Extra individual"
+            model.id in @extra_ids -> gettext("Individual extra")
             true -> nil
           end
         }
@@ -560,7 +560,7 @@ defmodule TokengateWeb.CoreComponents do
         {model.name}
       </button>
       <p :if={@models == []} class="text-xs text-base-content/40">
-        {@empty_text}
+        {@empty_text || gettext("No models available.")}
       </p>
     </div>
     """

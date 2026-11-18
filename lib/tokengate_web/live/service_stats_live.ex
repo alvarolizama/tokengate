@@ -77,7 +77,7 @@ defmodule TokengateWeb.ServiceStatsLive do
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "No autorizado.")}
+        {:halt, put_flash(socket, :error, gettext("Not authorized."))}
       end
     end)
   end
@@ -225,7 +225,7 @@ defmodule TokengateWeb.ServiceStatsLive do
               {@service.name}
             </h1>
             <p class="text-sm text-base-content/70">
-              Presupuesto: {ServiceStatsBody.limit_label(@service)}
+              {gettext("Budget:")} {ServiceStatsBody.limit_label(@service)}
             </p>
           </div>
         </header>

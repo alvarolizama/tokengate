@@ -277,7 +277,7 @@ defmodule TokengateWeb.LabsLive do
           <:subtitle>{gettext("Who built each model. Builtins come from models.dev.")}</:subtitle>
           <:actions>
             <.button phx-click="new_lab" id="new-lab-btn">
-              <.icon name="hero-plus" class="w-4 h-4" /> Nuevo lab custom
+              <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New custom lab")}
             </.button>
           </:actions>
         </.header>
@@ -373,7 +373,7 @@ defmodule TokengateWeb.LabsLive do
                 field={@form[:name]}
                 type="text"
                 label={gettext("Name")}
-                placeholder="Mi Laboratorio"
+                placeholder={gettext("My Lab")}
                 required
               />
               <.input
@@ -391,7 +391,7 @@ defmodule TokengateWeb.LabsLive do
               <.input
                 field={@form[:logo_url]}
                 type="url"
-                label="Logo (URL, opcional)"
+                label={gettext("Logo (URL, optional)")}
                 placeholder="https://…/logo.svg"
                 hint={gettext("If the lab has no remote logo, the icon below is used.")}
               />

@@ -37,7 +37,7 @@
       <.icon name="hero-key" class="w-5 h-5 shrink-0" />
       <div class="flex-1">
         <p class="font-semibold">
-          {gettext("Nueva clave generada para %{group}", group: @new_token_group)}
+          {gettext("New key generated for %{group}", group: @new_token_group)}
         </p>
         <div class="relative mt-2">
           <code
@@ -49,14 +49,15 @@
           <button
             type="button"
             id="copy-token-btn"
-            aria-label={gettext("Copiar la clave al portapapeles")}
-            title={gettext("Copiar la clave al portapapeles")}
+            aria-label={gettext("Copy the key to the clipboard")}
+            title={gettext("Copy the key to the clipboard")}
             phx-hook=".CopyToken"
             data-source="new-token-value"
+            data-copied-label={gettext("Copied!")}
             class="absolute right-2 top-1/2 -translate-y-1/2 btn btn-xs btn-ghost"
           >
             <.icon name="hero-clipboard-document" class="w-3.5 h-3.5" />
-            <span data-copy-label>{gettext("Copiar")}</span>
+            <span data-copy-label>{gettext("Copy")}</span>
           </button>
         </div>
         <p class="text-xs mt-2 opacity-80">
@@ -67,7 +68,7 @@
         phx-click="dismiss_token"
         class="btn btn-sm btn-ghost"
         id="dismiss-token-btn"
-        aria-label={gettext("Cerrar")}
+        aria-label={gettext("Close")}
       >
         <.icon name="hero-x-mark" class="w-4 h-4" />
       </button>
@@ -75,7 +76,7 @@
 
     <%!-- Copy hook for the one-time token. It copies the VISIBLE token and
          swaps only the label span, so the clipboard icon survives the
-         "¡Copiado!" feedback — the global CopyToClipboard hook rewrites the
+         "Copied!" feedback — the global CopyToClipboard hook rewrites the
          button's whole textContent and eats the icon after the first click. --%>
     <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyToken">
       export default {
@@ -88,7 +89,7 @@
               if (!label || label.dataset.copied) return
               const original = label.textContent
               label.dataset.copied = "true"
-              label.textContent = "¡Copiado!"
+              label.textContent = this.el.dataset.copiedLabel || "Copied!"
               setTimeout(() => {
                 label.textContent = original
                 delete label.dataset.copied
@@ -146,7 +147,7 @@
                       id={"manage-keys-#{t.group.id}"}
                       title={gettext("View, create and revoke your API keys")}
                     >
-                      <.icon name="hero-key" class="w-3.5 h-3.5" /> {gettext("Gestionar llaves")}
+                      <.icon name="hero-key" class="w-3.5 h-3.5" /> {gettext("Manage keys")}
                     </button>
                   </div>
                   <div class="flex items-center gap-1" id={"api-key-row-#{t.membership.id}"}>
@@ -158,7 +159,7 @@
 
                 <%= if t.api_key && t.api_key.status == "active" do %>
                   <p class="text-xs text-base-content/40 mt-1">
-                    {gettext("Creada el %{date}",
+                    {gettext("Created on %{date}",
                       date: format_date(t.api_key.inserted_at, @timezone)
                     )}
                   </p>
@@ -170,16 +171,18 @@
                       phx-value-id={t.membership.id}
                       data-confirm={
                         gettext(
-                          "¿Revocar esta clave? Se emite una nueva y este token deja de funcionar."
+                          "Revoke this key? A new one is issued and this token stops working."
                         )
                       }
                       class="btn btn-sm btn-primary"
                       id={"revoke-#{t.membership.id}"}
                       title={
-                        gettext("Revocar: emite una clave nueva y anula la anterior al instante.")
+                        gettext(
+                          "Revoke: issues a new key and voids the previous one immediately."
+                        )
                       }
                     >
-                      <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("Revocar")}
+                      <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("Revoke")}
                     </button>
 
                     <%!-- Delete = soft-hide: it leaves the listings and the
@@ -189,18 +192,18 @@
                       phx-value-id={t.membership.id}
                       data-confirm={
                         gettext(
-                          "¿Borrar esta clave? Desaparece de los listados y su token deja de funcionar; el consumo histórico se conserva."
+                          "Delete this key? It disappears from the listings and its token stops working; historical consumption is preserved."
                         )
                       }
                       class="btn btn-sm btn-ghost text-error"
                       id={"hide-#{t.membership.id}"}
                       title={
                         gettext(
-                          "Borrar: oculta la clave de todas las superficies y conserva el consumo histórico."
+                          "Delete: hides the key from every surface and preserves historical consumption."
                         )
                       }
                     >
-                      <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Borrar")}
+                      <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Delete key")}
                     </button>
                   </div>
 
@@ -209,13 +212,13 @@
                     id={"key-actions-help-#{t.membership.id}"}
                   >
                     {gettext(
-                      "Revocar emite una clave nueva y anula la anterior · Borrar oculta la clave de los listados y conserva el consumo histórico."
+                      "Revoke issues a new key and voids the previous one · Delete hides the key from the listings and preserves historical consumption."
                     )}
                   </p>
                 <% else %>
                   <p class="text-xs text-base-content/40 mt-1">
                     {if t.api_key,
-                      do: gettext("Clave revocada"),
+                      do: gettext("Key revoked"),
                       else: gettext("No key generated")}
                   </p>
                   <div class="mt-3">
@@ -225,7 +228,7 @@
                       class="btn btn-sm btn-primary"
                       id={"generate-#{t.membership.id}"}
                     >
-                      <.icon name="hero-key" class="w-4 h-4" /> {gettext("Generar clave")}
+                      <.icon name="hero-key" class="w-4 h-4" /> {gettext("Generate key")}
                     </button>
                   </div>
                 <% end %>
@@ -288,7 +291,9 @@
                     {gettext("Supervised services")}
                   </h3>
                   <p class="text-xs text-base-content/50 mt-0.5">
-                    {@supervised_services_count} servicio(s) asignado(s) · Vista de solo lectura
+                    {gettext("%{count} assigned service(s) · Read-only view",
+                      count: @supervised_services_count
+                    )}
                   </p>
                 </div>
                 <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">

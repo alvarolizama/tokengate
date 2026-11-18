@@ -36,7 +36,7 @@ defmodule TokengateWeb.GroupMembersLive do
         # to the list, never a dead LiveView.
         {:ok,
          socket
-         |> put_flash(:error, gettext("Perfil de límites no encontrado."))
+         |> put_flash(:error, gettext("Limit profile not found."))
          |> redirect(to: "/budget/profiles")}
 
       group ->
@@ -599,7 +599,7 @@ defmodule TokengateWeb.GroupMembersLive do
                   {gettext("Spend/month")}
                 </p>
                 <p class="text-lg font-bold text-success">${format_decimal(@group_monthly_spend)}</p>
-                <p class="text-xs text-base-content/40">{gettext("actual")}</p>
+                <p class="text-xs text-base-content/40">{gettext("current")}</p>
               </div>
             </div>
           </div>
@@ -769,7 +769,6 @@ defmodule TokengateWeb.GroupMembersLive do
                     denied_ids={denied_model_ids(@denied_models, member.id)}
                     toggle_event="toggle_extra_model"
                     target_value={member.id}
-                    empty_text="No hay modelos disponibles."
                   />
                 </div>
 

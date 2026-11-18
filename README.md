@@ -49,7 +49,7 @@ Spanish-only.
 
 ## Routing (proxy API)
 
-The public surface is exactly these seven routes:
+The public surface is exactly these eight routes:
 
 | Route | What it serves |
 |---|---|
@@ -60,6 +60,7 @@ The public surface is exactly these seven routes:
 | `POST /v1/audio/speech` | Text-to-speech passthrough (audio bytes back) |
 | `POST /v1/images/generations` | Image generation passthrough |
 | `POST /v1/decisions` | The decision surface, in the OpenAI Decisions shape (`input` + ordered questions) |
+| `POST /v1/rerank` | Rerank — canonical contract in and out, five upstream wires behind it |
 
 - **Model aliases + type routing** — clients ask for an alias (`gpt-4o`); it maps
   to one or more provider routes. The model's `model_type` selects the surface —
@@ -87,6 +88,21 @@ The public surface is exactly these seven routes:
   immediately; other errors retry the provider before moving on. Per-credential
   breaker with configurable threshold/cooldown. Every upstream attempt of one
   client request carries the same generated `Idempotency-Key`.
+- **Rerank (`/v1/rerank`)** — one canonical contract for every backend:
+  request `{model, query, documents, top_n}`, response
+  `{"results": [{"index", "relevance_score"}]}`. `documents` is a non-empty array
+  of strings (or objects carrying `text`; only the text is forwarded) and
+  `index` is the position in the array the caller sent, so results map back
+  without a document round-trip. Fireworks, OpenRouter, NaN, Helmcode and a
+  local oMLX host all answer through that same shape — the gateway absorbs each
+  vendor's envelope (`data[]`/`results[]`, Fireworks `usage`, Helmcode
+  `meta.billed_units`) and drops its extras. Billing follows the lane's price:
+  `per_1m_tokens` when the upstream reports token counters (the query plus every
+  document), with a flat `per_request` price as the override for upstreams that
+  bill per call. A 2xx that carries no result list is a gateway error, never an
+  empty ranking. The local **oMLX** lane is a *custom* provider (never a
+  builtin): point it at an oMLX host with a reranker installed, and only the dev
+  demo seeds create one automatically.
 - **Two-gate throttling** — per-subject limits (RPM, concurrency) protect
   TokenGate; per-provider limits (`max_rpm`, `max_concurrent`,
   `max_concurrent_per_user`) protect the upstream key — every credential of a
@@ -152,8 +168,8 @@ The public surface is exactly these seven routes:
 
 | Page | What it does |
 |---|---|
-| `/dashboard` | Personal live consumption, period selector, the user's API keys with create/rename/rotate/revoke, supervised-services shortcut |
-| `/stats` | Analytics hub — Live pulse + tabs: Overview, Providers (tier/score ranking), Models, Limit profiles, Users, Services. One period selector — **Today / This week / This month / Last month / 30 days** — shared by the hub and every detail page, with the choice in the URL so it survives bookmarks and refresh; role-scoped, previous-period deltas, CSV export (`/stats/export`) |
+| `/dashboard` | Personal live consumption, period selector, the user's API keys (create, rename, revoke → new key, delete → soft-hide) with the one-time token shown once, supervised-services shortcut |
+| `/stats` | Analytics hub — Live pulse + tabs: Overview, Providers (tier/score ranking), Models, Limit profiles, Users, Services. One period selector — **Today / Yesterday / This week / 30 days** — shared by the hub and every detail page, with the choice in the URL (`?period=today|yesterday|week|30d`) so it survives bookmarks and refresh, and an out-of-set value degrades to the default (`week`) instead of being reinterpreted; role-scoped, previous-period deltas, CSV export (`/stats/export`) |
 | `/calculator` | Real provider spend vs an estimated cost from custom pricing (input/cache/output per M + cache-hit rate) |
 | `/catalog/labs` | Labs catalog — read-only models.dev labs + operator **custom** labs (name, key, icon/logo) |
 | `/catalog/providers` | Provider CRUD with multiple credentials each; per-provider operational limits; custom providers declare their capabilities (chat/decisions/embeddings/audio/image) and can override the upstream path per capability; billing surface label |
@@ -192,9 +208,16 @@ What the app actually enforces today — no more, no less:
   plug and an `on_mount`); the supervised-services area is granted by a live
   `service_supervisors` row, not by role. Impersonation is admin-only, audited
   start and stop, and the root admin can never be impersonated.
-- **API keys** — 192 bits from `:crypto.strong_rand_bytes/1`, shown **once**,
-  stored as SHA-256, revocable and rotatable individually; the auth cache
-  invalidates by key, member, group or user on every write that matters.
+- **API keys** — 192 bits from `:crypto.strong_rand_bytes/1`, shown **once**
+  (the plaintext is never stored or re-readable), stored as SHA-256; the auth
+  cache invalidates by key, member, group or user on every write that matters.
+  The lifecycle has three verbs, identical from the dashboard, the user panel
+  and the service panel: **rename** (label only, audited `api_key.rename` with
+  old and new label), **revoke** = issue a new key and void the previous one in
+  one transaction (the old token dies, the new plaintext is shown once), and
+  **delete** = soft-hide (`hidden_at`): the row disappears from every listing
+  and its token stops working, but `request_logs` keep their attribution
+  because `request_logs.api_key_id` has no FK to `api_keys`.
 
 **Perimeter**
 
@@ -313,7 +336,9 @@ mix ecto.demo    # priv/repo/demo_seeds.exs — idempotent, safe to re-run
 Seeds 31 days of synthetic traffic (~7.7k request logs) plus the full surface
 around it: 12 demo users and 4 limit profiles (one unlimited, one deliberately
 over-budget), 3 machine services (own cap / one-shot top-up / unlimited) with
-supervisors, 2 custom providers + credentials in `error`/`disabled` states,
+supervisors, 3 custom providers (including the local **oMLX** rerank lane, which
+is a custom row — never a builtin, so production never seeds one) plus
+credentials in `error`/`disabled` states,
 11 models with manual pricing and exclusive routes (member / profile / service),
 credit top-ups (active, drained, expired), observability webhooks, a custom lab,
 and a month of audit entries. The hourly metrics rollup is rebuilt for the whole

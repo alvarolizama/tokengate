@@ -188,7 +188,7 @@ defmodule TokengateWeb.TopupsLive do
        |> assign(:owner_results, [])
        |> assign(:form, to_form(Topups.change_topup(topup), as: :topup))}
     else
-      _ -> {:noreply, put_flash(socket, :error, gettext("Top-up no encontrado."))}
+      _ -> {:noreply, put_flash(socket, :error, gettext("Top-up not found."))}
     end
   end
 
@@ -289,7 +289,7 @@ defmodule TokengateWeb.TopupsLive do
           {:noreply, put_flash(socket, :error, gettext("Could not change the status."))}
       end
     else
-      _ -> {:noreply, put_flash(socket, :error, gettext("Top-up no encontrado."))}
+      _ -> {:noreply, put_flash(socket, :error, gettext("Top-up not found."))}
     end
   end
 
@@ -308,7 +308,7 @@ defmodule TokengateWeb.TopupsLive do
           {:noreply, put_flash(socket, :error, gettext("Could not revoke."))}
       end
     else
-      _ -> {:noreply, put_flash(socket, :error, gettext("Top-up no encontrado."))}
+      _ -> {:noreply, put_flash(socket, :error, gettext("Top-up not found."))}
     end
   end
 
@@ -388,7 +388,7 @@ defmodule TokengateWeb.TopupsLive do
         {:noreply,
          socket
          |> assign(:form_token, Ecto.UUID.generate())
-         |> put_flash(:error, gettext("Top-up no encontrado."))}
+         |> put_flash(:error, gettext("Top-up not found."))}
     end
   end
 

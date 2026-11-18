@@ -89,9 +89,7 @@ defmodule TokengateWeb.StatsHelpers do
   def format_tps(n) when is_integer(n), do: to_string(n)
 
   def period_label("today"), do: gettext("Today")
-  # Spanish msgid on purpose: the selector reads "Ayer" in every locale until
-  # W15 extracts and translates it (the fallback is the msgid).
-  def period_label("yesterday"), do: gettext("Ayer")
+  def period_label("yesterday"), do: gettext("Yesterday")
   def period_label("week"), do: gettext("This week")
   # Legacy labels for the monthly windows the pending surfaces still show
   # (dashboard/stats/calculator migrate in their own phase); not in the set.

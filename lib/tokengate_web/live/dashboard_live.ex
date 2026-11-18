@@ -200,7 +200,7 @@ defmodule TokengateWeb.DashboardLive do
 
     case find_membership(socket, member_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, gettext("No autorizado."))}
+        {:noreply, put_flash(socket, :error, gettext("Not authorized."))}
 
       %{api_key: nil} ->
         {:noreply, put_flash(socket, :error, gettext("This membership has no key."))}
@@ -220,7 +220,7 @@ defmodule TokengateWeb.DashboardLive do
              |> assign(:new_token_group, member.group.name)
              |> reload_personal_data(user)
              |> reload_open_keys_panel(user)
-             |> put_flash(:info, gettext("Clave revocada. Se emitió una nueva: cópiala ahora."))}
+             |> put_flash(:info, gettext("Key revoked. A new one was issued: copy it now."))}
 
           {:error, _reason} ->
             {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
@@ -235,7 +235,7 @@ defmodule TokengateWeb.DashboardLive do
 
     case find_membership(socket, member_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, gettext("No autorizado."))}
+        {:noreply, put_flash(socket, :error, gettext("Not authorized."))}
 
       %{api_key: nil} ->
         {:noreply, put_flash(socket, :error, gettext("This membership has no key."))}
@@ -252,7 +252,7 @@ defmodule TokengateWeb.DashboardLive do
              socket
              |> reload_personal_data(user)
              |> reload_open_keys_panel(user)
-             |> put_flash(:info, gettext("Clave borrada."))}
+             |> put_flash(:info, gettext("Key deleted."))}
 
           {:error, _reason} ->
             {:noreply, put_flash(socket, :error, gettext("Could not delete the key."))}
@@ -267,7 +267,7 @@ defmodule TokengateWeb.DashboardLive do
 
     case find_membership(socket, member_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, gettext("No autorizado."))}
+        {:noreply, put_flash(socket, :error, gettext("Not authorized."))}
 
       member ->
         {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
@@ -386,7 +386,7 @@ defmodule TokengateWeb.DashboardLive do
       {:noreply,
        socket
        |> assign(:new_key_token, token)
-       |> put_flash(:info, gettext("Clave revocada. Se emitió una nueva: cópiala ahora."))
+       |> put_flash(:info, gettext("Key revoked. A new one was issued: copy it now."))
        |> load_user_keys(user.id)
        |> reload_personal_data(user)}
     else
@@ -410,7 +410,7 @@ defmodule TokengateWeb.DashboardLive do
 
       {:noreply,
        socket
-       |> put_flash(:info, gettext("Clave borrada."))
+       |> put_flash(:info, gettext("Key deleted."))
        |> load_user_keys(user.id)
        |> reload_personal_data(user)}
     else
@@ -1039,8 +1039,8 @@ defmodule TokengateWeb.DashboardLive do
     base =
       case period do
         "today" -> gettext("per hour")
-        "yesterday" -> gettext("por hora (ayer)")
-        "week" -> gettext("por hora (semana)")
+        "yesterday" -> gettext("per hour (yesterday)")
+        "week" -> gettext("per hour (week)")
         "30d" -> gettext("per day (30d)")
         _ -> gettext("per hour")
       end

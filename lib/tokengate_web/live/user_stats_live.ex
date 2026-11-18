@@ -83,7 +83,7 @@ defmodule TokengateWeb.UserStatsLive do
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "No autorizado.")}
+        {:halt, put_flash(socket, :error, gettext("Not authorized."))}
       end
     end)
   end
@@ -551,14 +551,14 @@ defmodule TokengateWeb.UserStatsLive do
           <.input
             field={@form[:status_class]}
             type="select"
-            prompt="Todos"
+            prompt={gettext("All")}
             options={[{"2xx", "2xx"}, {"4xx", "4xx"}, {"5xx", "5xx"}]}
             label={gettext("Status")}
           />
           <.input
             field={@form[:streaming]}
             type="select"
-            prompt="Todos"
+            prompt={gettext("All")}
             options={[{gettext("Yes"), "true"}, {gettext("No"), "false"}]}
             label={gettext("Streaming")}
           />
@@ -570,12 +570,12 @@ defmodule TokengateWeb.UserStatsLive do
           <.input
             field={@form[:from]}
             type="date"
-            label="Desde"
+            label={gettext("From")}
           />
           <.input
             field={@form[:to]}
             type="date"
-            label="Hasta"
+            label={gettext("To")}
           />
         </.form>
 
@@ -584,22 +584,22 @@ defmodule TokengateWeb.UserStatsLive do
           <table class="table table-sm">
             <thead>
               <tr>
-                <th>Fecha</th>
-                <th>Modelo</th>
-                <th>Agente</th>
+                <th>{gettext("Date")}</th>
+                <th>{gettext("Model")}</th>
+                <th>{gettext("Agent")}</th>
                 <th>Streaming</th>
-                <th>Estado</th>
+                <th>{gettext("Status")}</th>
                 <th class="text-right">Input</th>
                 <th class="text-right">Output</th>
-                <th class="text-right">Costo</th>
-                <th class="text-right">Latencia</th>
+                <th class="text-right">{gettext("Cost")}</th>
+                <th class="text-right">{gettext("Latency")}</th>
               </tr>
             </thead>
             <tbody id="user-stats-logs" phx-update="stream">
               <tr id="user-stats-logs-empty" class="hidden only:table-row">
                 <td colspan="9" class="text-center py-8 text-base-content/40">
                   <%= if @memberships == [] do %>
-                    Este usuario no tiene membresías — no hay logs que mostrar.
+                    {gettext("This user has no memberships — there are no logs to show.")}
                   <% else %>
                     {gettext("No requests with the current filters.")}
                   <% end %>

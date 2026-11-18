@@ -85,7 +85,7 @@ defmodule TokengateWeb.ProvidersLive do
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, gettext("No autorizado."))}
+        {:halt, put_flash(socket, :error, gettext("Not authorized."))}
       end
     end)
   end
@@ -350,7 +350,7 @@ defmodule TokengateWeb.ProvidersLive do
       :error ->
         {:noreply,
          socket
-         |> put_flash(:error, gettext("El proveedor ya no existe."))
+         |> put_flash(:error, gettext("The provider no longer exists."))
          |> close_paths_modal()
          |> load_providers()}
 
@@ -511,7 +511,7 @@ defmodule TokengateWeb.ProvidersLive do
   # nothing.
   defp provider_gone(socket) do
     socket
-    |> put_flash(:error, gettext("El proveedor ya no existe."))
+    |> put_flash(:error, gettext("The provider no longer exists."))
     |> load_providers()
   end
 
@@ -545,7 +545,7 @@ defmodule TokengateWeb.ProvidersLive do
         {:error, :not_found} ->
           {:noreply,
            socket
-           |> put_flash(:error, gettext("El proveedor ya no existe."))
+           |> put_flash(:error, gettext("The provider no longer exists."))
            |> load_providers()}
 
         {:error, _} ->
@@ -599,7 +599,7 @@ defmodule TokengateWeb.ProvidersLive do
         # drop the form and say so instead of raising NoResultsError.
         {:noreply,
          socket
-         |> put_flash(:error, gettext("El proveedor ya no existe."))
+         |> put_flash(:error, gettext("The provider no longer exists."))
          |> assign(:form, nil)
          |> assign(:editing_provider_id, nil)
          |> load_providers()}
@@ -725,8 +725,8 @@ defmodule TokengateWeb.ProvidersLive do
 
       n ->
         ngettext(
-          "Paths actualizados (%{count} override).",
-          "Paths actualizados (%{count} overrides).",
+          "Paths updated (%{count} override).",
+          "Paths updated (%{count} overrides).",
           n,
           count: n
         )
@@ -976,7 +976,7 @@ defmodule TokengateWeb.ProvidersLive do
                           :if={entry.activated?}
                           class="text-[10px] text-success inline-flex items-center gap-0.5"
                         >
-                          <.icon name="hero-check-circle" class="w-3 h-3" /> {gettext("activo")}
+                          <.icon name="hero-check-circle" class="w-3 h-3" /> {gettext("active")}
                         </span>
                       </span>
                     </div>

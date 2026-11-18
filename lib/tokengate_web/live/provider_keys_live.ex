@@ -189,7 +189,7 @@ defmodule TokengateWeb.ProviderKeysLive do
   end
 
   def handle_event("save_credential", _params, socket) do
-    {:noreply, put_flash(socket, :error, gettext("Falta el formulario de la credencial."))}
+    {:noreply, put_flash(socket, :error, gettext("The credential form is missing."))}
   end
 
   def handle_event("toggle_credential", %{"id" => cred_id}, socket) do
@@ -381,7 +381,7 @@ defmodule TokengateWeb.ProviderKeysLive do
   end
 
   defp credential_missing(socket) do
-    put_flash(socket, :error, gettext("Esta API key no pertenece a este proveedor."))
+    put_flash(socket, :error, gettext("This API key does not belong to this provider."))
   end
 
   # The edit form is built from the row with the secret field cleared: the

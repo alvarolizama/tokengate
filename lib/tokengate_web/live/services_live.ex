@@ -575,7 +575,7 @@ defmodule TokengateWeb.ServicesLive do
        |> load_services()}
     else
       {:error, :not_active} ->
-        {:noreply, put_flash(socket, :error, gettext("Esa clave ya no está activa."))}
+        {:noreply, put_flash(socket, :error, gettext("That key is no longer active."))}
 
       {:error, %Ecto.Changeset{}} ->
         {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
@@ -603,7 +603,7 @@ defmodule TokengateWeb.ServicesLive do
 
       {:noreply,
        socket
-       |> put_flash(:info, gettext("Clave borrada. Su consumo histórico se conserva."))
+       |> put_flash(:info, gettext("Key deleted. Its historical consumption is preserved."))
        |> assign(:editing_key_id, nil)
        |> load_service_keys(service_id)
        |> load_services()}
@@ -806,7 +806,7 @@ defmodule TokengateWeb.ServicesLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Modelos actualizados.")
+         |> put_flash(:info, gettext("Models updated."))
          |> assign(:granted_models, granted_models)}
 
       {:error, _} ->
@@ -929,11 +929,11 @@ defmodule TokengateWeb.ServicesLive do
     Enum.find(assigns.all_services, &(&1.id == assigns.detail_service_id))
   end
 
-  # Sub label for display: name, or "Ilimitado" when the service has no
-  defp limit_label(%{unlimited_spend: true}), do: "Ilimitado"
+  # Sub label for display: the name, or the unlimited marker when the service has no cap
+  defp limit_label(%{unlimited_spend: true}), do: gettext("Unlimited")
 
   defp limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
-    do: "$#{Decimal.to_string(limit)}/mes"
+    do: gettext("$%{amount}/month", amount: Decimal.to_string(limit))
 
   defp limit_label(_service), do: gettext("No budget")
 
@@ -961,7 +961,7 @@ defmodule TokengateWeb.ServicesLive do
                 input_id="service-search"
               />
               <.button phx-click="new_service" id="new-service-btn">
-                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo servicio
+                <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New service")}
               </.button>
             </div>
           </:actions>
@@ -999,7 +999,7 @@ defmodule TokengateWeb.ServicesLive do
               <.input
                 field={@form[:unlimited_spend]}
                 type="checkbox"
-                label="Ilimitado"
+                label={gettext("Unlimited")}
                 hint={gettext("The only path to unlimited; it wins over the cap.")}
               />
             </div>
@@ -1078,7 +1078,6 @@ defmodule TokengateWeb.ServicesLive do
             granted_ids={granted_alias_ids(@granted_models, @models_service_id)}
             toggle_event="toggle_model"
             target_value={@models_service_id}
-            empty_text="No hay modelos disponibles."
           />
           <div class="flex justify-end mt-4">
             <button
@@ -1103,7 +1102,7 @@ defmodule TokengateWeb.ServicesLive do
           <%!-- El límite del servicio viajaba en el título del modal; con el
                título de la primitiva <.modal> va como caption del cuerpo. --%>
           <p class="text-xs text-base-content/50 mb-4">
-            · Límite: {limit_label(detail_service(assigns))}
+            · {gettext("Cap:")} {limit_label(detail_service(assigns))}
           </p>
 
           <%!-- Stats 30d --%>
@@ -1258,11 +1257,11 @@ defmodule TokengateWeb.ServicesLive do
           cancel_button_id="cancel-delete-service"
           warning_intro={gettext("Will be permanently erased:")}
           warning_items={[
-            gettext("Sus claves API (todas las activas y revocadas)"),
-            gettext("Los modelos otorgados al servicio"),
-            gettext("Los supervisores asignados"),
-            gettext("Sus top-ups de crédito"),
-            gettext("Todo su historial de peticiones (request_logs): la FK es ON DELETE CASCADE")
+            gettext("Its API keys (all active and revoked)"),
+            gettext("The models granted to the service"),
+            gettext("The assigned supervisors"),
+            gettext("Its credit top-ups"),
+            gettext("All its request history (request_logs): the FK is ON DELETE CASCADE")
           ]}
         />
 
@@ -1329,7 +1328,7 @@ defmodule TokengateWeb.ServicesLive do
                   <.sort_button
                     event="sort_services"
                     field={:inserted_at}
-                    label="Creado"
+                    label={gettext("Created")}
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -1412,7 +1411,7 @@ defmodule TokengateWeb.ServicesLive do
         title={gettext("Manage the service models")}
       >
         <.icon name="hero-rectangle-stack" class="w-3 h-3" />
-        {length(Map.get(@granted_models, @service.id, []))} modelos
+        {gettext("%{count} models", count: length(Map.get(@granted_models, @service.id, [])))}
       </button>
     </td>
     <td class="text-right text-xs font-mono">

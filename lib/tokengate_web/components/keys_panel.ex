@@ -234,13 +234,13 @@ defmodule TokengateWeb.KeysPanel do
             phx-value-key-id={key.id}
             class="btn btn-xs btn-ghost text-error shrink-0"
             id={"revoke-key-#{key.id}"}
-            title={gettext("Revocar esta clave")}
-            aria-label={gettext("Revocar esta clave")}
+            title={gettext("Revoke this key")}
+            aria-label={gettext("Revoke this key")}
             data-confirm={
-              gettext("¿Revocar esta clave? Se emite una nueva y este token deja de funcionar.")
+              gettext("Revoke this key? A new one is issued and this token stops working.")
             }
           >
-            {gettext("Revocar")}
+            {gettext("Revoke")}
           </button>
           <button
             :if={@hide_event}
@@ -249,15 +249,15 @@ defmodule TokengateWeb.KeysPanel do
             phx-value-key-id={key.id}
             class="btn btn-xs btn-ghost shrink-0"
             id={"hide-key-#{key.id}"}
-            title={gettext("Borrar esta clave")}
-            aria-label={gettext("Borrar esta clave")}
+            title={gettext("Delete this key")}
+            aria-label={gettext("Delete this key")}
             data-confirm={
               gettext(
-                "¿Borrar esta clave? Desaparece de los listados y su token deja de funcionar; el consumo histórico se conserva."
+                "Delete this key? It disappears from the listings and its token stops working; historical consumption is preserved."
               )
             }
           >
-            {gettext("Borrar")}
+            {gettext("Delete key")}
           </button>
         </div>
       </div>
@@ -299,7 +299,7 @@ defmodule TokengateWeb.KeysPanel do
       <div class="flex items-end gap-2">
         <div class="flex-1">
           <label class="label py-1" for="new-key-label">
-            <span class="label-text text-xs">Nueva clave</span>
+            <span class="label-text text-xs">{gettext("New key")}</span>
           </label>
           <input
             type="text"
@@ -310,7 +310,7 @@ defmodule TokengateWeb.KeysPanel do
           />
         </div>
         <button type="submit" class="btn btn-primary btn-sm" id="create-key-btn">
-          Crear clave
+          {gettext("Create key")}
         </button>
       </div>
     </.form>

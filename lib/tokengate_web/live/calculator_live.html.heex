@@ -3,11 +3,11 @@
     <%!-- Header ──────────────────────────────────────────────────────────── --%>
     <div class="flex items-center justify-between flex-wrap gap-4">
       <.header>
-        Calculadora de Costos
+        {gettext("Cost calculator")}
         <:subtitle>
           <span class="inline-flex items-center gap-2">
             <.icon name="hero-calculator" class="w-4 h-4 text-base-content/50" />
-            Compara gasto real vs estimado por modelo, lane y key
+            {gettext("Compares real vs estimated spend by model, lane and key")}
           </span>
         </:subtitle>
         <:actions>
@@ -27,13 +27,13 @@
             <div class="space-y-4">
               <div class="space-y-1.5">
                 <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                  Modelo
+                  {gettext("Model")}
                 </label>
                 <select
                   name="model_id"
                   class="select select-bordered select-sm w-full"
                 >
-                  <option value="">Selecciona un modelo…</option>
+                  <option value="">{gettext("Pick a model…")}</option>
                   <%= for model <- @models do %>
                     <option value={model.id} selected={model.id == @selected_model_id}>
                       {model.name}
@@ -54,7 +54,7 @@
                   name="lane_id"
                   class="select select-bordered select-sm w-full"
                 >
-                  <option value="">Todos los providers</option>
+                  <option value="">{gettext("All providers")}</option>
                   <%= for lane <- @lanes do %>
                     <option value={lane.id} selected={lane.id == @selected_lane_id}>
                       {lane_label(lane)}
@@ -77,7 +77,7 @@
                   name="credential_id"
                   class="select select-bordered select-sm w-full"
                 >
-                  <option value="">Todas las keys del pool</option>
+                  <option value="">{gettext("All pool keys")}</option>
                   <%= for credential <- pool_credentials(pool_lane) do %>
                     <option
                       value={credential.id}
@@ -95,13 +95,16 @@
               <%!-- Custom pricing, stacked for the narrow column --%>
               <div class="pt-4 border-t border-base-200 space-y-3">
                 <p class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                  Precios custom
+                  {gettext("Custom prices")}
                 </p>
                 <p class="text-[11px] text-base-content/40 -mt-1">
                   <%= if @lane_non_token do %>
-                    El lane cobra por unidad, no por tokens — sin estimado
+                    {gettext("The lane bills per unit, not per token — no estimate")}
                   <% else %>
-                    Por {Pricing.rate_suffix(@lane_unit)} de tokens — solo afecta la línea "Estimado (custom)"
+                    {gettext(
+                      "Per %{unit} of tokens — only affects the \"Estimated (custom)\" line",
+                      unit: Pricing.rate_suffix(@lane_unit)
+                    )}
                   <% end %>
                 </p>
 
@@ -111,7 +114,10 @@
                   class="alert alert-warning text-[11px] py-2 px-3"
                 >
                   <span>
-                    Este lane cobra por unidad ({Pricing.label(@lane_unit)}), no por tokens: el estimado no aplica. Solo se muestra el gasto real.
+                    {gettext(
+                      "This lane bills per unit (%{unit}), not per token: the estimate does not apply. Only real spend is shown.",
+                      unit: Pricing.label(@lane_unit)
+                    )}
                   </span>
                 </div>
 
@@ -130,7 +136,7 @@
                 <div class="space-y-3">
                   <div class="space-y-1.5">
                     <label class="text-xs font-medium text-base-content/60" for="cost-input">
-                      Entrada
+                      {gettext("Input price")}
                     </label>
                     <div class="join w-full">
                       <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
@@ -153,7 +159,7 @@
 
                   <div class="space-y-1.5">
                     <label class="text-xs font-medium text-base-content/60" for="cost-cache">
-                      Cache
+                      {gettext("Cache price")}
                     </label>
                     <div class="join w-full">
                       <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
@@ -176,7 +182,7 @@
 
                   <div class="space-y-1.5">
                     <label class="text-xs font-medium text-base-content/60" for="cost-cache-write">
-                      Escritura de cache
+                      {gettext("Cache write price")}
                     </label>
                     <div class="join w-full">
                       <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
@@ -199,7 +205,7 @@
 
                   <div class="space-y-1.5">
                     <label class="text-xs font-medium text-base-content/60" for="cost-output">
-                      Salida
+                      {gettext("Output price")}
                     </label>
                     <div class="join w-full">
                       <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
@@ -241,7 +247,7 @@
               <:sub :if={
                 Decimal.compare(@summary.total_real, 0) == :eq and @summary.total_requests > 0
               }>
-                El proveedor no reporta costo
+                {gettext("The provider reports no cost")}
               </:sub>
             </.kpi_card>
 
@@ -249,7 +255,7 @@
             <.kpi_card
               :if={!@lane_non_token}
               id="calc-estimated"
-              label="Estimado (custom)"
+              label={gettext("Estimated (custom)")}
               icon="hero-calculator"
               accent="primary"
               title={gettext("Estimated cost with the custom prices on the left")}
@@ -259,10 +265,12 @@
 
             <.kpi_card
               id="calc-difference"
-              label="Diferencia"
+              label={gettext("Difference")}
               icon="hero-scale"
               accent={difference_accent(@summary.difference)}
-              title="Real − Estimado (custom): positivo = pagaste más de lo estimado"
+              title={
+                gettext("Real − Estimated (custom): positive = you paid more than estimated")
+              }
             >
               <span :if={@summary.difference} class={difference_class(@summary.difference)}>
                 {difference_sign(@summary.difference)}{abs_decimal(@summary.difference)}
@@ -270,7 +278,9 @@
               <span :if={is_nil(@summary.difference)} class="text-base-content/40">—</span>
               <:sub :if={difference_pct(@summary)}>
                 <span class={difference_class(@summary.difference)}>
-                  {difference_sign(@summary.difference)}{difference_pct(@summary)}% vs estimado
+                  {difference_sign(@summary.difference)}{difference_pct(@summary)}% {gettext(
+                    "vs estimated"
+                  )}
                 </span>
               </:sub>
             </.kpi_card>
@@ -319,7 +329,7 @@
           <div class="card bg-base-100 border border-base-300 shadow-sm" id="calc-empty">
             <div class="card-body">
               <p class="text-sm text-base-content/40 py-12 text-center">
-                Selecciona un modelo para ver la comparativa de gasto real vs estimado.
+                {gettext("Pick a model to see the real vs estimated spend comparison.")}
               </p>
             </div>
           </div>
@@ -330,7 +340,7 @@
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body">
               <p class="text-sm text-base-content/40 py-8 text-center">
-                Sin datos para este modelo en el periodo seleccionado.
+                {gettext("No data for this model in the selected period.")}
               </p>
             </div>
           </div>
@@ -343,7 +353,7 @@
             <div class="card-body space-y-3 p-4 sm:p-6">
               <div class="flex items-center justify-between flex-wrap gap-2">
                 <h3 class="text-sm font-semibold text-base-content">
-                  Comparativa: Gasto Real vs Estimado
+                  {gettext("Comparison: Real vs Estimated spend")}
                 </h3>
                 <div class="flex items-center gap-4 text-xs">
                   <span class="inline-flex items-center gap-1.5">
@@ -352,7 +362,7 @@
                   </span>
                   <span :if={!@lane_non_token} class="inline-flex items-center gap-1.5">
                     <span class="w-3 h-3 rounded-sm bg-primary"></span>
-                    <span class="text-base-content/60">Estimado (custom)</span>
+                    <span class="text-base-content/60">{gettext("Estimated (custom)")}</span>
                   </span>
                 </div>
               </div>
@@ -441,14 +451,14 @@
                     else: "grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr_1fr]"
                   )
                 ]}>
-                  <span>Hora</span>
+                  <span>{gettext("Hour")}</span>
                   <span class="text-right">Requests</span>
-                  <span class="text-right">Entrada</span>
+                  <span class="text-right">{gettext("In")}</span>
                   <span class="text-right">Cache read</span>
                   <span class="text-right">Cache write</span>
-                  <span class="text-right">Salida</span>
+                  <span class="text-right">{gettext("Out")}</span>
                   <span class="text-right">Real</span>
-                  <span :if={!@lane_non_token} class="text-right">Estimado (custom)</span>
+                  <span :if={!@lane_non_token} class="text-right">{gettext("Estimated (custom)")}</span>
                 </div>
                 <div
                   :for={row <- @chart_data}

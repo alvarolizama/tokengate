@@ -150,7 +150,7 @@ defmodule TokengateWeb.GroupsLive do
   def handle_event("edit_models", %{"id" => group_id}, socket) do
     case fetch_group(group_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, gettext("Perfil de límites no encontrado."))}
+        {:noreply, put_flash(socket, :error, gettext("Limit profile not found."))}
 
       group ->
         {:noreply, assign(socket, :editing_models_group_id, group.id)}
@@ -164,7 +164,7 @@ defmodule TokengateWeb.GroupsLive do
   def handle_event("edit_group", %{"id" => group_id}, socket) do
     case fetch_group(group_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, gettext("Perfil de límites no encontrado."))}
+        {:noreply, put_flash(socket, :error, gettext("Limit profile not found."))}
 
       group ->
         changeset = Accounts.change_group(group)
@@ -183,7 +183,7 @@ defmodule TokengateWeb.GroupsLive do
   def handle_event("delete_group", %{"id" => group_id}, socket) do
     case fetch_group(group_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, gettext("Perfil de límites no encontrado."))}
+        {:noreply, put_flash(socket, :error, gettext("Limit profile not found."))}
 
       group ->
         delete_group(socket, group)
@@ -195,7 +195,7 @@ defmodule TokengateWeb.GroupsLive do
   def handle_event("toggle_model", %{"target-id" => group_id, "model-id" => model_id}, socket) do
     case fetch_group(group_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, gettext("Perfil de límites no encontrado."))}
+        {:noreply, put_flash(socket, :error, gettext("Limit profile not found."))}
 
       group ->
         toggle_group_model(socket, group.id, model_id)
@@ -311,7 +311,7 @@ defmodule TokengateWeb.GroupsLive do
   defp save_group(socket, group_id, group_params) when is_binary(group_id) do
     case fetch_group(group_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, gettext("Perfil de límites no encontrado."))}
+        {:noreply, put_flash(socket, :error, gettext("Limit profile not found."))}
 
       group ->
         update_group(socket, group, group_params)
@@ -472,7 +472,6 @@ defmodule TokengateWeb.GroupsLive do
                 granted_ids={Map.get(@granted_models, @editing_models_group_id, [])}
                 toggle_event="toggle_model"
                 target_value={@editing_models_group_id}
-                empty_text="No hay modelos disponibles."
               />
               <div class="flex justify-end mt-4">
                 <button

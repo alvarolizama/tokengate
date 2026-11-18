@@ -357,11 +357,11 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
             <h1 class="text-lg font-semibold leading-8 mt-1 flex items-center gap-2">
               {@service.name}
               <span class="badge badge-ghost badge-sm" id="supervised-service-readonly">
-                <.icon name="hero-eye" class="w-3 h-3 mr-1" /> Solo lectura
+                <.icon name="hero-eye" class="w-3 h-3 mr-1" /> {gettext("Read-only")}
               </span>
             </h1>
             <p class="text-sm text-base-content/70">
-              Presupuesto: {limit_label(@service)} · {period_label(@period)}
+              {gettext("Budget:")} {limit_label(@service)} · {period_label(@period)}
             </p>
           </div>
         </header>

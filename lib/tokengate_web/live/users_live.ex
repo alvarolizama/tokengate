@@ -589,7 +589,7 @@ defmodule TokengateWeb.UsersLive do
            |> assign(:new_key_token, token)
            |> put_flash(
              :info,
-             gettext("Clave revocada. Copia la nueva ahora: no se vuelve a mostrar.")
+             gettext("Key revoked. Copy the new one now: it is not shown again.")
            )
            |> load_user_keys(api_key.user_id)}
 
@@ -661,7 +661,7 @@ defmodule TokengateWeb.UsersLive do
 
       {:noreply,
        socket
-       |> put_flash(:info, gettext("Clave borrada."))
+       |> put_flash(:info, gettext("Key deleted."))
        |> load_user_keys(socket.assigns.keys_user_id)}
     else
       _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
@@ -1192,10 +1192,10 @@ defmodule TokengateWeb.UsersLive do
                 ]}
                 id="toggle-today-spend"
               >
-                <.icon name="hero-currency-dollar" class="w-4 h-4" /> Gasto hoy
+                <.icon name="hero-currency-dollar" class="w-4 h-4" /> {gettext("Spend today")}
               </button>
               <.button phx-click="new_user" id="new-user-btn">
-                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo usuario
+                <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New user")}
               </.button>
             </div>
           </:actions>
@@ -1230,7 +1230,7 @@ defmodule TokengateWeb.UsersLive do
             <.input
               field={@form[:global_role]}
               type="select"
-              label="Rol"
+              label={gettext("Role")}
               options={[{gettext("User"), "user"}, {gettext("Administrator"), "admin"}]}
               prompt={gettext("Pick a role")}
             />
@@ -1269,7 +1269,7 @@ defmodule TokengateWeb.UsersLive do
             <.input
               field={@form[:global_role]}
               type="select"
-              label="Rol"
+              label={gettext("Role")}
               options={[{gettext("User"), "user"}, {gettext("Administrator"), "admin"}]}
             />
             <.input
@@ -1397,7 +1397,7 @@ defmodule TokengateWeb.UsersLive do
                   <.sort_button
                     event="sort_users"
                     field={:role}
-                    label="Rol"
+                    label={gettext("Role")}
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -1425,7 +1425,7 @@ defmodule TokengateWeb.UsersLive do
                   <.sort_button
                     event="sort_users"
                     field={:inserted_at}
-                    label="Creado"
+                    label={gettext("Created")}
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -1578,7 +1578,7 @@ defmodule TokengateWeb.UsersLive do
           gettext("Limit profile memberships"),
           gettext("API keys"),
           gettext(
-            "El historial de consumo (request_logs) NO se borra: se conserva sin atribución al usuario"
+            "Consumption history (request_logs) is NOT deleted: it is kept without attribution to the user"
           ),
           gettext("Audit logs will lose the user attribution")
         ]}

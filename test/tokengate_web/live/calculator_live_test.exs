@@ -170,19 +170,33 @@ defmodule TokengateWeb.CalculatorLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/calculator")
 
-    assert html =~ "Calculadora de Costos"
-    assert html =~ "Precios custom"
+    # Default locale is English: the msgids render as-is.
+    assert html =~ "Cost calculator"
+    assert html =~ "Custom prices"
     # Input groups: label + $ prefix + /1M suffix per price
     assert html =~ ~s(for="cost-input")
-    assert html =~ "Entrada"
-    assert html =~ "Cache"
-    assert html =~ "Salida"
+    assert html =~ "Input price"
+    assert html =~ "Cache write price"
+    assert html =~ "Output price"
     assert html =~ "/1M"
+    refute html =~ "Calculadora de Costos"
+    refute html =~ "Precios custom"
     # El lane y la escritura de cache existen desde el mount
     assert has_element?(view, "#lane-select")
     assert has_element?(view, "#cost-cache-write")
     assert has_element?(view, ~s(#lane-select option[value=""]))
     _ = view
+
+    # The Spanish locale keeps the same wording the surface had before the
+    # msgids moved to English (msgid English -> msgstr es).
+    {:ok, _} = Tokengate.Accounts.update_user_locale(admin, "es")
+    {:ok, view_es, html_es} = live(recycle(conn), ~p"/calculator")
+    assert html_es =~ "Calculadora de Costos"
+    assert html_es =~ "Precios custom"
+    assert html_es =~ "Entrada"
+    assert html_es =~ "Salida"
+    refute html_es =~ "Cost calculator"
+    _ = view_es
   end
 
   test "regular user is redirected from calculator", %{conn: conn} do
@@ -933,7 +947,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
       |> element("#calculator-form")
       |> render_change(%{"model_id" => "not-a-uuid"})
 
-    assert html =~ "Selecciona un modelo"
+    assert html =~ "Pick a model"
     assert has_element?(view, "#calc-empty")
   end
 end

@@ -334,7 +334,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
                   <h3 class="font-semibold text-base-content flex items-center gap-2">
                     {service.name}
                     <span class="badge badge-ghost badge-sm" id={"service-readonly-#{service.id}"}>
-                      <.icon name="hero-eye" class="w-3 h-3 mr-1" /> Solo lectura
+                      <.icon name="hero-eye" class="w-3 h-3 mr-1" /> {gettext("Read-only")}
                     </span>
                   </h3>
 
