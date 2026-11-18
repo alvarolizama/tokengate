@@ -637,12 +637,18 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
       %{user: user, password: password} = register()
       service = service() |> supervised(user)
 
+      # Con tráfico la tabla del pivote se pinta de verdad (sin filas `.table`
+      # sólo emite su empty-state): el assert es sobre la tabla, no sobre el
+      # hueco.
+      {:ok, _} = log_for(service, %{model_requested: "pivot-model"})
+
       conn = login(conn, user, password)
       {:ok, view, html} = live(conn, ~p"/services/supervised/#{service.id}")
       wait_loaded(view)
 
       refute html =~ "Uso diario por modelo"
       assert has_element?(view, "#service-model-breakdown-table")
+      assert has_element?(view, "#model-breakdown-pivot-model")
       assert has_element?(view, "#supervised-service-readonly")
     end
   end

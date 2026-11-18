@@ -98,6 +98,9 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
            |> assign(:form, to_form(ServiceStatsBody.default_filters(), as: :filter))
            |> assign(:cursor, nil)
            |> assign(:has_more, false)
+           # El stream no es enumerable: `.table` necesita el flag explícito
+           # para el empty-state (lo recalcula `ServiceStatsBody.apply_logs/3`).
+           |> assign(:logs_empty?, true)
            |> assign(:page_size, @page_size)
            |> assign(:summary_refresh_scheduled, false)
            |> assign(:load_error, nil)
@@ -193,7 +196,10 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
            socket.assigns.timezone,
            socket.assigns.key_filter
          ) do
-      socket = stream_insert(socket, :logs, log, at: 0)
+      socket =
+        socket
+        |> stream_insert(:logs, log, at: 0)
+        |> assign(:logs_empty?, false)
 
       socket =
         if socket.assigns[:summary_refresh_scheduled] do
@@ -396,6 +402,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           form={@form}
           streams={@streams}
           has_more={@has_more}
+          logs_empty?={@logs_empty?}
           logs_id="supervised-service-logs"
           logs_empty_text={gettext("This service has no requests yet.")}
           load_more_id="load-more-supervised-logs"

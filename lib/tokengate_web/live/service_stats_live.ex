@@ -60,6 +60,9 @@ defmodule TokengateWeb.ServiceStatsLive do
       |> assign(:form, to_form(ServiceStatsBody.default_filters(), as: :filter))
       |> assign(:cursor, nil)
       |> assign(:has_more, false)
+      # El stream no es enumerable: `.table` necesita el flag explícito para el
+      # empty-state (lo recalcula `ServiceStatsBody.apply_logs/3`).
+      |> assign(:logs_empty?, true)
       |> assign(:page_size, @page_size)
       |> assign(:summary, ServiceStatsBody.default_summary())
       |> assign(:key_rows, [])
@@ -96,7 +99,10 @@ defmodule TokengateWeb.ServiceStatsLive do
            timezone,
            socket.assigns.key_filter
          ) do
-        socket = stream_insert(socket, :logs, log, at: 0)
+        socket =
+          socket
+          |> stream_insert(:logs, log, at: 0)
+          |> assign(:logs_empty?, false)
 
         # Coalesce summary reloads: at most one service_stats recompute per
         # interval per connected LiveView, regardless of broadcast rate.
@@ -243,6 +249,7 @@ defmodule TokengateWeb.ServiceStatsLive do
           form={@form}
           streams={@streams}
           has_more={@has_more}
+          logs_empty?={@logs_empty?}
         />
       </div>
     </Layouts.dashboard>
