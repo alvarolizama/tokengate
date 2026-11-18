@@ -20,7 +20,7 @@ defmodule TokengateWeb.UsersLive do
   import TokengateWeb.StatsHelpers, only: [budget_cell: 1, format_usd: 1]
 
   alias Tokengate.Accounts
-  alias Tokengate.Accounts.User
+  alias Tokengate.Accounts.{ApiKey, User}
   alias Tokengate.Credits
   alias Tokengate.Metrics.DashboardCache
 
@@ -60,6 +60,7 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:revoked_keys, [])
       |> assign(:keys_spend, %{})
       |> assign(:keys_counts, %{})
+      |> assign(:editing_key_id, nil)
       |> assign(:new_key_token, nil)
       |> assign(:page, 1)
       |> assign(:per_page, @per_page)
@@ -470,15 +471,20 @@ defmodule TokengateWeb.UsersLive do
   ## Events — groups (read-only view modal; memberships are managed per group)
 
   def handle_event("view_groups", %{"id" => user_id}, socket) do
-    user = Accounts.get_user!(user_id)
-    memberships = Accounts.list_group_members_for_user(user_id)
-    group_ids = Enum.map(memberships, & &1.group_id)
+    case fetch_user(user_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, gettext("User not found."))}
 
-    {:noreply,
-     socket
-     |> assign(:editing_groups_user_id, user_id)
-     |> assign(:editing_groups_user_name, user.name || user.email)
-     |> assign(:editing_group_ids, group_ids)}
+      user ->
+        memberships = Accounts.list_group_members_for_user(user.id)
+        group_ids = Enum.map(memberships, & &1.group_id)
+
+        {:noreply,
+         socket
+         |> assign(:editing_groups_user_id, user.id)
+         |> assign(:editing_groups_user_name, user.name || user.email)
+         |> assign(:editing_group_ids, group_ids)}
+    end
   end
 
   def handle_event("cancel_edit_groups", _params, socket) do
@@ -494,7 +500,7 @@ defmodule TokengateWeb.UsersLive do
   # Las keys de un usuario se cargan solo al abrir su modal: el listado de
   # usuarios no paga N+1 por cada fila.
   def handle_event("manage_keys", %{"id" => user_id}, socket) do
-    case Accounts.get_user(user_id) do
+    case fetch_user(user_id) do
       nil ->
         {:noreply, put_flash(socket, :error, gettext("User not found."))}
 
@@ -503,6 +509,7 @@ defmodule TokengateWeb.UsersLive do
          socket
          |> assign(:keys_user_id, user.id)
          |> assign(:keys_user_name, user.name || user.email)
+         |> assign(:editing_key_id, nil)
          |> assign(:new_key_token, nil)
          |> load_user_keys(user.id)}
     end
@@ -516,6 +523,7 @@ defmodule TokengateWeb.UsersLive do
      |> assign(:keys, [])
      |> assign(:revoked_keys, [])
      |> assign(:keys_spend, %{})
+     |> assign(:editing_key_id, nil)
      |> assign(:new_key_token, nil)}
   end
 
@@ -557,53 +565,104 @@ defmodule TokengateWeb.UsersLive do
     end
   end
 
+  # Revocar = emitir una key nueva y anular la anterior (`revoke_and_replace`,
+  # el lifecycle único de W2): el token nuevo se muestra UNA vez en el panel.
+  #
+  # Alcance hermético: el id es del cliente (cast antes de tocar la DB) y la
+  # fila tiene que pertenecer al usuario cuyo panel está abierto. Con
+  # `api_key.user_id == socket.assigns.keys_user_id` a secas, panel cerrado
+  # (nil) + key ajena sin `user_id` también era true (`nil == nil`).
   def handle_event("revoke_user_key", %{"key-id" => api_key_id}, socket) do
-    with %{} = api_key <- Accounts.get_api_key(api_key_id),
-         true <- api_key.user_id == socket.assigns.keys_user_id do
-      case Accounts.revoke_api_key(api_key) do
-        {:ok, _} ->
+    with {:ok, api_key_id} <- Ecto.UUID.cast(api_key_id),
+         %ApiKey{} = api_key <- Accounts.get_api_key(api_key_id),
+         true <- panel_owns_key?(socket, api_key) do
+      case Accounts.revoke_and_replace_api_key(api_key) do
+        {:ok, replacement, token} ->
           audit(socket, "api_key.revoke", "api_key", api_key.id, %{
             "label" => api_key.label,
-            "user_id" => api_key.user_id
+            "user_id" => api_key.user_id,
+            "replacement_id" => replacement.id
           })
 
           {:noreply,
            socket
-           |> put_flash(:info, gettext("Key revoked."))
-           |> load_user_keys(socket.assigns.keys_user_id)}
+           |> assign(:new_key_token, token)
+           |> put_flash(
+             :info,
+             gettext("Clave revocada. Copia la nueva ahora: no se vuelve a mostrar.")
+           )
+           |> load_user_keys(api_key.user_id)}
+
+        {:error, :not_active} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
+          {:noreply, put_flash(socket, :error, gettext("Key not found."))}
       end
     else
       _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
     end
   end
 
-  # Reactivar una key revocada: el token vuelve a valer en el siguiente
-  # request. Scope exacto: la fila debe pertenecer al usuario cuyo panel está
-  # abierto (nil == nil no autoriza) y estar realmente revocada.
-  def handle_event("reactivate_user_key", %{"key-id" => api_key_id}, socket) do
+  # Submit del form inline de rename. Va ANTES del clause del lápiz: su
+  # pattern es un superconjunto (el payload del submit también trae "key-id").
+  #
+  # El contexto hace el chequeo de pertenencia y audita `api_key.rename` con
+  # old/new label (mismo camino que servicios); aquí solo se le pasa el sujeto
+  # del panel y el actor.
+  def handle_event(
+        "rename_user_key",
+        %{"key-id" => key_id, "key" => %{"label" => label}},
+        socket
+      )
+      when is_binary(label) do
+    label = String.trim(label)
+
+    with {:ok, key_id} <- Ecto.UUID.cast(key_id),
+         %ApiKey{} = api_key <- Accounts.get_api_key(key_id),
+         true <- panel_owns_key?(socket, api_key),
+         {:ok, _key} <-
+           Accounts.rename_api_key(api_key, label,
+             user_id: socket.assigns.keys_user_id,
+             actor: socket.assigns.current_user
+           ) do
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Key renamed."))
+       |> assign(:editing_key_id, nil)
+       |> load_user_keys(socket.assigns.keys_user_id)}
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Could not rename the key."))}
+    end
+  end
+
+  # Lápiz de la fila: abre el form inline de rename.
+  def handle_event("rename_user_key", %{"key-id" => key_id}, socket) when is_binary(key_id) do
+    {:noreply, assign(socket, :editing_key_id, key_id)}
+  end
+
+  def handle_event("rename_user_key", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel_rename_user_key", _params, socket) do
+    {:noreply, assign(socket, :editing_key_id, nil)}
+  end
+
+  # Borrar = soft-hide (W2): la fila desaparece de todas las superficies y el
+  # token deja de autenticar, pero `request_logs` conserva su atribución.
+  def handle_event("hide_user_key", %{"key-id" => api_key_id}, socket) do
     with {:ok, api_key_id} <- Ecto.UUID.cast(api_key_id),
-         %{} = api_key <- Accounts.get_api_key(api_key_id),
-         true <- is_binary(socket.assigns.keys_user_id),
-         true <- api_key.user_id == socket.assigns.keys_user_id,
-         true <- api_key.status == "revoked" do
-      case Accounts.reactivate_api_key(api_key) do
-        {:ok, _} ->
-          audit(socket, "api_key.reactivate", "api_key", api_key.id, %{
-            "label" => api_key.label,
-            "user_id" => api_key.user_id
-          })
+         %ApiKey{} = api_key <- Accounts.get_api_key(api_key_id),
+         true <- panel_owns_key?(socket, api_key),
+         {:ok, hidden} <- Accounts.hide_api_key(api_key) do
+      audit(socket, "api_key.hide", "api_key", hidden.id, %{
+        "label" => hidden.label,
+        "user_id" => hidden.user_id
+      })
 
-          {:noreply,
-           socket
-           |> put_flash(:info, gettext("Key reactivated."))
-           |> load_user_keys(socket.assigns.keys_user_id)}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not reactivate the key."))}
-      end
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Clave borrada."))
+       |> load_user_keys(socket.assigns.keys_user_id)}
     else
       _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
     end
@@ -616,14 +675,14 @@ defmodule TokengateWeb.UsersLive do
   # Limpia las sticky routes del USUARIO (todas sus keys): su próxima petición
   # re-evalúa proveedores en vez de quedarse pegado a uno degradado.
   def handle_event("clear_user_sticky_routes", %{"id" => user_id}, socket) do
-    case Accounts.get_user(user_id) do
+    case fetch_user(user_id) do
       nil ->
         {:noreply, put_flash(socket, :error, gettext("User not found."))}
 
       user ->
-        Accounts.clear_user_sticky_routes(user_id)
+        Accounts.clear_user_sticky_routes(user.id)
 
-        audit(socket, "routing.clear_sticky", "user", user_id, %{"email" => user.email})
+        audit(socket, "routing.clear_sticky", "user", user.id, %{"email" => user.email})
 
         {:noreply,
          socket
@@ -633,7 +692,7 @@ defmodule TokengateWeb.UsersLive do
              who: user.name || user.email
            )
          )
-         |> load_user_keys(user_id)}
+         |> load_user_keys(user.id)}
     end
   end
 
@@ -648,15 +707,20 @@ defmodule TokengateWeb.UsersLive do
   end
 
   def handle_event("edit_user", %{"id" => user_id}, socket) do
-    user = Accounts.get_user!(user_id)
-    changeset = User.admin_update_changeset(user, %{})
+    case fetch_user(user_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, gettext("User not found."))}
 
-    {:noreply,
-     socket
-     |> assign(:form, to_form(Map.put(changeset, :params, %{}), as: :user))
-     |> assign(:editing_user_id, user.id)
-     |> assign(:editing_user_sub_id, current_sub_id(user_id))
-     |> assign(:form_mode, :edit)}
+      user ->
+        changeset = User.admin_update_changeset(user, %{})
+
+        {:noreply,
+         socket
+         |> assign(:form, to_form(Map.put(changeset, :params, %{}), as: :user))
+         |> assign(:editing_user_id, user.id)
+         |> assign(:editing_user_sub_id, current_sub_id(user.id))
+         |> assign(:form_mode, :edit)}
+    end
   end
 
   def handle_event("cancel_form", _params, socket) do
@@ -681,15 +745,19 @@ defmodule TokengateWeb.UsersLive do
   ## Events — reset password ---------------------------------------------
 
   def handle_event("reset_password", %{"id" => user_id}, socket) do
-    user = Accounts.get_user!(user_id)
+    case fetch_user(user_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, gettext("User not found."))}
 
-    changeset = User.reset_password_changeset(user, %{})
+      user ->
+        changeset = User.reset_password_changeset(user, %{})
 
-    {:noreply,
-     socket
-     |> assign(:form, to_form(changeset, as: :user))
-     |> assign(:reset_user_id, user.id)
-     |> assign(:form_mode, :reset_password)}
+        {:noreply,
+         socket
+         |> assign(:form, to_form(changeset, as: :user))
+         |> assign(:reset_user_id, user.id)
+         |> assign(:form_mode, :reset_password)}
+    end
   end
 
   def handle_event("save_password", %{"user" => user_params}, socket) do
@@ -715,31 +783,12 @@ defmodule TokengateWeb.UsersLive do
   ## Events — suspend/activate -------------------------------------------
 
   def handle_event("toggle_status", %{"id" => user_id}, socket) do
-    user = Accounts.get_user!(user_id)
+    case fetch_user(user_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, gettext("User not found."))}
 
-    if root_admin?(user) do
-      {:noreply,
-       put_flash(socket, :error, gettext("The root administrator cannot be suspended."))}
-    else
-      new_status = if user.status == "active", do: "suspended", else: "active"
-
-      case Accounts.admin_update_user(user, %{"status" => new_status}) do
-        {:ok, _} ->
-          audit(socket, "user.toggle_status", "user", user.id, %{
-            "email" => user.email,
-            "status" => new_status
-          })
-
-          msg =
-            if new_status == "active",
-              do: gettext("User activated."),
-              else: gettext("User suspended.")
-
-          {:noreply, socket |> put_flash(:info, msg) |> load_users()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not change the status."))}
-      end
+      user ->
+        toggle_user_status(socket, user)
     end
   end
 
@@ -763,7 +812,25 @@ defmodule TokengateWeb.UsersLive do
   end
 
   def handle_event("confirm_delete_user", %{"id" => user_id}, socket) do
-    user = Accounts.get_user!(user_id)
+    case fetch_user(user_id) do
+      nil ->
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("User not found."))
+         |> assign(:delete_target_id, nil)
+         |> assign(:delete_target_email, nil)}
+
+      user ->
+        confirm_delete_user(socket, user)
+    end
+  end
+
+  # Catch-all: an event with an unexpected payload (or from a stale client)
+  # leaves the socket untouched instead of raising FunctionClauseError and
+  # killing the LiveView.
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  defp confirm_delete_user(socket, %User{} = user) do
     current_user = socket.assigns.current_user
 
     cond do
@@ -800,6 +867,53 @@ defmodule TokengateWeb.UsersLive do
   end
 
   ## Template helpers ------------------------------------------------------
+
+  # Body of `toggle_status`: a client id that resolves to a real user is the
+  # only way in, so a missing row cannot reach the root-admin guard.
+  defp toggle_user_status(socket, %User{} = user) do
+    if root_admin?(user) do
+      {:noreply,
+       put_flash(socket, :error, gettext("The root administrator cannot be suspended."))}
+    else
+      new_status = if user.status == "active", do: "suspended", else: "active"
+
+      case Accounts.admin_update_user(user, %{"status" => new_status}) do
+        {:ok, _} ->
+          audit(socket, "user.toggle_status", "user", user.id, %{
+            "email" => user.email,
+            "status" => new_status
+          })
+
+          msg =
+            if new_status == "active",
+              do: gettext("User activated."),
+              else: gettext("User suspended.")
+
+          {:noreply, socket |> put_flash(:info, msg) |> load_users()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not change the status."))}
+      end
+    end
+  end
+
+  # A client-supplied id reaches `Repo.get` as a string: a non-UUID would raise
+  # `Ecto.Query.CastError` and kill the LiveView, so it is cast first and a
+  # missing row is just `nil` (the caller shows a flash).
+  defp fetch_user(user_id) do
+    with {:ok, user_id} <- Ecto.UUID.cast(user_id) do
+      Accounts.get_user(user_id)
+    else
+      _ -> nil
+    end
+  end
+
+  # Hermetic scope for the keys panel: the row must belong to the user the
+  # panel was opened for. `nil == nil` must never authorize (closed panel +
+  # a key with no `user_id`).
+  defp panel_owns_key?(socket, %ApiKey{} = api_key) do
+    is_binary(socket.assigns.keys_user_id) and api_key.user_id == socket.assigns.keys_user_id
+  end
 
   # Keys activas del usuario + consumo por key (una sola query por lote).
   defp load_user_keys(socket, user_id) do
@@ -866,19 +980,37 @@ defmodule TokengateWeb.UsersLive do
         # Un usuario pertenece a UN solo presupuesto mensual: es el sujeto que
         # le aporta su límite mensual heredado. Se crea la membresía + una key
         # inicial (la key cuelga del usuario: N keys con label).
-        result =
+        #
+        # El token del alta se emite UNA sola vez: antes se descartaba
+        # (`{_token, ...}`), así que la key nacía inservible porque nadie veía
+        # el token. Ahora se deja en el panel de claves del usuario recién
+        # creado, que se abre con el aviso de "cópialo ahora".
+        created =
           if sub_id do
             with {:ok, member} <-
                    Accounts.create_group_member(%{
                      user_id: user.id,
                      group_id: sub_id,
                      status: "active"
-                   }) do
-              create_initial_key(user, member)
+                   }),
+                 {:ok, token} <- create_initial_key(user, member) do
+              {:ok, token}
             end
+          else
+            {:ok, nil}
           end
 
-        case result do
+        case created do
+          {:ok, token} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, gettext("User created."))
+             |> assign(:form, nil)
+             |> assign(:editing_user_id, nil)
+             |> assign(:form_mode, nil)
+             |> load_users()
+             |> open_initial_key_panel(user, token)}
+
           {:error, changeset} ->
             {:noreply,
              socket
@@ -888,15 +1020,6 @@ defmodule TokengateWeb.UsersLive do
                  errors: format_errors(changeset)
                )
              )
-             |> assign(:form, nil)
-             |> assign(:editing_user_id, nil)
-             |> assign(:form_mode, nil)
-             |> load_users()}
-
-          _ ->
-            {:noreply,
-             socket
-             |> put_flash(:info, gettext("User created."))
              |> assign(:form, nil)
              |> assign(:editing_user_id, nil)
              |> assign(:form_mode, nil)
@@ -985,7 +1108,7 @@ defmodule TokengateWeb.UsersLive do
   end
 
   defp create_initial_key(user, member) do
-    {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+    {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
 
     case Accounts.create_api_key(%{
            "subject_type" => "member",
@@ -996,9 +1119,22 @@ defmodule TokengateWeb.UsersLive do
            "key_prefix" => key_prefix,
            "status" => "active"
          }) do
-      {:ok, _api_key} -> {:ok, member}
+      {:ok, _api_key} -> {:ok, token}
       {:error, changeset} -> {:error, changeset}
     end
+  end
+
+  # Opens the keys panel of a freshly created user with its initial token.
+  # Without a membership there is no key, so there is nothing to show.
+  defp open_initial_key_panel(socket, _user, nil), do: socket
+
+  defp open_initial_key_panel(socket, user, token) do
+    socket
+    |> assign(:keys_user_id, user.id)
+    |> assign(:keys_user_name, user.name || user.email)
+    |> assign(:editing_key_id, nil)
+    |> assign(:new_key_token, token)
+    |> load_user_keys(user.id)
   end
 
   defp root_admin?(%User{email: email}) do
@@ -1349,9 +1485,12 @@ defmodule TokengateWeb.UsersLive do
           new_token={@new_key_token}
           create_event="create_key"
           revoke_event="revoke_user_key"
-          reactivate_event="reactivate_user_key"
           dismiss_event="dismiss_new_key_token"
           sticky_event="clear_user_sticky_routes"
+          rename_event="rename_user_key"
+          cancel_rename_event="cancel_rename_user_key"
+          editing_key_id={@editing_key_id}
+          hide_event="hide_user_key"
           empty_text={gettext("This user has no active keys.")}
         />
 
@@ -1438,7 +1577,9 @@ defmodule TokengateWeb.UsersLive do
         warning_items={[
           gettext("Limit profile memberships"),
           gettext("API keys"),
-          gettext("All consumption history (request_logs)"),
+          gettext(
+            "El historial de consumo (request_logs) NO se borra: se conserva sin atribución al usuario"
+          ),
           gettext("Audit logs will lose the user attribution")
         ]}
       />

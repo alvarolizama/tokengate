@@ -328,4 +328,32 @@ defmodule TokengateWeb.GroupsLiveTest do
 
     assert Accounts.get_group!(group.id).monthly_spend_limit_usd == Decimal.new("250.50")
   end
+
+  # --------------------------------------------------------------------------
+  # Ids del cliente (F6): un id no-UUID o inexistente no mata la LiveView
+  # --------------------------------------------------------------------------
+
+  test "malformed and unknown ids never crash the profile handlers", %{conn: conn} do
+    %{group: group, model: model_} = group_fixture()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/budget/profiles")
+
+    for {event, params} <- [
+          {"edit_group", %{"id" => "no-es-un-uuid"}},
+          {"edit_models", %{"id" => "no-es-un-uuid"}},
+          {"delete_group", %{"id" => "no-es-un-uuid"}},
+          {"toggle_model", %{"target-id" => "no-es-un-uuid", "model-id" => model_.id}},
+          {"edit_group", %{"id" => Ecto.UUID.generate()}},
+          {"delete_group", %{"id" => Ecto.UUID.generate()}}
+        ] do
+      html = render_hook(view, event, params)
+      assert html =~ "Perfil de límites no encontrado"
+    end
+
+    # La vista sigue viva y el perfil real sigue en su sitio.
+    assert has_element?(view, "#edit-#{group.id}")
+    refute has_element?(view, "#group-form")
+  end
 end

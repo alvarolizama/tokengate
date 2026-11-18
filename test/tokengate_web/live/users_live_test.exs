@@ -967,19 +967,34 @@ defmodule TokengateWeb.UsersLiveTest do
       assert has_element?(view, "#key-#{k1.id}")
       assert has_element?(view, "#key-#{k2.id}")
 
-      view |> element("#revoke-key-#{k1.id}") |> render_click()
+      html = view |> element("#revoke-key-#{k1.id}") |> render_click()
 
-      # La revocada sale de la lista (la lista solo trae activas)…
+      # Contrato W2: revocar = emitir una nueva y anular la anterior. El token
+      # nuevo se muestra UNA vez en el panel.
+      assert html =~ "Clave revocada"
+      assert has_element?(view, "#new-key-token")
+
+      # La vieja sale de las activas (su sección de revocadas la conserva)…
       refute has_element?(view, "#key-#{k1.id}")
-      # …y la otra sigue viva.
+      assert has_element?(view, "#revoked-key-#{k1.id}", "revocar")
+      # …y la otra sigue viva, intacta.
       assert has_element?(view, "#key-#{k2.id}", "seguir")
 
       assert Accounts.get_api_key(k1.id).status == "revoked"
       assert Accounts.get_api_key(k2.id).status == "active"
-      assert Enum.map(Accounts.list_api_keys_for_user(target.id), & &1.id) == [k2.id]
+
+      # La activa nueva conserva el label y es una fila distinta (la vieja no
+      # se pisa: su histórico sigue atribuido).
+      active = Accounts.list_api_keys_for_user(target.id)
+      assert Enum.any?(active, &(&1.id == k2.id))
+      replacement = Enum.find(active, &(&1.id != k2.id))
+      assert replacement
+      assert replacement.id != k1.id
+      assert replacement.label == "revocar"
+      assert replacement.status == "active"
     end
 
-    test "a revoked key stays in the panel and can be reactivated", %{conn: conn} do
+    test "a revoked key stays in the panel as read-only (no reactivation)", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       %{user: target} = register("user")
       k1 = create_key(target, "volver")
@@ -992,32 +1007,27 @@ defmodule TokengateWeb.UsersLiveTest do
 
       view |> element("#keys-#{target.id}") |> render_click()
 
-      # La revocada no está en la lista de activas: vive en su propia sección
-      # con el botón de reactivar.
+      # La revocada no está en la lista de activas: vive en su propia sección,
+      # sólo lectura. Reactivar no forma parte del lifecycle.
       refute has_element?(view, "#key-#{k1.id}")
       assert has_element?(view, "#revoked-key-#{k1.id}", "volver")
       assert has_element?(view, "#revoke-key-#{k2.id}")
+      refute has_element?(view, "#reactivate-key-#{k1.id}")
 
-      html = view |> element("#reactivate-key-#{k1.id}") |> render_click()
-      assert html =~ "Clave reactivada"
+      # Un evento viejo (o forjado) de reactivación ya no tiene handler: lo
+      # absorbe el catch-all y el token sigue muerto.
+      render_hook(view, "reactivate_user_key", %{"key-id" => k1.id})
 
-      # Reconocimiento de estado: vuelve al bloque de activas con su badge.
-      assert has_element?(view, "#key-#{k1.id}", "volver")
-      assert has_element?(view, "#key-#{k1.id}", "Activo")
-      refute has_element?(view, "#revoked-key-#{k1.id}")
-      assert has_element?(view, "#revoke-key-#{k1.id}")
-
-      assert Accounts.get_api_key(k1.id).status == "active"
-      # La otra clave no se toca.
+      assert Accounts.get_api_key(k1.id).status == "revoked"
       assert Accounts.get_api_key(k2.id).status == "active"
     end
 
-    test "reactivating a key of another user is refused", %{conn: conn} do
+    test "revoking a key of another user is refused while the panel shows a different user",
+         %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       %{user: target} = register("user")
       %{user: other} = register("other")
       foreign = create_key(other, "ajena")
-      {:ok, _} = Accounts.revoke_api_key(foreign)
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/access/users")
@@ -1025,11 +1035,210 @@ defmodule TokengateWeb.UsersLiveTest do
       view |> element("#keys-#{target.id}") |> render_click()
 
       # Forged event with a foreign key-id while the panel is open.
-      html = render_hook(view, "reactivate_user_key", %{"key-id" => foreign.id})
+      html = render_hook(view, "revoke_user_key", %{"key-id" => foreign.id})
 
       assert html =~ "Clave no encontrada"
 
-      assert Accounts.get_api_key(foreign.id).status == "revoked"
+      # Ni se revoca ni se emite un reemplazo para el otro usuario.
+      assert Accounts.get_api_key(foreign.id).status == "active"
+      assert length(Accounts.list_api_keys_for_user(other.id)) == 1
+    end
+
+    # El chequeo viejo era `api_key.user_id == socket.assigns.keys_user_id`:
+    # panel cerrado (nil) + una key legacy sin user_id daba `nil == nil` = true.
+    test "a key with no user_id is not revoked while the panel is closed", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{member: member} = group_with_log()
+
+      {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      {:ok, legacy} =
+        Accounts.create_api_key(%{
+          "subject_type" => "member",
+          "group_member_id" => member.id,
+          "key_hash" => key_hash,
+          "key_prefix" => key_prefix,
+          "label" => "legacy"
+        })
+
+      assert legacy.user_id == nil
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      html = render_hook(view, "revoke_user_key", %{"key-id" => legacy.id})
+
+      assert html =~ "Clave no encontrada"
+      assert Accounts.get_api_key(legacy.id).status == "active"
+    end
+
+    test "renaming a key from the panel updates the label and audits it", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      k = create_key(target, "viejo")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#keys-#{target.id}") |> render_click()
+
+      # El lápiz existe porque users cablea `rename_event` (antes ni se pasaba).
+      assert has_element?(view, "#rename-key-#{k.id}")
+
+      view |> element("#rename-key-#{k.id}") |> render_click()
+      assert has_element?(view, "#rename-key-form-#{k.id}")
+
+      html =
+        view
+        |> element("#rename-key-inline-#{k.id}")
+        |> render_submit(%{"key-id" => k.id, "key" => %{"label" => "nuevo"}})
+
+      assert html =~ "Clave renombrada"
+      assert Accounts.get_api_key(k.id).label == "nuevo"
+      assert has_element?(view, "#key-#{k.id}", "nuevo")
+
+      # La auditoría vive en el contexto (mismo camino que servicios).
+      entry =
+        Repo.get_by(Tokengate.Auditing.AuditLog, action: "api_key.rename", entity_id: k.id)
+
+      assert entry
+      assert entry.changes["old_label"] == "viejo"
+      assert entry.changes["new_label"] == "nuevo"
+    end
+
+    test "a rename on a key of another user is refused", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      %{user: other} = register("other")
+      foreign = create_key(other, "ajena")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#keys-#{target.id}") |> render_click()
+
+      html =
+        render_hook(view, "rename_user_key", %{
+          "key-id" => foreign.id,
+          "key" => %{"label" => "robada"}
+        })
+
+      assert html =~ "No se pudo renombrar la clave"
+      assert Accounts.get_api_key(foreign.id).label == "ajena"
+    end
+
+    test "deleting a key soft-hides it instead of removing the row", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      k = create_key(target, "borrar")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#keys-#{target.id}") |> render_click()
+      assert has_element?(view, "#hide-key-#{k.id}")
+
+      html = view |> element("#hide-key-#{k.id}") |> render_click()
+
+      assert html =~ "Clave borrada"
+      refute has_element?(view, "#key-#{k.id}")
+      refute has_element?(view, "#revoked-key-#{k.id}")
+
+      # La fila sigue ahí (atribución histórica) pero oculta y muerta.
+      hidden = Accounts.get_api_key(k.id)
+      assert hidden
+      assert hidden.hidden_at
+      assert hidden.status == "revoked"
+      assert Accounts.list_api_keys_for_user(target.id) == []
+    end
+
+    test "creating a user with a budget shows the initial token once", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      {:ok, sub} = Accounts.create_group(%{name: "Alta #{unique()}"})
+
+      email = "alta-#{unique()}@example.com"
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#new-user-btn") |> render_click()
+
+      html =
+        view
+        |> form("#user-form", %{
+          user: %{
+            email: email,
+            name: "Alta",
+            password: "valid-password-123",
+            global_role: "user",
+            sub_id: sub.id
+          }
+        })
+        |> render_submit()
+
+      assert html =~ "Usuario creado"
+
+      user = Accounts.get_user_by_email(email)
+      assert [key] = Accounts.list_api_keys_for_user(user.id)
+
+      # El panel se abre con el token del alta, que antes se descartaba.
+      assert has_element?(view, "#user-keys-modal")
+      assert has_element?(view, "#new-key-token")
+
+      shown =
+        view
+        |> element("#new-key-token code")
+        |> render()
+        |> String.replace(~r/<[^>]*>/, "")
+        |> String.trim()
+
+      # El token mostrado es exactamente el de la key creada (usable, no una
+      # máscara): su hash coincide con el guardado.
+      assert Accounts.hash_api_key(shown) == key.key_hash
+    end
+
+    test "client ids that are not UUIDs never kill the LiveView", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      for {event, params} <- [
+            {"view_groups", %{"id" => "no-es-un-uuid"}},
+            {"manage_keys", %{"id" => "no-es-un-uuid"}},
+            {"edit_user", %{"id" => "no-es-un-uuid"}},
+            {"reset_password", %{"id" => "no-es-un-uuid"}},
+            {"toggle_status", %{"id" => "no-es-un-uuid"}},
+            {"confirm_delete_user", %{"id" => "no-es-un-uuid"}},
+            {"view_groups", %{"id" => Ecto.UUID.generate()}},
+            {"edit_user", %{"id" => Ecto.UUID.generate()}}
+          ] do
+        html = render_hook(view, event, params)
+        assert html =~ "Usuario no encontrado"
+      end
+
+      # La vista sigue viva y sirviendo el listado.
+      assert has_element?(view, "#user-#{target.id}")
+      assert has_element?(view, "#user-#{admin.id}")
+    end
+
+    test "the delete modal tells the truth about the consumption history", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#delete-#{target.id}") |> render_click()
+
+      assert has_element?(view, "#delete-user-modal")
+      html = render(view)
+
+      # request_logs no tiene FK a users y group_member_id es SET NULL: el
+      # historial NO se borra, sólo pierde la atribución.
+      assert html =~ "NO se borra"
+      refute html =~ "All consumption history (request_logs)"
     end
 
     test "creating a key with a label adds it alongside the existing ones", %{conn: conn} do

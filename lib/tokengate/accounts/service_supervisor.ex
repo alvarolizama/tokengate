@@ -19,6 +19,8 @@ defmodule Tokengate.Accounts.ServiceSupervisor do
     supervisor
     |> cast(attrs, [:service_id, :user_id])
     |> validate_required([:service_id, :user_id])
+    |> foreign_key_constraint(:service_id)
+    |> foreign_key_constraint(:user_id)
     |> unique_constraint([:service_id, :user_id])
   end
 end
