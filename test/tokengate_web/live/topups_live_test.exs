@@ -214,6 +214,86 @@ defmodule TokengateWeb.TopupsLiveTest do
       assert topup.expires_at == nil
       assert Topups.grants_credit?(topup)
     end
+
+    # F17: the owner search declares `phx-change` on the input itself, so
+    # LiveView ships the typed value under "value" (the `name` only travels as
+    # `_target`). The handler expected %{"q" => _} and the view died on the
+    # first keystroke.
+    test "escribir en el buscador de dueño filtra sin matar la LiveView", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      user = user_fixture()
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
+
+      view |> element("#new-topup-btn") |> render_click()
+
+      html =
+        view
+        |> element("#topup-owner-search")
+        |> render_change(%{"value" => user.email})
+
+      assert html =~ user.email
+      assert has_element?(view, "#select-owner-#{user.id}")
+
+      html =
+        view
+        |> element("#topup-owner-search")
+        |> render_change(%{"value" => "sin-coincidencias-#{unique()}"})
+
+      refute html =~ user.email
+      assert html =~ "Sin coincidencias"
+
+      # The view is still alive: the owner picker keeps responding.
+      view |> element("#owner-kind-service") |> render_click()
+      assert has_element?(view, "#topup-owner-search")
+    end
+
+    # F8: two submits of the same form (a double click, or one queued behind
+    # the other) used to create TWO top-ups. The one-shot token lives in the
+    # form and is consumed by the first save.
+    test "un doble submit crea UN solo top-up", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      user = user_fixture()
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
+
+      view |> element("#new-topup-btn") |> render_click()
+      view |> element("#select-owner-#{user.id}") |> render_click()
+
+      token_html = view |> element("#topup-idempotency-key") |> render()
+      [_, token] = Regex.run(~r/value="([^"]+)"/, token_html)
+
+      payload = %{"topup" => %{"amount_usd" => "10.00"}, "idempotency_key" => token}
+
+      html = render_submit(view, "save_topup", payload)
+      assert html =~ "Top-up guardado."
+
+      # Second submit with the SAME token: ignored.
+      render_submit(view, "save_topup", payload)
+
+      assert [topup] = Topups.list_for_user(user.id)
+      assert Decimal.equal?(topup.amount_usd, Decimal.new("10.00"))
+    end
+
+    test "un submit sin el token del form (forjado) no escribe nada", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      user = user_fixture()
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
+
+      view |> element("#new-topup-btn") |> render_click()
+      view |> element("#select-owner-#{user.id}") |> render_click()
+
+      render_submit(view, "save_topup", %{
+        "topup" => %{"amount_usd" => "99.00"},
+        "idempotency_key" => Ecto.UUID.generate()
+      })
+
+      assert Topups.list_for_user(user.id) == []
+    end
   end
 
   describe "acciones" do
@@ -256,6 +336,37 @@ defmodule TokengateWeb.TopupsLiveTest do
       refute Topups.grants_credit?(reloaded)
       # Lo ya consumido vive en los logs y se sigue midiendo.
       assert Decimal.equal?(Topups.consumed_usd(reloaded), Decimal.new("3.000000"))
+    end
+
+    # F6: `get_topup!(id)` on a client non-UUID raised Ecto.Query.CastError and
+    # killed the LiveView; a missing one raised NoResultsError.
+    test "un id de cliente no-UUID o inexistente no revienta la vista", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      user = user_fixture()
+      topup = topup_fixture(%{"user_id" => user.id, "amount_usd" => "10.00"})
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
+
+      assert render_hook(view, "toggle_topup_status", %{"id" => "no-es-uuid"}) =~
+               "Top-up no encontrado"
+
+      assert render_hook(view, "revoke_topup", %{"id" => "no-es-uuid"}) =~ "Top-up no encontrado"
+      assert render_hook(view, "edit_topup", %{"id" => "no-es-uuid"}) =~ "Top-up no encontrado"
+
+      assert render_hook(view, "toggle_topup_status", %{"id" => Ecto.UUID.generate()}) =~
+               "Top-up no encontrado"
+
+      # A forged owner neither touches the DB nor selects anybody.
+      render_hook(view, "select_owner", %{"id" => "no-es-uuid"})
+      refute has_element?(view, "#selected-owner")
+
+      render_hook(view, "select_owner", %{"id" => Ecto.UUID.generate()})
+      refute has_element?(view, "#selected-owner")
+
+      # The view and the real top-up are untouched.
+      assert Topups.get_topup!(topup.id).status == "active"
+      assert has_element?(view, "#toggle-topup-status-#{topup.id}")
     end
   end
 

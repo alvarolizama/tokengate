@@ -61,6 +61,14 @@
             {if @editing_topup_id, do: gettext("Edit top-up"), else: gettext("New top-up")}
           </h2>
           <.form for={@form} id="topup-form" phx-submit="save_topup">
+            <%!-- One-shot submit token: the double-submit guard. Consumed by
+                 the first save, so a second submit of this form is a no-op. --%>
+            <input
+              type="hidden"
+              name="idempotency_key"
+              id="topup-idempotency-key"
+              value={@form_token}
+            />
             <div id="topup-owner">
               <label class="text-xs text-base-content/60 block mb-1">Dueño</label>
 
@@ -99,7 +107,7 @@
 
               <.input
                 type="text"
-                name="topup_owner_query"
+                name="owner_query"
                 value={@owner_query}
                 placeholder={"Buscar #{if @owner_kind == "user", do: "usuario", else: "servicio"}…"}
                 phx-change="search_owner"
