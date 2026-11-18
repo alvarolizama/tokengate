@@ -30,8 +30,12 @@ defmodule TokengateWeb.KpiHelpers do
   alias Tokengate.Periods
 
   @doc """
-  Assigns the 4-card KPI metrics for a calendar `period` ("today", "7d",
-  "30d", "last_month") computed against the user's local timezone.
+  Assigns the 4-card KPI metrics for a canonical `period` ("today",
+  "yesterday", "week", "30d") computed against the user's local timezone.
+
+  The window comes from `Tokengate.Periods.period_bounds/2` and BOTH bounds are
+  applied: a closed window ("yesterday") that only passed `from` would add the
+  day after it, so the KPI would not match the window the page claims.
 
   The underlying cost aggregates are served through the shared
   `Tokengate.Metrics.DashboardCache` ETS (5s TTL, keyed per user + period +
@@ -44,12 +48,13 @@ defmodule TokengateWeb.KpiHelpers do
   def assign_kpi_metrics(socket, user, opts) do
     period = Keyword.get(opts, :period, "today")
     timezone = Keyword.get(opts, :timezone) || user.timezone || "Etc/UTC"
-    %{from: from} = Periods.period_bounds(period, timezone)
+    %{from: from, to: to} = Periods.period_bounds(period, timezone)
+    range = %{from: from, to: to}
 
     summary =
       if user.global_role == "admin" do
         DashboardCache.fetch_or_compute({:kpi_summary, :admin, period, timezone}, fn ->
-          Logs.cost_summary(%{from: from})
+          Logs.cost_summary(range)
         end)
       else
         member_ids = Accounts.scope_member_ids(user)
@@ -60,7 +65,7 @@ defmodule TokengateWeb.KpiHelpers do
 
           true ->
             DashboardCache.fetch_or_compute({:kpi_summary, user.id, period, timezone}, fn ->
-              Logs.cost_summary_for_members(member_ids, %{from: from})
+              Logs.cost_summary_for_members(member_ids, range)
             end)
         end
       end

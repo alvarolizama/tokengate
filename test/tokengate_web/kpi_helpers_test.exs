@@ -1,6 +1,67 @@
 defmodule TokengateWeb.KpiHelpersTest do
-  use ExUnit.Case, async: true
+  use Tokengate.DataCase, async: false
+  alias Tokengate.Accounts
+  alias Tokengate.Logs
   alias TokengateWeb.KpiHelpers
+
+  describe "assign_kpi_metrics/3 window" do
+    # La ventana sale de Periods.period_bounds/2 y se aplican from Y to: una
+    # ventana cerrada ("yesterday") que sólo pasara `from` sumaría también el
+    # día en curso y el KPI no cuadraría con la ventana que la página declara.
+    test "una ventana cerrada (yesterday) no suma el día en curso" do
+      {:ok, user} =
+        Accounts.register_user(%{
+          email: "kpi-window-#{System.unique_integer([:positive])}@example.com",
+          name: "KPI Window",
+          password: "password-secret-1",
+          global_role: "admin"
+        })
+
+      {:ok, group} = Accounts.create_group(%{name: "KPI #{System.unique_integer([:positive])}"})
+      {:ok, member} = Accounts.create_group_member(%{group_id: group.id, user_id: user.id})
+
+      today = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      yesterday_mid =
+        today
+        |> DateTime.to_date()
+        |> Date.add(-1)
+        |> DateTime.new!(~T[12:00:00], "Etc/UTC")
+
+      insert_log(member, yesterday_mid)
+      insert_log(member, today)
+
+      socket = %Phoenix.LiveView.Socket{}
+
+      yesterday =
+        KpiHelpers.assign_kpi_metrics(socket, user, period: "yesterday", timezone: "Etc/UTC")
+
+      assert yesterday.assigns.kpi_metrics.requests_total == 1
+      assert Decimal.equal?(yesterday.assigns.kpi_metrics.cost_usd, Decimal.new("0.010000"))
+
+      today_metrics =
+        KpiHelpers.assign_kpi_metrics(socket, user, period: "today", timezone: "Etc/UTC")
+
+      assert today_metrics.assigns.kpi_metrics.requests_total == 1
+    end
+  end
+
+  defp insert_log(member, at) do
+    {:ok, _log} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        model_requested: "gpt-4o",
+        status_code: 200,
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        provider_cost_usd: "0.010000",
+        latency_ms: 20,
+        streaming: false,
+        inserted_at: at
+      })
+
+    :ok
+  end
 
   describe "cache_hit_rate/2" do
     test "returns the percentage of input tokens served from cache" do

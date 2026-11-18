@@ -162,30 +162,29 @@ defmodule TokengateWeb.StatsExportControllerTest do
     assert response(forbidden_conn, 403) =~ "no autorizado"
   end
 
-  test "providers export: respeta el período del selector", %{conn: conn} do
-    # Mid previous calendar month: inside `last_month`, outside this week.
-    last_month_mid =
+  test "providers export: respeta la ventana cerrada de ayer", %{conn: conn} do
+    # Midday of the closed UTC day before today: inside `yesterday`, outside
+    # `today`. Both windows are UTC-anchored, so this holds on every weekday —
+    # a "week"-based fixture would flake on Mondays.
+    yesterday_mid =
       DateTime.utc_now()
       |> DateTime.to_date()
-      |> Date.beginning_of_month()
-      |> Date.add(-15)
+      |> Date.add(-1)
       |> DateTime.new!(~T[12:00:00], "Etc/UTC")
 
-    %{provider: old_provider} = group_with_log(inserted_at: last_month_mid)
+    %{provider: old_provider} = group_with_log(inserted_at: yesterday_mid)
 
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
 
-    # A log from last calendar month is outside "this week" but inside
-    # "last_month": the export keyboard must respect the period window.
-    assert response(get(conn, ~p"/stats/export?type=providers&period=week"), 200) =~
-             "proveedor,tier,score"
-
-    refute get(conn, ~p"/stats/export?type=providers&period=week").resp_body =~
+    # El log de ayer queda FUERA de "today" y DENTRO de "ayer": el export tiene
+    # que respetar el borde superior de la ventana cerrada (antes, un lector que
+    # sólo usaba `from` lo contaba en las dos).
+    refute get(conn, ~p"/stats/export?type=providers&period=today").resp_body =~
              old_provider.name
 
-    assert get(conn, ~p"/stats/export?type=providers&period=last_month").resp_body =~
+    assert get(conn, ~p"/stats/export?type=providers&period=yesterday").resp_body =~
              old_provider.name
   end
 
@@ -516,18 +515,47 @@ defmodule TokengateWeb.StatsExportControllerTest do
       assert length(data_rows) == 511
     end
 
-    test "logs export defaults to 7d and respects today/week/month periods", %{conn: conn} do
-      %{owner: owner, owner_password: password} = group_with_log()
-      %{user: _user, password: _pw} = register("user")
+    test "logs export: default canónico (week), 30d disponible y bookmarks huérfanos al default",
+         %{conn: conn} do
+      %{owner: owner, owner_password: password, member: member} = group_with_log()
 
-      conn =
-        conn
-        |> login(owner, password)
-        |> get(~p"/stats/export?type=logs&period=today")
+      # Hace 10 días: dentro de 30d, fuera de la semana (que mide 7 días como
+      # máximo, de lunes a ahora) — determinista cualquier día de la semana.
+      ten_days_ago =
+        DateTime.utc_now() |> DateTime.add(-10 * 86_400, :second) |> DateTime.truncate(:second)
 
-      body = response(conn, 200)
-      assert body =~ "fecha,estado"
-      assert body =~ "gpt-4o"
+      {:ok, _old} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          model_requested: "old-model",
+          agent_type: "api",
+          status_code: 200,
+          prompt_tokens: 1,
+          completion_tokens: 1,
+          latency_ms: 5,
+          streaming: false,
+          inserted_at: ten_days_ago
+        })
+
+      conn = login(conn, owner, password)
+
+      default_body = response(get(conn, ~p"/stats/export?type=logs"), 200)
+
+      assert default_body =~ "fecha,estado"
+      # El log de hoy entra; el de hace 10 días no: el default es la semana.
+      assert default_body =~ "gpt-4o"
+      refute default_body =~ "old-model"
+
+      # 30d sigue en el set canónico y sí lo trae.
+      assert response(get(conn, ~p"/stats/export?type=logs&period=30d"), 200) =~ "old-model"
+
+      # Bookmarks fuera del set (`month`, `last_month`, `7d`) y basura caen al
+      # default sin reventar: exactamente el mismo CSV que sin periodo.
+      for orphan <- ~w(month last_month 7d basura) do
+        orphan_body = response(get(conn, "/stats/export?type=logs&period=#{orphan}"), 200)
+
+        assert orphan_body == default_body
+      end
     end
 
     test "errors export only includes status >= 400 across the period", %{conn: conn} do

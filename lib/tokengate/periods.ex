@@ -13,6 +13,35 @@ defmodule Tokengate.Periods do
 
   @default_timezone "Etc/UTC"
 
+  # The ONE period vocabulary every stats surface offers — `StatsHelpers.canonical_periods/0`
+  # delegates here so no page can grow its own copy of the list again.
+  #
+  #   * `"today"`     — open UTC day
+  #   * `"yesterday"` — CLOSED UTC day (fixed 24h window)
+  #   * `"week"`      — open local-calendar week (Monday → now)
+  #   * `"30d"`       — open rolling 30 local days
+  @canonical_periods ~w(today yesterday week 30d)
+  @default_period "week"
+
+  @doc "Every selectable period, in display order."
+  def canonical_periods, do: @canonical_periods
+
+  @doc "The period an out-of-set bookmark degrades to."
+  def default_period, do: @default_period
+
+  @doc "True when `period` belongs to the canonical vocabulary."
+  def canonical_period?(period), do: period in @canonical_periods
+
+  @doc """
+  Casts an arbitrary value into the canonical vocabulary: canonical values pass
+  through, anything else (an old `?period=month` bookmark, `"7d"`, a non-binary
+  forged param) degrades to `default` instead of raising or being reinterpreted
+  as some other window.
+  """
+  def normalize_period(period, default \\ @default_period) do
+    if canonical_period?(period), do: period, else: default
+  end
+
   @doc "UTC now truncated to the second (the query cutoff used everywhere)."
   def now_utc do
     DateTime.utc_now() |> DateTime.truncate(:second)
@@ -63,15 +92,26 @@ defmodule Tokengate.Periods do
   end
 
   @doc """
-  UTC window `%{from: DateTime.t(), to: DateTime.t()}` for a period label,
-  using local calendar boundaries:
+  UTC window `%{from: DateTime.t(), to: DateTime.t()}` for a period label:
 
-    * `"today"` — start of UTC day → now (la ventana que resetea el kill-switch)
-    * `"week"`   — start of local week (Monday) → now
-    * `"month"`  — start of UTC month → now (la ventana que resetea el budget mensual)
+    * `"today"`     — start of UTC day → now (la ventana que resetea el kill-switch)
+    * `"yesterday"` — the CLOSED UTC day before today (fixed 24h, aligned with the
+      same UTC-day boundary the kill-switch and the daily budget reset on)
+    * `"week"`      — start of local week (Monday) → now
+    * `"30d"`       — start of local day 29 days ago → now
+
+  Canonical vocabulary above (`canonical_periods/0`). The remaining clauses are
+  legacy window builders kept for the monthly surfaces that later phases migrate
+  and for the rollup closed-window tests — they are NOT part of the set any
+  page offers, and an unknown label degrades to `default_period/0`:
+
+    * `"month"`      — start of UTC month → now (la ventana que resetea el budget mensual)
     * `"last_month"` — previous UTC calendar month, closed (from → first day of the current month)
-    * `"7d"`     — start of local day 6 days ago → now
-    * `"30d"`    — start of local day 29 days ago → now
+    * `"7d"`         — start of local day 6 days ago → now
+
+  Every caller must filter with BOTH bounds (`inserted_at >= from and
+  inserted_at <= to`): `"yesterday"`/`"last_month"` are closed windows, and a
+  reader that only takes `from` adds the window that follows.
   """
   def period_bounds(period, tz \\ @default_timezone, opts \\ []) do
     # `now` inyectable: previous_period_bounds tiene que poder calcular la
@@ -83,8 +123,8 @@ defmodule Tokengate.Periods do
     this_month_start =
       now_utc |> DateTime.to_date() |> Date.beginning_of_month() |> local_midnight_utc("Etc/UTC")
 
-    # Open (rolling) periods end at `now`; closed calendar periods ("last_month")
-    # end at their own boundary.
+    # Open (rolling) periods end at `now`; closed calendar periods ("yesterday",
+    # "last_month") end at their own boundary.
     {from, to} =
       case period do
         # "Hoy" mide el día UTC — la misma ventana que resetea el kill-switch
@@ -94,10 +134,16 @@ defmodule Tokengate.Periods do
         "today" ->
           {local_midnight_utc(DateTime.to_date(now_utc), "Etc/UTC"), now_utc}
 
+        # "Ayer" es el día UTC CERRADO anterior: ancla UTC (no la zona del
+        # usuario) porque es el mismo calendario con el que resetean el
+        # kill-switch y el budget diario. Anclado en UTC mide siempre 24 h —
+        # ningún cambio de hora lo alarga ni lo acorta.
+        "yesterday" ->
+          today_start = local_midnight_utc(DateTime.to_date(now_utc), "Etc/UTC")
+          {DateTime.add(today_start, -86_400, :second), today_start}
+
         "week" ->
-          # Date.day_of_week/1 returns 1=Monday … 7=Sunday
-          days_since_monday = Date.day_of_week(DateTime.to_date(now)) - 1
-          {local_midnight_utc(Date.add(DateTime.to_date(now), -days_since_monday), tz), now_utc}
+          {week_start(now, tz), now_utc}
 
         # Igual que "today": el mes UTC es la ventana en que resetea el
         # presupuesto mensual de cada sujeto (Budgets.Manager), así que el KPI
@@ -127,22 +173,34 @@ defmodule Tokengate.Periods do
           {local_midnight_utc(Date.add(DateTime.to_date(now), -29), tz), now_utc}
 
         _ ->
-          {local_midnight_utc(DateTime.to_date(now_utc), "Etc/UTC"), now_utc}
+          # Bookmark fuera del set (`?period=month` de un link viejo, basura):
+          # degrada al periodo por defecto en vez de reinterpretarse como "hoy".
+          {week_start(now, tz), now_utc}
       end
 
     %{from: from, to: to}
+  end
+
+  # Monday 00:00 local of the week `now` falls in. Local calendar, not a
+  # -168h shift: a week that crosses DST is 167h/169h long and the boundary
+  # has to stay on the local Monday.
+  defp week_start(now, tz) do
+    # Date.day_of_week/1 returns 1=Monday … 7=Sunday
+    days_since_monday = Date.day_of_week(DateTime.to_date(now)) - 1
+    local_midnight_utc(Date.add(DateTime.to_date(now), -days_since_monday), tz)
   end
 
   @doc """
   UTC window for the period *before* `period` — the calendar period that
   precedes it (used to compute deltas, e.g. this week vs last week).
 
-    * `"today"` → the previous complete UTC day
-    * `"week"`  → previous week (Mon–Sun, local calendar)
-    * `"month"` → previous UTC calendar month (same window the budget resets in)
+    * `"today"`     → the previous complete UTC day
+    * `"yesterday"` → the UTC day before it (span shift: same 24h length)
+    * `"week"`      → previous week (Mon–Sun, local calendar)
+    * `"30d"`       → the 30 days before the last 30 days (span shift)
+    * `"month"`     → previous UTC calendar month (same window the budget resets in)
     * `"last_month"` → the UTC calendar month before it
-    * `"7d"`    → the 7 days before the last 7 days (span shift)
-    * `"30d"`   → the 30 days before the last 30 days
+    * `"7d"`        → the 7 days before the last 7 days
 
   El `to` del periodo previo es EXCLUSIVO (es el `from` del actual): con
   `>=`/`<` en las queries, un log exactamente en el borde no cuenta doble.
@@ -154,6 +212,12 @@ defmodule Tokengate.Periods do
     prev_from =
       case period do
         "today" ->
+          DateTime.add(current.from, -86_400, :second)
+
+        # Closed UTC day: the window before it is the UTC day before, same
+        # length by construction (UTC has no DST). Span shift, never a
+        # calendar shift in a zone that could make it 23h/25h.
+        "yesterday" ->
           DateTime.add(current.from, -86_400, :second)
 
         "week" ->

@@ -434,10 +434,12 @@ defmodule TokengateWeb.ServiceStatsBody do
   @doc """
   Carga del periodo: summary, filas de la tabla de keys y pivote modelo × key.
 
-  Fuente única de bounds (`Periods.period_bounds/2`) para las tres lecturas —
-  dos `from` distintos mueven el borde de la ventana y la suma de la tabla deja
-  de cuadrar con el KPI. Todo pasa por `DashboardCache` con llaves que incluyen
-  service, periodo y timezone (y el `key_filter` en el summary).
+  Fuente única de bounds (`Periods.period_bounds/2`) para las tres lecturas, y
+  SIEMPRE con los dos bordes: dos `from` distintos mueven el borde de la
+  ventana, y un lector que sólo toma `from` suma de más toda ventana cerrada
+  (ayer, mes pasado) — en ambos casos la tabla deja de cuadrar con el KPI.
+  Todo pasa por `DashboardCache` con llaves que incluyen service, periodo y
+  timezone (y el `key_filter` en el summary).
   """
   def load_stats(socket) do
     socket
@@ -465,14 +467,18 @@ defmodule TokengateWeb.ServiceStatsBody do
         timezone: timezone,
         key_filter: key_filter
       }) do
-    %{from: from} = Periods.period_bounds(period, timezone)
+    # BOTH bounds: a closed window ("yesterday") read with only `from` would
+    # add every request of the day after it, and the table would stop matching
+    # its own KPI. One source for the pair — never two `period_bounds` calls.
+    %{from: from, to: to} = Periods.period_bounds(period, timezone)
+    range = [from: from, to: to]
 
     # El group by de la tabla SIEMPRE es del servicio completo (una query, el
     # trim a una fila es en memoria); el summary sí se scopea por key cuando el
     # selector lo pide — y su llave de cache lleva el scope.
     key_stats =
       DashboardCache.fetch_or_compute({:service_key_stats, service_id, period, timezone}, fn ->
-        Logs.service_key_stats(service_id, from: from)
+        Logs.service_key_stats(service_id, range)
       end)
 
     # Reporte por modelo: matriz modelo × API key (gasto del período). Se lee
@@ -482,7 +488,7 @@ defmodule TokengateWeb.ServiceStatsBody do
     model_key_stats =
       DashboardCache.fetch_or_compute(
         {:service_model_key_stats, service_id, period, timezone},
-        fn -> Logs.service_model_key_stats(service_id, from: from) end
+        fn -> Logs.service_model_key_stats(service_id, range) end
       )
 
     key_rows =
@@ -499,9 +505,9 @@ defmodule TokengateWeb.ServiceStatsBody do
 
     summary_opts =
       if key_filter == "all" do
-        [from: from]
+        range
       else
-        [from: from, api_key_id: key_filter]
+        [from: from, to: to, api_key_id: key_filter]
       end
 
     summary =
@@ -644,6 +650,7 @@ defmodule TokengateWeb.ServiceStatsBody do
     %{
       service_id: assigns.service.id,
       filters: Map.get(assigns, :filters, default_filters()),
+      timezone: Map.get(assigns, :timezone) || "Etc/UTC",
       key_filter: assigns[:key_filter] || "all",
       page_size: assigns[:page_size] || @page_size
     }
@@ -656,6 +663,7 @@ defmodule TokengateWeb.ServiceStatsBody do
       |> Map.put("service_id", params.service_id)
       |> maybe_key_filter(params.key_filter)
       |> drop_empty_filters()
+      |> parse_date_filters(Map.get(params, :timezone) || "Etc/UTC")
 
     logs =
       case mode do
@@ -818,12 +826,16 @@ defmodule TokengateWeb.ServiceStatsBody do
     after_from and before_to
   end
 
-  defp parse_date_string(date_str, timezone, mode \\ :start_of_day)
+  defp parse_date_string(date_str, timezone, mode)
 
   defp parse_date_string("", _tz, _mode), do: nil
   defp parse_date_string(nil, _tz, _mode), do: nil
 
-  defp parse_date_string(date_str, timezone, mode) do
+  # Already a datetime (programmatic callers, or a filter map that went through
+  # `parse_date_filters/2`): keep it as-is.
+  defp parse_date_string(%DateTime{} = dt, _tz, _mode), do: dt
+
+  defp parse_date_string(date_str, timezone, mode) when is_binary(date_str) do
     case Date.from_iso8601(date_str) do
       {:ok, date} ->
         time =
@@ -832,12 +844,53 @@ defmodule TokengateWeb.ServiceStatsBody do
             :end_of_day -> ~T[23:59:59]
           end
 
-        date
-        |> DateTime.new!(time, timezone)
-        |> DateTime.shift_zone!("Etc/UTC")
+        local_time_to_utc(date, time, timezone)
 
       _ ->
         nil
+    end
+  end
+
+  # Forged/odd params (`?from[]=x`) are a filter that does not apply, never a
+  # crash.
+  defp parse_date_string(_other, _timezone, _mode), do: nil
+
+  # Default mode for the realtime matcher (`log_matches_filters?/4`).
+  defp parse_date_string(value, timezone), do: parse_date_string(value, timezone, :start_of_day)
+
+  # DST-safe: on a spring-forward day the local 00:00 may not exist and
+  # `DateTime.new!/3` raised, which used to kill the LiveView. Fall back to the
+  # first instant of the day that does exist.
+  defp local_time_to_utc(date, time, timezone) do
+    case DateTime.new(date, time, timezone) do
+      {:ok, dt} -> DateTime.shift_zone!(dt, "Etc/UTC")
+      {:ambiguous, dt, _later} -> DateTime.shift_zone!(dt, "Etc/UTC")
+      {:gap, _just_before, just_after} -> DateTime.shift_zone!(just_after, "Etc/UTC")
+      {:error, _reason} -> nil
+    end
+  end
+
+  @doc false
+  # Converts the "Desde"/"Hasta" form values (ISO dates, in the user's zone)
+  # into the UTC datetimes `Logs.list_logs/1` expects. A value that doesn't
+  # parse is DROPPED — the filter is ignored — instead of reaching Ecto as a
+  # string, which raised `Ecto.Query.CastError` and took the socket down.
+  def parse_date_filters(filters, timezone) do
+    filters
+    |> parse_date_filter("from", timezone, :start_of_day)
+    |> parse_date_filter("to", timezone, :end_of_day)
+  end
+
+  defp parse_date_filter(filters, key, timezone, mode) do
+    case Map.fetch(filters, key) do
+      {:ok, value} ->
+        case parse_date_string(value, timezone, mode) do
+          nil -> Map.delete(filters, key)
+          dt -> Map.put(filters, key, dt)
+        end
+
+      :error ->
+        filters
     end
   end
 

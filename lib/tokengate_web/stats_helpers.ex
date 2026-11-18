@@ -89,21 +89,30 @@ defmodule TokengateWeb.StatsHelpers do
   def format_tps(n) when is_integer(n), do: to_string(n)
 
   def period_label("today"), do: gettext("Today")
+  # Spanish msgid on purpose: the selector reads "Ayer" in every locale until
+  # W15 extracts and translates it (the fallback is the msgid).
+  def period_label("yesterday"), do: gettext("Ayer")
   def period_label("week"), do: gettext("This week")
+  # Legacy labels for the monthly windows the pending surfaces still show
+  # (dashboard/stats/calculator migrate in their own phase); not in the set.
   def period_label("month"), do: gettext("This month")
   def period_label("last_month"), do: gettext("Last month")
   def period_label("30d"), do: gettext("30 days")
   def period_label(_), do: gettext("Today")
 
   @doc """
-  Set canónico de temporalidad de /stats: las mismas cinco opciones en todas
-  las páginas. Un solo vocabulario — el que `Periods.period_bounds/2` ya
-  soporta — y un solo formato: botones en grupo `join` con el periodo en la
-  URL (`?period=`) para que viaje con bookmark/refresh/back-forward.
-  """
-  @canonical_periods ~w(today week month last_month 30d)
+  Set canónico de temporalidad de /stats: las mismas cuatro opciones en todas
+  las páginas. La lista vive en `Tokengate.Periods.canonical_periods/0` — una
+  sola fuente para el selector, las superficies y el export, así que ninguna
+  página puede volver a crecer su propia copia literal.
 
-  def canonical_periods, do: @canonical_periods
+  `yesterday` es el día UTC cerrado anterior; `today`, `week` y `30d` son
+  ventanas abiertas que terminan en `now`.
+  """
+  def canonical_periods, do: Tokengate.Periods.canonical_periods()
+
+  @doc "True cuando `period` pertenece al set canónico."
+  def canonical_period?(period), do: Tokengate.Periods.canonical_period?(period)
 
   @doc """
   Selector de temporalidad compartido por todas las páginas de /stats.

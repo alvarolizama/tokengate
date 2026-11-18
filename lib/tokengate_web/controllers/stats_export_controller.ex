@@ -4,7 +4,9 @@ defmodule TokengateWeb.StatsExportController do
 
   Accepts query params:
     * `type`   — `models`, `groups`, `providers`, `services`, `errors`, or `logs` (required)
-    * `period` — `today`, `week`, `month`, `last_month`, `7d`, `30d` (default: `7d`)
+    * `period` — a canonical period: `today`, `yesterday`, `week`, `30d`
+      (default: `week`; any other value — an old `month`/`last_month`/`7d`
+      bookmark — degrades to the default instead of 500ing)
     * `model_id` — filter by model (for models type only)
     * `group_id`  — filter by group (for groups type only)
 
@@ -439,7 +441,10 @@ defmodule TokengateWeb.StatsExportController do
 
   defp load_group_breakdown(_, _), do: []
 
-  defp parse_period(nil), do: "7d"
-  defp parse_period(period) when period in ~w(today week month last_month 7d 30d), do: period
-  defp parse_period(_), do: "7d"
+  # The period vocabulary lives in `Tokengate.Periods` (the one source): a
+  # canonical value passes through and anything else — an old `?period=month`
+  # bookmark, a forged non-binary param — degrades to the default, which is
+  # itself in the set. Default `week` keeps the old "a week of data" intent of
+  # the previous `7d` default.
+  defp parse_period(period), do: Periods.normalize_period(period)
 end

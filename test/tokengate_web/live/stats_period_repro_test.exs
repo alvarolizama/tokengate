@@ -34,7 +34,7 @@ defmodule TokengateWeb.StatsPeriodReproTest do
     {:ok, conn: conn}
   end
 
-  for period <- ~w(today week month last_month 30d) do
+  for period <- ~w(today yesterday week 30d) do
     test "overview con periodo #{period} no revienta", %{conn: conn} do
       _log = repro_log()
 
@@ -61,6 +61,108 @@ defmodule TokengateWeb.StatsPeriodReproTest do
       view = wait_loaded(view)
 
       assert render(view) =~ "Estadísticas"
+    end
+  end
+
+  # Ventana cerrada: las tres lecturas del cuerpo de stats (summary, tabla de
+  # keys y matriz modelo × key) usan from Y to, así que "ayer" no arrastra el
+  # día en curso. Es el bug de F2 tal cual: con sólo `from`, las tres sumaban de
+  # más y la tabla dejaba de cuadrar con su KPI.
+  describe "service stats body window" do
+    test "ayer no suma hoy en summary, keys ni modelos" do
+      {:ok, service} =
+        Accounts.create_service(%{"name" => "bounds-#{Ecto.UUID.generate()}"})
+
+      today = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      yesterday_mid =
+        today
+        |> DateTime.to_date()
+        |> Date.add(-1)
+        |> DateTime.new!(~T[12:00:00], "Etc/UTC")
+
+      service_log(service, yesterday_mid)
+      service_log(service, today)
+
+      yesterday = compute(service, "yesterday")
+
+      assert yesterday.summary.request_count == 1
+      assert Enum.sum(Enum.map(yesterday.key_rows, & &1.stats.request_count)) == 1
+      assert Enum.sum(Enum.map(yesterday.model_breakdown.rows, & &1.request_count)) == 1
+
+      today_stats = compute(service, "today")
+
+      assert today_stats.summary.request_count == 1
+      assert Enum.sum(Enum.map(today_stats.model_breakdown.rows, & &1.request_count)) == 1
+    end
+
+    defp compute(service, period) do
+      TokengateWeb.ServiceStatsBody.compute_stats_assigns(%{
+        service_id: service.id,
+        service_api_keys: [],
+        period: period,
+        timezone: "Etc/UTC",
+        key_filter: "all"
+      })
+    end
+
+    # Los filtros Desde/Hasta del form llegan como fecha ISO: compute_logs los
+    # convierte a datetime ANTES de tocar Logs (antes viajaban como string y
+    # Ecto.Query.CastError mataba el socket). Una fecha que no parsea se ignora.
+    test "los filtros Desde/Hasta parsean a datetime y nunca revientan" do
+      {:ok, service} = Accounts.create_service(%{"name" => "dates-#{Ecto.UUID.generate()}"})
+      service_log(service, DateTime.utc_now() |> DateTime.truncate(:second))
+
+      today = Date.utc_today() |> Date.to_iso8601()
+
+      valid =
+        logs_for(service, %{"from" => today, "to" => today}, "Etc/UTC")
+
+      assert length(valid.logs) == 1
+
+      # Un rango de ayer no trae el log de hoy: el filtro sí acota.
+      yesterday = Date.utc_today() |> Date.add(-1) |> Date.to_iso8601()
+
+      assert logs_for(service, %{"from" => yesterday, "to" => yesterday}, "Etc/UTC").logs == []
+
+      # Basura y params forjados: filtro ignorado, no crash.
+      for garbage <- ["no-es-fecha", "2026-13-45", "2026-11-01T99:00:00", ["2026-11-01"]] do
+        assert length(logs_for(service, %{"from" => garbage, "to" => garbage}, "Etc/UTC").logs) ==
+                 1
+      end
+
+      # Medianoche local inexistente (spring-forward de Chile): el parseo cae al
+      # primer instante válido del día en vez de reventar con DateTime.new!.
+      assert length(logs_for(service, %{"from" => "2026-09-06"}, "America/Santiago").logs) == 1
+    end
+
+    defp logs_for(service, filters, timezone) do
+      TokengateWeb.ServiceStatsBody.compute_logs(
+        %{
+          service_id: service.id,
+          filters: Map.merge(TokengateWeb.ServiceStatsBody.default_filters(), filters),
+          timezone: timezone,
+          key_filter: "all",
+          page_size: 50
+        },
+        :reset,
+        nil
+      )
+    end
+
+    defp service_log(service, at) do
+      %Tokengate.Logs.RequestLog{}
+      |> Ecto.Changeset.change(%{
+        inserted_at: at,
+        subject_type: "service",
+        service_id: service.id,
+        model_requested: "gpt-4o",
+        status_code: 200,
+        prompt_tokens: 5,
+        completion_tokens: 5,
+        provider_cost_usd: Decimal.new("0.001")
+      })
+      |> Repo.insert!()
     end
   end
 

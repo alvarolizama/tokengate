@@ -72,8 +72,11 @@ defmodule Tokengate.PeriodsTest do
   end
 
   test "period_bounds month = start of UTC month" do
-    # "Este mes" mide el mes UTC — la ventana en que resetea el presupuesto
-    # mensual de cada sujeto (Budgets.Manager), igual que "Hoy" con el día.
+    # Ventana legacy (fuera del set canónico): se conserva para las superficies
+    # mensuales que migran en otra fase y para los tests de ventana cerrada del
+    # rollup. "Este mes" mide el mes UTC — la ventana en que resetea el
+    # presupuesto mensual de cada sujeto (Budgets.Manager), igual que "Hoy" con
+    # el día.
     %{from: from} = Periods.period_bounds("month", "America/Mexico_City")
     assert from == Periods.start_of_month_utc("Etc/UTC")
 
@@ -82,6 +85,95 @@ defmodule Tokengate.PeriodsTest do
     # ...pero sí las que siguen siendo de calendario local.
     assert Periods.period_bounds("week", "Etc/UTC").from !=
              Periods.period_bounds("week", "America/Mexico_City").from
+  end
+
+  describe "canonical period set" do
+    test "es exactamente today, yesterday, week y 30d" do
+      assert Periods.canonical_periods() == ~w(today yesterday week 30d)
+      assert Periods.default_period() == "week"
+
+      for period <- ~w(today yesterday week 30d) do
+        assert Periods.canonical_period?(period)
+      end
+
+      refute Periods.canonical_period?("month")
+      refute Periods.canonical_period?("last_month")
+      refute Periods.canonical_period?("7d")
+      refute Periods.canonical_period?(nil)
+    end
+
+    test "normalize_period/2 degrada bookmarks fuera del set al default" do
+      assert Periods.normalize_period("today") == "today"
+      assert Periods.normalize_period("yesterday") == "yesterday"
+      assert Periods.normalize_period("30d") == "30d"
+
+      # Bookmarks viejos / params forjados: al default, sin reinterpretarse.
+      assert Periods.normalize_period("month") == "week"
+      assert Periods.normalize_period("last_month") == "week"
+      assert Periods.normalize_period("7d") == "week"
+      assert Periods.normalize_period(nil) == "week"
+      assert Periods.normalize_period(["today"]) == "week"
+
+      # El default es inyectable (cada superficie puede elegir el suyo).
+      assert Periods.normalize_period("today", "30d") == "today"
+      assert Periods.normalize_period("basura", "30d") == "30d"
+    end
+
+    test "un periodo desconocido cae en la ventana del default (week)" do
+      now = ~U[2026-11-17 13:45:12Z]
+
+      assert Periods.period_bounds("basura", "Etc/UTC", now: now) ==
+               Periods.period_bounds("week", "Etc/UTC", now: now)
+
+      assert Periods.period_bounds(nil, "Etc/UTC", now: now) ==
+               Periods.period_bounds("week", "Etc/UTC", now: now)
+    end
+  end
+
+  # "Ayer" es el día UTC CERRADO anterior: ventana fija (now inyectable), ancla
+  # UTC y 24 h exactas aunque la zona del usuario cruce un cambio de hora.
+  describe "yesterday" do
+    test "es el día UTC cerrado anterior, con now inyectable" do
+      now = ~U[2026-11-17 13:45:12Z]
+      %{from: from, to: to} = Periods.period_bounds("yesterday", "Etc/UTC", now: now)
+
+      assert from == ~U[2026-11-16 00:00:00Z]
+      assert to == ~U[2026-11-17 00:00:00Z]
+      assert DateTime.diff(to, from, :second) == 86_400
+
+      # El `to` de ayer es el `from` de hoy: borde compartido, sin hueco ni solape.
+      assert to == Periods.period_bounds("today", "Etc/UTC", now: now).from
+    end
+
+    test "ancla UTC: la zona del usuario no mueve la ventana" do
+      now = ~U[2026-11-17 13:45:12Z]
+      expected = Periods.period_bounds("yesterday", "Etc/UTC", now: now)
+
+      for tz <- ~w(Etc/UTC America/Mexico_City Europe/Madrid America/Santiago) do
+        assert Periods.period_bounds("yesterday", tz, now: now) == expected
+      end
+    end
+
+    test "DST-safe: mide 24 h aunque el día local cruce el cambio de hora" do
+      # 2026-09-06 es el spring-forward de Chile: la medianoche local NO existe
+      # y un ancla local habría medido 23 h. Anclado en UTC mide 24 h.
+      now = ~U[2026-09-07 12:00:00Z]
+      %{from: from, to: to} = Periods.period_bounds("yesterday", "America/Santiago", now: now)
+
+      assert from == ~U[2026-09-06 00:00:00Z]
+      assert to == ~U[2026-09-07 00:00:00Z]
+      assert DateTime.diff(to, from, :second) == 86_400
+    end
+
+    test "previous_period_bounds: span shift de un día UTC, pegado y exclusivo" do
+      now = ~U[2026-11-17 13:45:12Z]
+      current = Periods.period_bounds("yesterday", "Etc/UTC", now: now)
+      %{from: from, to: to} = Periods.previous_period_bounds("yesterday", "Etc/UTC", now: now)
+
+      assert to == current.from
+      assert from == ~U[2026-11-15 00:00:00Z]
+      assert DateTime.diff(to, from, :second) == 86_400
+    end
   end
 
   test "local_day_range devuelve start y start+24h" do

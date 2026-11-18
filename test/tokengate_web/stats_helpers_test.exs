@@ -5,6 +5,34 @@ defmodule TokengateWeb.StatsHelpersTest do
 
   alias TokengateWeb.StatsHelpers, as: Stats
 
+  describe "canonical_periods/0" do
+    test "el set canónico es exactamente today/yesterday/week/30d" do
+      assert Stats.canonical_periods() == ~w(today yesterday week 30d)
+
+      for period <- ~w(today yesterday week 30d) do
+        assert Stats.canonical_period?(period)
+      end
+
+      refute Stats.canonical_period?("month")
+      refute Stats.canonical_period?("last_month")
+      refute Stats.canonical_period?("7d")
+    end
+
+    test "cada periodo canónico tiene label en español" do
+      Gettext.put_locale(TokengateWeb.Gettext, "es")
+      on_exit(fn -> Gettext.put_locale(TokengateWeb.Gettext, "en") end)
+
+      assert Stats.period_label("today") == "Hoy"
+      assert Stats.period_label("yesterday") == "Ayer"
+      assert Stats.period_label("week") == "Esta semana"
+      assert Stats.period_label("30d") == "30 días"
+
+      for period <- Stats.canonical_periods() do
+        assert Stats.period_label(period) != ""
+      end
+    end
+  end
+
   describe "money/1" do
     test "cero exacto es $0.00" do
       assert Stats.money(Decimal.new(0)) == "$0.00"
