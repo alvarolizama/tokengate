@@ -215,6 +215,63 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
     end
   end
 
+  describe "rollup covering indexes (F37)" do
+    # The nine counters `Rollup.summary_from_rollup/1` sums.
+    @measures ~w(
+      request_count error_count prompt_tokens completion_tokens
+      cache_read_tokens cache_creation_tokens cost_micro
+      total_latency_ms latency_count
+    )
+
+    test "every rollup index carries the full measure set" do
+      for index <- ~w(
+            request_metrics_hourly_hour_idx
+            request_metrics_hourly_member_idx
+            request_metrics_hourly_user_idx
+            request_metrics_hourly_model_idx
+            request_metrics_hourly_provider_idx
+          ) do
+        [[def]] =
+          Tokengate.Repo.query!("SELECT indexdef FROM pg_indexes WHERE indexname = $1", [index]).rows
+
+        include_list = def |> String.split("INCLUDE") |> List.last()
+
+        assert def =~ "INCLUDE", "#{index} has no INCLUDE list: #{def}"
+
+        for measure <- @measures do
+          assert include_list =~ measure,
+                 "#{index} is missing #{measure} in its INCLUDE list: #{def}"
+        end
+      end
+    end
+
+    test "the rollup's covering keys are the window the summary bounds" do
+      # The summary bounds `(day, hour_utc)` — every rollup index is prefixed by
+      # that pair, which is what lets the window prune the table at all. The
+      # plan itself is not asserted here: the test fixture is a handful of
+      # rows, so the planner legitimately prefers a seq scan and an EXPLAIN
+      # would only measure that. The measure set above is the mechanical part;
+      # the production plan (`Heap Fetches` with real volume) is the
+      # owner-gated W15 measurement.
+      for index <- ~w(
+            request_metrics_hourly_hour_idx
+            request_metrics_hourly_member_idx
+            request_metrics_hourly_user_idx
+            request_metrics_hourly_model_idx
+            request_metrics_hourly_provider_idx
+          ) do
+        [[def]] =
+          Tokengate.Repo.query!("SELECT indexdef FROM pg_indexes WHERE indexname = $1", [index]).rows
+
+        key_list =
+          def |> String.split("USING btree") |> List.last() |> String.split("INCLUDE") |> hd()
+
+        assert key_list =~ "day"
+        assert key_list =~ "hour_utc"
+      end
+    end
+  end
+
   describe "aggregate_hours/2 idempotency" do
     test "re-running the aggregation does not double-count" do
       {tm, _group} = group_member_fixture()

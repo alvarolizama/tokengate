@@ -2454,6 +2454,37 @@ defmodule Tokengate.Metrics.Rollup do
     }
   end
 
+  # -----------------------------------------------------------------------
+  # Rollup coverage (self-healing input)
+  # -----------------------------------------------------------------------
+
+  @doc """
+  What the rollup currently covers: the newest aggregated bucket and the total
+  bucket count.
+
+  This is DATA coverage, not work coverage — an hour without traffic has no
+  bucket, so an old newest bucket is not by itself a gap. `HourlyAggregate`
+  compares it against the newest raw log hour (`HourlyAggregate.gap_hours/0`)
+  to decide whether the rollup is behind and the readers are falling back to
+  `request_logs` for hours the rollup should already own.
+  """
+  @spec coverage() :: %{last_hour_utc: DateTime.t() | nil, buckets: non_neg_integer()}
+  def coverage do
+    row =
+      Repo.one(
+        from(m in RequestMetricsHourly,
+          select: %{last_hour_utc: max(m.hour_utc), buckets: count(m.id)}
+        ),
+        timeout: stats_timeout()
+      )
+
+    %{
+      last_hour_utc:
+        if(is_nil(row.last_hour_utc), do: nil, else: to_utc_datetime(row.last_hour_utc)),
+      buckets: row.buckets
+    }
+  end
+
   @doc """
   Top HTTP error codes from the rollup — sums `error_count` grouped by
   nothing (the rollup has no `status_code` dimension), so this returns a

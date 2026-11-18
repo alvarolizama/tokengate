@@ -83,16 +83,50 @@ defmodule Tokengate.Credits.Topups do
     |> Repo.all()
   end
 
+  # `request_logs` is partitioned by `inserted_at` and keeps ~90 daily
+  # partitions, so an unbounded `SUM ... WHERE credit_topup_id = ?` walks all
+  # of them. This read runs on the proxy's reserve path
+  # (`Budgets.Manager.ensure_topup_loaded/1`) and again on the admin pages
+  # every 5s, so the partition walk is the whole cost. A top-up can only be
+  # debited AFTER it exists, so the read is bounded by its creation instant.
+  #
+  # The grace window covers the two orderings the bound must not cut:
+  #
+  #   * a request that started before the top-up was created and was settled
+  #     against it afterwards (the log carries the request start time), and
+  #   * the WriteWorker flush lag plus clock skew between nodes.
+  #
+  # One extra day of partitions costs a single extra range scan; scanning the
+  # full retention window is what this avoids.
+  @consumption_grace_hours 24
+
   @doc """
   Consumo de un top-up: la suma de lo asentado en los logs con su id.
+
+  La lectura va acotada por `inserted_at >= creación del top-up - gracia`
+  (ver `consumption_floor/1`): sin la cota, cada `consumed_usd/1` es un
+  seq scan de todas las particiones de `request_logs`.
   """
-  def consumed_usd(%Topup{id: id}) do
+  def consumed_usd(%Topup{id: id} = topup) do
     RequestLog
     |> where([rl], rl.credit_topup_id == ^id)
+    |> consume_since(consumption_floor(topup))
     |> select([rl], fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
     |> Repo.one()
     |> Decimal.new()
   end
+
+  # Nothing to bound against an unsaved struct (no `inserted_at` yet).
+  defp consumption_floor(%Topup{inserted_at: %DateTime{} = inserted_at}) do
+    inserted_at
+    |> DateTime.add(-@consumption_grace_hours * 3600, :second)
+    |> DateTime.truncate(:second)
+  end
+
+  defp consumption_floor(_topup), do: nil
+
+  defp consume_since(query, nil), do: query
+  defp consume_since(query, %DateTime{} = from), do: where(query, [rl], rl.inserted_at >= ^from)
 
   @doc """
   Remanente de un top-up en USD (nunca negativo).
@@ -169,7 +203,6 @@ defmodule Tokengate.Credits.Topups do
       topups
       |> Map.values()
       |> List.flatten()
-      |> Enum.map(& &1.id)
       |> consumed_by_topup_ids()
 
     Map.new(subjects, fn subject ->
@@ -200,13 +233,28 @@ defmodule Tokengate.Credits.Topups do
 
   defp consumed_by_topup_ids([]), do: %{}
 
-  defp consumed_by_topup_ids(ids) do
+  # Same date bound as `consumed_usd/1`, applied once for the whole batch: all
+  # the given top-ups are live rows, so the OLDEST creation (minus grace) is
+  # the earliest instant any of them can have been debited at. Bounding the
+  # batch by that minimum keeps this ONE query instead of one per top-up, while
+  # still skipping the partitions older than the oldest top-up.
+  defp consumed_by_topup_ids(topups) do
+    ids = Enum.map(topups, & &1.id)
+
     RequestLog
     |> where([rl], rl.credit_topup_id in ^ids)
+    |> consume_since(earliest_consumption_floor(topups))
     |> group_by([rl], rl.credit_topup_id)
     |> select([rl], {rl.credit_topup_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
     |> Repo.all()
     |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+  end
+
+  defp earliest_consumption_floor(topups) do
+    topups
+    |> Enum.map(&consumption_floor/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.min(DateTime, fn -> nil end)
   end
 
   defp row(topup, consumed) do
