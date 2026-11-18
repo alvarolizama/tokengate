@@ -1067,252 +1067,209 @@ defmodule TokengateWeb.MonitoringLive do
           </.link>
         </div>
 
-        <%!-- Logs table (includes pending in-flight rows highlighted) --%>
+        <%!-- Logs feed. El stream está acotado a @max_stream_rows (ver
+             prepend_log/2): las filas in-flight llegan por el mismo stream con
+             `__pending__: true` y se distinguen por su badge + el ping. --%>
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
-          <table class="table table-sm">
-            <thead>
-              <tr class="border-b-0">
-                <th
-                  colspan="7"
-                  class="text-[10px] uppercase tracking-wider text-primary/70 bg-primary/5 border-r border-base-200"
-                >
-                  {gettext("Client")}
-                </th>
-                <th
-                  colspan="5"
-                  class="text-[10px] uppercase tracking-wider text-warning/70 bg-warning/5 border-r border-base-200"
-                >
-                  {gettext("Provider")}
-                </th>
-                <th
-                  colspan="4"
-                  class="text-[10px] uppercase tracking-wider text-accent/70 bg-accent/5 border-r border-base-200"
-                >
-                  {gettext("Response")}
-                </th>
-                <th
-                  colspan="6"
-                  class="text-[10px] uppercase tracking-wider text-info/70 bg-info/5 border-r border-base-200"
-                >
-                  {gettext("Performance")}
-                </th>
-                <th
-                  colspan="1"
-                  class="text-[10px] uppercase tracking-wider text-success/70 bg-success/5"
-                >
-                  {gettext("Costs")}
-                </th>
-              </tr>
-              <tr>
-                <th>{gettext("Date")}</th>
-                <th>{gettext("Model")}</th>
-                <th>{gettext("Type")}</th>
-                <th>{gettext("User")}</th>
-                <th>{gettext("Limit profile")}</th>
-                <th>{gettext("Agent")}</th>
-                <th>{gettext("API key")}</th>
-                <th class="border-r border-base-200">{gettext("Provider")}</th>
-                <th title={gettext("Provider API key or model")}>{gettext("Prov. key")}</th>
-                <th title={gettext("Provider HTTP status")}>{gettext("Prov. status")}</th>
-                <th
-                  title={gettext("Provider error reason")}
-                  colspan="2"
-                  class="border-r border-base-200"
-                >
-                  {gettext("Error")}
-                </th>
-                <th title={gettext("HTTP status sent to the client")}>{gettext("Status")}</th>
-                <th>{gettext("Think")}</th>
-                <th>{gettext("Effort")}</th>
-                <th class="border-r border-base-200">{gettext("Streaming")}</th>
-                <th class="text-right">{gettext("Input")}</th>
-                <th class="text-right">{gettext("Output")}</th>
-                <th class="text-right" title={gettext("Cache read")}>{gettext("Cache R")}</th>
-                <th class="text-right">{gettext("TPS")}</th>
-                <th title={gettext("Time to first token — streaming only")}>TTFT</th>
-                <th class="border-r border-base-200">{gettext("Latency")}</th>
-                <th class="text-right">{gettext("Cost")}</th>
-              </tr>
-            </thead>
-            <tbody id="logs" phx-update="stream">
-              <tr id="logs-empty" class="hidden only:table-row">
-                <td colspan="23" class="text-center py-8 text-base-content/40">
-                  {gettext("No logs match the filters.")}
-                </td>
-              </tr>
-              <tr
-                :for={{id, log} <- @streams.logs}
-                id={id}
-                class={if Map.get(log, :__pending__), do: "bg-warning/20 hover:bg-warning/30"}
-              >
+          <.table
+            id="logs"
+            rows={@streams.logs}
+            row_item={fn {_id, log} -> log end}
+            row_class="align-top"
+            empty?={@stream_rows == 0}
+          >
+            <:col :let={log} label={gettext("Date")}>
+              <div class="whitespace-nowrap text-sm">
                 <%= if Map.get(log, :__pending__) do %>
-                  <%!-- Pending in-flight row --%>
-                  <td class="whitespace-nowrap text-sm font-medium">
-                    <span class="flex items-center gap-1.5">
-                      <span class="relative flex h-2 w-2">
-                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60"></span>
-                        <span class="relative inline-flex rounded-full h-2 w-2 bg-warning"></span>
-                      </span>
-                      {format_datetime(log.inserted_at, @timezone)}
+                  <span class="flex items-center gap-1.5 font-medium">
+                    <span class="relative flex h-2 w-2">
+                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60"></span>
+                      <span class="relative inline-flex rounded-full h-2 w-2 bg-warning"></span>
                     </span>
-                  </td>
-                  <td class="text-sm">{log.model_requested}</td>
-                  <td class="text-sm">
-                    <span
-                      :if={log.subject_type == "service"}
-                      class="badge badge-sm badge-info"
-                    >
-                      {gettext("Service")}
-                    </span>
-                    <span :if={log.subject_type != "service"} class="badge badge-sm badge-ghost">
-                      {gettext("User")}
-                    </span>
-                  </td>
-                  <td class="text-sm">{member_display(log)}</td>
-                  <td class="text-sm">{member_group(log)}</td>
-                  <td class="text-sm">{log.client_agent || "—"}</td>
-                  <td class="text-sm">{api_key_display(log, @api_key_options)}</td>
-                  <td class="text-sm border-r border-base-200">{provider_name(log)}</td>
-                  <td class="text-sm">{prov_key_display(log)}</td>
-                  <td class="text-sm">—</td>
-                  <td colspan="2" class="text-sm border-r border-base-200">—</td>
-                  <td>
-                    <span class="badge badge-sm badge-warning">{gettext("In flight")}</span>
-                  </td>
-                  <td><.think_badge value={log.think} /></td>
-                  <td class="text-sm">{log.effort || "—"}</td>
-                  <td class="text-sm border-r border-base-200">
-                    {if log.streaming, do: gettext("Yes"), else: gettext("No")}
-                  </td>
-                  <td class="text-sm text-right tabular-nums">—</td>
-                  <td class="text-sm text-right tabular-nums">—</td>
-                  <td class="text-sm text-right tabular-nums">—</td>
-                  <td class="text-sm text-right tabular-nums text-base-content/70">—</td>
-                  <td class="text-sm text-base-content/70">—</td>
-                  <td class="text-sm border-r border-base-200">—</td>
-                  <td class="text-sm text-right tabular-nums">—</td>
-                <% else %>
-                  <%!-- Completed log row --%>
-                  <td class="whitespace-nowrap text-sm">
                     {format_datetime(log.inserted_at, @timezone)}
-                  </td>
-                  <td class="text-sm">{model_display(log.model_requested, log.model_responded)}</td>
-                  <td class="text-sm">
-                    <span
-                      :if={log.subject_type == "service"}
-                      class="badge badge-sm badge-info"
-                    >
-                      {gettext("Service")}
-                    </span>
-                    <span :if={log.subject_type != "service"} class="badge badge-sm badge-ghost">
-                      {gettext("User")}
-                    </span>
-                  </td>
-                  <td class="text-sm">{member_display(log)}</td>
-                  <td class="text-sm">{member_group(log)}</td>
-                  <td class="text-sm" title={log.agent_type}>
-                    {log.client_agent || "—"}
-                  </td>
-                  <td class="text-sm">{api_key_display(log, @api_key_options)}</td>
-                  <td class="text-sm border-r border-base-200">{provider_name(log)}</td>
-                  <td
-                    class="text-sm"
-                    title={
-                      if log.credential_name && log.credential_name != "",
-                        do: log.credential_name,
-                        else: nil
-                    }
-                  >
-                    {prov_key_display(log)}
-                  </td>
-                  <td class="text-sm">
-                    <span :if={log.provider_status_code} class="badge badge-sm badge-ghost">{log.provider_status_code}</span>
-                    <span :if={!log.provider_status_code} class="text-base-content/40">—</span>
-                  </td>
-                  <td colspan="2" class="text-sm border-r border-base-200">
-                    <div :if={log.error_reason} class="flex flex-col gap-0.5 items-start">
-                      <button
-                        type="button"
-                        class="badge badge-sm badge-error cursor-pointer hover:badge-error/80 transition-colors"
-                        phx-click="show_error"
-                        phx-value-log-id={log.id}
-                        phx-value-inserted-at={DateTime.to_iso8601(log.inserted_at)}
-                        title={gettext("View full error detail")}
-                        aria-label={gettext("View full error detail")}
-                      >
-                        {log.error_reason}
-                      </button>
-                      <button
-                        :if={log.error_message}
-                        type="button"
-                        class="text-left text-xs text-base-content/60 max-w-[220px] truncate cursor-pointer hover:text-base-content transition-colors"
-                        phx-click="show_error"
-                        phx-value-log-id={log.id}
-                        phx-value-inserted-at={DateTime.to_iso8601(log.inserted_at)}
-                        title={log.error_message}
-                      >
-                        {log.error_message}
-                      </button>
-                    </div>
-                    <span :if={!log.error_reason} class="text-base-content/40">—</span>
-                  </td>
-                  <td>
-                    <span class={["badge", "badge-sm", status_badge_class(log.status_code)]}>
-                      {log.status_code}
-                    </span>
-                    <span
-                      :if={log.status_code == 200 && log.error_reason}
-                      class="badge badge-sm badge-warning ml-1"
-                      title={
-                        gettext(
-                          "The provider failed and the request was recovered by falling back to another provider"
-                        )
-                      }
-                    >
-                      fallback
-                    </span>
-                  </td>
-                  <td><.think_badge value={log.think} /></td>
-                  <td class="text-sm">
-                    <span class="flex items-center gap-1.5">
-                      {log.effort || "—"}
-                      <%!-- Operator effort policy rewrite: the client's
-                           intent and what travelled to the wire differ. --%>
-                      <span
-                        :if={log.effort_applied && log.effort_applied != log.effort}
-                        class="badge badge-sm badge-accent"
-                        title={
-                          gettext(
-                            "Reasoning effort the gateway sent upstream after the operator's effort policy"
-                          )
-                        }
-                      >
-                        {log.effort || "∅"} → {log.effort_applied}
-                      </span>
-                    </span>
-                  </td>
-                  <td class="text-sm border-r border-base-200">
-                    {if log.streaming, do: gettext("Yes"), else: gettext("No")}
-                  </td>
-                  <td class="text-sm text-right tabular-nums">{format_number(log.prompt_tokens)}</td>
-                  <td class="text-sm text-right tabular-nums">
-                    {format_number(log.completion_tokens)}
-                  </td>
-                  <td class="text-sm text-right tabular-nums">
-                    {format_cache_tokens(log.cache_read_tokens)}
-                  </td>
-                  <td class="text-sm text-right tabular-nums text-base-content/70">
-                    {tps(log.completion_tokens, log.latency_ms)}
-                  </td>
-                  <td class="text-sm text-base-content/70">{format_ttft(log.ttft_ms)}</td>
-                  <td class="text-sm border-r border-base-200">{log.latency_ms}ms</td>
-                  <td class="text-sm text-right tabular-nums">
-                    {format_cost(log.provider_cost_usd)}
-                  </td>
+                  </span>
+                <% else %>
+                  {format_datetime(log.inserted_at, @timezone)}
                 <% end %>
-              </tr>
-            </tbody>
-          </table>
+              </div>
+            </:col>
+            <:col :let={log} label={gettext("Model")}>
+              <span class="text-sm">
+                {if Map.get(log, :__pending__),
+                  do: log.model_requested,
+                  else: model_display(log.model_requested, log.model_responded)}
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("Type")}>
+              <span :if={log.subject_type == "service"} class="badge badge-sm badge-info">
+                {gettext("Service")}
+              </span>
+              <span :if={log.subject_type != "service"} class="badge badge-sm badge-ghost">
+                {gettext("User")}
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("User")}>
+              <span class="text-sm">{member_display(log)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Limit profile")}>
+              <span class="text-sm">{member_group(log)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Agent")}>
+              <span class="text-sm" title={Map.get(log, :agent_type)}>{log.client_agent || "—"}</span>
+            </:col>
+            <:col :let={log} label={gettext("API key")}>
+              <span class="text-sm">{api_key_display(log, @api_key_options)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Provider")}>
+              <span class="text-sm">{provider_name(log)}</span>
+            </:col>
+            <:col
+              :let={log}
+              label={gettext("Prov. key")}
+              tooltip={gettext("Provider API key or model")}
+            >
+              <span
+                class="text-sm"
+                title={
+                  if Map.get(log, :credential_name) not in [nil, ""],
+                    do: Map.get(log, :credential_name)
+                }
+              >
+                {prov_key_display(log)}
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("Prov. status")} tooltip={gettext("Provider HTTP status")}>
+              <span :if={log.provider_status_code} class="badge badge-sm badge-ghost">
+                {log.provider_status_code}
+              </span>
+              <span :if={!log.provider_status_code} class="text-sm text-base-content/40">—</span>
+            </:col>
+            <:col :let={log} label={gettext("Error")} tooltip={gettext("Provider error reason")}>
+              <div class="min-w-[180px]">
+                <%= if Map.get(log, :__pending__) do %>
+                  <span class="text-sm text-base-content/40">—</span>
+                <% else %>
+                  <div :if={log.error_reason} class="flex flex-col gap-0.5 items-start">
+                    <button
+                      type="button"
+                      class="badge badge-sm badge-error cursor-pointer hover:badge-error/80 transition-colors"
+                      phx-click="show_error"
+                      phx-value-log-id={log.id}
+                      phx-value-inserted-at={DateTime.to_iso8601(log.inserted_at)}
+                      title={gettext("View full error detail")}
+                      aria-label={gettext("View full error detail")}
+                    >
+                      {log.error_reason}
+                    </button>
+                    <button
+                      :if={log.error_message}
+                      type="button"
+                      class="text-left text-xs text-base-content/60 max-w-[220px] truncate cursor-pointer hover:text-base-content transition-colors"
+                      phx-click="show_error"
+                      phx-value-log-id={log.id}
+                      phx-value-inserted-at={DateTime.to_iso8601(log.inserted_at)}
+                      title={log.error_message}
+                    >
+                      {log.error_message}
+                    </button>
+                  </div>
+                  <span :if={!log.error_reason} class="text-sm text-base-content/40">—</span>
+                <% end %>
+              </div>
+            </:col>
+            <:col
+              :let={log}
+              label={gettext("Status")}
+              tooltip={gettext("HTTP status sent to the client")}
+            >
+              <%= if Map.get(log, :__pending__) do %>
+                <span class="badge badge-sm badge-warning">{gettext("In flight")}</span>
+              <% else %>
+                <span class={["badge", "badge-sm", status_badge_class(log.status_code)]}>
+                  {log.status_code}
+                </span>
+                <span
+                  :if={log.status_code == 200 && log.error_reason}
+                  class="badge badge-sm badge-warning ml-1"
+                  title={
+                    gettext(
+                      "The provider failed and the request was recovered by falling back to another provider"
+                    )
+                  }
+                >
+                  fallback
+                </span>
+              <% end %>
+            </:col>
+            <:col :let={log} label="Think">
+              <.think_badge value={log.think} />
+            </:col>
+            <:col :let={log} label="Effort">
+              <span class="text-sm inline-flex items-center gap-1.5">
+                {log.effort || "—"}
+                <%!-- Operator effort policy rewrite: the client's
+                     intent and what travelled to the wire differ. --%>
+                <span
+                  :if={
+                    Map.get(log, :effort_applied) &&
+                      Map.get(log, :effort_applied) != log.effort
+                  }
+                  class="badge badge-sm badge-accent"
+                  title={
+                    gettext(
+                      "Reasoning effort the gateway sent upstream after the operator's effort policy"
+                    )
+                  }
+                >
+                  {log.effort || "∅"} → {Map.get(log, :effort_applied)}
+                </span>
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("Streaming")}>
+              <span class="text-sm">{if log.streaming, do: gettext("Yes"), else: gettext("No")}</span>
+            </:col>
+            <:col :let={log} label={gettext("Input")} align="right">
+              <span class="text-sm tabular-nums">
+                {if Map.get(log, :__pending__), do: "—", else: format_number(log.prompt_tokens)}
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("Output")} align="right">
+              <span class="text-sm tabular-nums">
+                {if Map.get(log, :__pending__), do: "—", else: format_number(log.completion_tokens)}
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("Cache R")} align="right" tooltip={gettext("Cache read")}>
+              <span class="text-sm tabular-nums">{format_cache_tokens(log.cache_read_tokens)}</span>
+            </:col>
+            <:col :let={log} label="TPS" align="right">
+              <span class="text-sm tabular-nums text-base-content/70">
+                {tps(log.completion_tokens, log.latency_ms)}
+              </span>
+            </:col>
+            <:col
+              :let={log}
+              label="TTFT"
+              tooltip={gettext("Time to first token — streaming only")}
+            >
+              <span class="text-sm text-base-content/70">{format_ttft(log.ttft_ms)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Latency")}>
+              <span class="text-sm">
+                {if Map.get(log, :__pending__), do: "—", else: "#{log.latency_ms}ms"}
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("Cost")} align="right">
+              <span class="text-sm tabular-nums">
+                {if Map.get(log, :__pending__), do: "—", else: format_cost(log.provider_cost_usd)}
+              </span>
+            </:col>
+            <:empty>
+              <div id="logs-empty-state">
+                <.icon name="hero-funnel" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                <p>{gettext("No logs match the filters.")}</p>
+              </div>
+            </:empty>
+          </.table>
         </div>
 
         <%!-- Load more --%>

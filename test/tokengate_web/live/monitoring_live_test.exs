@@ -101,6 +101,22 @@ defmodule TokengateWeb.MonitoringLiveTest do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/operations/monitoring")
   end
 
+  ## Empty feed ----------------------------------------------------------------
+
+  test "empty feed renders the table empty state instead of a bare header", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    # El feed es un stream y `.table` no puede deducir la vacuidad por sí solo:
+    # el LiveView le pasa `empty?` desde `stream_rows`. Sin ese assign la tabla
+    # pintaría solo el thead, sin mensaje.
+    assert has_element?(view, "#logs-empty")
+    assert has_element?(view, "#logs-empty", "No hay logs que coincidan con los filtros.")
+    refute has_element?(view, "#logs")
+  end
+
   ## User / group / think / effort columns ---------------------------------------
 
   test "shows user, group, think and effort for completed logs", %{conn: conn} do
