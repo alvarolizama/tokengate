@@ -606,136 +606,119 @@ defmodule TokengateWeb.GroupMembersLive do
         </div>
 
         <div id="members">
-          <div
-            :if={!@members_empty?}
-            class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm"
-          >
-            <table class="table table-sm">
-              <thead>
-                <tr>
-                  <th>{gettext("Member")}</th>
-                  <th>{gettext("Limits")}</th>
-                  <th>{gettext("Models")}</th>
-                  <th>{gettext("Spend/month")}</th>
-                  <th>{gettext("Usage")}</th>
-                  <th class="text-right">{gettext("Actions")}</th>
-                </tr>
-              </thead>
-              <tbody id="members-rows" phx-update="stream">
-                <tr :for={{dom_id, member} <- @streams.members} id={dom_id} class="align-top">
-                  <% mb = Map.get(@member_budgets, member.id, %{monthly_spend: Decimal.new(0)}) %>
-                  <% limits = Map.fetch!(@member_limits, member.id) %>
-                  <% own_conc? = not is_nil(member.user.default_concurrency_limit) %>
-                  <% own_rpm? = not is_nil(member.user.default_rpm_limit) %>
-                  <td>
-                    <p class="font-medium text-sm">{member.user.email}</p>
-                    <p class="text-xs text-base-content/50">{member.user.name}</p>
-                    <div class="flex items-center gap-1.5 mt-1 flex-wrap">
-                      <span class="badge badge-xs badge-ghost capitalize">{member.status}</span>
-                    </div>
-                  </td>
-                  <td class="text-xs whitespace-nowrap" id={"limits-#{member.id}"}>
-                    <p class="flex items-center gap-1">
-                      <span class="text-base-content/50">Conc.</span>
-                      {limits.concurrency_limit}
-                      <span
-                        :if={own_conc?}
-                        class="badge badge-xs badge-accent"
-                        title={gettext("The user's own override over the limit profile default")}
-                      >
-                        propio
-                      </span>
-                    </p>
-                    <p class="flex items-center gap-1">
-                      <span class="text-base-content/50">RPM</span>
-                      {limits.rpm_limit}
-                      <span
-                        :if={own_rpm?}
-                        class="badge badge-xs badge-accent"
-                        title={gettext("The user's own override over the limit profile default")}
-                      >
-                        propio
-                      </span>
-                    </p>
-                  </td>
-                  <td>
-                    <div class="flex items-center gap-1.5 flex-wrap">
-                      <button
-                        phx-click="open_details"
-                        phx-value-id={member.id}
-                        class="badge badge-sm badge-outline gap-1 hover:badge-primary cursor-pointer transition-colors"
-                        id={"details-#{member.id}"}
-                        title={gettext("Member models")}
-                      >
-                        <.icon name="hero-rectangle-stack" class="w-3 h-3" />
-                        {length(MapSet.to_list(@group_alias_ids))} del perfil de límites
-                      </button>
-                      <span
-                        :if={extra_model_ids(@extra_models, member.id) != []}
-                        class="badge badge-sm badge-accent"
-                      >
-                        +{length(extra_model_ids(@extra_models, member.id))} extra
-                      </span>
-                    </div>
-                  </td>
-                  <td class="font-mono text-sm">${format_decimal(mb.monthly_spend)}</td>
-                  <td>
-                    <% tier = get_member_tier(@usage_tiers, member.id) %>
-                    <%= if tier do %>
-                      <span
-                        class={["badge badge-sm", tier_badge_class(tier.tier)]}
-                        title={
-                          gettext(
-                            "Score: %{score} | Peak RPM: %{peak_rpm} | Active days: %{active_days} | Requests: %{requests}",
-                            score: tier.score,
-                            peak_rpm: tier.peak_rpm,
-                            active_days: tier.active_days,
-                            requests: tier.request_count
-                          )
-                        }
-                      >
-                        {String.capitalize(tier.tier)}
-                      </span>
-                    <% else %>
-                      <span
-                        class="badge badge-sm badge-ghost"
-                        title={gettext("No activity in 30 days")}
-                      >—</span>
-                    <% end %>
-                  </td>
-                  <td class="text-right">
-                    <div class="flex gap-0.5 justify-end">
-                      <.link
-                        navigate={~p"/stats/users/#{member.user_id}"}
-                        class="btn btn-xs btn-ghost"
-                        id={"stats-#{member.id}"}
-                        title={gettext("View this user's consolidated stats")}
-                      >
-                        <.icon name="hero-chart-bar" class="w-3.5 h-3.5" />
-                      </.link>
-                      <button
-                        phx-click="remove_member"
-                        phx-value-id={member.id}
-                        class="btn btn-xs btn-ghost text-error"
-                        id={"remove-#{member.id}"}
-                        title={gettext("Remove member")}
-                      >
-                        <.icon name="hero-trash" class="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div
-            :if={@members_empty?}
-            class="text-center py-12 text-base-content/40"
-            id="members-empty"
-          >
-            <.icon name="hero-users" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>{gettext("This limit profile has no members yet.")}</p>
+          <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
+            <.table
+              id="members-rows"
+              rows={@streams.members}
+              row_item={fn {_id, member} -> member end}
+              row_class="align-top"
+              empty?={@members_empty?}
+            >
+              <:col :let={member} label={gettext("Member")}>
+                <p class="font-medium text-sm">{member.user.email}</p>
+                <p class="text-xs text-base-content/50">{member.user.name}</p>
+                <div class="flex items-center gap-1.5 mt-1 flex-wrap">
+                  <span class="badge badge-xs badge-ghost capitalize">{member.status}</span>
+                </div>
+              </:col>
+              <:col :let={member} label={gettext("Limits")}>
+                <% limits = Map.fetch!(@member_limits, member.id) %>
+                <div id={"limits-#{member.id}"} class="text-xs whitespace-nowrap">
+                  <p class="flex items-center gap-1">
+                    <span class="text-base-content/50">Conc.</span>
+                    {limits.concurrency_limit}
+                    <span
+                      :if={not is_nil(member.user.default_concurrency_limit)}
+                      class="badge badge-xs badge-accent"
+                      title={gettext("The user's own override over the limit profile default")}
+                    >
+                      propio
+                    </span>
+                  </p>
+                  <p class="flex items-center gap-1">
+                    <span class="text-base-content/50">RPM</span>
+                    {limits.rpm_limit}
+                    <span
+                      :if={not is_nil(member.user.default_rpm_limit)}
+                      class="badge badge-xs badge-accent"
+                      title={gettext("The user's own override over the limit profile default")}
+                    >
+                      propio
+                    </span>
+                  </p>
+                </div>
+              </:col>
+              <:col :let={member} label={gettext("Models")}>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    phx-click="open_details"
+                    phx-value-id={member.id}
+                    class="badge badge-sm badge-outline gap-1 hover:badge-primary cursor-pointer transition-colors"
+                    id={"details-#{member.id}"}
+                    title={gettext("Member models")}
+                  >
+                    <.icon name="hero-rectangle-stack" class="w-3 h-3" />
+                    {length(MapSet.to_list(@group_alias_ids))} del perfil de límites
+                  </button>
+                  <span
+                    :if={extra_model_ids(@extra_models, member.id) != []}
+                    class="badge badge-sm badge-accent"
+                  >
+                    +{length(extra_model_ids(@extra_models, member.id))} extra
+                  </span>
+                </div>
+              </:col>
+              <:col :let={member} label={gettext("Spend/month")} align="right">
+                <% mb = Map.get(@member_budgets, member.id, %{monthly_spend: Decimal.new(0)}) %>
+                <span class="font-mono text-sm">${format_decimal(mb.monthly_spend)}</span>
+              </:col>
+              <:col :let={member} label={gettext("Usage")}>
+                <% tier = get_member_tier(@usage_tiers, member.id) %>
+                <%= if tier do %>
+                  <span
+                    class={["badge badge-sm", tier_badge_class(tier.tier)]}
+                    title={
+                      gettext(
+                        "Score: %{score} | Peak RPM: %{peak_rpm} | Active days: %{active_days} | Requests: %{requests}",
+                        score: tier.score,
+                        peak_rpm: tier.peak_rpm,
+                        active_days: tier.active_days,
+                        requests: tier.request_count
+                      )
+                    }
+                  >
+                    {String.capitalize(tier.tier)}
+                  </span>
+                <% else %>
+                  <span class="badge badge-sm badge-ghost" title={gettext("No activity in 30 days")}>—</span>
+                <% end %>
+              </:col>
+              <:action :let={member}>
+                <.link
+                  navigate={~p"/stats/users/#{member.user_id}"}
+                  class="btn btn-xs btn-ghost"
+                  id={"stats-#{member.id}"}
+                  title={gettext("View this user's consolidated stats")}
+                >
+                  <.icon name="hero-chart-bar" class="w-3.5 h-3.5" />
+                </.link>
+                <button
+                  phx-click="remove_member"
+                  phx-value-id={member.id}
+                  class="btn btn-xs btn-ghost text-error"
+                  id={"remove-#{member.id}"}
+                  title={gettext("Remove member")}
+                >
+                  <.icon name="hero-trash" class="w-3.5 h-3.5" />
+                </button>
+              </:action>
+              <:empty>
+                <div id="members-empty">
+                  <.icon name="hero-users" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                  <p>{gettext("This limit profile has no members yet.")}</p>
+                </div>
+              </:empty>
+            </.table>
           </div>
         </div>
 

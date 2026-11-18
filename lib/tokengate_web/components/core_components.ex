@@ -396,44 +396,91 @@ defmodule TokengateWeb.CoreComponents do
   attr :rows, :list, required: true
   attr :row_id, :any, default: nil, doc: "the function for generating the row id"
   attr :row_click, :any, default: nil, doc: "the function for handling phx-click on each row"
+  attr :row_class, :string, default: nil, doc: "extra class for every body row (e.g. align-top)"
 
   attr :row_item, :any,
     default: &Function.identity/1,
     doc: "the function for mapping each row before calling the :col and :action slots"
 
+  attr :sort_field, :any, default: nil, doc: "the field currently sorted (enables the arrow)"
+  attr :sort_direction, :any, default: nil, doc: ":asc | :desc"
+  attr :sort_event, :string, default: "sort", doc: "phx-click event fired by sortable headers"
+  attr :empty?, :boolean, default: false, doc: "force the empty state (required for streams)"
+  attr :empty_text, :string, default: nil, doc: "fallback empty-state message"
+
   slot :col, required: true do
     attr :label, :string
+    attr :field, :atom, doc: "when set, the header becomes a sort button for this field"
+    attr :align, :string, doc: "left (default) | right | center"
+    attr :tooltip, :string, doc: "optional help tooltip rendered next to the header label"
   end
 
   slot :action, doc: "the slot for showing user actions in the last table column"
+  slot :empty, doc: "optional empty-state content (overrides empty_text)"
 
   def table(assigns) do
+    stream? = is_struct(assigns.rows, Phoenix.LiveView.LiveStream)
+
     assigns =
-      with %{rows: %Phoenix.LiveView.LiveStream{}} <- assigns do
-        assign(assigns, row_id: assigns.row_id || fn {id, _item} -> id end)
-      end
+      assigns
+      |> assign(:stream?, stream?)
+      |> assign(:row_id, assigns.row_id || if(stream?, do: fn {id, _item} -> id end))
+      |> assign(:is_empty?, assigns.empty? or (!stream? and assigns.rows == []))
 
     ~H"""
-    <table class="table table-sm">
+    <div :if={@is_empty?} class="text-center py-12 text-base-content/40" id={@id <> "-empty"}>
+      <%= if @empty != [] do %>
+        {render_slot(@empty)}
+      <% else %>
+        {@empty_text || gettext("No records yet.")}
+      <% end %>
+    </div>
+    <table :if={!@is_empty?} class="table table-sm">
       <thead>
         <tr>
-          <th :for={col <- @col}>{col[:label]}</th>
-          <th :if={@action != []}>
+          <th :for={col <- @col} class={align_class(col[:align])}>
+            <span class={[
+              "inline-flex items-center gap-1",
+              col[:align] == "right" && "justify-end w-full"
+            ]}>
+              <%= if col[:field] do %>
+                <button
+                  type="button"
+                  phx-click={@sort_event}
+                  phx-value-field={col[:field]}
+                  class="flex items-center gap-1 hover:text-primary"
+                >
+                  {col[:label]}
+                  <span class="inline-block w-3 text-center">
+                    <%= if @sort_field == col[:field] do %>
+                      {if @sort_direction == :asc, do: "▲", else: "▼"}
+                    <% end %>
+                  </span>
+                </button>
+              <% else %>
+                {col[:label]}
+              <% end %>
+              <span :if={col[:tooltip]} class="tooltip tooltip-top" data-tip={col[:tooltip]}>
+                <.icon name="hero-question-mark-circle" class="w-3.5 h-3.5 text-base-content/40" />
+              </span>
+            </span>
+          </th>
+          <th :if={@action != []} class="text-right">
             <span class="sr-only">{gettext("Actions")}</span>
           </th>
         </tr>
       </thead>
-      <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
-        <tr :for={row <- @rows} id={@row_id && @row_id.(row)}>
+      <tbody id={@id} phx-update={@stream? && "stream"}>
+        <tr :for={row <- @rows} id={@row_id && @row_id.(row)} class={@row_class}>
           <td
             :for={col <- @col}
             phx-click={@row_click && @row_click.(row)}
-            class={@row_click && "hover:cursor-pointer"}
+            class={[align_class(col[:align]), @row_click && "hover:cursor-pointer"]}
           >
             {render_slot(col, @row_item.(row))}
           </td>
-          <td :if={@action != []} class="w-0 font-semibold">
-            <div class="flex gap-4">
+          <td :if={@action != []} class="w-0 text-right">
+            <div class="flex gap-2 justify-end">
               <%= for action <- @action do %>
                 {render_slot(action, @row_item.(row))}
               <% end %>
@@ -444,6 +491,10 @@ defmodule TokengateWeb.CoreComponents do
     </table>
     """
   end
+
+  defp align_class("right"), do: "text-right"
+  defp align_class("center"), do: "text-center"
+  defp align_class(_), do: nil
 
   @doc """
   Renders a data list.
