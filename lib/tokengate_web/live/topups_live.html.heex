@@ -191,6 +191,7 @@
         id="topups"
         rows={@streams.topups}
         row_item={fn {_dom_id, topup} -> topup end}
+        row_class={fn {_dom_id, topup} -> archived?(topup, @consumed) && "opacity-50" end}
         sort_field={@sort_field}
         sort_direction={@sort_direction}
         sort_event="sort_topups"
