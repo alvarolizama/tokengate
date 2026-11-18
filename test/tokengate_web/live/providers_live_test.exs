@@ -850,4 +850,140 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert reloaded.name == builtin.name
     assert reloaded.base_url == builtin.base_url
   end
+
+  ## Client ids and stale rows (F6/F8) -------------------------------------
+
+  # Every id that arrives in an event payload is untrusted: a non-UUID used to
+  # raise Ecto.Query.CastError and an unknown UUID Ecto.NoResultsError inside
+  # get_provider!/1 — both killed the LiveView mid-render.
+  test "un id malformado o inexistente no tumba la LiveView", %{conn: conn} do
+    provider = create_provider()
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    for event <- ~w(edit_provider edit_paths toggle_provider) do
+      html = render_click(view, event, %{"id" => "no-es-un-uuid"})
+      assert html =~ "El proveedor ya no existe."
+
+      html = render_click(view, event, %{"id" => Ecto.UUID.generate()})
+      assert html =~ "El proveedor ya no existe."
+    end
+
+    # No clause matched this event either: the catch-all keeps the page alive
+    # instead of raising FunctionClauseError.
+    html = render_click(view, "evento_desconocido", %{"id" => provider.id})
+    assert html =~ "Proveedores"
+
+    # The page still works after all of that.
+    view |> element("#edit-#{provider.id}") |> render_click()
+    assert has_element?(view, "#provider-form")
+  end
+
+  test "guardar el form de un proveedor que ya no existe no revienta", %{conn: conn} do
+    provider = create_provider(%{name: "stale-#{unique()}"})
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    view |> element("#edit-#{provider.id}") |> render_click()
+    assert has_element?(view, "#provider-form")
+
+    # Another admin deletes it while this form is open.
+    {:ok, _} = Providers.delete_provider(provider)
+
+    html =
+      view
+      |> form("#provider-form", provider: %{name: "renombrado"})
+      |> render_submit()
+
+    assert html =~ "El proveedor ya no existe."
+    refute has_element?(view, "#provider-form")
+    refute has_element?(view, "#edit-#{provider.id}")
+  end
+
+  # A submit already in flight lands right after Cancel cleared the modal
+  # assign; get_provider!(nil) used to crash the LiveView on that path.
+  test "save_paths después de cancelar no llama get_provider!(nil)", %{conn: conn} do
+    provider = create_provider(%{path_overrides: %{"chat" => "/v1/chat"}})
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    view |> element("#paths-#{provider.id}") |> render_click()
+    assert has_element?(view, "#paths-modal")
+
+    view |> element("#close-paths-modal") |> render_click()
+    refute has_element?(view, "#paths-modal")
+
+    html = render_click(view, "save_paths", %{"paths" => %{"image" => "/v1/images"}})
+
+    assert html =~ "El proveedor ya no existe."
+    refute has_element?(view, "#paths-modal")
+    # Nothing was written by the stale submit.
+    assert Providers.get_provider!(provider.id).path_overrides == %{"chat" => "/v1/chat"}
+  end
+
+  # The old guard only counted lanes served by the provider's KEYS; a lane
+  # mounted on one of its credential pools (credential_id NULL) read as unused
+  # and took the whole provider with it.
+  test "borrar un proveedor con lanes por pool se bloquea", %{conn: conn} do
+    provider = create_provider()
+
+    u = unique()
+
+    {:ok, model_} =
+      Providers.create_model(%{
+        name: "gpt-4o-pool-#{u}",
+        context_window: 128_000
+      })
+
+    {:ok, pool} = Providers.create_pool(provider, %{name: "pool-#{u}"})
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-pooled",
+        status: "active"
+      })
+
+    {:ok, _member} = Providers.add_pool_member(pool, credential)
+
+    {:ok, _lane} =
+      Providers.create_model_provider(%{
+        model_id: model_.id,
+        pool_id: pool.id,
+        provider_model: "gpt-4-turbo",
+        enabled: true,
+        priority: 1
+      })
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    html = view |> element("#delete-#{provider.id}") |> render_click()
+
+    assert html =~ "está en uso por uno o más modelos"
+    assert has_element?(view, "#edit-#{provider.id}")
+    assert Providers.get_provider(provider.id)
+  end
+
+  test "borrar un proveedor que otro admin ya borró no revienta", %{conn: conn} do
+    provider = create_provider()
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    {:ok, _} = Providers.delete_provider(provider)
+
+    html = view |> element("#delete-#{provider.id}") |> render_click()
+
+    assert html =~ "El proveedor ya no existe."
+    refute has_element?(view, "#edit-#{provider.id}")
+  end
 end
