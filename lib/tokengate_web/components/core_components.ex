@@ -464,7 +464,10 @@ defmodule TokengateWeb.CoreComponents do
                   type="button"
                   phx-click={@sort_event}
                   phx-value-field={col[:field]}
-                  class="flex items-center gap-1 hover:text-primary"
+                  class={[
+                    "flex items-center gap-1 hover:text-primary",
+                    col[:align] == "right" && "justify-end w-full"
+                  ]}
                 >
                   {col[:label]}
                   <span class="inline-block w-3 text-center">
