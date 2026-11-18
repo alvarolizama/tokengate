@@ -826,6 +826,11 @@ msgstr "Revocar esta clave"
 msgid "Revoked"
 msgstr "Revocada"
 
+#: lib/tokengate_web/live/model_providers_live.ex
+#, elixir-autogen, elixir-format
+msgid "Routing"
+msgstr "Enrutamiento"
+
 #: lib/tokengate_web/components/keys_panel.ex:82
 #, elixir-autogen, elixir-format
 msgid "Sticky routing"
@@ -2144,6 +2149,11 @@ msgstr "Elegir otro proveedor"
 #, elixir-autogen, elixir-format
 msgid "Context window (tokens)"
 msgstr "Ventana de contexto (tokens)"
+
+#: lib/tokengate_web/live/model_providers_live.ex
+#, elixir-autogen, elixir-format
+msgid "Credential"
+msgstr "Credencial"
 
 #: lib/tokengate_web/live/model_providers_live.ex:1904
 #: lib/tokengate_web/live/models_live.ex:1606
@@ -4751,6 +4761,11 @@ msgstr "Modelos que este proveedor sirve para este tipo:"
 msgid "No provider declares this type."
 msgstr "Ningún proveedor declara este tipo."
 
+#: lib/tokengate_web/live/model_providers_live.ex
+#, elixir-autogen, elixir-format
+msgid "Pricing"
+msgstr "Precios"
+
 #: lib/tokengate_web/live/model_providers_live.ex:2326
 #, elixir-autogen, elixir-format
 msgid "Pricing unit"
@@ -5460,6 +5475,11 @@ msgstr "Una API key"
 #, elixir-autogen, elixir-format
 msgid "Pick a pool"
 msgstr "Elige un pool"
+
+#: lib/tokengate_web/live/model_providers_live.ex
+#, elixir-autogen, elixir-format
+msgid "Pick or type the provider model first."
+msgstr "Elige o escribe el modelo del proveedor para continuar."
 
 #: lib/tokengate_web/live/model_providers_live.ex:1480
 #: lib/tokengate_web/live/model_providers_live.ex:1485
