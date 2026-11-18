@@ -65,6 +65,7 @@ defmodule TokengateWeb.NotificationsLive do
 
   defp load_data(socket) do
     settings = Notifications.get_settings()
+    links = Notifications.list_links()
 
     socket
     |> assign(:settings, settings)
@@ -72,8 +73,8 @@ defmodule TokengateWeb.NotificationsLive do
     |> assign(:env_token?, is_binary(Application.get_env(:tokengate, :telegram_bot_token)))
     |> assign(:token_set?, not is_nil(settings.bot_token))
     |> assign(:configured?, Telegram.configured?())
-    |> assign(:links_empty?, Notifications.list_links() == [])
-    |> stream(:links, Notifications.list_links(), reset: true)
+    |> assign(:links_empty?, links == [])
+    |> stream(:links, links, reset: true)
     |> load_notifications()
   end
 
@@ -446,46 +447,39 @@ defmodule TokengateWeb.NotificationsLive do
             </p>
 
             <div class="overflow-x-auto mt-3">
-              <table class="table table-sm">
-                <thead>
-                  <tr>
-                    <th>{gettext("Event")}</th>
-                    <th>{gettext("Severity")}</th>
-                    <th class="text-right">{gettext("Enabled")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr :for={event <- @events} id={"event-row-" <> event.name}>
-                    <td>
-                      <div class="font-medium text-sm">{event_label(event.name)}</div>
-                      <div
-                        :if={event_description(event.name) != ""}
-                        class="text-xs text-base-content/50"
-                      >
-                        {event_description(event.name)}
-                      </div>
-                    </td>
-                    <td>
-                      <% {cls, text} = severity_badge(event.severity) %>
-                      <span class={"badge badge-sm " <> cls}>{text}</span>
-                    </td>
-                    <td class="text-right">
-                      <button
-                        type="button"
-                        phx-click="toggle_event"
-                        phx-value-event={event.name}
-                        id={"toggle-event-" <> event.name}
-                        class={[
-                          "btn btn-xs",
-                          if(event.enabled, do: "btn-success", else: "btn-ghost")
-                        ]}
-                      >
-                        {if event.enabled, do: gettext("On"), else: gettext("Off")}
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+              <.table
+                id="events-rows"
+                rows={@events}
+                row_id={fn event -> "event-row-" <> event.name end}
+              >
+                <:col :let={event} label={gettext("Event")}>
+                  <div class="font-medium text-sm">{event_label(event.name)}</div>
+                  <div
+                    :if={event_description(event.name) != ""}
+                    class="text-xs text-base-content/50"
+                  >
+                    {event_description(event.name)}
+                  </div>
+                </:col>
+                <:col :let={event} label={gettext("Severity")}>
+                  <% {cls, text} = severity_badge(event.severity) %>
+                  <span class={"badge badge-sm " <> cls}>{text}</span>
+                </:col>
+                <:col :let={event} label={gettext("Enabled")} align="right">
+                  <button
+                    type="button"
+                    phx-click="toggle_event"
+                    phx-value-event={event.name}
+                    id={"toggle-event-" <> event.name}
+                    class={[
+                      "btn btn-xs",
+                      if(event.enabled, do: "btn-success", else: "btn-ghost")
+                    ]}
+                  >
+                    {if event.enabled, do: gettext("On"), else: gettext("Off")}
+                  </button>
+                </:col>
+              </.table>
             </div>
           </div>
         </div>
@@ -586,50 +580,40 @@ defmodule TokengateWeb.NotificationsLive do
             </p>
 
             <div class="mt-3">
-              <table class="table table-sm table-fixed w-full">
-                <colgroup>
-                  <col style="width: 14%" />
-                  <col style="width: 22%" />
-                  <col style="width: 18%" />
-                  <col style="width: 34%" />
-                  <col style="width: 12%" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>{gettext("Kind")}</th>
-                    <th>{gettext("Chat id")}</th>
-                    <th>{gettext("Topic id")}</th>
-                    <th>{gettext("Label")}</th>
-                    <th class="text-right">{gettext("Actions")}</th>
-                  </tr>
-                </thead>
-                <tbody id="links" phx-update="stream">
-                  <tr :for={{dom_id, link} <- @streams.links} id={dom_id}>
-                    <td>
-                      <span class="badge badge-sm badge-ghost">{kind_label(link.kind)}</span>
-                    </td>
-                    <td class="font-mono text-xs">{link.chat_id}</td>
-                    <td class="font-mono text-xs">{link.thread_id}</td>
-                    <td class="text-sm">{link.label}</td>
-                    <td class="text-right">
-                      <button
-                        type="button"
-                        phx-click="remove_link"
-                        phx-value-id={link.id}
-                        class="btn btn-ghost btn-xs text-error"
-                        id={"remove-link-" <> link.id}
-                      >
-                        <.icon name="hero-x-mark" class="w-3 h-3" /> {gettext("Remove")}
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div :if={@links_empty?} class="text-center py-8 text-base-content/40" id="links-empty">
-              <.icon name="hero-link-slash" class="w-8 h-8 mx-auto mb-2 opacity-40" />
-              <p class="text-sm">{gettext("No linked chats yet.")}</p>
+              <.table
+                id="links"
+                rows={@streams.links}
+                row_item={fn {_id, link} -> link end}
+                empty?={@links_empty?}
+              >
+                <:col :let={link} label={gettext("Kind")}>
+                  <span class="badge badge-sm badge-ghost">{kind_label(link.kind)}</span>
+                </:col>
+                <:col :let={link} label={gettext("Chat id")}>
+                  <span class="font-mono text-xs">{link.chat_id}</span>
+                </:col>
+                <:col :let={link} label={gettext("Topic id")}>
+                  <span class="font-mono text-xs">{link.thread_id}</span>
+                </:col>
+                <:col :let={link} label={gettext("Label")}>
+                  <span class="text-sm">{link.label}</span>
+                </:col>
+                <:action :let={link}>
+                  <button
+                    type="button"
+                    phx-click="remove_link"
+                    phx-value-id={link.id}
+                    class="btn btn-ghost btn-xs text-error"
+                    id={"remove-link-" <> link.id}
+                  >
+                    <.icon name="hero-x-mark" class="w-3 h-3" /> {gettext("Remove")}
+                  </button>
+                </:action>
+                <:empty>
+                  <.icon name="hero-link-slash" class="w-8 h-8 mx-auto mb-2 opacity-40" />
+                  <p class="text-sm">{gettext("No linked chats yet.")}</p>
+                </:empty>
+              </.table>
             </div>
           </div>
         </div>
@@ -658,57 +642,43 @@ defmodule TokengateWeb.NotificationsLive do
             </p>
 
             <div class="overflow-x-auto mt-3">
-              <table class="table table-sm table-fixed w-full">
-                <colgroup>
-                  <col style="width: 20%" />
-                  <col style="width: 26%" />
-                  <col style="width: 24%" />
-                  <col style="width: 15%" />
-                  <col style="width: 15%" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>{gettext("When")}</th>
-                    <th>{gettext("Event")}</th>
-                    <th>{gettext("Target")}</th>
-                    <th>{gettext("Status")}</th>
-                    <th class="text-right">{gettext("Actions")}</th>
-                  </tr>
-                </thead>
-                <tbody id="notifications" phx-update="stream">
-                  <tr :for={{dom_id, n} <- @streams.notifications} id={dom_id}>
-                    <td class="text-xs text-base-content/60 whitespace-nowrap">
-                      {fmt_dt(n.inserted_at)}
-                    </td>
-                    <td class="text-sm">{event_label(n.event)}</td>
-                    <td class="text-xs">{n.target_label}</td>
-                    <td>
-                      <% {cls, text} = status_badge(n.status) %>
-                      <span class={"badge badge-sm " <> cls} title={n.error}>{text}</span>
-                    </td>
-                    <td class="text-right">
-                      <button
-                        type="button"
-                        phx-click="resend"
-                        phx-value-id={n.id}
-                        class="btn btn-ghost btn-xs"
-                        id={"resend-" <> n.id}
-                      >
-                        <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Resend")}
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div
-              :if={@notifications_empty?}
-              class="text-center py-8 text-base-content/40"
-              id="notifications-empty"
-            >
-              <.icon name="hero-bell-slash" class="w-8 h-8 mx-auto mb-2 opacity-40" />
-              <p class="text-sm">{gettext("No notifications emitted yet.")}</p>
+              <.table
+                id="notifications"
+                rows={@streams.notifications}
+                row_item={fn {_id, notification} -> notification end}
+                empty?={@notifications_empty?}
+              >
+                <:col :let={n} label={gettext("When")}>
+                  <span class="text-xs text-base-content/60 whitespace-nowrap">
+                    {fmt_dt(n.inserted_at)}
+                  </span>
+                </:col>
+                <:col :let={n} label={gettext("Event")}>
+                  <span class="text-sm">{event_label(n.event)}</span>
+                </:col>
+                <:col :let={n} label={gettext("Target")}>
+                  <span class="text-xs">{n.target_label}</span>
+                </:col>
+                <:col :let={n} label={gettext("Status")}>
+                  <% {cls, text} = status_badge(n.status) %>
+                  <span class={"badge badge-sm " <> cls} title={n.error}>{text}</span>
+                </:col>
+                <:action :let={n}>
+                  <button
+                    type="button"
+                    phx-click="resend"
+                    phx-value-id={n.id}
+                    class="btn btn-ghost btn-xs"
+                    id={"resend-" <> n.id}
+                  >
+                    <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Resend")}
+                  </button>
+                </:action>
+                <:empty>
+                  <.icon name="hero-bell-slash" class="w-8 h-8 mx-auto mb-2 opacity-40" />
+                  <p class="text-sm">{gettext("No notifications emitted yet.")}</p>
+                </:empty>
+              </.table>
             </div>
           </div>
         </div>

@@ -367,65 +367,52 @@ defmodule TokengateWeb.ObservabilityLive do
         </div>
 
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
-          <table class="table table-sm">
-            <thead>
-              <tr>
-                <th>{gettext("Webhook")}</th>
-                <th>{gettext("Type")}</th>
-                <th>URL</th>
-                <th class="text-right">{gettext("Actions")}</th>
-              </tr>
-            </thead>
-            <tbody id="destinations" phx-update="stream">
-              <tr
-                :for={{id, destination} <- @streams.destinations}
-                id={id}
+          <.table
+            id="destinations"
+            rows={@streams.destinations}
+            row_item={fn {_id, destination} -> destination end}
+            empty?={@destinations_empty?}
+          >
+            <:col :let={destination} label={gettext("Webhook")}>
+              <div class="flex items-center gap-2">
+                <.icon name="hero-bell-alert" class="w-4 h-4 text-primary shrink-0" />
+                <span class="font-medium text-sm">{destination.name}</span>
+              </div>
+            </:col>
+            <:col :let={destination} label={gettext("Type")}>
+              <span class="badge badge-sm badge-primary/20 border-primary/30 text-primary">
+                {destination.type}
+              </span>
+            </:col>
+            <:col :let={destination} label="URL">
+              <p class="max-w-xs text-xs text-base-content/50 truncate">{destination.url}</p>
+            </:col>
+            <:action :let={destination}>
+              <button
+                phx-click="edit_destination"
+                phx-value-id={destination.id}
+                class="btn btn-xs btn-ghost"
+                id={"edit-destination-#{destination.id}"}
+                title={gettext("Edit webhook")}
               >
-                <td>
-                  <div class="flex items-center gap-2">
-                    <.icon name="hero-bell-alert" class="w-4 h-4 text-primary shrink-0" />
-                    <span class="font-medium text-sm">{destination.name}</span>
-                  </div>
-                </td>
-                <td>
-                  <span class="badge badge-sm badge-primary/20 border-primary/30 text-primary">
-                    {destination.type}
-                  </span>
-                </td>
-                <td class="max-w-xs">
-                  <p class="text-xs text-base-content/50 truncate">{destination.url}</p>
-                </td>
-                <td class="text-right">
-                  <div class="flex gap-1 justify-end">
-                    <button
-                      phx-click="edit_destination"
-                      phx-value-id={destination.id}
-                      class="btn btn-xs btn-ghost"
-                      id={"edit-destination-#{destination.id}"}
-                      title={gettext("Edit webhook")}
-                    >
-                      <.icon name="hero-pencil" class="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      phx-click="delete_destination"
-                      phx-value-id={destination.id}
-                      class="btn btn-xs btn-ghost text-error"
-                      id={"delete-destination-#{destination.id}"}
-                      data-confirm={gettext("Delete webhook? This action cannot be undone.")}
-                      title={gettext("Delete webhook")}
-                    >
-                      <.icon name="hero-trash" class="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div :if={@destinations_empty?} class="text-center py-12 text-base-content/40">
-            <.icon name="hero-bell-slash" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>{gettext("No webhooks configured.")}</p>
-          </div>
+                <.icon name="hero-pencil" class="w-3.5 h-3.5" />
+              </button>
+              <button
+                phx-click="delete_destination"
+                phx-value-id={destination.id}
+                class="btn btn-xs btn-ghost text-error"
+                id={"delete-destination-#{destination.id}"}
+                data-confirm={gettext("Delete webhook? This action cannot be undone.")}
+                title={gettext("Delete webhook")}
+              >
+                <.icon name="hero-trash" class="w-3.5 h-3.5" />
+              </button>
+            </:action>
+            <:empty>
+              <.icon name="hero-bell-slash" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+              <p>{gettext("No webhooks configured.")}</p>
+            </:empty>
+          </.table>
         </div>
       </div>
     </Layouts.dashboard>

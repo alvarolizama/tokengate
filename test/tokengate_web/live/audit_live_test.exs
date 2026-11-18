@@ -27,14 +27,14 @@ defmodule TokengateWeb.AuditLiveTest do
   test "admin sees recorded audit entries", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
-    {:ok, _} =
+    {:ok, log} =
       Auditing.log(admin, "model.create", "model", "m-1", %{"name" => "gpt-x"}, %{
         ip: "10.0.0.1"
       })
 
     conn = login(conn, admin, password)
 
-    {:ok, _view, html} = live(conn, ~p"/operations/audit")
+    {:ok, view, html} = live(conn, ~p"/operations/audit")
 
     # Default UI language is English: the msgid is rendered as-is.
     assert html =~ "Audit"
@@ -42,6 +42,10 @@ defmodule TokengateWeb.AuditLiveTest do
     refute html =~ "Auditoría"
     assert html =~ "model.create"
     assert html =~ admin.email
+
+    # The .table contract: tbody carries the id and each row keeps its dom id.
+    assert has_element?(view, "tbody#audit-rows")
+    assert has_element?(view, "tr#audit-#{log.id}")
 
     # And the Spanish catalog still renders the same screen in Spanish.
     {:ok, _admin} = Accounts.update_user_locale(admin, "es")
@@ -68,6 +72,14 @@ defmodule TokengateWeb.AuditLiveTest do
 
     assert html =~ "topup.create"
     refute html =~ "model.create"
+
+    # No match → the .table empty-state slot renders instead of a colspan row.
+    view
+    |> form("#audit-filters", %{"f" => %{"action" => "does.not.exist"}})
+    |> render_change()
+
+    assert has_element?(view, "#audit-rows-empty", "No events for the selected filters.")
+    refute has_element?(view, "#audit-rows")
   end
 
   test "non-admin is redirected to the dashboard", %{conn: conn} do
