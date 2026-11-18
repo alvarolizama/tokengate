@@ -549,6 +549,54 @@ defmodule TokengateWeb.ModelsLiveModalsTest do
     refute html =~ "Elige primero el proveedor"
   end
 
+  # P12 — el wizard de alta vive en el contenedor único (`.modal`): overlay +
+  # card con cierre en `cancel_form` (✕/Escape/click-away) y el indicador de
+  # pasos lo pinta `.steps` como `<id>-steps`, una miga por paso y la activa
+  # siguiendo el assign `wizard_step` (current_step). En edición no hay pasos:
+  # `steps` va nil y el indicador no aparece.
+  @tag modal_group: "wizard"
+  test "P12 el wizard de alta usa el contenedor .modal y el indicador .steps", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_keyed_provider("acme-p12", %{name: "Acme P12"})
+    _cred = create_credential(provider)
+    model = create_model(%{name: "m-p12-#{unique()}"})
+    conn = login(conn, admin, password)
+
+    view = open_wizard(conn)
+
+    # Contenedor `.modal`: fijo, con el mismo closer en ✕/Escape/click-away.
+    assert has_element?(
+             view,
+             ~s|#model-wizard.fixed.inset-0[phx-window-keydown="cancel_form"]|
+           )
+
+    assert has_element?(view, "#model-wizard .relative.card")
+
+    # Indicador `.steps`: id derivado del modal y una miga por paso.
+    assert has_element?(view, "#model-wizard-steps")
+
+    for step <- ~w(provider credential model details) do
+      assert has_element?(view, "#wizard-crumb-#{step}")
+    end
+
+    # La miga activa sale de `@wizard_step` (no hay estado en el componente).
+    assert has_element?(view, "#wizard-crumb-provider.border-primary")
+    refute has_element?(view, "#wizard-crumb-credential.border-primary")
+
+    view |> element("#wizard-provider-acme-p12") |> render_click()
+
+    assert has_element?(view, "#wizard-crumb-credential.border-primary")
+    refute has_element?(view, "#wizard-crumb-provider.border-primary")
+
+    # Edición: entra directa a los datos, sin migas.
+    {:ok, edit_view, _html} = live(conn, ~p"/catalog/models")
+    edit_view |> element("#edit-model-#{model.id}") |> render_click()
+
+    assert has_element?(edit_view, "#model-wizard")
+    assert has_element?(edit_view, "#model-form")
+    refute has_element?(edit_view, "#model-wizard-steps")
+  end
+
   # ===========================================================================
   # W3 — credenciales no activas y TTL sticky (modal_group: "credentials")
   # ===========================================================================
