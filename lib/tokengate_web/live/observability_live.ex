@@ -44,7 +44,7 @@ defmodule TokengateWeb.ObservabilityLive do
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "No autorizado.")}
+        {:halt, put_flash(socket, :error, gettext("Not authorized."))}
       end
     end)
   end
@@ -93,13 +93,18 @@ defmodule TokengateWeb.ObservabilityLive do
   end
 
   def handle_event("edit_destination", %{"id" => id}, socket) do
-    destination = Observability.get_destination!(id)
-    changeset = Observability.change_destination(destination)
+    case fetch_destination(id) do
+      {:ok, destination} ->
+        changeset = Observability.change_destination(destination)
 
-    {:noreply,
-     socket
-     |> assign(:form, to_form(changeset, as: :destination))
-     |> assign(:editing_destination_id, destination.id)}
+        {:noreply,
+         socket
+         |> assign(:form, to_form(changeset, as: :destination))
+         |> assign(:editing_destination_id, destination.id)}
+
+      :error ->
+        {:noreply, put_flash(socket, :error, gettext("That webhook does not exist."))}
+    end
   end
 
   def handle_event("cancel_form", _params, socket) do
@@ -110,82 +115,144 @@ defmodule TokengateWeb.ObservabilityLive do
   end
 
   def handle_event("save_destination", %{"destination" => destination_params}, socket) do
-    # Parse headers from JSON string if present
-    destination_params =
-      Map.update(destination_params, "headers", %{}, fn
-        headers when is_map(headers) ->
-          headers
-
-        headers when is_binary(headers) and headers != "" ->
-          case Jason.decode(headers) do
-            {:ok, parsed} -> parsed
-            {:error, _} -> %{"_raw" => headers}
-          end
-
-        _ ->
-          %{}
-      end)
-
-    result =
-      cond do
-        socket.assigns.editing_destination_id == :new ->
-          Observability.create_destination(destination_params)
-
+    case destination_base(socket) do
+      :cancelled ->
         # A submit already in flight lands right after Cancel cleared the id.
-        is_nil(socket.assigns.editing_destination_id) ->
-          :skip
-
-        true ->
-          destination = Observability.get_destination!(socket.assigns.editing_destination_id)
-          Observability.update_destination(destination, destination_params)
-      end
-
-    case result do
-      :skip ->
         {:noreply, socket}
 
-      {:ok, destination} ->
-        audit(
-          socket,
-          if(socket.assigns.editing_destination_id == :new,
-            do: "destination.create",
-            else: "destination.update"
-          ),
-          "destination",
-          destination.id,
-          %{"name" => destination.name}
-        )
-
+      :missing ->
         {:noreply,
          socket
-         |> put_flash(:info, gettext("Webhook saved."))
+         |> put_flash(:error, gettext("That webhook does not exist."))
          |> assign(:form, nil)
-         |> assign(:editing_destination_id, nil)
-         |> load_data()}
+         |> assign(:editing_destination_id, nil)}
 
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :destination))}
+      {:ok, base} ->
+        save_destination(socket, base, destination_params)
     end
   end
 
   def handle_event("delete_destination", %{"id" => id}, socket) do
-    destination = Observability.get_destination!(id)
+    case fetch_destination(id) do
+      {:ok, destination} ->
+        case Observability.delete_destination(destination) do
+          {:ok, _} ->
+            audit(socket, "destination.delete", "destination", destination.id, %{
+              "name" => destination.name
+            })
 
-    case Observability.delete_destination(destination) do
-      {:ok, _} ->
-        audit(socket, "destination.delete", "destination", destination.id, %{
-          "name" => destination.name
-        })
+            {:noreply,
+             socket
+             |> put_flash(:info, gettext("Webhook deleted."))
+             |> load_data()}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, gettext("Could not delete the webhook."))}
+        end
+
+      :error ->
+        {:noreply, put_flash(socket, :error, gettext("That webhook does not exist."))}
+    end
+  end
+
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  ## Private helpers -------------------------------------------------------
+
+  # The headers textarea is edited as JSON text but stored as a :map. Invalid
+  # JSON used to be smuggled in as `%{"_raw" => text}` and saved with a
+  # "Webhook saved." flash; it is rejected now.
+  defp save_destination(socket, base, destination_params) do
+    case decode_headers(Map.get(destination_params, "headers")) do
+      {:ok, headers} ->
+        attrs = Map.put(destination_params, "headers", headers)
+
+        result =
+          if socket.assigns.editing_destination_id == :new do
+            Observability.create_destination(attrs)
+          else
+            Observability.update_destination(base, attrs)
+          end
+
+        case result do
+          {:ok, destination} ->
+            audit(
+              socket,
+              if(socket.assigns.editing_destination_id == :new,
+                do: "destination.create",
+                else: "destination.update"
+              ),
+              "destination",
+              destination.id,
+              %{"name" => destination.name}
+            )
+
+            {:noreply,
+             socket
+             |> put_flash(:info, gettext("Webhook saved."))
+             |> assign(:form, nil)
+             |> assign(:editing_destination_id, nil)
+             |> load_data()}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:noreply, assign(socket, :form, to_form(changeset, as: :destination))}
+        end
+
+      {:error, :not_json} ->
+        changeset =
+          base
+          |> Observability.change_destination(Map.drop(destination_params, ["headers"]))
+          |> Ecto.Changeset.put_change(:headers, Map.get(destination_params, "headers"))
+          |> Ecto.Changeset.add_error(:headers, "is invalid")
 
         {:noreply,
          socket
-         |> put_flash(:info, gettext("Webhook deleted."))
-         |> load_data()}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Could not delete the webhook."))}
+         |> put_flash(
+           :error,
+           gettext("Could not save the webhook: the headers are not valid JSON.")
+         )
+         |> assign(:form, to_form(changeset, as: :destination))}
     end
   end
+
+  defp decode_headers(nil), do: {:ok, %{}}
+  defp decode_headers(headers) when is_map(headers), do: {:ok, headers}
+
+  defp decode_headers(headers) when is_binary(headers) do
+    if String.trim(headers) == "" do
+      {:ok, %{}}
+    else
+      case Jason.decode(headers) do
+        {:ok, parsed} when is_map(parsed) -> {:ok, parsed}
+        _ -> {:error, :not_json}
+      end
+    end
+  end
+
+  defp decode_headers(_), do: {:error, :not_json}
+
+  # `editing_destination_id` is either `:new`, nil (cancelled) or the id of the
+  # destination being edited; a stale/forged/vanished id must not raise.
+  defp destination_base(%{assigns: %{editing_destination_id: nil}}), do: :cancelled
+  defp destination_base(%{assigns: %{editing_destination_id: :new}}), do: {:ok, %Destination{}}
+
+  defp destination_base(%{assigns: %{editing_destination_id: id}}) do
+    case fetch_destination(id) do
+      {:ok, destination} -> {:ok, destination}
+      :error -> :missing
+    end
+  end
+
+  defp fetch_destination(id) when is_binary(id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(id),
+         %Destination{} = destination <- Observability.get_destination(uuid) do
+      {:ok, destination}
+    else
+      _ -> :error
+    end
+  end
+
+  defp fetch_destination(_), do: :error
 
   ## Template helpers -----------------------------------------------------
 
@@ -202,6 +269,10 @@ defmodule TokengateWeb.ObservabilityLive do
     end
   end
 
+  # A rejected submit keeps the typed text in the textarea (the changeset holds
+  # it as a string so the operator can fix it).
+  defp headers_to_string(headers) when is_binary(headers), do: headers
+
   defp headers_to_string(_), do: ""
 
   ## Render ----------------------------------------------------------------
@@ -217,7 +288,7 @@ defmodule TokengateWeb.ObservabilityLive do
     >
       <div class="space-y-6">
         <.header>
-          Observabilidad
+          {gettext("Observability")}
           <:subtitle>
             {gettext("Telemetry webhooks (OTLP) of the whole installation, in one place")}
           </:subtitle>
@@ -239,7 +310,7 @@ defmodule TokengateWeb.ObservabilityLive do
                 />
               </form>
               <.button phx-click="new_destination" id="new-destination-btn">
-                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo webhook
+                <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New webhook")}
               </.button>
             </div>
           </:actions>
@@ -274,16 +345,20 @@ defmodule TokengateWeb.ObservabilityLive do
                   field={@form[:headers]}
                   value={headers_to_string(@form[:headers].value)}
                   type="textarea"
-                  label="Cabeceras (JSON)"
+                  label={gettext("Headers (JSON)")}
                   placeholder='{"Authorization": "Bearer xxx"}'
-                  hint="Cabeceras HTTP adicionales en formato JSON. Dejalo vacio si no necesitas cabeceras extra."
+                  hint={
+                    gettext(
+                      "Extra HTTP headers as JSON. Leave it empty when no extra headers are needed."
+                    )
+                  }
                 />
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
-                    Cancelar
+                    {gettext("Cancel")}
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-destination-btn">
-                    Guardar
+                    {gettext("Save")}
                   </button>
                 </div>
               </.form>

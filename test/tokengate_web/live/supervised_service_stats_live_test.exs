@@ -199,6 +199,17 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
              live(conn, ~p"/services/supervised/#{Ecto.UUID.generate()}")
   end
 
+  test "a service id that is not a UUID bounces back instead of crashing mount", %{conn: conn} do
+    %{user: user, password: password} = register()
+    supervised(service(), user)
+
+    conn = login(conn, user, password)
+
+    # `Repo.get(Service, "not-a-uuid")` raised CastError inside mount.
+    assert {:error, {:live_redirect, %{to: "/services/supervised"}}} =
+             live(conn, ~p"/services/supervised/not-a-uuid")
+  end
+
   test "an admin who supervises nothing is redirected to /dashboard", %{conn: conn} do
     service = service()
     %{user: admin, password: password} = register("admin")
@@ -347,10 +358,21 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
              "#period-week[href='/services/supervised/#{service.id}?period=week']"
            )
 
+    # The selector offers the canonical set; the old monthly labels (month /
+    # last_month / 7d) are gone from every surface.
     assert has_element?(
              view,
-             "#period-last_month[href='/services/supervised/#{service.id}?period=last_month']"
+             "#period-yesterday[href='/services/supervised/#{service.id}?period=yesterday']"
            )
+
+    assert has_element?(
+             view,
+             "#period-30d[href='/services/supervised/#{service.id}?period=30d']"
+           )
+
+    refute has_element?(view, "#period-last_month")
+    refute has_element?(view, "#period-month")
+    refute has_element?(view, "#period-7d")
 
     # Navigating with the param answers the narrower window: only the fresh one.
     {:ok, view_week, _html} = live(conn, ~p"/services/supervised/#{service.id}?period=week")
@@ -536,6 +558,42 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
       # Quitar el filtro vuelve a traer todo.
       view
       |> form("#service-stats-filter-form", %{"filter" => %{"status_class" => ""}})
+      |> render_change()
+
+      assert has_element?(view, "#logs-#{ok_log.id}")
+    end
+
+    test "a Desde/Hasta that does not parse is ignored instead of killing the socket", %{
+      conn: conn
+    } do
+      %{user: user, password: password} = register()
+      service = service() |> supervised(user)
+
+      {:ok, ok_log} = log_for(service, %{model_requested: "date-model", status_code: 200})
+
+      conn = login(conn, user, password)
+      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+      wait_loaded(view)
+
+      assert has_element?(view, "#logs-#{ok_log.id}")
+
+      # A raw string reaching Ecto raised CastError and took the LiveView down;
+      # `ServiceStatsBody` drops an unparseable date (the filter is ignored).
+      html =
+        view
+        |> form("#service-stats-filter-form", %{
+          "filter" => %{"from" => "no-es-fecha", "to" => "31/12/2026"}
+        })
+        |> render_change()
+
+      refute html =~ "Esta vista es de solo lectura"
+      assert has_element?(view, "#logs-#{ok_log.id}")
+
+      # A real date still narrows the stream (today's fixture is inside it).
+      today = Date.utc_today() |> Date.to_string()
+
+      view
+      |> form("#service-stats-filter-form", %{"filter" => %{"from" => today}})
       |> render_change()
 
       assert has_element?(view, "#logs-#{ok_log.id}")

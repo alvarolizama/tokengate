@@ -89,20 +89,32 @@ defmodule TokengateWeb.NotificationsLive do
 
   @impl true
   def handle_event("save_token", %{"token" => %{"bot_token" => token}}, socket) do
-    case Notifications.put_token(token) do
-      {:ok, _} ->
-        audit(socket, "notification.token_set", "notification_settings", "global", %{})
+    if blank_token?(token) do
+      # The token input is never prefilled, so an empty submit means "keep the
+      # current one" (as the hint says). Clearing has its own button and event:
+      # an empty save used to DELETE the stored token.
+      {:noreply,
+       socket
+       |> assign(:token, "")
+       |> put_flash(:info, gettext("No new token submitted: the stored one is kept."))}
+    else
+      case Notifications.put_token(token) do
+        {:ok, _} ->
+          audit(socket, "notification.token_set", "notification_settings", "global", %{})
 
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Bot token saved."))
-         |> maybe_resolve_username()
-         |> load_data()}
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Bot token saved."))
+           |> maybe_resolve_username()
+           |> load_data()}
 
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, gettext("Could not save the bot token."))}
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not save the bot token."))}
+      end
     end
   end
+
+  def handle_event("save_token", _params, socket), do: {:noreply, socket}
 
   def handle_event("clear_token", _params, socket) do
     Notifications.clear_token()
@@ -272,6 +284,9 @@ defmodule TokengateWeb.NotificationsLive do
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value) when is_binary(value), do: String.trim(value)
   defp blank_to_nil(value), do: value
+
+  defp blank_token?(token) when is_binary(token), do: String.trim(token) == ""
+  defp blank_token?(_), do: true
 
   defp message(:test), do: gettext("Tokengate test message — notifications are wired up.")
 

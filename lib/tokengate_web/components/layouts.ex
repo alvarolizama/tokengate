@@ -57,7 +57,7 @@ defmodule TokengateWeb.Layouts do
         <ul class="flex flex-column px-1 space-x-4 items-center">
           <li>
             <.link href={~p"/login"} class="btn btn-primary gap-2">
-              Iniciar sesión <span aria-hidden="true">&rarr;</span>
+              {gettext("Log in")} <span aria-hidden="true">&rarr;</span>
             </.link>
           </li>
         </ul>
@@ -452,12 +452,21 @@ defmodule TokengateWeb.Layouts do
             this.groups = [...this.el.closest("aside").querySelectorAll("[id^='sidebar-section-']")]
 
             this.el.addEventListener("input", () => this.filter())
+
             this.el.addEventListener("keydown", (e) => {
               if (e.key === "Escape") {
                 this.el.value = ""
                 this.filter()
               }
             })
+
+            // Los patches del servidor (timers de 2-3s de dashboard/stats)
+            // reescriben el `class` de cada enlace desde el HTML del servidor,
+            // así que el `hidden` que puso el filtro desaparecía en cada patch.
+            // El valor tecleado sigue en el input: se vuelve a aplicar el
+            // filtro después de cada actualización de LiveView.
+            this.onUpdate = () => this.filter()
+            document.addEventListener("phx:update", this.onUpdate)
 
             this.onKey = (e) => {
               if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -471,6 +480,7 @@ defmodule TokengateWeb.Layouts do
           },
           destroyed() {
             window.removeEventListener("keydown", this.onKey)
+            document.removeEventListener("phx:update", this.onUpdate)
           },
           filter() {
             const q = this.el.value.trim().toLowerCase()
@@ -704,6 +714,34 @@ defmodule TokengateWeb.Layouts do
     <div id={@id} aria-live="polite">
       <.flash kind={:info} flash={@flash} />
       <.flash kind={:error} flash={@flash} />
+
+      <%!-- `put_flash(socket, :warning, …)` is used for PARTIAL successes (the
+           user was created but the budget was not assigned). `core_components`'s
+           `<.flash>` only accepts :info/:error, so without this block those
+           messages were stored and never rendered — a silent dead end. --%>
+      <%= if warning = Phoenix.Flash.get(@flash, :warning) do %>
+        <div
+          id="flash-warning"
+          phx-click={JS.push("lv:clear-flash", value: %{key: "warning"}) |> hide("#flash-warning")}
+          role="alert"
+          class="toast toast-top toast-end z-50"
+        >
+          <div class="alert alert-warning w-80 sm:w-96 max-w-80 sm:max-w-96 text-wrap">
+            <.icon name="hero-exclamation-triangle" class="size-5 shrink-0" />
+            <div>
+              <p>{warning}</p>
+            </div>
+            <div class="flex-1" />
+            <button
+              type="button"
+              class="group self-start cursor-pointer"
+              aria-label={gettext("close")}
+            >
+              <.icon name="hero-x-mark" class="size-5 opacity-40 group-hover:opacity-70" />
+            </button>
+          </div>
+        </div>
+      <% end %>
 
       <.flash
         id="client-error"

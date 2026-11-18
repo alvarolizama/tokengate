@@ -73,7 +73,8 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/operations/observability")
 
-    assert html =~ "Observabilidad"
+    # La cabecera es un msgid en inglés (la UI corre en `en` por defecto).
+    assert html =~ "Observability"
     assert has_element?(view, "#edit-destination-#{destination.id}")
     assert render(view) =~ destination.name
   end
@@ -152,6 +153,97 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     html = render(view)
     assert html =~ "New hook"
     assert Repo.get_by!(Tokengate.Observability.Destination, name: "New hook")
+  end
+
+  test "invalid header JSON is rejected with an error, not saved as a webhook", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/observability")
+
+    view |> element("#new-destination-btn") |> render_click()
+
+    html =
+      view
+      |> element("#destination-form")
+      |> render_submit(%{
+        destination: %{
+          name: "Hooked",
+          url: "https://example.com/hooked",
+          headers: "{not json"
+        }
+      })
+
+    # Nothing was persisted and the success flash never fired.
+    refute Repo.get_by(Tokengate.Observability.Destination, name: "Hooked")
+    refute html =~ "Webhook saved."
+    refute render(view) =~ "Webhook saved."
+
+    # The modal stays open with the error under the field and the typed text.
+    assert has_element?(view, "#destination-form")
+    assert has_element?(view, "#destination-form textarea[name='destination[headers]']")
+  end
+
+  test "a JSON array is not a headers map and is rejected too", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/observability")
+
+    view |> element("#new-destination-btn") |> render_click()
+
+    view
+    |> element("#destination-form")
+    |> render_submit(%{
+      destination: %{name: "Arrayy", url: "https://example.com/a", headers: "[1,2]"}
+    })
+
+    refute Repo.get_by(Tokengate.Observability.Destination, name: "Arrayy")
+    refute render(view) =~ "Webhook saved."
+  end
+
+  test "a valid headers JSON is saved as a map", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/observability")
+
+    view |> element("#new-destination-btn") |> render_click()
+
+    view
+    |> element("#destination-form")
+    |> render_submit(%{
+      destination: %{
+        name: "Con headers",
+        url: "https://example.com/ok",
+        headers: ~s({"Authorization": "Bearer dummy"})
+      }
+    })
+
+    destination = Repo.get_by!(Tokengate.Observability.Destination, name: "Con headers")
+    assert destination.headers == %{"Authorization" => "Bearer dummy"}
+  end
+
+  test "a forged or unknown destination id answers with a flash instead of crashing", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/observability")
+
+    # Unknown UUID: no crash, no form.
+    render_click(view, "edit_destination", %{"id" => Ecto.UUID.generate()})
+    refute has_element?(view, "#destination-form")
+    assert has_element?(view, "#flash-error")
+
+    # Not a UUID at all: the old `get_destination!/1` raised CastError.
+    render_click(view, "edit_destination", %{"id" => "not-a-uuid"})
+    refute has_element?(view, "#destination-form")
+    assert has_element?(view, "#flash-error")
+
+    render_click(view, "delete_destination", %{"id" => "not-a-uuid"})
+    assert has_element?(view, "#flash-error")
   end
 
   test "deletes a destination", %{conn: conn} do

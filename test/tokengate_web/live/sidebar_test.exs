@@ -218,4 +218,59 @@ defmodule TokengateWeb.SidebarTest do
     assert has_element?(view, ~s(.shell-sidebar[class~="bg-base-200"]))
     refute has_element?(view, ~s(.shell-sidebar[class~="bg-base-200/50"]))
   end
+
+  # F23: el filtro del nav vive en el cliente, pero los patches del servidor
+  # (timers de 2-3s) reescriben el `class` de cada enlace desde el HTML del
+  # servidor: el hook .NavFilter vuelve a aplicar lo tecleado tras cada
+  # `phx:update`. El markup que el hook necesita para encontrarlos es contrato.
+  test "el filtro del sidebar tiene su input y su nav", %{conn: conn} do
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/providers")
+
+    assert has_element?(view, "#sidebar-search")
+    # El hook (namespaceado al compilar) es el que re-aplica el filtro tras
+    # cada `phx:update`.
+    assert render(view) =~ ~s(phx-hook="TokengateWeb.Layouts.NavFilter")
+    assert has_element?(view, "#sidebar-nav .nav-link")
+    # El campo de filtro se oculta con el rail, pero nunca se duplica.
+    assert length(Regex.scan(~r/id="sidebar-search"/, render(view))) == 1
+  end
+
+  # F23: cambiar de idioma remonta el LiveView en la MISMA URL, query string
+  # incluida — `?period=` / `?new=1` / un filtro no se pierden al cambiar de
+  # idioma (antes se hacía push_navigate solo con el path).
+  test "cambiar de idioma preserva el query string", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, %{user: admin, password: password})
+
+    {:ok, view, _html} = live(conn, ~p"/calculator?period=today")
+
+    assert {:error, {:live_redirect, %{kind: :push, to: to}}} =
+             render_change(view, "set-locale", %{"locale" => "es"})
+
+    # Misma ruta Y mismo periodo: el remonte por idioma no es una navegación.
+    assert to == "/calculator?period=today"
+
+    # Y sin query string sigue yendo a la ruta limpia (no "…?").
+    {:ok, view_plain, _html} = live(conn, ~p"/calculator")
+
+    assert {:error, {:live_redirect, %{to: "/calculator"}}} =
+             render_change(view_plain, "set-locale", %{"locale" => "es"})
+  end
+
+  # F24/P16: `put_flash(socket, :warning, …)` (alta de usuario con presupuesto
+  # fallido) se guardaba y nunca se pintaba: `<.flash>` de core_components solo
+  # acepta :info/:error.
+  test "el flash :warning se renderiza en el shell", %{conn: _conn} do
+    html =
+      render_component(&TokengateWeb.Layouts.flash_group/1, %{
+        flash: %{"warning" => "Usuario creado sin presupuesto"}
+      })
+
+    assert html =~ "flash-warning"
+    assert html =~ "Usuario creado sin presupuesto"
+
+    # Sin warning en el flash no se pinta el contenedor.
+    html = render_component(&TokengateWeb.Layouts.flash_group/1, %{flash: %{}})
+    refute html =~ "flash-warning"
+  end
 end

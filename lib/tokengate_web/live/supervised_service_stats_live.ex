@@ -54,7 +54,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   def mount(%{"service_id" => service_id}, _session, socket) do
     user = socket.assigns.current_user
 
-    case Accounts.get_service(service_id) do
+    case fetch_service(service_id) do
       nil ->
         {:ok, deny(socket, gettext("That service does not exist."))}
 
@@ -136,6 +136,17 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   end
 
   ## Params / period ------------------------------------------------------
+
+  # `service_id` comes from the URL: a non-UUID value used to reach Ecto as a
+  # binary_id and raised `CastError` inside mount, killing the LiveView.
+  defp fetch_service(service_id) when is_binary(service_id) do
+    case Ecto.UUID.cast(service_id) do
+      {:ok, uuid} -> Accounts.get_service(uuid)
+      :error -> nil
+    end
+  end
+
+  defp fetch_service(_service_id), do: nil
 
   @impl true
   def handle_params(params, _uri, socket) do
@@ -228,10 +239,14 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   def handle_event("set_key", _params, socket), do: {:noreply, socket}
 
   def handle_event("filter", params, socket) do
+    # A forged payload without the nested map must not raise. The "Desde"/
+    # "Hasta" strings are parsed to UTC datetimes by `ServiceStatsBody` (dropped
+    # when they do not parse), so a bad date never reaches Ecto as a string.
     filter_params =
-      params
-      |> Map.get("filter", %{})
-      |> then(&Map.merge(ServiceStatsBody.default_filters(), &1))
+      case Map.get(params, "filter") do
+        %{} = given -> Map.merge(ServiceStatsBody.default_filters(), given)
+        _ -> ServiceStatsBody.default_filters()
+      end
 
     socket =
       socket

@@ -21,7 +21,15 @@ defmodule TokengateWeb.CalculatorLive do
   The estimate always applies the four typed rates. `CostCalculator` has a
   fallback that prices the whole prompt at the input rate when a lane declares
   no cache price; this page does not replicate it, so a lane without a cache
-  price prefills 0.00 and the operator types the real cache rate.
+  price prefills an EMPTY field and the form says which rates carry no price
+  (an empty field is not "free": it is flagged and counted as $0).
+
+  Money is rendered with `TokengateWeb.StatsHelpers.money/1` — the same source
+  as the rest of the repo — so a sub-cent spend stays visible instead of
+  collapsing to "$0.00".
+
+  The period is part of the URL (`?period=`), normalized against the canonical
+  set; the same `period_selector` component the stats pages use drives it.
   """
 
   use TokengateWeb, :live_view
@@ -30,10 +38,11 @@ defmodule TokengateWeb.CalculatorLive do
   alias Tokengate.Periods
   alias Tokengate.Providers
   alias Tokengate.Providers.Pricing
+  alias TokengateWeb.StatsHelpers
 
   import TokengateWeb.KpiHelpers, only: [kpi_card: 1, format_compact: 1]
+  import TokengateWeb.StatsHelpers, only: [period_selector: 1]
 
-  @periods ~w(today week 7d 30d last_month)
   @default_prices %{input: "3.00", cache: "0.30", cache_write: "0.00", output: "15.00"}
 
   @impl true
@@ -61,7 +70,8 @@ defmodule TokengateWeb.CalculatorLive do
       |> assign(:selected_credential_id, nil)
       |> assign(:lane_unit, "per_1m_tokens")
       |> assign(:lane_non_token, false)
-      |> assign(:period, "7d")
+      |> assign(:period, Periods.default_period())
+      |> assign(:price_issues, [])
       |> assign(:cost_input, @default_prices.input)
       |> assign(:cost_cache, @default_prices.cache)
       |> assign(:cost_output, @default_prices.output)
@@ -72,10 +82,43 @@ defmodule TokengateWeb.CalculatorLive do
     {:ok, socket}
   end
 
+  # The period lives in the URL (shareable/bookmarkable). Anything outside the
+  # canonical set (`?period=month`, `?period=7d`, garbage) degrades to the
+  # period already in the socket — the default on a fresh mount — instead of
+  # raising or silently reinterpreting the window.
+  @impl true
+  def handle_params(params, _uri, socket) do
+    period = Periods.normalize_period(params["period"], socket.assigns.period)
+    socket = assign(socket, :period, period)
+
+    {:noreply, reload_selected(socket)}
+  end
+
+  # A period patch must repaint the numbers of the model already selected
+  # (changing the period does not re-run `calculate`: no form event fired).
+  defp reload_selected(socket) do
+    {prices, issues} = parse_prices(current_prices(socket))
+    socket = assign(socket, :price_issues, issues)
+
+    case socket.assigns.selected_model_id do
+      model_id when is_binary(model_id) and model_id != "" ->
+        load_chart_data(
+          socket,
+          model_id,
+          socket.assigns.period,
+          prices,
+          socket.assigns.selected_lane_id,
+          socket.assigns.selected_credential_id
+        )
+
+      _ ->
+        socket
+    end
+  end
+
   @impl true
   def handle_event("calculate", params, socket) do
-    model_id = params["model_id"] || ""
-    period = params["period"] || socket.assigns.period
+    model_id = cast_model_id(params["model_id"])
 
     model_changed = model_id != (socket.assigns.selected_model_id || "")
 
@@ -94,7 +137,6 @@ defmodule TokengateWeb.CalculatorLive do
     socket =
       socket
       |> assign(:selected_model_id, model_id)
-      |> assign(:period, period)
       |> assign(:lanes, lanes)
 
     socket =
@@ -119,13 +161,19 @@ defmodule TokengateWeb.CalculatorLive do
         pool_credential_id(lanes, socket.assigns.selected_lane_id, credential_id)
       )
 
+    # Parsed once per event: the fields with no usable number are surfaced (an
+    # empty price is not a free lane, and a comma/invalid string no longer
+    # falls back to the hardcoded rate).
+    {prices, issues} = parse_prices(current_prices(socket))
+    socket = assign(socket, :price_issues, issues)
+
     socket =
       if model_id != "" do
         load_chart_data(
           socket,
           model_id,
-          period,
-          current_prices(socket),
+          socket.assigns.period,
+          prices,
           socket.assigns.selected_lane_id,
           socket.assigns.selected_credential_id
         )
@@ -240,10 +288,10 @@ defmodule TokengateWeb.CalculatorLive do
         credential_id: nilify(credential_id)
       )
 
-    cost_input = parse_decimal(prices.input, Decimal.new("3.00"))
-    cost_cache = parse_decimal(prices.cache, Decimal.new("0.30"))
-    cost_cache_write = parse_decimal(prices.cache_write, Decimal.new("0.00"))
-    cost_output = parse_decimal(prices.output, Decimal.new("15.00"))
+    cost_input = prices.input
+    cost_cache = prices.cache
+    cost_cache_write = prices.cache_write
+    cost_output = prices.output
 
     # The price is in the lane's unit (1M, 1K or a plain unit): one formula
     # `quantity × price / divisor`, with Pricing's divisor.
@@ -291,15 +339,21 @@ defmodule TokengateWeb.CalculatorLive do
       else
         chart_data
         |> Enum.reduce(Decimal.new(0), fn row, acc -> Decimal.add(acc, row.estimated_cost) end)
-        |> Decimal.round(4)
+        |> Decimal.round(6)
       end
 
-    # Total real cost from cost_summary (same source as Stats)
-    total_real = Decimal.round(summary_data.total_cost_usd, 4)
+    # Total real cost from cost_summary (same source as Stats). NOT rounded to
+    # cents (or to 4 decimals): the column is numeric(12,6) and a sub-cent
+    # spend must stay visible — rounding here was half of the "$0.00" bug.
+    total_real = summary_data.total_cost_usd
 
+    # SIGN matters: real − estimated, so a POSITIVE difference means the
+    # operator paid MORE than the estimate (error accent) and a negative one
+    # means the estimate was pessimistic (success accent). The old
+    # estimated − real made overpaying look green.
     difference =
       if total_estimated do
-        Decimal.sub(total_estimated, total_real) |> Decimal.round(4)
+        Decimal.sub(total_real, total_estimated) |> Decimal.round(6)
       end
 
     summary = %{
@@ -326,19 +380,108 @@ defmodule TokengateWeb.CalculatorLive do
   defp nilify(nil), do: nil
   defp nilify(value), do: value
 
-  # ── Parsing helpers ────────────────────────────────────────────────────────
+  # `model_id` comes from the client: a non-UUID value used to reach Ecto as a
+  # binary_id and raised `Ecto.Query.CastError`, killing the LiveView. Anything
+  # that is not a UUID becomes "no model selected".
+  defp cast_model_id(nil), do: ""
 
-  defp parse_decimal(str, default) do
-    case Decimal.parse(str || "") do
-      {d, ""} -> d
-      _ -> default
+  defp cast_model_id(id) when is_binary(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} -> uuid
+      :error -> ""
     end
   end
+
+  defp cast_model_id(_), do: ""
+
+  # ── Parsing helpers ────────────────────────────────────────────────────────
+
+  # Parses the four typed rates. Every field yields a Decimal (so the estimate
+  # is always computable) PLUS a status the form shows:
+  #
+  #   * `:ok`      — a finite, non-negative number
+  #   * `:empty`   — nothing typed: counted as $0 but FLAGGED. An empty price is
+  #                  not a free lane, and it no longer silently becomes the
+  #                  hardcoded default.
+  #   * `:invalid` — not a number (after accepting the Spanish decimal comma),
+  #                  negative, NaN or infinite: counted as $0 and FLAGGED.
+  defp parse_prices(raw) do
+    Enum.reduce([:input, :cache, :cache_write, :output], {%{}, []}, fn key, {prices, issues} ->
+      {decimal, status} = parse_price(Map.get(raw, key))
+      prices = Map.put(prices, key, decimal)
+
+      if status == :ok do
+        {prices, issues}
+      else
+        {prices, [{key, status} | issues]}
+      end
+    end)
+  end
+
+  defp parse_price(nil), do: {Decimal.new(0), :empty}
+
+  defp parse_price(value) when is_binary(value) do
+    # "1,5" is a decimal comma (ES keyboard), not an invalid number.
+    normalized = value |> String.trim() |> String.replace(",", ".")
+
+    case Decimal.parse(normalized) do
+      {d, ""} -> if finite_price?(d), do: {d, :ok}, else: {Decimal.new(0), :invalid}
+      _ -> {Decimal.new(0), :invalid}
+    end
+  end
+
+  defp parse_price(_), do: {Decimal.new(0), :invalid}
+
+  defp finite_price?(%Decimal{} = d) do
+    not Decimal.nan?(d) and not Decimal.inf?(d) and
+      Decimal.compare(d, Decimal.new(0)) != :lt
+  end
+
+  @doc """
+  Human label for a price field, keyed by the same atoms `:price_issues` uses.
+  """
+  def price_field_label(:input), do: gettext("input")
+  def price_field_label(:cache), do: gettext("cache")
+  def price_field_label(:cache_write), do: gettext("cache write")
+  def price_field_label(:output), do: gettext("output")
+  def price_field_label(_), do: "—"
+
+  @doc """
+  Notice for the rates that carry no usable number: says WHICH field and what
+  the estimate does with it, so a missing price never reads as "free".
+  """
+  def price_issues_text(issues) do
+    empty = for {key, :empty} <- issues, do: price_field_label(key)
+    invalid = for {key, :invalid} <- issues, do: price_field_label(key)
+
+    [empty_text(empty), invalid_text(invalid)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  defp empty_text([]), do: nil
+
+  defp empty_text(fields),
+    do:
+      gettext("No price for %{fields}: the estimate counts $0 there.",
+        fields: Enum.join(fields, ", ")
+      )
+
+  defp invalid_text([]), do: nil
+
+  defp invalid_text(fields),
+    do:
+      gettext("Invalid price for %{fields}: the estimate counts $0 there.",
+        fields: Enum.join(fields, ", ")
+      )
 
   # Lane price as a decimal string that keeps the lane's precision: per_1K
   # prices are stored as 0.0035, so rounding to 2 decimals would zero them.
   # Trailing zeros are trimmed but at least two decimals stay.
-  defp price_string(nil), do: "0.00"
+  #
+  # A lane WITHOUT a price prefills an EMPTY field (and the form flags it):
+  # "0.00" would read as a free lane.
+  defp price_string(nil), do: ""
 
   defp price_string(%Decimal{} = d), do: d |> Decimal.round(6) |> decimal_price_string()
 
@@ -360,12 +503,8 @@ defmodule TokengateWeb.CalculatorLive do
 
   # ── Template helpers ──────────────────────────────────────────────────────
 
-  def period_label("today"), do: "Hoy"
-  def period_label("week"), do: "Esta semana"
-  def period_label("7d"), do: gettext("7 days")
-  def period_label("30d"), do: gettext("30 days")
-  def period_label("last_month"), do: gettext("Last month")
-  def period_label(_), do: "—"
+  # Canonical period labels, from the single source the stats pages use.
+  defdelegate period_label(period), to: TokengateWeb.StatsHelpers
 
   @doc """
   Lane label: `provider — provider_model (P<priority>)`, and when the lane
@@ -418,13 +557,14 @@ defmodule TokengateWeb.CalculatorLive do
 
   def credential_label(_cred), do: "key"
 
-  def format_cost(%Decimal{} = d) do
-    d
-    |> Decimal.round(2)
-    |> Decimal.to_string(:normal)
-  end
+  # Money goes through the repo-wide formatter: `money/1` keeps sub-cent
+  # amounts visible ($0.000004) and returns "$0.00" only for a true zero — the
+  # old round-to-2 printed a real sub-cent spend as "0.00".
+  def format_cost(%Decimal{} = d), do: StatsHelpers.money(d)
 
-  def format_cost(_), do: "0.00"
+  # No Decimal means no number was computed (a non-token lane has no estimate):
+  # an em dash, never a fake "0.00".
+  def format_cost(_), do: "—"
 
   def format_number(n) when is_integer(n) do
     n
@@ -543,6 +683,8 @@ defmodule TokengateWeb.CalculatorLive do
 
   defp format_hour_label(_), do: "—"
 
+  # The difference is `real − estimate`, so these classes read directly:
+  # paying MORE than estimated is an error accent, paying LESS is success.
   def difference_class(%Decimal{} = d) do
     cond do
       Decimal.compare(d, 0) == :gt -> "text-error"
@@ -556,8 +698,10 @@ defmodule TokengateWeb.CalculatorLive do
   def difference_sign(%Decimal{sign: -1}), do: "−"
   def difference_sign(_), do: "+"
 
-  def abs_decimal(%Decimal{} = d), do: Decimal.abs(d) |> Decimal.to_string(:normal)
-  def abs_decimal(_), do: "0.00"
+  # Absolute difference as money (sub-cent included) — the template adds the
+  # sign in front, so this never doubles the dollar prefix.
+  def abs_decimal(%Decimal{} = d), do: StatsHelpers.money(Decimal.abs(d))
+  def abs_decimal(_), do: StatsHelpers.money(Decimal.new(0))
 
   # Same criterion as difference_class/1: positive means paying more than the
   # estimate (error accent); everything else keeps the primary accent.
@@ -567,17 +711,18 @@ defmodule TokengateWeb.CalculatorLive do
 
   def difference_pct(%{difference: nil}), do: nil
 
-  def difference_pct(%{difference: diff, total_real: real}) do
-    if Decimal.equal?(real, Decimal.new(0)) do
+  # Percentage over the ESTIMATE: "you paid X% more/less than the estimate".
+  def difference_pct(%{difference: diff, total_estimated: estimated}) do
+    if is_nil(estimated) or Decimal.equal?(estimated, Decimal.new(0)) do
       nil
     else
       diff
-      |> Decimal.div(real)
+      |> Decimal.div(estimated)
       |> Decimal.mult(100)
       |> Decimal.round(1)
       |> Decimal.to_string(:normal)
     end
   end
 
-  def periods, do: @periods
+  def periods, do: TokengateWeb.StatsHelpers.canonical_periods()
 end
