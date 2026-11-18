@@ -191,61 +191,142 @@ defmodule Tokengate.Providers do
 
   Sticky entries that pointed at the deleted lanes are cleared after the
   delete, so a recreated lane never inherits an old pin.
+
+  The provider row is locked `FOR UPDATE` before anything is collected, so two
+  deletes of the same provider serialize: the loser finds no row and returns
+  `{:error, :not_found}` instead of raising `Ecto.StaleEntryError` from inside
+  the cascade. The routing cache is dropped only after the transaction
+  commits — a rolled-back delete leaves the snapshot alone.
   """
+  @spec delete_provider(Provider.t()) ::
+          {:ok, Provider.t()} | {:error, :not_found} | {:error, Ecto.Changeset.t()}
   def delete_provider(%Provider{} = provider) do
-    Repo.transaction(fn ->
-      credential_ids =
-        from(c in Credential, where: c.provider_id == ^provider.id, select: c.id)
-        |> Repo.all()
+    delete_locked(provider, fn -> delete_provider_rows(provider) end)
+  end
 
-      pool_ids =
-        from(p in CredentialPool, where: p.provider_id == ^provider.id, select: p.id)
-        |> Repo.all()
+  @doc """
+  Deletes a provider only when no lane mounts it.
 
-      # Collect the lane ids BEFORE deleting: the sticky tracker is keyed by
-      # them and the rows are gone by the time it runs.
-      model_provider_ids =
-        from(mp in ModelProvider,
-          where: mp.credential_id in ^credential_ids or mp.pool_id in ^pool_ids,
-          select: mp.id
-        )
-        |> Repo.all()
+  Same cascade and the same row lock as `delete_provider/1`, but the "is it in
+  use" check runs INSIDE the transaction and under that lock, so the answer
+  cannot go stale between the check and the delete. The admin UI uses this:
+  deleting a provider that serves traffic must not silently take its lanes
+  with it.
 
-      if model_provider_ids != [] do
-        from(mp in ModelProvider, where: mp.id in ^model_provider_ids)
-        |> Repo.delete_all()
-      end
-
-      if pool_ids != [] do
-        from(m in CredentialPoolMember, where: m.pool_id in ^pool_ids)
-        |> Repo.delete_all()
-
-        from(p in CredentialPool, where: p.id in ^pool_ids)
-        |> Repo.delete_all()
-      end
-
-      if credential_ids != [] do
-        from(c in Credential, where: c.provider_id == ^provider.id)
-        |> Repo.delete_all()
-      end
-
-      case Repo.delete(provider) do
-        {:ok, _} ->
-          # Clear sticky routing entries pointing at deleted model providers
-          if model_provider_ids != [] do
-            Tokengate.Routing.StickyTracker.clear_all_for_provider(model_provider_ids)
-          end
-
-          {:ok, provider}
-
-        {:error, changeset} ->
-          Repo.rollback(changeset)
+  A lane counts as mounting the provider through one of its credentials OR
+  through one of its credential pools (`credential_id` NULL): a credential-only
+  check misses every pool lane.
+  """
+  @spec delete_provider_if_unused(Provider.t()) ::
+          {:ok, Provider.t()}
+          | {:error, :in_use | :not_found}
+          | {:error, Ecto.Changeset.t()}
+  def delete_provider_if_unused(%Provider{} = provider) do
+    delete_locked(provider, fn ->
+      if provider_in_use?(provider.id) do
+        Repo.rollback(:in_use)
+      else
+        delete_provider_rows(provider)
       end
     end)
-    |> case do
-      {:ok, _} -> {:ok, provider}
-      {:error, changeset} -> {:error, changeset}
+  end
+
+  # One transaction, one lock, one place that invalidates: both deletes above
+  # differ only in the guard they run while holding the row.
+  defp delete_locked(%Provider{id: provider_id}, delete_fun) do
+    result =
+      Repo.transaction(fn ->
+        case lock_provider(provider_id) do
+          nil ->
+            Repo.rollback(:not_found)
+
+          _provider_id ->
+            case delete_fun.() do
+              {:ok, deleted} -> deleted
+              {:error, reason} -> Repo.rollback(reason)
+            end
+        end
+      end)
+
+    case result do
+      {:ok, deleted} ->
+        Tokengate.Routing.Cache.invalidate_all()
+        {:ok, deleted}
+
+      {:error, reason} ->
+        {:error, reason}
     end
+  end
+
+  defp lock_provider(provider_id) do
+    from(p in Provider, where: p.id == ^provider_id, select: p.id, lock: "FOR UPDATE")
+    |> Repo.one()
+  end
+
+  # Runs inside the delete transaction: every statement here must roll back
+  # with it, or a half-deleted provider would commit.
+  defp delete_provider_rows(%Provider{} = provider) do
+    credential_ids =
+      from(c in Credential, where: c.provider_id == ^provider.id, select: c.id)
+      |> Repo.all()
+
+    pool_ids =
+      from(p in CredentialPool, where: p.provider_id == ^provider.id, select: p.id)
+      |> Repo.all()
+
+    # Collect the lane ids BEFORE deleting: the sticky tracker is keyed by
+    # them and the rows are gone by the time it runs.
+    model_provider_ids =
+      from(mp in ModelProvider,
+        where: mp.credential_id in ^credential_ids or mp.pool_id in ^pool_ids,
+        select: mp.id
+      )
+      |> Repo.all()
+
+    if model_provider_ids != [] do
+      from(mp in ModelProvider, where: mp.id in ^model_provider_ids)
+      |> Repo.delete_all()
+    end
+
+    if pool_ids != [] do
+      from(m in CredentialPoolMember, where: m.pool_id in ^pool_ids)
+      |> Repo.delete_all()
+
+      from(p in CredentialPool, where: p.id in ^pool_ids)
+      |> Repo.delete_all()
+    end
+
+    if credential_ids != [] do
+      from(c in Credential, where: c.provider_id == ^provider.id)
+      |> Repo.delete_all()
+    end
+
+    case Repo.delete(provider) do
+      {:ok, _} ->
+        # Clear sticky routing entries pointing at deleted model providers
+        if model_provider_ids != [] do
+          Tokengate.Routing.StickyTracker.clear_all_for_provider(model_provider_ids)
+        end
+
+        {:ok, provider}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  # Lanes served by this provider's credentials or mounted on its pools.
+  defp provider_in_use?(provider_id) do
+    credential_lanes =
+      from(c in Credential, where: c.provider_id == ^provider_id, select: c.id)
+
+    pool_ids = from(p in CredentialPool, where: p.provider_id == ^provider_id, select: p.id)
+
+    Repo.exists?(
+      from(mp in ModelProvider,
+        where: mp.credential_id in subquery(credential_lanes) or mp.pool_id in subquery(pool_ids)
+      )
+    )
   end
 
   def change_provider(%Provider{} = provider, attrs \\ %{}),
@@ -963,19 +1044,59 @@ defmodule Tokengate.Providers do
 
   A mounted pool returns `{:error, :pool_in_use}` instead of a constraint
   error: `model_providers.pool_id` is a RESTRICT foreign key, so letting the
-  delete reach Postgres would surface as a 500 in the UI. Members go with the
-  pool (their FK cascades).
+  delete reach Postgres unchecked would surface as a 500 in the UI. Members go
+  with the pool (their FK cascades).
+
+  The check and the delete share one transaction, and the pool row is locked
+  `FOR UPDATE` before the check: a lane cannot be mounted between the two
+  statements. If a concurrent writer still wins the race, the RESTRICT FK is
+  translated to the same `{:error, :pool_in_use}`. A pool that is already gone
+  returns `{:error, :not_found}` instead of raising `Ecto.StaleEntryError`.
   """
   @spec delete_pool(CredentialPool.t()) ::
-          {:ok, CredentialPool.t()} | {:error, :pool_in_use} | {:error, Ecto.Changeset.t()}
+          {:ok, CredentialPool.t()}
+          | {:error, :pool_in_use | :not_found}
+          | {:error, Ecto.Changeset.t()}
   def delete_pool(%CredentialPool{} = pool) do
-    if pool_in_use?(pool.id) do
-      {:error, :pool_in_use}
-    else
-      pool
-      |> Repo.delete()
-      |> invalidate_all_on_ok()
+    result =
+      Repo.transaction(fn ->
+        case lock_pool(pool.id) do
+          nil ->
+            Repo.rollback(:not_found)
+
+          _pool_id ->
+            if pool_in_use?(pool.id) do
+              Repo.rollback(:pool_in_use)
+            else
+              delete_pool_row(pool)
+            end
+        end
+      end)
+
+    case result do
+      {:ok, deleted} -> invalidate_all_on_ok({:ok, deleted})
+      {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp lock_pool(pool_id) do
+    from(p in CredentialPool, where: p.id == ^pool_id, select: p.id, lock: "FOR UPDATE")
+    |> Repo.one()
+  end
+
+  # The FK is the last line of defence: a lane mounted right after the check
+  # aborts the delete here, and the caller sees the same reason as a mounted
+  # pool instead of a Postgrex exception.
+  defp delete_pool_row(pool) do
+    case Repo.delete(pool) do
+      {:ok, deleted} -> deleted
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  rescue
+    e in Postgrex.Error ->
+      if foreign_key_violation?(e),
+        do: Repo.rollback(:pool_in_use),
+        else: reraise(e, __STACKTRACE__)
   end
 
   @doc """
@@ -1631,6 +1752,11 @@ defmodule Tokengate.Providers do
   defp pool_in_use?(pool_id) do
     Repo.exists?(from(mp in ModelProvider, where: mp.pool_id == ^pool_id))
   end
+
+  defp foreign_key_violation?(%Postgrex.Error{postgres: %{code: :foreign_key_violation}}),
+    do: true
+
+  defp foreign_key_violation?(_error), do: false
 
   # A credential that is a member of any pool cannot be deleted: the composite
   # membership FK is RESTRICT.

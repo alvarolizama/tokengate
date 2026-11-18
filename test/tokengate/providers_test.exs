@@ -1,6 +1,7 @@
 defmodule Tokengate.ProvidersTest do
   use Tokengate.DataCase, async: true
   alias Tokengate.Providers
+  alias Tokengate.Routing
 
   alias Tokengate.Providers.{
     Provider,
@@ -337,6 +338,113 @@ defmodule Tokengate.ProvidersTest do
       refute Enum.any?(Providers.list_providers(), &(&1.id == provider.id))
       assert Providers.list_credentials_for_provider(provider.id) == []
       refute Repo.get(ModelProvider, mp.id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Atomic deletes (F8): the row lock serializes concurrent deletes, the
+  # "in use" guard runs inside the same transaction as the delete, and the
+  # routing snapshot is dropped only when the delete committed.
+  # ---------------------------------------------------------------------------
+
+  describe "provider delete atomicity" do
+    test "delete_provider/1 on a row that is already gone returns {:error, :not_found}" do
+      provider = provider_fixture()
+      credential_fixture(provider)
+
+      assert {:ok, _} = Providers.delete_provider(provider)
+
+      # Same struct, second delete (double click / retried request): with no
+      # lock the cascade would reach Repo.delete and raise StaleEntryError.
+      assert {:error, :not_found} = Providers.delete_provider(provider)
+    end
+
+    test "delete_provider/1 drops the routing snapshot after it commits" do
+      provider = provider_fixture()
+      model_id = Ecto.UUID.generate()
+      warm = fn -> [:warm] end
+
+      assert Routing.Cache.fetch_model_providers(model_id, nil, warm) == [:warm]
+      assert Routing.Cache.fetch_model_providers(model_id, nil, fn -> [:db] end) == [:warm]
+
+      assert {:ok, _} = Providers.delete_provider(provider)
+
+      # The cached list is gone: the next read recomputes.
+      assert Routing.Cache.fetch_model_providers(model_id, nil, fn -> [:db] end) == [:db]
+    end
+
+    test "delete_provider_if_unused/1 deletes a provider no lane mounts" do
+      provider = provider_fixture()
+      credential_fixture(provider)
+
+      assert {:ok, _} = Providers.delete_provider_if_unused(provider)
+      assert Providers.get_provider(provider.id) == nil
+      assert Providers.list_credentials_for_provider(provider.id) == []
+    end
+
+    test "delete_provider_if_unused/1 blocks on a key lane and keeps every row" do
+      provider = provider_fixture()
+      lane = model_provider_fixture(nil, provider)
+      credential = Providers.get_credential!(lane.credential_id)
+
+      assert {:error, :in_use} = Providers.delete_provider_if_unused(provider)
+
+      assert %Provider{} = Providers.get_provider(provider.id)
+      assert %Credential{} = Providers.get_credential(credential.id)
+      assert %ModelProvider{} = Repo.get(ModelProvider, lane.id)
+    end
+
+    test "delete_provider_if_unused/1 blocks on a lane mounted on one of its pools" do
+      provider = provider_fixture()
+      model_ = model_fixture()
+
+      {:ok, pool} =
+        Providers.create_pool(provider, %{name: "primary-#{System.unique_integer([:positive])}"})
+
+      credential = credential_fixture(provider)
+      {:ok, _member} = Providers.add_pool_member(pool, credential)
+
+      # Pool lane: credential_id is NULL, so a credential-only check reads the
+      # provider as unused and cascades it away silently.
+      {:ok, lane} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          pool_id: pool.id,
+          provider_model: "gpt-4-turbo",
+          enabled: true,
+          priority: 1
+        })
+
+      assert {:error, :in_use} = Providers.delete_provider_if_unused(provider)
+
+      assert Providers.get_provider(provider.id)
+      assert Providers.get_pool(pool.id)
+      assert %ModelProvider{} = Repo.get(ModelProvider, lane.id)
+    end
+
+    test "delete_pool/1 on a pool that is already gone returns {:error, :not_found}" do
+      provider = provider_fixture()
+
+      {:ok, pool} =
+        Providers.create_pool(provider, %{name: "primary-#{System.unique_integer([:positive])}"})
+
+      assert {:ok, _} = Providers.delete_pool(pool)
+      assert {:error, :not_found} = Providers.delete_pool(pool)
+    end
+
+    test "delete_pool/1 drops the routing snapshot after it commits" do
+      provider = provider_fixture()
+
+      {:ok, pool} =
+        Providers.create_pool(provider, %{name: "primary-#{System.unique_integer([:positive])}"})
+
+      model_id = Ecto.UUID.generate()
+
+      assert Routing.Cache.fetch_model_providers(model_id, nil, fn -> [:warm] end) == [:warm]
+
+      assert {:ok, _} = Providers.delete_pool(pool)
+
+      assert Routing.Cache.fetch_model_providers(model_id, nil, fn -> [:db] end) == [:db]
     end
   end
 

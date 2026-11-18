@@ -16,8 +16,10 @@ defmodule TokengateWeb.ProvidersLive do
   Pricing is managed per ModelProvider (model × credential) in the
   Models section, not here.
 
-  Deleting a provider that is referenced by model_providers is blocked
-  with a friendly Spanish flash message.
+  Deleting a provider that still serves lanes is blocked with a friendly
+  Spanish flash message; the "is it in use" check runs in the context, inside
+  the delete transaction and under the provider's row lock, and it counts
+  lanes served by the provider's credential pools as well as by its keys.
   """
 
   use TokengateWeb, :live_view
@@ -83,7 +85,7 @@ defmodule TokengateWeb.ProvidersLive do
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "No autorizado.")}
+        {:halt, put_flash(socket, :error, gettext("No autorizado."))}
       end
     end)
   end
@@ -322,8 +324,13 @@ defmodule TokengateWeb.ProvidersLive do
   # the provider's own overrides — an empty input means "inherit", which is
   # the normal state.
   def handle_event("edit_paths", %{"id" => provider_id}, socket) do
-    provider = Providers.get_provider!(provider_id)
-    {:noreply, open_paths_modal(socket, provider, ProviderPaths.overrides(provider))}
+    case fetch_provider(provider_id) do
+      {:ok, provider} ->
+        {:noreply, open_paths_modal(socket, provider, ProviderPaths.overrides(provider))}
+
+      :error ->
+        {:noreply, provider_gone(socket)}
+    end
   end
 
   def handle_event("cancel_paths", _params, socket) do
@@ -332,32 +339,45 @@ defmodule TokengateWeb.ProvidersLive do
 
   # An empty input is dropped by `normalize/1`, so "leave it blank" and "clear
   # an override" are the same gesture and the column keeps one shape.
+  #
+  # The id comes from the modal's assign, not from the payload: Cancel clears
+  # it, and a submit already in flight lands right after — that path must be a
+  # no-op, never a `get_provider!(nil)` that takes the LiveView down.
   def handle_event("save_paths", %{"paths" => params}, socket) do
-    provider = Providers.get_provider!(socket.assigns.paths_provider_id)
     submitted = Map.delete(params, "provider_id")
 
-    case ProviderPaths.normalize(submitted) do
-      {:ok, overrides} ->
-        case Providers.update_provider(provider, %{path_overrides: overrides}) do
-          {:ok, _provider} ->
-            audit(socket, "provider.paths_update", "provider", provider.id, %{
-              "name" => provider.name,
-              "path_overrides" => overrides
-            })
+    case fetch_provider(socket.assigns.paths_provider_id) do
+      :error ->
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("El proveedor ya no existe."))
+         |> close_paths_modal()
+         |> load_providers()}
 
-            {:noreply,
-             socket
-             |> put_flash(:info, paths_flash(overrides))
-             |> close_paths_modal()
-             |> load_providers()}
+      {:ok, provider} ->
+        case ProviderPaths.normalize(submitted) do
+          {:ok, overrides} ->
+            case Providers.update_provider(provider, %{path_overrides: overrides}) do
+              {:ok, _provider} ->
+                audit(socket, "provider.paths_update", "provider", provider.id, %{
+                  "name" => provider.name,
+                  "path_overrides" => overrides
+                })
 
-          {:error, changeset} ->
-            {:noreply,
-             reject_paths(socket, provider, submitted, changeset_error_message(changeset))}
+                {:noreply,
+                 socket
+                 |> put_flash(:info, paths_flash(overrides))
+                 |> close_paths_modal()
+                 |> load_providers()}
+
+              {:error, changeset} ->
+                {:noreply,
+                 reject_paths(socket, provider, submitted, changeset_error_message(changeset))}
+            end
+
+          {:error, message} ->
+            {:noreply, reject_paths(socket, provider, submitted, message)}
         end
-
-      {:error, message} ->
-        {:noreply, reject_paths(socket, provider, submitted, message)}
     end
   end
 
@@ -366,14 +386,19 @@ defmodule TokengateWeb.ProvidersLive do
   # form renders those read-only and the changeset discards any change to them
   # anyway.
   def handle_event("edit_provider", %{"id" => provider_id}, socket) do
-    provider = Providers.get_provider!(provider_id)
-    changeset = Providers.change_provider(provider)
+    case fetch_provider(provider_id) do
+      {:ok, provider} ->
+        changeset = Providers.change_provider(provider)
 
-    {:noreply,
-     socket
-     |> assign(:form, to_form(changeset, as: :provider))
-     |> assign(:editing_provider_id, provider.id)
-     |> assign(:editing_provider_builtin?, provider.source == "builtin")}
+        {:noreply,
+         socket
+         |> assign(:form, to_form(changeset, as: :provider))
+         |> assign(:editing_provider_id, provider.id)
+         |> assign(:editing_provider_builtin?, provider.source == "builtin")}
+
+      :error ->
+        {:noreply, provider_gone(socket)}
+    end
   end
 
   def handle_event("save_provider", %{"provider" => provider_params}, socket) do
@@ -410,31 +435,41 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   def handle_event("toggle_provider", %{"id" => provider_id}, socket) do
-    provider = Providers.get_provider!(provider_id)
-    new_status = if provider.status == "active", do: "disabled", else: "active"
+    case fetch_provider(provider_id) do
+      :error ->
+        {:noreply, provider_gone(socket)}
 
-    case Providers.update_provider(provider, %{status: new_status}) do
-      {:ok, _} ->
-        audit(socket, "provider.toggle_status", "provider", provider.id, %{
-          "name" => provider.name,
-          "status" => new_status
-        })
+      {:ok, provider} ->
+        new_status = if provider.status == "active", do: "disabled", else: "active"
 
-        {:noreply,
-         socket
-         |> put_flash(
-           :info,
-           if(new_status == "active",
-             do: gettext("Provider activated."),
-             else: gettext("Provider deactivated.")
-           )
-         )
-         |> load_providers()}
+        case Providers.update_provider(provider, %{status: new_status}) do
+          {:ok, _} ->
+            audit(socket, "provider.toggle_status", "provider", provider.id, %{
+              "name" => provider.name,
+              "status" => new_status
+            })
 
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Could not update the provider."))}
+            {:noreply,
+             socket
+             |> put_flash(
+               :info,
+               if(new_status == "active",
+                 do: gettext("Provider activated."),
+                 else: gettext("Provider deactivated.")
+               )
+             )
+             |> load_providers()}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, gettext("Could not update the provider."))}
+        end
     end
   end
+
+  # A client can post any event it wants over the socket: an event with no
+  # clause would raise FunctionClauseError and take the LiveView down with the
+  # page half rendered. Unknown events are a no-op.
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   ## Private helpers — provider save --------------------------------------
 
@@ -458,53 +493,76 @@ defmodule TokengateWeb.ProvidersLive do
 
   defp normalize_capabilities(params), do: params
 
-  defp delete_provider(socket, provider) do
-    referenced? =
-      Repo.exists?(
-        from(mp in ModelProvider,
-          join: c in assoc(mp, :credential),
-          where: c.provider_id == ^provider.id
-        )
-      )
-
-    if referenced? do
-      {:noreply,
-       put_flash(
-         socket,
-         :error,
-         gettext("Cannot delete: the provider is in use by one or more models.")
-       )}
+  # Client-supplied ids are untrusted. A malformed one raises
+  # `Ecto.Query.CastError` inside `Repo.get` and a well-formed-but-gone one
+  # raises `Ecto.NoResultsError` inside `get_provider!/1`; either kills the
+  # LiveView mid-request. Every handler that takes an id from the socket casts
+  # first and treats "no row" as a flash, not an exception.
+  defp fetch_provider(id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(id),
+         %Provider{} = provider <- Repo.get(Provider, uuid) do
+      {:ok, provider}
     else
-      # Slow deletes surface as exceptions, not {:error, _}: a client-side
-      # timeout raises DBConnection.ConnectionError; a server-side
-      # statement_timeout or deadlock raises Postgrex.Error (query_canceled /
-      # 40P01). Without this the LiveView crashes and the user sees nothing.
-      try do
-        case Providers.delete_provider(provider) do
-          {:ok, _} ->
-            audit(socket, "provider.delete", "provider", provider.id, %{"name" => provider.name})
+      _ -> :error
+    end
+  end
 
-            {:noreply,
-             socket
-             |> put_flash(:info, gettext("Provider deleted."))
-             |> load_providers()}
+  # Drops the row from the table (it is gone) and says why the click did
+  # nothing.
+  defp provider_gone(socket) do
+    socket
+    |> put_flash(:error, gettext("El proveedor ya no existe."))
+    |> load_providers()
+  end
 
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, gettext("Could not delete the provider."))}
-        end
-      rescue
-        e in [DBConnection.ConnectionError, Postgrex.Error] ->
-          Logger.warning("delete_provider/1 DB error for #{provider.id}: #{Exception.message(e)}")
+  # The "is it in use" answer is decided by the context INSIDE the delete
+  # transaction and under the provider's row lock: the check cannot go stale
+  # between the two statements, and a lane served by one of the provider's
+  # credential pools counts too.
+  defp delete_provider(socket, provider) do
+    # Slow deletes surface as exceptions, not {:error, _}: a client-side
+    # timeout raises DBConnection.ConnectionError; a server-side
+    # statement_timeout or deadlock raises Postgrex.Error (query_canceled /
+    # 40P01). Without this the LiveView crashes and the user sees nothing.
+    try do
+      case Providers.delete_provider_if_unused(provider) do
+        {:ok, _} ->
+          audit(socket, "provider.delete", "provider", provider.id, %{"name" => provider.name})
 
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Provider deleted."))
+           |> load_providers()}
+
+        {:error, :in_use} ->
           {:noreply,
            put_flash(
              socket,
              :error,
-             gettext(
-               "The delete failed in the database (timeout or lock). Try again; if it persists, contact an administrator."
-             )
+             gettext("Cannot delete: the provider is in use by one or more models.")
            )}
+
+        {:error, :not_found} ->
+          {:noreply,
+           socket
+           |> put_flash(:error, gettext("El proveedor ya no existe."))
+           |> load_providers()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not delete the provider."))}
       end
+    rescue
+      e in [DBConnection.ConnectionError, Postgrex.Error] ->
+        Logger.warning("delete_provider/1 DB error for #{provider.id}: #{Exception.message(e)}")
+
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext(
+             "The delete failed in the database (timeout or lock). Try again; if it persists, contact an administrator."
+           )
+         )}
     end
   end
 
@@ -535,35 +593,46 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   defp save_provider(socket, provider_id, provider_params) when is_binary(provider_id) do
-    provider = Providers.get_provider!(provider_id)
-
-    case Providers.update_provider(provider, provider_params) do
-      {:ok, updated} ->
-        audit(socket, "provider.update", "provider", updated.id, %{
-          "name" => updated.name,
-          "changes" =>
-            Map.take(provider_params, [
-              "name",
-              "status",
-              "base_url",
-              "dialect",
-              "capabilities",
-              "max_rpm",
-              "max_concurrent",
-              "max_concurrent_per_user",
-              "receive_timeout_ms"
-            ])
-        })
-
+    case fetch_provider(provider_id) do
+      :error ->
+        # The row is gone (another admin deleted it while this form was open):
+        # drop the form and say so instead of raising NoResultsError.
         {:noreply,
          socket
-         |> put_flash(:info, gettext("Provider updated."))
+         |> put_flash(:error, gettext("El proveedor ya no existe."))
          |> assign(:form, nil)
          |> assign(:editing_provider_id, nil)
          |> load_providers()}
 
-      {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :provider))}
+      {:ok, provider} ->
+        case Providers.update_provider(provider, provider_params) do
+          {:ok, updated} ->
+            audit(socket, "provider.update", "provider", updated.id, %{
+              "name" => updated.name,
+              "changes" =>
+                Map.take(provider_params, [
+                  "name",
+                  "status",
+                  "base_url",
+                  "dialect",
+                  "capabilities",
+                  "max_rpm",
+                  "max_concurrent",
+                  "max_concurrent_per_user",
+                  "receive_timeout_ms"
+                ])
+            })
+
+            {:noreply,
+             socket
+             |> put_flash(:info, gettext("Provider updated."))
+             |> assign(:form, nil)
+             |> assign(:editing_provider_id, nil)
+             |> load_providers()}
+
+          {:error, changeset} ->
+            {:noreply, assign(socket, :form, to_form(changeset, as: :provider))}
+        end
     end
   end
 
@@ -651,8 +720,16 @@ defmodule TokengateWeb.ProvidersLive do
 
   defp paths_flash(overrides) do
     case map_size(overrides) do
-      0 -> gettext("Paths reset: every capability falls back to its default.")
-      n -> "Paths actualizados (#{n} #{if n == 1, do: "override", else: "overrides"})."
+      0 ->
+        gettext("Paths reset: every capability falls back to its default.")
+
+      n ->
+        ngettext(
+          "Paths actualizados (%{count} override).",
+          "Paths actualizados (%{count} overrides).",
+          n,
+          count: n
+        )
     end
   end
 
@@ -898,7 +975,7 @@ defmodule TokengateWeb.ProvidersLive do
                           :if={entry.activated?}
                           class="text-[10px] text-success inline-flex items-center gap-0.5"
                         >
-                          <.icon name="hero-check-circle" class="w-3 h-3" /> activo
+                          <.icon name="hero-check-circle" class="w-3 h-3" /> {gettext("activo")}
                         </span>
                       </span>
                     </div>
@@ -968,7 +1045,7 @@ defmodule TokengateWeb.ProvidersLive do
                     label="Base URL"
                     placeholder="https://relay.example.com/v1"
                     disabled={@editing_provider_builtin?}
-                    hint="URL base (OpenAI-compatible)."
+                    hint={gettext("URL base (OpenAI-compatible).")}
                   />
                 </div>
 
