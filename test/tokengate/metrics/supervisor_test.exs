@@ -36,7 +36,10 @@ defmodule Tokengate.Metrics.SupervisorTest do
 
     snap = Collector.snapshot()
     assert snap.requests_total == 1
-    assert snap.by_model == %{"model-x" => 1}
+    # Collector.snapshot/0 no longer exposes by_model/by_provider (unbounded
+    # dimensions removed); the bounded agent dimension is the surviving
+    # per-key counter, so assert the event landed there instead.
+    assert snap.by_agent == %{"api" => 1}
     assert Decimal.equal?(snap.cost_usd, Decimal.new("0.100000"))
   end
 
