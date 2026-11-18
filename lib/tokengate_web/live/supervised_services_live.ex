@@ -250,18 +250,145 @@ defmodule TokengateWeb.SupervisedServicesLive do
           </:actions>
         </.header>
 
-        <div
-          :if={@services_empty?}
-          id="supervised-empty"
-          class="card bg-base-100 border border-base-300 shadow-sm"
-        >
-          <div class="card-body items-center text-center py-12">
-            <.icon name="hero-wrench-screwdriver" class="w-12 h-12 text-base-content/30" />
-            <h3 class="text-lg font-semibold mt-2">{gettext("You supervise no services.")}</h3>
-            <p class="text-base-content/60 max-w-md">
-              {gettext("An administrator can assign you services from the")}
-              <strong>{gettext("Services")}</strong> {gettext("section.")}
-            </p>
+        <%!-- Listado: una fila por servicio supervisado (contrato .table común,
+             read-only: sin headers ordenables ni acciones de mutación). --%>
+        <div id="supervised-services">
+          <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
+            <.table
+              id="supervised-rows"
+              rows={@streams.services}
+              row_item={fn {_id, service} -> service end}
+              row_class="align-top"
+              empty?={@services_empty?}
+            >
+              <:col :let={service} label={gettext("Service")}>
+                <p class="font-medium text-sm">{service.name}</p>
+                <div class="flex flex-wrap items-center gap-1.5 mt-1">
+                  <span class="badge badge-ghost badge-xs" id={"service-readonly-#{service.id}"}>
+                    <.icon name="hero-eye" class="w-3 h-3 mr-1" /> {gettext("Read-only")}
+                  </span>
+                  <span class="badge badge-outline badge-xs">
+                    {service.concurrency_limit || 5} conc.
+                  </span>
+                  <span class="badge badge-outline badge-xs">{service.rpm_limit || 60} RPM</span>
+                  <span class="badge badge-ghost badge-xs">{limit_label(service)}</span>
+                </div>
+              </:col>
+              <:col :let={service} label={gettext("Keys")}>
+                <% active_keys = Map.get(@api_keys, service.id, []) %>
+                <%= if active_keys != [] do %>
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="badge badge-ghost badge-sm gap-1">
+                      <.icon name="hero-key" class="w-3 h-3" />
+                      <span class="font-mono">{hd(active_keys).key_prefix}</span>…
+                      <span class={[
+                        "badge badge-xs",
+                        if(hd(active_keys).status == "active",
+                          do: "badge-success",
+                          else: "badge-error"
+                        )
+                      ]}>
+                        {hd(active_keys).status}
+                      </span>
+                    </span>
+                    <span :if={length(active_keys) > 1} class="badge badge-ghost badge-sm">
+                      {gettext("%{count} keys", count: length(active_keys))}
+                    </span>
+                  </div>
+                <% else %>
+                  <span class="badge badge-ghost badge-sm">{gettext("No API key")}</span>
+                <% end %>
+              </:col>
+              <:col :let={service} label={gettext("Models")}>
+                <% models = model_names_for(@granted_models, service.id, @models) %>
+                <div class="flex flex-wrap gap-1.5" id={"models-#{service.id}"}>
+                  <%= if models == [] do %>
+                    <p class="text-xs text-base-content/40">
+                      {gettext("This service has no models assigned.")}
+                    </p>
+                  <% else %>
+                    <span
+                      :for={model <- models}
+                      id={"model-badge-#{service.id}-#{model.id}"}
+                      class="badge badge-primary badge-sm"
+                    >
+                      {model.name}
+                    </span>
+                  <% end %>
+                </div>
+              </:col>
+              <:col :let={service} label={gettext("Actual spend")} align="right">
+                <span class="font-mono text-sm" id={"metric-cost-#{service.id}"}>
+                  {format_cost(summary_for(@summaries, service.id).cost_usd)}
+                </span>
+                <p class="text-[10px] text-base-content/40">{gettext("30 days")}</p>
+              </:col>
+              <:col :let={service} label={gettext("Requests 30d")} align="right">
+                <% stats = summary_for(@summaries, service.id) %>
+                <p class="font-mono text-sm" id={"metric-requests-#{service.id}"}>
+                  {Stats.format_number(stats.request_count)}
+                </p>
+                <p
+                  class="text-[10px] text-base-content/50 flex items-center gap-1 justify-end"
+                  id={"metric-errors-#{service.id}"}
+                  title={gettext("Errors")}
+                >
+                  <.icon name="hero-exclamation-triangle" class="w-3 h-3" />
+                  {Stats.format_number(stats.error_count)}
+                </p>
+              </:col>
+              <:col :let={service} label={gettext("Tokens")} align="right">
+                <% stats = summary_for(@summaries, service.id) %>
+                <p
+                  class="text-xs font-mono flex items-center gap-1 justify-end"
+                  id={"metric-input-#{service.id}"}
+                  title={gettext("Tokens in")}
+                >
+                  <.icon name="hero-arrow-down-tray" class="w-3 h-3 text-base-content/40" />
+                  {Stats.format_compact(stats.prompt_tokens)}
+                </p>
+                <p
+                  class="text-xs font-mono flex items-center gap-1 justify-end"
+                  id={"metric-output-#{service.id}"}
+                  title={gettext("Tokens out")}
+                >
+                  <.icon name="hero-arrow-up-tray" class="w-3 h-3 text-base-content/40" />
+                  {Stats.format_compact(stats.completion_tokens)}
+                </p>
+                <p class="text-[10px] text-base-content/40">
+                  {gettext("cache hit")} {Stats.cache_hit_pct(
+                    stats.prompt_tokens,
+                    stats.cache_read_tokens
+                  )} · {Stats.format_tps(stats.avg_tps)} tps
+                </p>
+              </:col>
+              <:col :let={service} label={gettext("Average latency")} align="right">
+                <span class="font-mono text-xs" id={"metric-latency-#{service.id}"}>
+                  {Stats.format_ms(summary_for(@summaries, service.id).avg_latency_ms)}
+                </span>
+                <p class="text-[10px] text-base-content/40">{gettext("30 days")}</p>
+              </:col>
+              <:action :let={service}>
+                <.link
+                  navigate={~p"/services/supervised/#{service.id}"}
+                  id={"service-stats-link-#{service.id}"}
+                  class="btn btn-xs btn-primary"
+                  title={gettext("View full stats")}
+                >
+                  <.icon name="hero-chart-bar" class="w-3.5 h-3.5" /> {gettext("View full stats")}
+                </.link>
+              </:action>
+              <:empty>
+                <div id="supervised-empty" class="flex flex-col items-center">
+                  <.icon name="hero-wrench-screwdriver" class="size-12 text-base-content/30" />
+                  <h3 class="text-lg font-semibold mt-2">{gettext("You supervise no services.")}</h3>
+                  <p class="text-base-content/60 max-w-md">
+                    {gettext("An administrator can assign you services from the")}
+                    <strong>{gettext("Services")}</strong> {gettext("section.")}
+                  </p>
+                </div>
+              </:empty>
+            </.table>
           </div>
         </div>
 
@@ -319,141 +446,6 @@ defmodule TokengateWeb.SupervisedServicesLive do
             </div>
           </div>
         </section>
-
-        <div id="supervised-services" phx-update="stream" class="space-y-4">
-          <article
-            :for={{id, service} <- @streams.services}
-            id={id}
-            class="card bg-base-100 border border-base-300 shadow-sm"
-          >
-            <div class="card-body gap-4">
-              <% stats = summary_for(@summaries, service.id) %>
-
-              <header class="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h3 class="font-semibold text-base-content flex items-center gap-2">
-                    {service.name}
-                    <span class="badge badge-ghost badge-sm" id={"service-readonly-#{service.id}"}>
-                      <.icon name="hero-eye" class="w-3 h-3 mr-1" /> {gettext("Read-only")}
-                    </span>
-                  </h3>
-
-                  <div class="flex flex-wrap items-center gap-2 mt-2">
-                    <span class="badge badge-outline badge-sm">
-                      {service.concurrency_limit || 5} conc.
-                    </span>
-                    <span class="badge badge-outline badge-sm">
-                      {service.rpm_limit || 60} RPM
-                    </span>
-                    <span class="badge badge-ghost badge-sm">{limit_label(service)}</span>
-
-                    <% active_keys = Map.get(@api_keys, service.id, []) %>
-                    <%= if active_keys != [] do %>
-                      <span class="badge badge-ghost badge-sm gap-1">
-                        <.icon name="hero-key" class="w-3 h-3" />
-                        <span class="font-mono">{hd(active_keys).key_prefix}</span>…
-                        <span class={[
-                          "badge badge-xs",
-                          if(hd(active_keys).status == "active",
-                            do: "badge-success",
-                            else: "badge-error"
-                          )
-                        ]}>
-                          {hd(active_keys).status}
-                        </span>
-                      </span>
-                      <span :if={length(active_keys) > 1} class="badge badge-ghost badge-sm">
-                        {gettext("%{count} keys", count: length(active_keys))}
-                      </span>
-                    <% else %>
-                      <span class="badge badge-ghost badge-sm">{gettext("No API key")}</span>
-                    <% end %>
-                  </div>
-                </div>
-
-                <.link
-                  navigate={~p"/services/supervised/#{service.id}"}
-                  id={"service-stats-link-#{service.id}"}
-                  class="btn btn-sm btn-primary"
-                >
-                  <.icon name="hero-chart-bar" class="w-4 h-4" /> {gettext("View full stats")}
-                </.link>
-              </header>
-
-              <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-                <.metric_tile
-                  id={"metric-cost-#{service.id}"}
-                  label={gettext("Actual spend")}
-                  value={format_cost(stats.cost_usd)}
-                  icon="hero-currency-dollar"
-                  accent="success"
-                  sub={gettext("30 days")}
-                />
-                <.metric_tile
-                  id={"metric-requests-#{service.id}"}
-                  label="Requests"
-                  value={Stats.format_number(stats.request_count)}
-                  icon="hero-bolt"
-                  accent="primary"
-                  sub={gettext("30 days")}
-                />
-                <.metric_tile
-                  id={"metric-input-#{service.id}"}
-                  label={gettext("Tokens in")}
-                  value={Stats.format_compact(stats.prompt_tokens)}
-                  icon="hero-arrow-down-tray"
-                  accent="accent"
-                  sub={"cache hit #{Stats.cache_hit_pct(stats.prompt_tokens, stats.cache_read_tokens)}"}
-                />
-                <.metric_tile
-                  id={"metric-output-#{service.id}"}
-                  label={gettext("Tokens out")}
-                  value={Stats.format_compact(stats.completion_tokens)}
-                  icon="hero-arrow-up-tray"
-                  accent="warning"
-                  sub={"#{Stats.format_tps(stats.avg_tps)} tps"}
-                />
-                <.metric_tile
-                  id={"metric-errors-#{service.id}"}
-                  label={gettext("Errors")}
-                  value={Stats.format_number(stats.error_count)}
-                  icon="hero-exclamation-triangle"
-                  accent={if stats.error_count > 0, do: "error", else: "neutral"}
-                  sub={error_rate_label(stats.request_count, stats.error_count)}
-                />
-                <.metric_tile
-                  id={"metric-latency-#{service.id}"}
-                  label={gettext("Average latency")}
-                  value={Stats.format_ms(stats.avg_latency_ms)}
-                  icon="hero-clock"
-                  accent="neutral"
-                  sub={gettext("30 days")}
-                />
-              </div>
-
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  {gettext("Allowed models")}
-                </span>
-                <div class="flex flex-wrap gap-2" id={"models-#{service.id}"}>
-                  <%= if model_names_for(@granted_models, service.id, @models) == [] do %>
-                    <p class="text-xs text-base-content/40">
-                      {gettext("This service has no models assigned.")}
-                    </p>
-                  <% else %>
-                    <span
-                      :for={model <- model_names_for(@granted_models, service.id, @models)}
-                      id={"model-badge-#{service.id}-#{model.id}"}
-                      class="badge badge-primary badge-sm"
-                    >
-                      {model.name}
-                    </span>
-                  <% end %>
-                </div>
-              </div>
-            </div>
-          </article>
-        </div>
       </div>
     </Layouts.dashboard>
     """

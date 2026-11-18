@@ -1261,99 +1261,129 @@ defmodule TokengateWeb.ServicesLive do
           ]}
         />
 
-        <%!-- Services table --%>
+        <%!-- Services table: identidad → campos QUE COMPARTE con Usuarios
+             (mismo orden en ambas tablas) → resto de campos propios → Creado
+             → acciones. --%>
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
-          <table class="table table-sm">
-            <thead>
-              <tr>
-                <th>
-                  <.sort_button
-                    event="sort_services"
-                    field={:name}
-                    label={gettext("Service")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                  />
-                </th>
-                <%!-- Orden: identidad → campos QUE COMPARTE con Usuarios (mismo
-                     orden en ambas tablas) → resto de campos propios → Creado →
-                     acciones. --%>
-                <th>{gettext("Keys")}</th>
-                <th class="text-right">
-                  <.sort_button
-                    event="sort_services"
-                    field={:limit}
-                    label={gettext("Monthly cap (UTC month)")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                    align="right"
-                  />
-                </th>
-                <th class="text-right">
-                  <.sort_button
-                    event="sort_services"
-                    field={:monthly_spend}
-                    label={gettext("Monthly spend")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                    align="right"
-                  />
-                </th>
-                <th class="text-right">
-                  <.sort_button
-                    event="sort_services"
-                    field={:total_spend}
-                    label={gettext("Total spend")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                    align="right"
-                  />
-                </th>
-                <th>{gettext("Models")}</th>
-                <th class="text-right">
-                  <.sort_button
-                    event="sort_services"
-                    field={:requests}
-                    label="Requests 30d"
-                    current={@sort_field}
-                    direction={@sort_direction}
-                    align="right"
-                  />
-                </th>
-                <th>
-                  <.sort_button
-                    event="sort_services"
-                    field={:inserted_at}
-                    label={gettext("Created")}
-                    current={@sort_field}
-                    direction={@sort_direction}
-                  />
-                </th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="services" phx-update="stream">
-              <tr :for={{id, service} <- @streams.services} id={id}>
-                <.service_row
-                  service={service}
-                  granted_models={@granted_models}
-                  stats={@service_stats}
-                  monthly_spend={@monthly_spend_by_service}
-                  total_spend={@total_spend_by_service}
-                  service_credit={@service_credit}
-                  supervisors_map={@supervisors_map}
-                  keys_by_service={@keys_by_service}
-                  timezone={@timezone}
-                />
-              </tr>
-            </tbody>
-          </table>
-          <.empty_state
-            :if={@services_empty?}
-            id="services-empty"
-            icon="hero-wrench-screwdriver"
-            title={gettext("No services yet.")}
-          />
+          <.table
+            id="services"
+            rows={@streams.services}
+            row_item={fn {_id, service} -> service end}
+            row_class="align-top"
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
+            sort_event="sort_services"
+            empty?={@services_empty?}
+          >
+            <:col :let={service} label={gettext("Service")} field={:name}>
+              <.admin_identity
+                icon="hero-wrench-screwdriver"
+                title={service.name}
+                subtitle={"#{service.concurrency_limit || 5} conc. · #{service.rpm_limit || 60} RPM"}
+                truncate
+              />
+            </:col>
+            <:col :let={service} label={gettext("Keys")}>
+              <.keys_badge
+                subject_id={service.id}
+                count={length(Map.get(@keys_by_service, service.id, []))}
+                open_event="manage_keys"
+              />
+            </:col>
+            <:col
+              :let={service}
+              label={gettext("Monthly cap (UTC month)")}
+              field={:limit}
+              align="right"
+              tooltip={
+                gettext(
+                  "Credit consumed against the service's monthly cap — the same reading as the Users list."
+                )
+              }
+            >
+              <div class="min-w-[150px]" id={"credit-#{service.id}"}>
+                <.budget_cell credit={Map.get(@service_credit, service.id)} />
+              </div>
+            </:col>
+            <:col :let={service} label={gettext("Monthly spend")} field={:monthly_spend} align="right">
+              <span class="text-xs font-mono" id={"monthly-spend-#{service.id}"}>
+                ${format_usd(Map.get(@monthly_spend_by_service, service.id, Decimal.new(0)))}
+              </span>
+            </:col>
+            <:col :let={service} label={gettext("Total spend")} field={:total_spend} align="right">
+              <span class="text-xs font-mono" id={"total-spend-#{service.id}"}>
+                ${format_usd(Map.get(@total_spend_by_service, service.id, Decimal.new(0)))}
+              </span>
+            </:col>
+            <:col :let={service} label={gettext("Models")}>
+              <button
+                phx-click="edit_models"
+                phx-value-id={service.id}
+                class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
+                id={"edit-models-#{service.id}"}
+                title={gettext("Manage the service models")}
+              >
+                <.icon name="hero-rectangle-stack" class="w-3 h-3" />
+                {gettext("%{count} models", count: length(Map.get(@granted_models, service.id, [])))}
+              </button>
+            </:col>
+            <:col :let={service} label={gettext("Requests 30d")} field={:requests} align="right">
+              <span class="text-xs font-mono">
+                {format_number(stat_for(@service_stats, service.id, :total_requests))}
+              </span>
+            </:col>
+            <:col :let={service} label={gettext("Created")} field={:inserted_at}>
+              <span class="text-xs text-base-content/50">
+                {format_date(service.inserted_at, @timezone)}
+              </span>
+            </:col>
+            <:action :let={service}>
+              <.link
+                navigate={~p"/stats/services/#{service.id}"}
+                class="btn btn-xs btn-ghost"
+                id={"stats-#{service.id}"}
+                title={gettext("View this service's consolidated stats")}
+                aria-label={gettext("View the service's stats")}
+              >
+                <.icon name="hero-chart-bar" class="w-3 h-3" />
+              </.link>
+              <button
+                phx-click="edit_service"
+                phx-value-id={service.id}
+                class="btn btn-xs btn-ghost"
+                id={"edit-#{service.id}"}
+                title={gettext("Edit service")}
+                aria-label={gettext("Edit service")}
+              >
+                <.icon name="hero-pencil" class="w-3 h-3" />
+              </button>
+              <button
+                phx-click="view_detail"
+                phx-value-id={service.id}
+                class="btn btn-xs btn-ghost"
+                id={"detail-#{service.id}"}
+                title={gettext("View detail: stats and supervisors")}
+                aria-label={gettext("View the service detail")}
+              >
+                <.icon name="hero-eye" class="w-3 h-3" />
+              </button>
+              <button
+                phx-click="open_delete_modal"
+                phx-value-id={service.id}
+                phx-value-name={service.name}
+                class="btn btn-xs btn-ghost text-error"
+                id={"delete-#{service.id}"}
+                title={gettext("Delete service")}
+                aria-label={gettext("Delete service")}
+              >
+                <.icon name="hero-trash" class="w-3 h-3" />
+              </button>
+            </:action>
+            <:empty>
+              <.icon name="hero-wrench-screwdriver" class="size-10 mx-auto mb-2 opacity-40" />
+              <p class="text-sm font-medium text-base-content/60">{gettext("No services yet.")}</p>
+            </:empty>
+          </.table>
         </div>
       </div>
     </Layouts.dashboard>
@@ -1361,107 +1391,6 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   ## Components ---------------------------------------------------------------
-
-  attr :service, :map, required: true
-  attr :granted_models, :map, required: true
-  attr :stats, :map, required: true
-  attr :monthly_spend, :map, required: true
-  attr :total_spend, :map, required: true
-  attr :service_credit, :map, required: true
-  attr :supervisors_map, :map, required: true
-  attr :keys_by_service, :map, required: true
-  attr :timezone, :string, required: true
-
-  defp service_row(assigns) do
-    ~H"""
-    <td>
-      <.admin_identity
-        icon="hero-wrench-screwdriver"
-        title={@service.name}
-        subtitle={"#{@service.concurrency_limit || 5} conc. · #{@service.rpm_limit || 60} RPM"}
-        truncate
-      />
-    </td>
-    <td>
-      <.keys_badge
-        subject_id={@service.id}
-        count={length(Map.get(@keys_by_service, @service.id, []))}
-        open_event="manage_keys"
-      />
-    </td>
-    <td class="min-w-[150px]" id={"credit-#{@service.id}"}>
-      <.budget_cell credit={Map.get(@service_credit, @service.id)} />
-    </td>
-    <td class="text-right text-xs font-mono" id={"monthly-spend-#{@service.id}"}>
-      ${format_usd(Map.get(@monthly_spend, @service.id, Decimal.new(0)))}
-    </td>
-    <td class="text-right text-xs font-mono" id={"total-spend-#{@service.id}"}>
-      ${format_usd(Map.get(@total_spend, @service.id, Decimal.new(0)))}
-    </td>
-    <td>
-      <button
-        phx-click="edit_models"
-        phx-value-id={@service.id}
-        class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
-        id={"edit-models-#{@service.id}"}
-        title={gettext("Manage the service models")}
-      >
-        <.icon name="hero-rectangle-stack" class="w-3 h-3" />
-        {gettext("%{count} models", count: length(Map.get(@granted_models, @service.id, [])))}
-      </button>
-    </td>
-    <td class="text-right text-xs font-mono">
-      {format_number(stat_for(@stats, @service.id, :total_requests))}
-    </td>
-    <td class="text-xs text-base-content/50">
-      {format_date(@service.inserted_at, @timezone)}
-    </td>
-    <td>
-      <div class="flex gap-1">
-        <.link
-          navigate={~p"/stats/services/#{@service.id}"}
-          class="btn btn-xs btn-ghost"
-          id={"stats-#{@service.id}"}
-          title={gettext("View this service's consolidated stats")}
-          aria-label={gettext("View the service's stats")}
-        >
-          <.icon name="hero-chart-bar" class="w-3 h-3" />
-        </.link>
-        <button
-          phx-click="edit_service"
-          phx-value-id={@service.id}
-          class="btn btn-xs btn-ghost"
-          id={"edit-#{@service.id}"}
-          title={gettext("Edit service")}
-          aria-label={gettext("Edit service")}
-        >
-          <.icon name="hero-pencil" class="w-3 h-3" />
-        </button>
-        <button
-          phx-click="view_detail"
-          phx-value-id={@service.id}
-          class="btn btn-xs btn-ghost"
-          id={"detail-#{@service.id}"}
-          title={gettext("View detail: stats and supervisors")}
-          aria-label={gettext("View the service detail")}
-        >
-          <.icon name="hero-eye" class="w-3 h-3" />
-        </button>
-        <button
-          phx-click="open_delete_modal"
-          phx-value-id={@service.id}
-          phx-value-name={@service.name}
-          class="btn btn-xs btn-ghost text-error"
-          id={"delete-#{@service.id}"}
-          title={gettext("Delete service")}
-          aria-label={gettext("Delete service")}
-        >
-          <.icon name="hero-trash" class="w-3 h-3" />
-        </button>
-      </div>
-    </td>
-    """
-  end
 
   defp stat_for(stats, service_id, key) do
     case Map.get(stats, service_id) do
