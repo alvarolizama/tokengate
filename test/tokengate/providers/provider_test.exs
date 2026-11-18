@@ -136,6 +136,64 @@ defmodule Tokengate.Providers.ProviderTest do
                "embeddings" => "/embeddings"
              }
     end
+
+    # `:key` identifies the catalog row a builtin was materialized from: if a
+    # submit could rewrite it, the row would stop matching CatalogSync's entry
+    # while still claiming to be catalog-owned.
+    test "a builtin's catalog key cannot be reassigned" do
+      builtin = %Provider{
+        source: "builtin",
+        key: "openrouter",
+        name: "OpenRouter",
+        base_url: "https://openrouter.ai/api/v1"
+      }
+
+      changeset = Provider.changeset(builtin, %{key: "mine", status: "disabled"})
+
+      refute Map.has_key?(changeset.changes, :key)
+      # Status is not identity: a builtin can still be disabled by hand.
+      assert changeset.changes.status == "disabled"
+    end
+
+    # The lock reads the PERSISTED source, so smuggling `source: "custom"` in
+    # the same submit cannot unlock the identity fields.
+    test "flipping source in the same submit does not unlock a builtin's identity" do
+      builtin = %Provider{
+        source: "builtin",
+        key: "openrouter",
+        name: "OpenRouter",
+        base_url: "https://openrouter.ai/api/v1"
+      }
+
+      changeset =
+        Provider.changeset(builtin, %{
+          source: "custom",
+          key: "other",
+          name: "renamed",
+          base_url: "https://evil.example.com/v1",
+          capabilities: ["image"]
+        })
+
+      assert changeset.changes == %{}
+      assert Ecto.Changeset.get_field(changeset, :source) == "builtin"
+      assert Ecto.Changeset.get_field(changeset, :key) == "openrouter"
+    end
+
+    # New rows have no persisted identity to protect: the catalog sync and the
+    # fixtures still create builtins through this changeset.
+    test "a new row can be born with an explicit source and key" do
+      changeset =
+        Provider.changeset(%Provider{}, %{
+          name: "catalog-row",
+          base_url: "https://catalog.example.com/v1",
+          source: "builtin",
+          key: "catalog-row"
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :source) == "builtin"
+      assert Ecto.Changeset.get_field(changeset, :key) == "catalog-row"
+    end
   end
 
   # Helper to extract error messages from changeset

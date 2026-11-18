@@ -326,7 +326,7 @@ defmodule TokengateWeb.CoreComponents do
           type={@type}
           name={@name}
           id={@id}
-          value={Phoenix.HTML.Form.normalize_value(@type, @value)}
+          value={input_value(@type, @value)}
           class={[
             @class || "w-full input",
             @errors != [] && (@error_class || "input-error")
@@ -350,6 +350,14 @@ defmodule TokengateWeb.CoreComponents do
     </p>
     """
   end
+
+  # Only the types whose widget shows the value back to the user get one. A
+  # password does not: echoing the stored secret (or the one just typed) into
+  # `value=` puts it in the DOM and in every LiveView diff, where anyone with
+  # the markup can read it. The browser keeps the typed characters itself.
+  # `nil` omits the attribute entirely instead of rendering `value=""`.
+  defp input_value("password", _value), do: nil
+  defp input_value(type, value), do: Phoenix.HTML.Form.normalize_value(type, value)
 
   @doc """
   Renders a header with title.

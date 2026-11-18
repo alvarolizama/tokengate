@@ -20,7 +20,7 @@ defmodule TokengateWeb.ProviderKeysLive do
   alias Tokengate.Repo
 
   @impl true
-  def mount(%{"id" => provider_id} = params, _session, socket) do
+  def mount(%{"id" => provider_id}, _session, socket) do
     case fetch_provider(provider_id) do
       nil ->
         {:ok,
@@ -47,12 +47,25 @@ defmodule TokengateWeb.ProviderKeysLive do
           |> assign(:is_admin, user && user.global_role == "admin")
           |> assign(:credential_inflight, %{})
           |> require_admin_hook()
-          |> load_keys()
-          |> open_new_credential_form(params["new"] == "1")
 
         {:ok, socket}
     end
   end
+
+  # The page has ONE load point: the provider comes from mount, the rows and the
+  # `?new=1` modal from here. A patch that only changes the query string
+  # (`/keys` → `/keys?new=1`) then reuses this path instead of remounting or
+  # duplicating the loading logic in every entry point.
+  @impl true
+  def handle_params(params, _uri, %{assigns: %{provider: _}} = socket) do
+    {:noreply,
+     socket
+     |> load_keys()
+     |> open_new_credential_form(params["new"] == "1")}
+  end
+
+  # A mount that redirected to the index has no provider to load.
+  def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
   # `Repo.get/2` raises on an id that is not a UUID: a hand-typed URL would
   # crash the mount instead of landing on the index.
@@ -144,180 +157,253 @@ defmodule TokengateWeb.ProviderKeysLive do
     {:noreply, open_new_credential_form(socket, true)}
   end
 
+  # Every handler that names a credential goes through `fetch_credential/2`:
+  # the id is cast (a hand-typed or non-UUID id is an ordinary miss, not a
+  # CastError that kills the LiveView) and the row must belong to THIS page's
+  # provider — an id from another provider is not a key the operator can see,
+  # let alone toggle or delete. A miss answers with a flash and the socket
+  # survives.
   def handle_event("edit_credential", %{"id" => cred_id}, socket) do
-    cred = Providers.get_credential!(cred_id)
-    changeset = Providers.change_credential(cred)
-
-    {:noreply,
-     socket
-     |> assign(:credential_form, to_form(changeset, as: :credential))
-     |> assign(:editing_credential_id, cred.id)}
+    with_credential(socket, cred_id, &open_edit_credential_form/2)
   end
 
   def handle_event("cancel_credential", _params, socket) do
-    {:noreply, socket |> assign(:credential_form, nil) |> assign(:editing_credential_id, nil)}
+    {:noreply, close_credential_form(socket)}
   end
 
-  def handle_event("save_credential", %{"credential" => cred_params}, socket) do
-    editing_id = socket.assigns[:editing_credential_id]
+  def handle_event("save_credential", %{"credential" => params}, socket) do
+    # Only the two operator fields survive. `provider_id`, `status` and the
+    # error bookkeeping are server-set, so a forged submit cannot re-parent the
+    # key or flip its lifecycle state.
+    attrs = Map.take(params, ["name", "api_key_encrypted"])
 
-    if editing_id do
-      cred = Providers.get_credential!(editing_id)
+    case socket.assigns[:editing_credential_id] do
+      nil ->
+        {:noreply, create_credential(socket, attrs)}
 
-      # Si el api_key viene vacío, evitamos sobrescribir — lo removemos
-      cred_params =
-        if cred_params["api_key_encrypted"] in [nil, ""] do
-          Map.drop(cred_params, ["api_key_encrypted"])
-        else
-          cred_params
-        end
-
-      case Providers.update_credential(cred, cred_params) do
-        {:ok, _cred} ->
-          audit(socket, "credential.update", "credential", cred.id, %{
-            "provider_id" => cred.provider_id,
-            "name" => cred.name,
-            "key_rotated" => Map.has_key?(cred_params, "api_key_encrypted")
-          })
-
-          {:noreply,
-           socket
-           |> put_flash(:info, "Credencial actualizada.")
-           |> assign(:credential_form, nil)
-           |> assign(:editing_credential_id, nil)
-           |> load_keys()}
-
-        {:error, changeset} ->
-          {:noreply, assign(socket, :credential_form, to_form(changeset, as: :credential))}
-      end
-    else
-      case Providers.create_credential(cred_params) do
-        {:ok, cred} ->
-          audit(socket, "credential.create", "credential", cred.id, %{
-            "provider_id" => cred.provider_id,
-            "name" => cred.name
-          })
-
-          {:noreply,
-           socket
-           |> put_flash(:info, "Credencial creada.")
-           |> assign(:credential_form, nil)
-           |> assign(:editing_credential_id, nil)
-           |> load_keys()}
-
-        {:error, changeset} ->
-          {:noreply, assign(socket, :credential_form, to_form(changeset, as: :credential))}
-      end
+      cred_id ->
+        with_credential(socket, cred_id, fn socket, credential ->
+          update_credential(socket, credential, attrs)
+        end)
     end
+  end
+
+  def handle_event("save_credential", _params, socket) do
+    {:noreply, put_flash(socket, :error, gettext("Falta el formulario de la credencial."))}
   end
 
   def handle_event("toggle_credential", %{"id" => cred_id}, socket) do
-    cred = Providers.get_credential!(cred_id)
-
-    # Credentials in "error" state cannot be toggled — they must be reactivated.
-    if cred.status == "error" do
-      {:noreply,
-       put_flash(socket, :error, gettext("This credential is in error. Use Reactivate."))}
-    else
-      new_status = if cred.status == "active", do: "disabled", else: "active"
-
-      case Providers.update_credential(cred, %{status: new_status}) do
-        {:ok, _} ->
-          audit(socket, "credential.toggle_status", "credential", cred.id, %{
-            "provider_id" => cred.provider_id,
-            "name" => cred.name,
-            "status" => new_status
-          })
-
-          {:noreply,
-           socket
-           |> put_flash(
-             :info,
-             "Credencial #{if(new_status == "active", do: "activada", else: "desactivada")}."
-           )
-           |> load_keys()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not update the credential."))}
-      end
-    end
+    with_credential(socket, cred_id, &toggle_credential/2)
   end
 
   def handle_event("reactivate_credential", %{"id" => cred_id}, socket) do
-    cred = Providers.get_credential!(cred_id)
-
-    if cred.status == "error" do
-      case Providers.reactivate_credential(cred) do
-        {:ok, _} ->
-          audit(socket, "credential.reactivate", "credential", cred.id, %{
-            "provider_id" => cred.provider_id,
-            "name" => cred.name
-          })
-
-          {:noreply,
-           socket
-           |> put_flash(:info, "Credencial reactivada.")
-           |> load_keys()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not reactivate the credential."))}
-      end
-    else
-      {:noreply,
-       put_flash(socket, :error, gettext("Only credentials in error can be reactivated."))}
-    end
+    with_credential(socket, cred_id, &reactivate_credential/2)
   end
 
   def handle_event("reset_breaker", %{"id" => cred_id}, socket) do
-    cred = Providers.get_credential!(cred_id)
-
-    Tokengate.Routing.CircuitBreakerManager.reset(cred.id)
-
-    audit(socket, "credential.breaker_reset", "credential", cred.id, %{
-      "provider_id" => cred.provider_id,
-      "name" => cred.name
-    })
-
-    {:noreply,
-     socket
-     |> put_flash(:info, "Circuit breaker reseteado.")
-     |> load_keys()}
+    with_credential(socket, cred_id, &reset_breaker/2)
   end
 
   def handle_event("delete_credential", %{"id" => cred_id}, socket) do
-    cred = Providers.get_credential!(cred_id)
+    with_credential(socket, cred_id, &delete_credential/2)
+  end
 
-    case Providers.delete_credential(cred) do
-      {:ok, _} ->
-        audit(socket, "credential.delete", "credential", cred.id, %{
-          "provider_id" => cred.provider_id,
-          "name" => cred.name
+  # Stale clients (a row removed in another tab, a replayed event) must not
+  # crash the page.
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  ## Credential actions ----------------------------------------------------
+
+  defp open_edit_credential_form(socket, credential) do
+    socket
+    |> assign(:credential_form, to_form(edit_changeset(credential), as: :credential))
+    |> assign(:editing_credential_id, credential.id)
+  end
+
+  defp create_credential(socket, attrs) do
+    # The provider is the page's, never the hidden form field: creating a key
+    # under another provider would hand it the operator's secret.
+    attrs = Map.put(attrs, "provider_id", socket.assigns.provider.id)
+
+    case Providers.create_credential(attrs) do
+      {:ok, credential} ->
+        audit(socket, "credential.create", "credential", credential.id, %{
+          "provider_id" => credential.provider_id,
+          "name" => credential.name
         })
 
-        {:noreply,
-         socket
-         |> put_flash(:info, "Credencial eliminada.")
-         |> load_keys()}
+        socket
+        |> put_flash(:info, "Credencial creada.")
+        |> close_credential_form()
+        |> load_keys()
 
-      {:error, :credential_in_pool} ->
-        # La membresía es parte de la fuente de credenciales de un lane (FK
-        # RESTRICT): borrar la key dejaría el pool más chico de lo que el
-        # operador cree. Se rechaza con mensaje, no con un 500.
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           gettext("This API key belongs to a pool. Remove it from the pool first.")
-         )}
+      {:error, changeset} ->
+        assign(socket, :credential_form, to_form(changeset, as: :credential))
+    end
+  end
+
+  defp update_credential(socket, credential, attrs) do
+    # A blank secret on edit means "keep the current one": the field is dropped
+    # instead of cast, so an empty submit never overwrites the stored key.
+    rotated? = present?(attrs["api_key_encrypted"])
+    attrs = if rotated?, do: attrs, else: Map.drop(attrs, ["api_key_encrypted"])
+
+    case Providers.update_credential(credential, attrs) do
+      {:ok, updated} ->
+        audit(socket, "credential.update", "credential", updated.id, %{
+          "provider_id" => updated.provider_id,
+          "name" => updated.name,
+          "key_rotated" => rotated?
+        })
+
+        socket
+        |> put_flash(:info, "Credencial actualizada.")
+        |> close_credential_form()
+        |> load_keys()
+
+      {:error, changeset} ->
+        assign(socket, :credential_form, to_form(changeset, as: :credential))
+    end
+  end
+
+  # Credentials in "error" state cannot be toggled — they must be reactivated.
+  defp toggle_credential(socket, %Credential{status: "error"}) do
+    put_flash(socket, :error, gettext("This credential is in error. Use Reactivate."))
+  end
+
+  defp toggle_credential(socket, credential) do
+    new_status = if credential.status == "active", do: "disabled", else: "active"
+
+    case Providers.update_credential(credential, %{status: new_status}) do
+      {:ok, _} ->
+        audit(socket, "credential.toggle_status", "credential", credential.id, %{
+          "provider_id" => credential.provider_id,
+          "name" => credential.name,
+          "status" => new_status
+        })
+
+        socket
+        |> put_flash(
+          :info,
+          "Credencial #{if(new_status == "active", do: "activada", else: "desactivada")}."
+        )
+        |> load_keys()
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Could not delete the credential."))}
+        put_flash(socket, :error, gettext("Could not update the credential."))
+    end
+  end
+
+  defp reactivate_credential(socket, %Credential{status: "error"} = credential) do
+    case Providers.reactivate_credential(credential) do
+      {:ok, _} ->
+        audit(socket, "credential.reactivate", "credential", credential.id, %{
+          "provider_id" => credential.provider_id,
+          "name" => credential.name
+        })
+
+        socket
+        |> put_flash(:info, "Credencial reactivada.")
+        |> load_keys()
+
+      {:error, _} ->
+        put_flash(socket, :error, gettext("Could not reactivate the credential."))
+    end
+  end
+
+  defp reactivate_credential(socket, _credential) do
+    put_flash(socket, :error, gettext("Only credentials in error can be reactivated."))
+  end
+
+  defp reset_breaker(socket, credential) do
+    Tokengate.Routing.CircuitBreakerManager.reset(credential.id)
+
+    audit(socket, "credential.breaker_reset", "credential", credential.id, %{
+      "provider_id" => credential.provider_id,
+      "name" => credential.name
+    })
+
+    socket
+    |> put_flash(:info, "Circuit breaker reseteado.")
+    |> load_keys()
+  end
+
+  defp delete_credential(socket, credential) do
+    case Providers.delete_credential(credential) do
+      {:ok, _} ->
+        audit(socket, "credential.delete", "credential", credential.id, %{
+          "provider_id" => credential.provider_id,
+          "name" => credential.name
+        })
+
+        socket
+        |> put_flash(:info, "Credencial eliminada.")
+        |> load_keys()
+
+      {:error, :credential_in_pool} ->
+        # The membership is part of a lane's credential source (RESTRICT
+        # FK): deleting the key would leave the pool smaller than the operator
+        # thinks. It is refused with a message, not with a 500.
+        put_flash(
+          socket,
+          :error,
+          gettext("This API key belongs to a pool. Remove it from the pool first.")
+        )
+
+      {:error, _} ->
+        put_flash(socket, :error, gettext("Could not delete the credential."))
     end
   end
 
   ## Private helpers -------------------------------------------------------
 
-  # `?new=1` opens the alta modal on mount: activating a catalog provider in the
+  defp with_credential(socket, cred_id, fun) do
+    case fetch_credential(socket, cred_id) do
+      {:ok, credential} -> {:noreply, fun.(socket, credential)}
+      :error -> {:noreply, credential_missing(socket)}
+    end
+  end
+
+  # Resolves a credential id against THIS page's provider. The cast happens
+  # first because `Repo.get/2` raises `Ecto.Query.CastError` on a non-UUID id;
+  # ownership is checked here so no handler can be pointed at another
+  # provider's key. Missing and foreign ids answer the same way on purpose: the
+  # client learns nothing about keys it cannot see.
+  defp fetch_credential(socket, cred_id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(cred_id),
+         %Credential{provider_id: provider_id} = credential <-
+           Providers.get_credential(uuid),
+         true <- provider_id == socket.assigns.provider.id do
+      {:ok, credential}
+    else
+      _ -> :error
+    end
+  end
+
+  defp credential_missing(socket) do
+    put_flash(socket, :error, gettext("Esta API key no pertenece a este proveedor."))
+  end
+
+  # The edit form is built from the row with the secret field cleared: the
+  # stored key never reaches the DOM. `update_credential/3` rebuilds the
+  # changeset from the submitted params, so clearing it here cannot erase the
+  # stored secret — a blank field keeps the current key (and the password input
+  # drops `value` on top of this, see `CoreComponents.input/1`).
+  defp edit_changeset(credential) do
+    credential
+    |> Providers.change_credential()
+    |> Ecto.Changeset.force_change(:api_key_encrypted, nil)
+  end
+
+  defp close_credential_form(socket) do
+    socket
+    |> assign(:credential_form, nil)
+    |> assign(:editing_credential_id, nil)
+  end
+
+  defp present?(value), do: is_binary(value) and String.trim(value) != ""
+
+  # `?new=1` opens the alta modal on arrival: activating a catalog provider in the
   # index navigates here with that flag, so the operator lands one keystroke
   # away from typing the secret instead of having to find the button.
   defp open_new_credential_form(socket, true) do

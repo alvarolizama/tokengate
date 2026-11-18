@@ -188,6 +188,30 @@ defmodule TokengateWeb.ProviderKeysLiveTest do
            )
   end
 
+  # The alta modal opens from `handle_params`, so a patch that only changes the
+  # query string opens it too — and the rows load through that same path.
+  test "?new=1 opens the modal through handle_params on a patch", %{conn: conn} do
+    provider = create_provider()
+    credential = create_credential(provider, %{name: "Producción"})
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_keys(conn, provider)
+
+    refute has_element?(view, "#credential-form")
+
+    view |> render_patch(~p"/catalog/providers/#{provider.id}/keys?new=1")
+
+    assert has_element?(view, "#credential-form")
+
+    assert has_element?(
+             view,
+             "#credential-form input[name='credential[provider_id]'][value='#{provider.id}']"
+           )
+
+    assert has_element?(view, "#credential-#{credential.id}", "Producción")
+  end
+
   test "admin manages the keys of a provider", %{conn: conn} do
     provider = create_provider()
     %{user: admin, password: password} = register_admin()
@@ -281,5 +305,155 @@ defmodule TokengateWeb.ProviderKeysLiveTest do
     assert html =~ "Esta API key pertenece a un pool. Quítala del pool primero."
     assert has_element?(view, "#credential-#{credential.id}")
     assert Providers.get_credential(credential.id) != nil
+  end
+
+  ## The secret never comes back to the DOM --------------------------------
+
+  # P3: the edit modal edits the alias, not the secret. Neither a prefilled
+  # struct nor a `value=` on the password input may return the stored key to the
+  # markup (two guards: the changeset clears the field and
+  # `CoreComponents.input/1` renders no `value` for type=password).
+  test "the edit modal never renders the stored secret", %{conn: conn} do
+    provider = create_provider()
+    credential = create_credential(provider, %{api_key_encrypted: "sk-liv...eak"})
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_keys(conn, provider)
+
+    html = view |> element("#edit-credential-#{credential.id}") |> render_click()
+
+    assert has_element?(view, "#credential-form")
+    refute html =~ "sk-liv...eak"
+
+    password_input =
+      view
+      |> element("#credential-form input[name='credential[api_key_encrypted]']")
+      |> render()
+
+    refute password_input =~ "value="
+
+    # The alias IS prefilled: that is what gets edited.
+    assert has_element?(
+             view,
+             "#credential-form input[name='credential[name]'][value='#{credential.name}']"
+           )
+  end
+
+  # The alta takes the provider of the PAGE: the hidden field belongs to the
+  # client and cannot divert the secret to another provider.
+  test "the alta assigns the key to the provider of the page, not to the form field", %{
+    conn: conn
+  } do
+    provider = create_provider()
+    other = create_provider()
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_keys(conn, provider)
+
+    view |> element("#new-credential-#{provider.id}") |> render_click()
+
+    # A forged submit: the payload names the OTHER provider.
+    html =
+      render_submit(view, "save_credential", %{
+        "credential" => %{
+          "provider_id" => other.id,
+          "name" => "Forjada",
+          "api_key_encrypted" => "sk-test-wxyz"
+        }
+      })
+
+    assert html =~ "Credencial creada."
+    refute html =~ "sk-test-wxyz"
+
+    assert [credential] = Providers.list_credentials_for_provider(provider.id)
+    assert credential.name == "Forjada"
+    assert Providers.list_credentials_for_provider(other.id) == []
+  end
+
+  # A forged submit of the edit modal cannot move lifecycle state nor re-parent
+  # the credential: only the alias (and the secret, when a new one is typed) are
+  # operator-owned.
+  test "a forged status or provider_id in the edit submit is ignored", %{conn: conn} do
+    provider = create_provider()
+    other = create_provider()
+    credential = create_credential(provider, %{name: "Producción", status: "disabled"})
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_keys(conn, provider)
+
+    view |> element("#edit-credential-#{credential.id}") |> render_click()
+
+    # Forged payload: it tries to activate the key and move it to the other provider.
+    html =
+      render_submit(view, "save_credential", %{
+        "credential" => %{
+          "name" => "Staging",
+          "api_key_encrypted" => "",
+          "provider_id" => other.id,
+          "status" => "active",
+          "error_reason" => "unauthorized"
+        }
+      })
+
+    assert html =~ "Credencial actualizada."
+
+    updated = Providers.get_credential!(credential.id)
+    assert updated.name == "Staging"
+    assert updated.status == "disabled"
+    assert updated.provider_id == provider.id
+    assert is_nil(updated.error_reason)
+    assert updated.api_key_encrypted == credential.api_key_encrypted
+  end
+
+  # Every credential resolves against the provider of the page: a foreign id is
+  # not toggled, edited or deleted, and the LiveView stays alive.
+  test "an event aimed at another provider's key is refused and the page survives", %{
+    conn: conn
+  } do
+    provider = create_provider()
+    other = create_provider()
+    foreign = create_credential(other, %{name: "Ajena"})
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_keys(conn, provider)
+
+    for event <-
+          ~w(edit_credential toggle_credential reactivate_credential reset_breaker delete_credential) do
+      html = render_click(view, event, %{"id" => foreign.id})
+      assert html =~ "Esta API key no pertenece a este proveedor."
+    end
+
+    assert has_element?(view, "#keys-empty")
+    refute has_element?(view, "#credential-form")
+
+    unchanged = Providers.get_credential!(foreign.id)
+    assert unchanged.status == "active"
+    assert unchanged.name == "Ajena"
+  end
+
+  # A non-UUID id (CastError) and a missing one (NoResultsError) used to be two
+  # different crashes; they are now the same answer and the page survives.
+  test "ids that are not UUIDs or do not exist do not kill the page", %{conn: conn} do
+    provider = create_provider()
+    credential = create_credential(provider, %{name: "Producción"})
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_keys(conn, provider)
+
+    for bad_id <- ["no-es-un-uuid", Ecto.UUID.generate()] do
+      for event <-
+            ~w(edit_credential toggle_credential reactivate_credential reset_breaker delete_credential) do
+        html = render_click(view, event, %{"id" => bad_id})
+        assert html =~ "Esta API key no pertenece a este proveedor."
+      end
+    end
+
+    assert has_element?(view, "#credential-#{credential.id}", "Producción")
+    assert Providers.get_credential!(credential.id).name == "Producción"
   end
 end

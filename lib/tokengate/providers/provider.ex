@@ -78,12 +78,18 @@ defmodule Tokengate.Providers.Provider do
     timestamps(type: :utc_datetime)
   end
 
-  @identity_fields [:name, :base_url, :doc_url, :logo_url, :dialect, :capabilities]
+  @identity_fields [:key, :name, :base_url, :doc_url, :logo_url, :dialect, :capabilities]
+
+  # `:source` decides who owns the row (catalog vs operator), so it is locked
+  # with the same rules: a builtin cannot walk out of catalog ownership — and
+  # out of the identity lock — with one submit.
+  @ownership_fields [:source]
 
   # Operational (non-identity) fields, editable for builtins too:
-  # `lock_builtin_identity/1` only strips `@identity_fields`, so a catalog
-  # provider keeps its identity while the operator still tunes its limits and
-  # its per-service paths.
+  # `lock_builtin_identity/1` strips only the catalog-owned fields
+  # (`@identity_fields` plus `@ownership_fields`), so a catalog provider keeps
+  # its identity while the operator still tunes its limits and its per-service
+  # paths.
   @limit_fields [:max_rpm, :max_concurrent, :max_concurrent_per_user, :receive_timeout_ms]
 
   @doc false
@@ -162,17 +168,21 @@ defmodule Tokengate.Providers.Provider do
   end
 
   # Builtin identity is catalog-owned: once a row is builtin, operators
-  # can only flip its status (enable/disable) — name, base_url, dialect
-  # and capabilities come from the catalog sync alone.
-  defp lock_builtin_identity(changeset) do
-    if get_field(changeset, :source) == "builtin" do
-      Enum.reduce(@identity_fields, changeset, fn field, acc ->
-        if changing?(acc, field), do: delete_change(acc, field), else: acc
-      end)
-    else
-      changeset
-    end
+  # can only flip its status (enable/disable) — name, base_url, dialect,
+  # capabilities and the catalog key come from the catalog sync alone.
+  #
+  # The decision is taken on the PERSISTED row (`changeset.data`), never on the
+  # cast result: reading `:source` after the cast let a single submit smuggle
+  # `source: "custom"` next to `name: "renamed"` and rename a catalog provider,
+  # because the lock saw the forged source and stepped aside. CatalogSync writes
+  # builtins through `Ecto.Changeset.change/2`, so it never goes through here.
+  defp lock_builtin_identity(%{data: %__MODULE__{source: "builtin"}} = changeset) do
+    Enum.reduce(@identity_fields ++ @ownership_fields, changeset, fn field, acc ->
+      if changing?(acc, field), do: delete_change(acc, field), else: acc
+    end)
   end
+
+  defp lock_builtin_identity(changeset), do: changeset
 
   defp changing?(changeset, field), do: Map.has_key?(changeset.changes, field)
 
