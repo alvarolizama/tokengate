@@ -135,6 +135,28 @@ defmodule TokengateWeb.ModelsLive do
 
   ## Data loading ---------------------------------------------------------
 
+  # Un id de modelo que llega del cliente se castea ANTES de tocar la DB: uno que
+  # ni siquiera es UUID revienta con CastError y uno inexistente con
+  # NoResultsError, y los dos se llevan la LiveView. `nil` es el "nada que hacer"
+  # que todos los handlers de abajo comparten.
+  defp fetch_model(model_id) do
+    with {:ok, id} <- Ecto.UUID.cast(model_id) do
+      Providers.get_model(id)
+    else
+      _ -> nil
+    end
+  end
+
+  # Una lane por id de cliente (`edit_model_provider_from_modal`): cast + fila
+  # real, nunca `get_model_provider!/1` sobre un payload.
+  defp fetch_lane(ap_id) do
+    with {:ok, id} <- Ecto.UUID.cast(ap_id) do
+      Providers.get_model_provider(id)
+    else
+      _ -> nil
+    end
+  end
+
   # Una fila por modelo y, cuando el modelo ABRE sección, una fila separadora
   # justo antes: el stream es una lista plana y cada item es UN elemento del DOM,
   # así que la sección viaja como item propio (`kind: :section`).
@@ -239,7 +261,16 @@ defmodule TokengateWeb.ModelsLive do
     |> assign(:lab_choices, Enum.map(labs, &{"#{&1.name} (#{&1.key})", &1.key}))
   end
 
+  # Los tipos que el alta ofrece. Un tipo SIN ruta en el gateway (ningún endpoint
+  # en `ModelPicker.type_endpoint/1`) es una promesa que nada sirve — el error
+  # que el propio catálogo prohíbe (una capability declarada sin superficie).
+  # Hoy las seis tienen ruta, así que el filtro es la garantía mecánica: el día
+  # que un tipo entre al vocabulario antes que su ruta, no se ofrece.
   def model_type_choices do
+    Enum.filter(all_type_choices(), fn {_label, type, _icon} -> type_endpoint(type) != nil end)
+  end
+
+  defp all_type_choices do
     [
       {gettext("LLM (chat)"), "llm", "hero-chat-bubble-left-right"},
       {gettext("Embedding"), "embedding", "hero-squares-2x2"},
@@ -520,20 +551,25 @@ defmodule TokengateWeb.ModelsLive do
 
   def handle_event("toggle_pin", %{"id" => model_id}, socket) do
     if socket.assigns.is_admin do
-      model = Providers.get_model!(model_id)
-      new_pinned = !model.pinned
+      case fetch_model(model_id) do
+        nil ->
+          {:noreply, socket}
 
-      case Providers.update_model(model, %{pinned: new_pinned}) do
-        {:ok, _updated} ->
-          audit(socket, "model.pin_toggle", "model", model.id, %{
-            "name" => model.name,
-            "pinned" => new_pinned
-          })
+        model ->
+          new_pinned = !model.pinned
 
-          {:noreply, load_models(socket)}
+          case Providers.update_model(model, %{pinned: new_pinned}) do
+            {:ok, _updated} ->
+              audit(socket, "model.pin_toggle", "model", model.id, %{
+                "name" => model.name,
+                "pinned" => new_pinned
+              })
 
-        {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
+              {:noreply, load_models(socket)}
+
+            {:error, _changeset} ->
+              {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
+          end
       end
     else
       {:noreply,
@@ -541,20 +577,29 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
+  def handle_event("toggle_pin", _params, socket), do: {:noreply, socket}
+
   def handle_event("edit_guard_rails", %{"id" => model_id}, socket) do
     if socket.assigns.is_admin do
-      model = Providers.get_model!(model_id)
-      changeset = Providers.change_model(model)
+      case fetch_model(model_id) do
+        nil ->
+          {:noreply, socket}
 
-      {:noreply,
-       socket
-       |> assign(:guard_rails_form, to_form(changeset, as: :model))
-       |> assign(:guard_rails_model_id, model.id)}
+        model ->
+          changeset = Providers.change_model(model)
+
+          {:noreply,
+           socket
+           |> assign(:guard_rails_form, to_form(changeset, as: :model))
+           |> assign(:guard_rails_model_id, model.id)}
+      end
     else
       {:noreply,
        put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
+
+  def handle_event("edit_guard_rails", _params, socket), do: {:noreply, socket}
 
   def handle_event("cancel_guard_rails", _params, socket) do
     {:noreply,
@@ -575,29 +620,33 @@ defmodule TokengateWeb.ModelsLive do
          put_flash(socket, :error, gettext("You do not have permission for this action."))}
 
       true ->
-        model = Providers.get_model!(socket.assigns.guard_rails_model_id)
+        case fetch_model(socket.assigns.guard_rails_model_id) do
+          nil ->
+            {:noreply, socket}
 
-        case Providers.update_model(model, model_params) do
-          {:ok, _updated} ->
-            audit(socket, "model.guard_rails_update", "model", model.id, %{
-              "name" => model.name,
-              "changes" =>
-                Map.take(model_params, [
-                  "guard_rails",
-                  "prompt_cache_enabled",
-                  "lazy_cleanup_enabled"
-                ])
-            })
+          model ->
+            case Providers.update_model(model, model_params) do
+              {:ok, _updated} ->
+                audit(socket, "model.guard_rails_update", "model", model.id, %{
+                  "name" => model.name,
+                  "changes" =>
+                    Map.take(model_params, [
+                      "guard_rails",
+                      "prompt_cache_enabled",
+                      "lazy_cleanup_enabled"
+                    ])
+                })
 
-            {:noreply,
-             socket
-             |> put_flash(:info, "Guard rails actualizados.")
-             |> assign(:guard_rails_form, nil)
-             |> assign(:guard_rails_model_id, nil)
-             |> load_models()}
+                {:noreply,
+                 socket
+                 |> put_flash(:info, "Guard rails actualizados.")
+                 |> assign(:guard_rails_form, nil)
+                 |> assign(:guard_rails_model_id, nil)
+                 |> load_models()}
 
-          {:error, changeset} ->
-            {:noreply, assign(socket, :guard_rails_form, to_form(changeset, as: :model))}
+              {:error, changeset} ->
+                {:noreply, assign(socket, :guard_rails_form, to_form(changeset, as: :model))}
+            end
         end
     end
   end
@@ -608,40 +657,53 @@ defmodule TokengateWeb.ModelsLive do
   # an already-configured row): typing brings them up.
   def handle_event("edit_model", %{"id" => model_id}, socket) do
     if socket.assigns.is_admin do
-      model = Providers.get_model!(model_id)
-      changeset = Providers.change_model(model)
+      case fetch_model(model_id) do
+        # Id forjado o borrado entre el render y el click: no-op.
+        nil ->
+          {:noreply, socket}
 
-      type = model.model_type || "llm"
+        model ->
+          changeset = Providers.change_model(model)
+          type = model.model_type || "llm"
 
-      {:noreply,
-       socket
-       |> assign_form_data()
-       |> assign(:form, to_form(changeset, as: :model))
-       |> assign(:editing_model_id, model.id)
-       # La edición entra al mismo wizard que el alta: el tipo del row queda
-       # fijado desde el primer paso, así los proveedores se acotan al tipo real
-       # del modelo en vez de mostrar todos.
-       |> assign(:model_form_picked_type, type)
-       # La edición entra directo a los DATOS: el tipo del row ya está decidido.
-       # Y trae la relación REAL del modelo — sus lanes (API key + el id que
-       # viaja al upstream), no un "proveedor" que el modelo no tiene: el
-       # proveedor es una propiedad de la key.
-       |> assign(:wizard_lanes, model_lanes(model.id))
-       |> assign(:wizard_step, "details")}
+          {:noreply,
+           socket
+           |> assign_form_data()
+           |> assign(:form, to_form(changeset, as: :model))
+           |> assign(:editing_model_id, model.id)
+           # La edición entra al mismo wizard que el alta: el tipo del row queda
+           # fijado desde el primer paso, así los proveedores se acotan al tipo
+           # real del modelo en vez de mostrar todos.
+           |> assign(:model_form_picked_type, type)
+           # La edición entra directo a los DATOS: el tipo del row ya está
+           # decidido. Y trae la relación REAL del modelo — sus lanes (API key +
+           # el id que viaja al upstream), no un "proveedor" que el modelo no
+           # tiene: el proveedor es una propiedad de la key.
+           |> assign(:wizard_lanes, model_lanes(model.id))
+           |> assign(:wizard_step, "details")}
+      end
     else
       {:noreply,
        put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
+  def handle_event("edit_model", _params, socket), do: {:noreply, socket}
+
   # "Change" sobre un lane DENTRO del modal de edición del modelo: los lanes
   # viven ahora en la página del modelo, así que el clic navega ahí con el modal
   # del lane ya abierto (`?edit=<id>`).
   def handle_event("edit_model_provider_from_modal", %{"id" => ap_id}, socket) do
-    ap = Providers.get_model_provider!(ap_id)
+    case fetch_lane(ap_id) do
+      nil ->
+        {:noreply, socket}
 
-    {:noreply, push_navigate(socket, to: ~p"/catalog/models/#{ap.model_id}?edit=#{ap.id}")}
+      ap ->
+        {:noreply, push_navigate(socket, to: ~p"/catalog/models/#{ap.model_id}?edit=#{ap.id}")}
+    end
   end
+
+  def handle_event("edit_model_provider_from_modal", _params, socket), do: {:noreply, socket}
 
   @impl true
   def handle_event("save_model", %{"model" => model_params}, socket) do
@@ -655,37 +717,71 @@ defmodule TokengateWeb.ModelsLive do
 
   def handle_event("delete_model", %{"id" => model_id}, socket) do
     if socket.assigns.is_admin do
-      model_record = Providers.get_model!(model_id)
+      case delete_model_locked(model_id) do
+        {:ok, model} ->
+          audit(socket, "model.delete", "model", model.id, %{"name" => model.name})
 
-      has_providers? =
-        Repo.exists?(from(ap in ModelProvider, where: ap.model_id == ^model_id))
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Model deleted."))
+           |> load_models()}
 
-      if has_providers? do
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           gettext("Cannot delete: the model has providers assigned. Remove them first.")
-         )}
-      else
-        case Providers.delete_model(model_record) do
-          {:ok, _} ->
-            audit(socket, "model.delete", "model", model_record.id, %{
-              "name" => model_record.name
-            })
+        {:error, :has_providers} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             gettext("Cannot delete: the model has providers assigned. Remove them first.")
+           )}
 
-            {:noreply,
-             socket
-             |> put_flash(:info, gettext("Model deleted."))
-             |> load_models()}
+        # Id forjado o modelo inexistente: no-op.
+        {:error, :not_found} ->
+          {:noreply, socket}
 
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, gettext("Could not delete the model."))}
-        end
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not delete the model."))}
       end
     else
       {:noreply,
        put_flash(socket, :error, gettext("You do not have permission for this action."))}
+    end
+  end
+
+  def handle_event("delete_model", _params, socket), do: {:noreply, socket}
+
+  # Check-then-delete bajo lock: el `FOR UPDATE` sobre la fila del modelo
+  # serializa dos borrados (y cualquier alta de lane que tome el mismo modelo),
+  # así que la comprobación de lanes y el DELETE ven el MISMO estado. Sin el
+  # lock, dos submits simultáneos podían pasar los dos el `Repo.exists?` y uno
+  # borraba con lanes recién asignadas.
+  defp delete_model_locked(model_id) do
+    case fetch_model(model_id) do
+      nil ->
+        {:error, :not_found}
+
+      model ->
+        Repo.transaction(fn ->
+          case Repo.one(from(m in Model, where: m.id == ^model.id, lock: "FOR UPDATE")) do
+            nil ->
+              Repo.rollback(:not_found)
+
+            %Model{} = locked ->
+              if Repo.exists?(from(ap in ModelProvider, where: ap.model_id == ^locked.id)) do
+                Repo.rollback(:has_providers)
+              else
+                case Providers.delete_model(locked) do
+                  {:ok, deleted} -> deleted
+                  {:error, reason} -> Repo.rollback({:delete_failed, reason})
+                end
+              end
+          end
+        end)
+        |> case do
+          {:ok, deleted} -> {:ok, deleted}
+          {:error, :not_found} -> {:error, :not_found}
+          {:error, :has_providers} -> {:error, :has_providers}
+          {:error, {:delete_failed, _reason}} -> {:error, :delete_failed}
+        end
     end
   end
 
@@ -976,31 +1072,35 @@ defmodule TokengateWeb.ModelsLive do
   defp save_model(socket, nil, _model_params), do: {:noreply, socket}
 
   defp save_model(socket, model_id, model_params) when is_binary(model_id) do
-    model_record = Providers.get_model!(model_id)
+    case fetch_model(model_id) do
+      nil ->
+        {:noreply, socket}
 
-    case Providers.update_model(model_record, model_params) do
-      {:ok, updated} ->
-        audit(socket, "model.update", "model", updated.id, %{
-          "name" => updated.name,
-          "changes" =>
-            Map.take(model_params, [
-              "name",
-              "context_window",
-              "model_type",
-              "lab_key",
-              "icon"
-            ])
-        })
+      model_record ->
+        case Providers.update_model(model_record, model_params) do
+          {:ok, updated} ->
+            audit(socket, "model.update", "model", updated.id, %{
+              "name" => updated.name,
+              "changes" =>
+                Map.take(model_params, [
+                  "name",
+                  "context_window",
+                  "model_type",
+                  "lab_key",
+                  "icon"
+                ])
+            })
 
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Model updated."))
-         |> assign(:form, nil)
-         |> assign(:editing_model_id, nil)
-         |> load_models()}
+            {:noreply,
+             socket
+             |> put_flash(:info, gettext("Model updated."))
+             |> assign(:form, nil)
+             |> assign(:editing_model_id, nil)
+             |> load_models()}
 
-      {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :model))}
+          {:error, changeset} ->
+            {:noreply, assign(socket, :form, to_form(changeset, as: :model))}
+        end
     end
   end
 

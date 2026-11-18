@@ -99,6 +99,25 @@ defmodule Tokengate.Providers.CatalogTest do
       assert Catalog.capabilities(nil) == []
     end
 
+    # F21/F61 — una capability es una promesa que solo es honesta si el gateway
+    # tiene una RUTA que la sirva. El vocabulario es exactamente el de las
+    # superficies /v1 y ningún proveedor declara algo fuera de él: `rerank` no
+    # se declara (ni en NaN ni en Helmcode) hasta que exista su ruta (W14), y
+    # una capability sin ruta se cae del set efectivo aunque esté escrita.
+    test "capabilities are narrowed to the types the gateway can route" do
+      served = Catalog.served_capabilities()
+      assert served == Catalog.capabilities()
+
+      for key <- Catalog.code_provider_keys() ++ Enum.map(Catalog.snapshot(), & &1.key) do
+        assert Catalog.capabilities(key) -- served == []
+      end
+
+      refute Catalog.declares?("nan", "rerank")
+      refute Catalog.declares?("helmcode", "rerank")
+      refute Catalog.declares?("openrouter", "rerank")
+      assert Catalog.capabilities("nan") == ~w(llm embedding stt tts image)
+    end
+
     test "decisions: el shape del wire se declara por proveedor" do
       # Los OpenAI-shape pasan verbatim (openai, fireworks y cualquier custom
       # como un host oMLX); los System One van por el traductor.
@@ -380,7 +399,23 @@ defmodule Tokengate.Providers.CatalogTest do
       # materialized under an older rule are KEPT — the sync never deletes —
       # so this is a subset check, not equality.)
       mirror_keys = Repo.all(from c in CatalogProvider, select: c.key)
-      assert builtin_keys -- mirror_keys == []
+
+      # Una instancia creada desde CERO replaya la historia del catálogo: una
+      # migración vieja sembró `kimi_code` y la siguiente la renombró a
+      # `kimi-for-coding`, una key que models.dev YA NO publica (partió la fila
+      # en -cn / -global). Esa fila es historia, no catálogo: el refresh nunca
+      # la publica y el sync nunca borra. Cualquier OTRO huérfano sí es un bug.
+      legacy_keys = ["kimi-for-coding"]
+      orphans = builtin_keys -- mirror_keys
+
+      assert orphans -- legacy_keys == [],
+             "builtin rows with no mirror row: #{inspect(orphans -- legacy_keys)}"
+
+      # La fila legada (si existe) no declara capabilities vigentes: el
+      # catálogo ya no la conoce, así que tampoco la ofrece el alta.
+      for key <- Enum.filter(orphans, &(&1 in legacy_keys)) do
+        assert Catalog.capabilities(key) == []
+      end
 
       # Identity comes from the mirror, including docs/logo.
       fireworks = Tokengate.Repo.get_by!(Provider, key: "fireworks-ai")

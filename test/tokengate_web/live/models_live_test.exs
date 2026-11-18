@@ -2891,4 +2891,64 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert has_element?(view, "#lane-pool-badge-#{pool_lane.id}", "1 key(s)")
     assert has_element?(view, "#model-lane-#{pool_lane.id}")
   end
+
+  ## W5 — ids del cliente, borrado bajo lock y tipos ofrecidos ----------------
+
+  # Todo handler del catálogo recibe ids del socket: un no-UUID y un UUID
+  # inexistente son no-ops, nunca CastError/NoResultsError.
+  test "forged ids in the model handlers are no-ops, never crashes", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_record = create_model()
+    lane = create_model_provider(model_record, create_provider())
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    for bad <- ["no-es-un-uuid", "2f1c2b1e-0000-4000-8000-000000000000"] do
+      render_hook(view, "delete_model", %{"id" => bad})
+      render_hook(view, "edit_model", %{"id" => bad})
+      render_hook(view, "toggle_pin", %{"id" => bad})
+      render_hook(view, "edit_guard_rails", %{"id" => bad})
+      render_hook(view, "edit_model_provider_from_modal", %{"id" => bad})
+    end
+
+    assert Providers.get_model(model_record.id) != nil
+    assert Providers.get_model_provider(lane.id) != nil
+    refute has_element?(view, "#model-form")
+  end
+
+  # El check-then-delete corre bajo lock y con el estado VIVO: un lane asignado
+  # después del render sigue bloqueando el borrado.
+  test "a lane assigned after the render still blocks the delete", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_record = create_model()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    # El modelo se sirve mientras la página está abierta.
+    _lane = create_model_provider(model_record, create_provider())
+
+    view |> element("#delete-model-#{model_record.id}") |> render_click()
+
+    assert render(view) =~ "No se puede eliminar"
+    assert Providers.get_model(model_record.id) != nil
+  end
+
+  # El paso 0 no puede ofrecer un tipo que el gateway no sabe servir, y el
+  # vocabulario de capabilities es EXACTAMENTE el de las rutas: `rerank` entra
+  # solo cuando exista su superficie (W14).
+  test "every offered type has a /v1 route and matches the catalog vocabulary" do
+    alias Tokengate.Providers.Catalog
+
+    routed_types = ModelsLive.type_endpoint_pairs() |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+
+    assert Enum.sort(Catalog.served_capabilities()) == routed_types
+    assert Enum.sort(Catalog.capabilities()) == routed_types
+
+    for {_label, type, _icon} <- ModelsLive.model_type_choices() do
+      assert type in routed_types
+      assert ModelsLive.type_endpoint(type)
+    end
+  end
 end

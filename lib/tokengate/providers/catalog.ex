@@ -76,7 +76,26 @@ defmodule Tokengate.Providers.Catalog do
   @sources ~w(builtin custom)
 
   # What a provider can serve. Declared in code, per provider (@customizations).
-  @capabilities ~w(llm embedding decision stt tts image)
+  #
+  # A capability is a PROMISE, and it is only honest when the gateway has a ROUTE
+  # to serve it (one /v1 surface per type — see `ModelPicker.type_endpoint/1`).
+  # Declaring a type no route serves offers the operator a model nothing can
+  # answer for; the catalog already documents that for NaN/Helmcode's `rerank`
+  # models (F61: the reason is the missing type, not the missing upstream).
+  #
+  # `rerank` is therefore deliberately OUT of this list: it joins it in W14,
+  # together with the `model_aliases` type, the CHECK migration, the
+  # `POST /v1/rerank` route and its endpoint entry. Until then `declares?/2`
+  # answers false for it whatever a provider declares (`served_capabilities/0`
+  # is the single place to flip).
+  #
+  # The same rule applies to a CUSTOM relay the operator declares (a local oMLX
+  # host, say): a capability the upstream cannot serve — `embedding` with no
+  # embedding model installed answers 404 "Available models: (none)" — must not
+  # be declared. The catalog cannot know what a custom host has installed, so
+  # the declaration is the operator's, and the wizard's type step reads it as-is.
+  @served_capabilities ~w(llm embedding decision stt tts image)
+  @capabilities @served_capabilities
 
   # models.dev npm package -> dialect. Anything absent is unsupported until a
   # dialect (a thin adapter) exists for it.
@@ -220,8 +239,10 @@ defmodule Tokengate.Providers.Catalog do
     # @ai-sdk/openai-compatible (dialecto openai ya resuelto); lo que la
     # customización aporta es el dialecto de reasoning: el toggle y el
     # escalar son MUTUAMENTE EXCLUSIVOS (400 con ambos, profile kimi-coding
-    # de Hermes). La key retirada ya no se declara: el refresh la marca
-    # stale y una instancia nueva no puede añadirla.
+    # de Hermes). La key retirada ya no se declara y el refresh no la
+    # publica; una instancia que la tenía se queda con la fila vieja (el sync
+    # nunca borra) y una creada desde cero la hereda de la migración de
+    # catálogo que la sembró — sin capabilities, así que el alta no la ofrece.
     "kimi-code-plan-cn" => %{capabilities: ~w(llm), reasoning_dialect: :toggle_xor_effort},
     "kimi-code-plan-global" => %{capabilities: ~w(llm), reasoning_dialect: :toggle_xor_effort},
     # OpenAI: models.dev no publica su base URL (como Cerebras, va en código).
@@ -544,7 +565,14 @@ defmodule Tokengate.Providers.Catalog do
   end
 
   @doc """
-  Capabilities declared for a provider in code (possibly empty).
+  Capabilities declared for a provider in code, NARROWED to the ones the gateway
+  can actually route (possibly empty).
+
+  A declaration the gateway has no surface for is not a capability: it is the
+  over-declaration that makes the wizard offer a type nothing can serve. The
+  filter lives here, not in each caller, so `declares?/2`,
+  `Providers.effective_capabilities/1` and the model wizard agree by
+  construction.
 
       iex> Tokengate.Providers.Catalog.capabilities("fireworks-ai")
       ["llm", "embedding", "decision"]
@@ -555,10 +583,19 @@ defmodule Tokengate.Providers.Catalog do
   @spec capabilities(String.t() | nil) :: [String.t()]
   def capabilities(key) do
     case option(key, :capabilities, []) do
-      caps when is_list(caps) -> caps
+      caps when is_list(caps) -> Enum.filter(caps, &(&1 in @served_capabilities))
       _ -> []
     end
   end
+
+  @doc """
+  The capabilities the gateway can route today — one per `/v1` surface.
+
+  `rerank` is not here yet: W14 adds it together with its type, its route and
+  its endpoint. Flipping it is a one-line change in this list.
+  """
+  @spec served_capabilities() :: [String.t()]
+  def served_capabilities, do: @served_capabilities
 
   @doc """
   True cuando un proveedor del catálogo declara la capability `type`.

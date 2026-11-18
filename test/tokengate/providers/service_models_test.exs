@@ -240,6 +240,19 @@ defmodule Tokengate.Providers.ServiceModelsTest do
       assert ServiceModels.type_of(nil, "openai/gpt-5-nano") == "llm"
       assert ServiceModels.type_of("alibaba", nil) == "llm"
     end
+
+    # El caso oMLX: una fila CUSTOM no tiene key de catálogo, así que no tiene
+    # familias verificadas — no hereda las de ningún otro proveedor. Su tipo sale
+    # SOLO del hint del id, que es lo único que el id delata.
+    test "sin key de catálogo no se hereda ninguna familia (fila custom: oMLX)" do
+      # Un id con familia de OTRO proveedor no se clasifica por esa familia.
+      assert ServiceModels.classify(nil, "flux-2-klein") == nil
+      assert ServiceModels.classify(nil, "qwen3-asr-flash") == nil
+      # El hint del id sí aplica: un embedding local se lista como embedding.
+      assert ServiceModels.type_of(nil, "mlx-community/Qwen3-Embedding-0.6B-4bit") == "embedding"
+      # Y nada inventa un `rerank` que el gateway todavía no sirve (W14).
+      assert ServiceModels.type_of(nil, "bge-reranker-v2-m3") == "llm"
+    end
   end
 
   describe "semilla verificada (@known_ids)" do
@@ -290,6 +303,8 @@ defmodule Tokengate.Providers.ServiceModelsTest do
       assert ServiceModels.known_ids("alibaba", "decision") == []
       assert ServiceModels.known_ids("openai", "stt") == []
       assert ServiceModels.known_ids(nil, "stt") == []
+      # Una fila custom (oMLX) no está ni debe estar en la semilla de código.
+      assert ServiceModels.known_ids(nil, "embedding") == []
     end
 
     test "provider_keys/0 lista los proveedores con semilla" do

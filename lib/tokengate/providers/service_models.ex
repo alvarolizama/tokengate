@@ -269,6 +269,13 @@ defmodule Tokengate.Providers.ServiceModels do
       nil
   """
   @spec classify(String.t() | nil, String.t() | nil) :: String.t() | nil
+  # Un proveedor SIN key de catálogo — una fila custom, como un host oMLX local o
+  # un relay propio — no tiene familias verificadas: no hereda las de ningún
+  # otro proveedor. Su tipo sale solo del hint del id (`type_of/2`), que es lo
+  # único que un id delata honestamente; inventarle una familia ofrecería un
+  # tipo que nadie comprobó contra ESE upstream.
+  def classify(nil, _model_id), do: nil
+
   def classify(provider_key, model_id) when is_binary(model_id) do
     provider_key
     |> patterns_for()
@@ -306,6 +313,12 @@ defmodule Tokengate.Providers.ServiceModels do
   un subconjunto, así que declara la suya.
   """
   @spec known_ids(String.t() | nil, String.t()) :: [String.t()]
+  # Sin key de catálogo no hay semilla: la semilla es DATA verificada POR
+  # proveedor y un custom (un host oMLX, un relay propio) no está en esa tabla —
+  # ni debe estarlo (F70: la fila de oMLX es custom + seed de dev, nunca builtin
+  # ni dato de código). Lo que su upstream publique se lista EN VIVO con su key.
+  def known_ids(nil, _type), do: []
+
   def known_ids(provider_key, type) when is_binary(type) and is_binary(provider_key) do
     # La tabla PROPIA de la key gana sobre la del alias de superficie: el Token
     # Plan comparte las familias de id con `alibaba` pero sirve un subconjunto,
