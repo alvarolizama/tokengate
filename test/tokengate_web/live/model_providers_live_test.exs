@@ -896,4 +896,243 @@ defmodule TokengateWeb.ModelProvidersLiveTest do
              "#model-provider-form input[name='model_provider[provider_model]'][value='upstream/tecleado']"
            )
   end
+
+  ## Wizard del modal (credential → routing → pricing) ----------------------
+
+  # Deja el paso 1 listo: proveedor elegido en el picker, key y modelo del
+  # upstream escritos.
+  defp fill_credential_step(view, provider, credential) do
+    pick_provider(view, provider)
+
+    view
+    |> form("#model-provider-form",
+      model_provider: %{
+        credential_id: credential.id,
+        provider_model: "upstream/wizard"
+      }
+    )
+    |> render_change()
+  end
+
+  test "the assign modal is a 3-step wizard over the shared modal", %{conn: conn} do
+    model = create_model()
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    view |> element("#new-ap-#{model.id}") |> render_click()
+
+    # Contenedor único `.modal` (título + indicador `.steps`) con el form dentro.
+    assert has_element?(view, "#model-provider-modal #model-provider-form")
+    assert has_element?(view, "#model-provider-modal-steps #wizard-crumb-credential")
+    assert has_element?(view, "#wizard-crumb-routing")
+    assert has_element?(view, "#wizard-crumb-pricing")
+
+    # Los tres pasos están montados y sólo el primero está activo: el submit
+    # lleva todos los campos y Back no pierde nada.
+    assert has_element?(view, "#lane-step-credential[data-active='true']")
+    assert has_element?(view, "#lane-step-routing[data-active='false']")
+    assert has_element?(view, "#lane-step-pricing[data-active='false']")
+
+    # Footer del wizard: en el primer paso sólo hay Next.
+    assert has_element?(view, "#lane-next-btn")
+    refute has_element?(view, "#lane-back-btn")
+    refute has_element?(view, "#save-ap-btn")
+  end
+
+  test "Next validates the credential step and Back keeps the typed data", %{conn: conn} do
+    model = create_model()
+    provider = create_provider()
+    credential = create_credential(provider)
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    view |> element("#new-ap-#{model.id}") |> render_click()
+
+    # Sin key ni modelo del upstream no se avanza: el aviso se pinta en el paso.
+    view |> element("#lane-next-btn") |> render_click()
+    assert has_element?(view, "#lane-step-credential[data-active='true']")
+    assert has_element?(view, "#lane-step-routing[data-active='false']")
+    assert has_element?(view, "#lane-step-error")
+
+    fill_credential_step(view, provider, credential)
+    view |> element("#lane-next-btn") |> render_click()
+
+    assert has_element?(view, "#lane-step-routing[data-active='true']")
+    assert has_element?(view, "#lane-step-credential[data-active='false']")
+    refute has_element?(view, "#lane-step-error")
+
+    # Back no recasta ni resetea: lo tecleado y el proveedor siguen ahí.
+    view |> element("#lane-back-btn") |> render_click()
+    assert has_element?(view, "#lane-step-credential[data-active='true']")
+    assert has_element?(view, "#selected-provider")
+
+    assert has_element?(
+             view,
+             "#model-provider-form input[name='model_provider[provider_model]'][value='upstream/wizard']"
+           )
+  end
+
+  test "the routing step refuses an exclusive scope without a target", %{conn: conn} do
+    model = create_model()
+    provider = create_provider()
+    credential = create_credential(provider)
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    view |> element("#new-ap-#{model.id}") |> render_click()
+    fill_credential_step(view, provider, credential)
+    view |> element("#lane-next-btn") |> render_click()
+
+    view |> element("button[phx-value-scope='member']") |> render_click()
+    view |> element("#lane-next-btn") |> render_click()
+
+    assert has_element?(view, "#lane-step-routing[data-active='true']")
+
+    assert has_element?(
+             view,
+             "#lane-step-error",
+             "Selecciona al menos un perfil de límites o usuario para el scope exclusivo."
+           )
+
+    # Global no necesita destino: el wizard avanza al paso de precios.
+    view |> element("button[phx-value-scope='global']") |> render_click()
+    view |> element("#lane-next-btn") |> render_click()
+    assert has_element?(view, "#lane-step-pricing[data-active='true']")
+  end
+
+  test "the pricing step reviews the lane and is the only one that saves", %{conn: conn} do
+    model = create_model()
+    provider = create_provider()
+    credential = create_credential(provider)
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    view |> element("#new-ap-#{model.id}") |> render_click()
+    fill_credential_step(view, provider, credential)
+    view |> element("#lane-next-btn") |> render_click()
+    view |> element("#lane-next-btn") |> render_click()
+
+    assert has_element?(view, "#lane-step-pricing[data-active='true']")
+
+    # Resumen de los pasos 1-2 y Save (no Next) en el footer.
+    assert has_element?(view, "#lane-summary", provider.name)
+    assert has_element?(view, "#lane-summary", credential.name)
+    assert has_element?(view, "#lane-summary", "upstream/wizard")
+    assert has_element?(view, "#save-ap-btn[type='submit'][form='model-provider-form']")
+    refute has_element?(view, "#lane-next-btn")
+    assert has_element?(view, "#lane-back-btn")
+
+    html =
+      view
+      |> form("#model-provider-form",
+        model_provider: %{
+          credential_id: credential.id,
+          provider_model: "upstream/wizard"
+        }
+      )
+      |> render_submit()
+
+    assert html =~ "Proveedor asignado al modelo."
+    [lane] = Providers.list_model_providers(model.id)
+    assert lane.provider_model == "upstream/wizard"
+  end
+
+  test "a new pool without keys cannot leave the credential step", %{conn: conn} do
+    model = create_model()
+    provider = create_provider()
+    _credential = create_credential(provider)
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    view |> element("#new-ap-#{model.id}") |> render_click()
+    pick_provider(view, provider)
+    switch_to_pool(view)
+    view |> element("#new-pool-toggle") |> render_click()
+
+    view
+    |> form("#model-provider-form",
+      model_provider: %{
+        source: "pool",
+        new_pool_name: "Pool sin keys",
+        provider_model: "upstream/pool-wizard"
+      }
+    )
+    |> render_change()
+
+    view |> element("#lane-next-btn") |> render_click()
+
+    assert has_element?(view, "#lane-step-credential[data-active='true']")
+
+    assert has_element?(
+             view,
+             "#lane-step-error",
+             "Selecciona al menos una API key para el pool nuevo."
+           )
+
+    assert Providers.list_model_providers(model.id) == []
+  end
+
+  test "editing a lane enters the wizard at the pricing step", %{conn: conn} do
+    model = create_model()
+    lane = create_lane(model, create_provider(), %{provider_model: "upstream/preset"})
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}?edit=#{lane.id}")
+
+    # Edición: todo está decidido, se entra al último paso (revisar y guardar).
+    assert has_element?(view, "#lane-step-pricing[data-active='true']")
+    assert has_element?(view, "#save-ap-btn")
+    refute has_element?(view, "#lane-next-btn")
+
+    view |> element("#lane-back-btn") |> render_click()
+    assert has_element?(view, "#lane-step-routing[data-active='true']")
+
+    view |> element("#lane-back-btn") |> render_click()
+    assert has_element?(view, "#lane-step-credential[data-active='true']")
+    assert has_element?(view, "#lane-step-pricing[data-active='false']")
+  end
+
+  # El error de un campo que vive en otro paso (aquí la prioridad, en routing)
+  # no se puede quedar oculto: el modal salta al paso dueño del error.
+  test "a save error jumps to the step that owns the field", %{conn: conn} do
+    model = create_model()
+    provider = create_provider()
+    credential = create_credential(provider)
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    view |> element("#new-ap-#{model.id}") |> render_click()
+    fill_credential_step(view, provider, credential)
+    view |> element("#lane-next-btn") |> render_click()
+    view |> element("#lane-next-btn") |> render_click()
+
+    # Prioridad negativa: el changeset del lane la rechaza (-1 está reservado
+    # para los exclusivos).
+    html =
+      view
+      |> form("#model-provider-form",
+        model_provider: %{
+          credential_id: credential.id,
+          provider_model: "upstream/wizard",
+          priority: "-1"
+        }
+      )
+      |> render_submit()
+
+    assert html =~ "No se pudo asignar"
+    assert has_element?(view, "#lane-step-routing[data-active='true']")
+
+    assert has_element?(
+             view,
+             "#model-provider-form input[name='model_provider[priority]'][value='-1']"
+           )
+
+    assert Providers.list_model_providers(model.id) == []
+  end
 end

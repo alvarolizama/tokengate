@@ -18,6 +18,29 @@ defmodule TokengateWeb.ModelProvidersLive do
 
   @provider_results_limit 8
 
+  # Campos por paso del wizard del lane: si el save falla con un campo que vive
+  # en un paso oculto, el modal salta al paso dueño del error (si no, el aviso
+  # se quedaría fuera de pantalla).
+  @credential_fields [:model_id, :credential_id, :pool_id, :provider_model]
+
+  @routing_fields [
+    :enabled,
+    :priority,
+    :sticky_ttl_ms,
+    :sticky_ttl_seconds,
+    :exclusive_to_group_id,
+    :exclusive_to_group_member_id
+  ]
+
+  @pricing_fields [
+    :pricing_unit,
+    :unit_cost,
+    :input_cost_per_million,
+    :output_cost_per_million,
+    :cache_cost_per_million,
+    :cache_write_cost_per_million
+  ]
+
   import Ecto.Query, only: [from: 2]
   import TokengateWeb.ModelPicker
 
@@ -55,6 +78,10 @@ defmodule TokengateWeb.ModelProvidersLive do
           |> assign(:provider_form, nil)
           |> assign(:editing_ap_id, nil)
           |> assign(:credential_form, nil)
+          # Paso del wizard del modal (credential → routing → pricing). El modal
+          # lo gatea `provider_form`; en reposo se queda en el primero.
+          |> assign(:lane_step, "credential")
+          |> assign(:lane_step_error, nil)
           # Estado del modal de lane en reposo: la página tiene que renderizar
           # (y los tests leer el socket) antes de que se abra cualquier form.
           |> assign(:provider_form_model_id, nil)
@@ -214,6 +241,8 @@ defmodule TokengateWeb.ModelProvidersLive do
     |> assign(:provider_form_model_id, model.id)
     |> assign(:provider_form, to_form(changeset, as: :model_provider))
     |> assign(:editing_ap_id, :new)
+    |> assign(:lane_step, "credential")
+    |> assign(:lane_step_error, nil)
     |> assign(:current_scope, "global")
     |> assign(:current_scope_group_ids, [])
     |> assign(:current_scope_member_ids, [])
@@ -271,6 +300,8 @@ defmodule TokengateWeb.ModelProvidersLive do
              |> assign(:provider_form_model_id, model.id)
              |> assign(:provider_form, to_form(changeset, as: :model_provider))
              |> assign(:editing_ap_id, :new)
+             |> assign(:lane_step, "credential")
+             |> assign(:lane_step_error, nil)
              |> assign(:current_scope, "global")
              |> assign(:current_scope_group_ids, [])
              |> assign(:current_scope_member_ids, [])
@@ -440,6 +471,8 @@ defmodule TokengateWeb.ModelProvidersLive do
      socket
      |> assign(:provider_form, nil)
      |> assign(:editing_ap_id, nil)
+     |> assign(:lane_step, "credential")
+     |> assign(:lane_step_error, nil)
      |> assign(:provider_models, [])
      |> assign(:provider_models_loading, false)
      |> assign(:provider_model_search, "")
@@ -465,6 +498,41 @@ defmodule TokengateWeb.ModelProvidersLive do
 
   def handle_event("edit_model_provider", %{"id" => ap_id}, socket) do
     {:noreply, open_lane_modal(socket, ap_id)}
+  end
+
+  ## Events — wizard del modal (credential → routing → pricing) --------------
+
+  # Next valida el paso ACTIVO antes de avanzar: un paso a medias no deja
+  # llegar al siguiente y el aviso se pinta en el propio paso (#lane-step-error).
+  # Sin form abierto (evento encolado detrás de Cancelar) es un no-op.
+  def handle_event("lane_next_step", _params, socket) do
+    if socket.assigns.is_admin and socket.assigns[:provider_form] do
+      case validate_lane_step(socket, socket.assigns[:lane_step]) do
+        :ok ->
+          {:noreply,
+           socket
+           |> assign(:lane_step, next_lane_step(socket.assigns[:lane_step]))
+           |> assign(:lane_step_error, nil)}
+
+        {:error, message} ->
+          {:noreply, assign(socket, :lane_step_error, message)}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Back no revalida ni recasta nada: los assigns del form (y los pickers de
+  # scope/provider/pool) siguen intactos entre pasos.
+  def handle_event("lane_prev_step", _params, socket) do
+    if socket.assigns.is_admin and socket.assigns[:provider_form] do
+      {:noreply,
+       socket
+       |> assign(:lane_step, prev_lane_step(socket.assigns[:lane_step]))
+       |> assign(:lane_step_error, nil)}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Elegir la unidad de precio reescribe el changeset del form abierto (nada se
@@ -528,6 +596,9 @@ defmodule TokengateWeb.ModelProvidersLive do
       socket =
         socket
         |> assign(:provider_model_search, model_search)
+        # Un cambio del operador limpia el aviso del paso: el error era del
+        # estado anterior, no de lo que acaba de escribir.
+        |> assign(:lane_step_error, nil)
         # Lo tecleado manda: el re-render de un phx-change sale del changeset,
         # así que sin recastar lo que acaba de llegar el form devolvía los
         # valores viejos y borraba lo escrito (mismo mecanismo que el picker de
@@ -1090,6 +1161,11 @@ defmodule TokengateWeb.ModelProvidersLive do
     socket
     |> assign(:provider_form, to_form(changeset, as: :model_provider))
     |> assign(:editing_ap_id, ap.id)
+    # Edición: todo está ya decidido (key, scope, precio), así que el wizard
+    # entra directo al último paso; Back lleva a routing/credential sin perder
+    # nada.
+    |> assign(:lane_step, "pricing")
+    |> assign(:lane_step_error, nil)
     |> assign(:provider_form_model_id, ap.model_id)
     |> assign(:provider_form_credential_id, fetch_credential_id)
     |> assign(:provider_form_is_fireworks, pool_fireworks?(pool_provider, ap, socket))
@@ -1111,6 +1187,177 @@ defmodule TokengateWeb.ModelProvidersLive do
     |> build_provider_choices(ap.model_id)
     |> assign_credential_choices()
     |> fetch_provider_models(fetch_credential_id)
+  end
+
+  ## Wizard del lane — pasos, validación y resumen --------------------------
+
+  # Los tres pasos del modal. Los labels son msgid inglés (gettext); los crumbs
+  # NO son clicables: avanzar y volver los gobiernan `lane_next_step` /
+  # `lane_prev_step`, que validan el paso activo.
+  defp lane_steps do
+    [
+      {"credential", gettext("Credential")},
+      {"routing", gettext("Routing")},
+      {"pricing", gettext("Pricing")}
+    ]
+  end
+
+  defp next_lane_step("credential"), do: "routing"
+  defp next_lane_step(_step), do: "pricing"
+
+  defp prev_lane_step("pricing"), do: "routing"
+  defp prev_lane_step(_step), do: "credential"
+
+  # Validación por paso: sólo se valida el paso ACTIVO al pulsar Next. Los
+  # campos llegan por el `phx-change` del form (que recasta en cada tecla), así
+  # que validar aquí no pierde nada de lo escrito ni toca la DB.
+  defp validate_lane_step(socket, "credential"), do: validate_credential_step(socket)
+  defp validate_lane_step(socket, "routing"), do: validate_routing_step(socket)
+  # El paso de precios no avanza a ningún sitio: su validación es el submit, que
+  # corre el changeset completo (la unidad es una lista cerrada, `Pricing.units/0`).
+  defp validate_lane_step(_socket, _step), do: :ok
+
+  defp validate_credential_step(socket) do
+    form = socket.assigns[:provider_form]
+
+    cond do
+      is_nil(form) ->
+        {:error, gettext("The credential form is missing.")}
+
+      blank_value?(form[:provider_model].value) ->
+        {:error, gettext("Pick or type the provider model first.")}
+
+      socket.assigns[:lane_source] == "pool" ->
+        validate_pool_step(form)
+
+      blank_value?(form[:credential_id].value) ->
+        {:error, gettext("Pick the API key that will serve this model")}
+
+      true ->
+        :ok
+    end
+  end
+
+  # Un pool es la fuente: o uno existente elegido, o uno nuevo con nombre y al
+  # menos una key. El mismo criterio que `plan_pool_source/2`, pero ANTES de
+  # dejar avanzar.
+  defp validate_pool_step(form) do
+    new_name? = not blank_value?(form[:new_pool_name].value)
+
+    cond do
+      not new_name? and blank_value?(form[:pool_id].value) ->
+        {:error, gettext("Pick an existing pool or create a new one.")}
+
+      new_name? and new_pool_member_ids(form) == [] ->
+        {:error, gettext("Select at least one API key for the new pool.")}
+
+      true ->
+        :ok
+    end
+  end
+
+  # Un scope exclusivo sin destino no puede degradarse a global en silencio
+  # (L37): el paso de routing lo rechaza antes de llegar al save.
+  defp validate_routing_step(socket) do
+    scope = socket.assigns[:current_scope] || "global"
+
+    cond do
+      scope == "member" and
+          missing_scope_target?(socket, :current_scope_member_ids, :current_scope_member_id) ->
+        {:error, gettext("Select at least one limit profile or user for the exclusive scope.")}
+
+      scope == "group" and
+          missing_scope_target?(socket, :current_scope_group_ids, :current_scope_group_id) ->
+        {:error, gettext("Select at least one limit profile or user for the exclusive scope.")}
+
+      true ->
+        :ok
+    end
+  end
+
+  # El alta es multi-select (`*_ids`); la edición guarda un único id.
+  defp missing_scope_target?(socket, ids_key, id_key) do
+    if socket.assigns[:editing_ap_id] == :new do
+      List.wrap(socket.assigns[ids_key]) == []
+    else
+      blank_id?(socket.assigns[id_key])
+    end
+  end
+
+  defp new_pool_member_ids(form) do
+    case form[:new_pool_member_ids].value do
+      ids when is_list(ids) -> Enum.reject(ids, &blank_value?/1)
+      _ -> []
+    end
+  end
+
+  defp blank_value?(nil), do: true
+  defp blank_value?(""), do: true
+  defp blank_value?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank_value?(_value), do: false
+
+  # Al fallar el save, el modal salta al paso dueño del primer error: el error
+  # de la fuente (pool/key) vive en un bloque que, en otro paso, quedaría
+  # oculto y el operador no sabría qué corregir.
+  defp lane_step_with_error(%Ecto.Changeset{} = changeset, current) do
+    fields = Enum.map(changeset.errors, fn {field, _error} -> field end)
+
+    cond do
+      Enum.any?(fields, &(&1 in @pricing_fields)) -> "pricing"
+      Enum.any?(fields, &(&1 in @routing_fields)) -> "routing"
+      Enum.any?(fields, &(&1 in @credential_fields)) -> "credential"
+      true -> current
+    end
+  end
+
+  ## Resumen del paso de precios -------------------------------------------
+
+  defp lane_summary_provider(assigns) do
+    case assigns[:provider_form_provider_key] do
+      nil -> "—"
+      provider_ref_key -> provider_label(assigns[:provider_choices] || [], provider_ref_key)
+    end
+  end
+
+  defp lane_summary_credential(%{lane_source: "pool"} = assigns) do
+    pool_name =
+      case Enum.find(assigns[:provider_pools] || [], &(&1.id == assigns[:lane_pool_id])) do
+        %CredentialPool{name: name} -> name
+        _ -> nil
+      end
+
+    pool_name || assigns.provider_form[:new_pool_name].value || "—"
+  end
+
+  defp lane_summary_credential(assigns) do
+    credential =
+      Enum.find(
+        assigns[:credential_choices] || [],
+        &(&1.id == assigns[:provider_form_credential_id])
+      )
+
+    case credential do
+      %Credential{name: name} when is_binary(name) and name != "" -> name
+      %Credential{} -> gettext("unnamed key")
+      _ -> "—"
+    end
+  end
+
+  defp lane_summary_scope(assigns) do
+    scope = assigns[:current_scope] || "global"
+
+    target =
+      case scope do
+        "group" -> assigns[:scope_group_search]
+        "member" -> assigns[:scope_member_search]
+        _ -> nil
+      end
+
+    if blank_value?(target) do
+      scope_label(scope)
+    else
+      "#{scope_label(scope)} · #{target}"
+    end
   end
 
   ## Async: catálogo del proveedor --------------------------------------
@@ -1294,6 +1541,7 @@ defmodule TokengateWeb.ModelProvidersLive do
              )
            )
            |> assign(:lane_pool_error, lane_error_in_modal(socket, changeset))
+           |> assign(:lane_step, lane_step_with_error(changeset, socket.assigns[:lane_step]))
            |> assign(:provider_form, to_form(changeset, as: :model_provider))}
 
         {:error, reason} ->
@@ -1346,6 +1594,7 @@ defmodule TokengateWeb.ModelProvidersLive do
             {:noreply,
              socket
              |> assign(:lane_pool_error, lane_error_in_modal(socket, changeset))
+             |> assign(:lane_step, lane_step_with_error(changeset, socket.assigns[:lane_step]))
              |> assign(:provider_form, to_form(changeset, as: :model_provider))}
 
           {:error, _reason} ->
@@ -1409,6 +1658,8 @@ defmodule TokengateWeb.ModelProvidersLive do
      |> put_flash(:info, msg)
      |> assign(:provider_form, nil)
      |> assign(:editing_ap_id, nil)
+     |> assign(:lane_step, "credential")
+     |> assign(:lane_step_error, nil)
      # The modal is closing: nothing is in flight anymore, so the spinner
      # must not leak into the next one.
      |> assign(:provider_models_loading, false)
@@ -1435,6 +1686,8 @@ defmodule TokengateWeb.ModelProvidersLive do
      |> put_flash(:info, gettext("Provider updated."))
      |> assign(:provider_form, nil)
      |> assign(:editing_ap_id, nil)
+     |> assign(:lane_step, "credential")
+     |> assign(:lane_step_error, nil)
      # Same as the create path: closing the modal ends any listing state.
      |> assign(:provider_models_loading, false)
      |> assign(:lane_pool_error, nil)
@@ -1780,6 +2033,8 @@ defmodule TokengateWeb.ModelProvidersLive do
         {:noreply,
          socket
          |> assign(:lane_pool_error, message)
+         # El fallo es de la FUENTE (pool/key): su bloque vive en el paso 1.
+         |> assign(:lane_step, "credential")
          |> assign(:provider_form, to_form(changeset, as: :model_provider))}
 
       _ ->
@@ -2660,1001 +2915,1099 @@ defmodule TokengateWeb.ModelProvidersLive do
           </div>
         </div>
 
-        <%!-- Alias provider form (new/edit) --%>
-        <div :if={@provider_form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_model_provider" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-5xl">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">
-                {if @editing_ap_id == :new,
-                  do: gettext("Assign provider"),
-                  else: gettext("Edit provider")}
-              </h2>
+        <%!-- Alias provider form (new/edit). Wizard de 3 pasos (credential →
+             routing → pricing) sobre el `.modal` único: los tres pasos se
+             renderizan SIEMPRE y los inactivos se ocultan con `hidden`, así el
+             submit lleva todos los campos y Back no pierde nada. --%>
+        <.modal
+          :if={@provider_form}
+          id="model-provider-modal"
+          title={
+            if @editing_ap_id == :new,
+              do: gettext("Assign provider"),
+              else: gettext("Edit provider")
+          }
+          on_close="cancel_model_provider"
+          max_w="max-w-5xl"
+          steps={lane_steps()}
+          current_step={@lane_step}
+        >
+          <.form
+            for={@provider_form}
+            id="model-provider-form"
+            phx-submit="save_model_provider"
+            phx-change="provider_form_changed"
+            phx-window-keydown="close_scope_pickers"
+            phx-key="Escape"
+          >
+            <%!-- Paso 1 — credential: de qué proveedor sale el lane y con qué
+                 fuente (una key suelta o un pool) sirve a este modelo. --%>
+            <div
+              id="lane-step-credential"
+              data-step="credential"
+              data-active={to_string(@lane_step == "credential")}
+              class={["space-y-5", @lane_step != "credential" && "hidden"]}
+            >
+              <%!-- The provider. When the model came from the catalog this list
+                   is exactly the providers that serve it, cheapest first; a
+                   custom model falls back to every active provider. --%>
+              <div>
+                <label class="text-sm font-medium text-base-content">{gettext("Provider")}</label>
+                <p class="text-xs text-base-content/50 mb-2">
+                  <%= if @editing_ap_id == :new do %>
+                    {gettext("The provider of this row is")}
+                    <b>{gettext("derived from the API key")}</b>
+                    {gettext(
+                      "you pick below: every credential belongs to a provider. If that provider serves this model according to"
+                    )}
+                    {gettext(
+                      "models.dev, the provider model and the list price are filled in automatically."
+                    )}
+                    {gettext("You can also filter the API keys by provider here.")}
+                  <% else %>
+                    {gettext(
+                      "Provider of this assignment, derived from its API key. Change the key below to"
+                    )}
+                    {gettext("move the row to another provider.")}
+                  <% end %>
+                </p>
 
-              <.form
-                for={@provider_form}
-                id="model-provider-form"
-                phx-submit="save_model_provider"
-                phx-change="provider_form_changed"
-                phx-window-keydown="close_scope_pickers"
-                phx-key="Escape"
-              >
-                <%!-- Step 1 — the provider. When the model came from the catalog
-                     this list is exactly the providers that serve it, cheapest
-                     first; a custom model falls back to every active provider. --%>
-                <div class="mb-5">
-                  <label class="text-sm font-medium text-base-content">{gettext("Provider")}</label>
-                  <p class="text-xs text-base-content/50 mb-2">
-                    <%= if @editing_ap_id == :new do %>
-                      {gettext("The provider of this row is")}
-                      <b>{gettext("derived from the API key")}</b>
-                      {gettext(
-                        "you pick below: every credential belongs to a provider. If that provider serves this model according to"
+                <%= if @provider_form_provider_key do %>
+                  <div
+                    class="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/10 border border-primary/30"
+                    id="selected-provider"
+                  >
+                    <.icon name="hero-server-stack" class="w-4 h-4 text-primary shrink-0" />
+                    <span class="text-sm font-medium flex-1">
+                      {provider_chip_name(
+                        @provider_choices,
+                        @provider_credentials,
+                        @provider_form_provider_key
                       )}
-                      {gettext(
-                        "models.dev, the provider model and the list price are filled in automatically."
-                      )}
-                      {gettext("You can also filter the API keys by provider here.")}
-                    <% else %>
-                      {gettext(
-                        "Provider of this assignment, derived from its API key. Change the key below to"
-                      )}
-                      {gettext("move the row to another provider.")}
-                    <% end %>
-                  </p>
-
-                  <%= if @provider_form_provider_key do %>
-                    <div
-                      class="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/10 border border-primary/30"
-                      id="selected-provider"
-                    >
-                      <.icon name="hero-server-stack" class="w-4 h-4 text-primary shrink-0" />
-                      <span class="text-sm font-medium flex-1">
-                        {provider_chip_name(
+                      <span
+                        :if={
+                          provider_key_label(
+                            @provider_choices,
+                            @provider_credentials,
+                            @provider_form_provider_key
+                          )
+                        }
+                        class="text-xs text-base-content/50 font-mono ml-1"
+                      >
+                        {provider_key_label(
                           @provider_choices,
                           @provider_credentials,
                           @provider_form_provider_key
                         )}
-                        <span
-                          :if={
-                            provider_key_label(
-                              @provider_choices,
-                              @provider_credentials,
-                              @provider_form_provider_key
-                            )
-                          }
-                          class="text-xs text-base-content/50 font-mono ml-1"
-                        >
-                          {provider_key_label(
-                            @provider_choices,
-                            @provider_credentials,
-                            @provider_form_provider_key
-                          )}
-                        </span>
                       </span>
-                      <button
-                        type="button"
-                        phx-click="clear_provider_choice"
-                        class="btn btn-xs btn-ghost"
-                        id="change-provider"
-                        title={gettext("Choose another provider")}
-                      >
-                        <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Change")}
-                      </button>
-                    </div>
-                  <% else %>
-                    <%!-- A bare input, NOT wrapped in a form: this picker lives
+                    </span>
+                    <button
+                      type="button"
+                      phx-click="clear_provider_choice"
+                      class="btn btn-xs btn-ghost"
+                      id="change-provider"
+                      title={gettext("Choose another provider")}
+                    >
+                      <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Change")}
+                    </button>
+                  </div>
+                <% else %>
+                  <%!-- A bare input, NOT wrapped in a form: this picker lives
                        inside #model-provider-form, and a form inside a form is
                        dropped by HTML parsers (which would cut the outer form in
                        two and orphan every field after it). --%>
-                    <div class="relative">
-                      <.icon
-                        name="hero-magnifying-glass"
-                        class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
-                      />
-                      <input
-                        type="text"
-                        name="q"
-                        phx-change="search_providers"
-                        id="provider-search"
-                        value={@provider_search}
-                        placeholder={
-                          gettext("Search provider by name or id… (e.g. openrouter, fireworks)")
-                        }
-                        class="input input-sm w-full pl-9"
-                        autocomplete="off"
-                        phx-debounce="150"
-                      />
-                    </div>
+                  <div class="relative">
+                    <.icon
+                      name="hero-magnifying-glass"
+                      class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
+                    />
+                    <input
+                      type="text"
+                      name="q"
+                      phx-change="search_providers"
+                      id="provider-search"
+                      value={@provider_search}
+                      placeholder={
+                        gettext("Search provider by name or id… (e.g. openrouter, fireworks)")
+                      }
+                      class="input input-sm w-full pl-9"
+                      autocomplete="off"
+                      phx-debounce="150"
+                    />
+                  </div>
 
-                    <div
-                      :if={@provider_choices_results == []}
-                      id="provider-empty"
-                      class="text-sm text-base-content/50 py-3 text-center"
-                    >
-                      {gettext("No provider matches. Create the provider in")}
-                      <b>/catalog/providers</b>
-                      {gettext("and come back here.")}
-                    </div>
+                  <div
+                    :if={@provider_choices_results == []}
+                    id="provider-empty"
+                    class="text-sm text-base-content/50 py-3 text-center"
+                  >
+                    {gettext("No provider matches. Create the provider in")}
+                    <b>/catalog/providers</b>
+                    {gettext("and come back here.")}
+                  </div>
 
-                    <div
-                      :if={@provider_choices_results != []}
-                      id="provider-results"
-                      class="mt-2 max-h-56 overflow-y-auto rounded-lg border border-base-300"
+                  <div
+                    :if={@provider_choices_results != []}
+                    id="provider-results"
+                    class="mt-2 max-h-56 overflow-y-auto rounded-lg border border-base-300"
+                  >
+                    <button
+                      :for={choice <- @provider_choices_results}
+                      type="button"
+                      phx-click="select_provider"
+                      phx-value-key={provider_ref(choice.provider)}
+                      id={"provider-row-#{dom_key(provider_ref(choice.provider))}"}
+                      class="w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0 flex items-center gap-2"
                     >
-                      <button
-                        :for={choice <- @provider_choices_results}
-                        type="button"
-                        phx-click="select_provider"
-                        phx-value-key={provider_ref(choice.provider)}
-                        id={"provider-row-#{dom_key(provider_ref(choice.provider))}"}
-                        class="w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0 flex items-center gap-2"
-                      >
-                        <img
-                          :if={choice.provider.logo_url}
-                          src={choice.provider.logo_url}
-                          alt=""
-                          data-logo
-                          class="w-5 h-5 shrink-0 rounded"
-                          loading="lazy"
-                        />
-                        <%!-- El icono va SIEMPRE (oculto si hay logo): una URL que
+                      <img
+                        :if={choice.provider.logo_url}
+                        src={choice.provider.logo_url}
+                        alt=""
+                        data-logo
+                        class="w-5 h-5 shrink-0 rounded"
+                        loading="lazy"
+                      />
+                      <%!-- El icono va SIEMPRE (oculto si hay logo): una URL que
                          no carga no dispara el fallback del servidor, así que la
                          revela el listener global de `error` en app.js. --%>
-                        <.icon
-                          name="hero-server-stack"
-                          class={[
-                            "w-5 h-5 shrink-0 text-base-content/30",
-                            choice.provider.logo_url && "hidden"
-                          ]}
-                        />
-                        <span class="flex-1 min-w-0">
-                          <span class="text-sm font-medium truncate">{choice.provider.name}</span>
-                          <span class="text-xs text-base-content/50 font-mono ml-1">
-                            {choice.provider.key}
-                          </span>
+                      <.icon
+                        name="hero-server-stack"
+                        class={[
+                          "w-5 h-5 shrink-0 text-base-content/30",
+                          choice.provider.logo_url && "hidden"
+                        ]}
+                      />
+                      <span class="flex-1 min-w-0">
+                        <span class="text-sm font-medium truncate">{choice.provider.name}</span>
+                        <span class="text-xs text-base-content/50 font-mono ml-1">
+                          {choice.provider.key}
                         </span>
-                        <span
-                          :if={length(choice.provider.credentials) > 0}
-                          class="badge badge-xs badge-success shrink-0"
-                          title={gettext("It already has API keys registered")}
-                        >
-                          {length(choice.provider.credentials)} key(s)
-                        </span>
-                        <span
-                          :if={length(choice.provider.credentials) == 0}
-                          class="badge badge-xs badge-ghost shrink-0"
-                        >
-                          {gettext("no key")}
-                        </span>
-                      </button>
-                    </div>
+                      </span>
+                      <span
+                        :if={length(choice.provider.credentials) > 0}
+                        class="badge badge-xs badge-success shrink-0"
+                        title={gettext("It already has API keys registered")}
+                      >
+                        {length(choice.provider.credentials)} key(s)
+                      </span>
+                      <span
+                        :if={length(choice.provider.credentials) == 0}
+                        class="badge badge-xs badge-ghost shrink-0"
+                      >
+                        {gettext("no key")}
+                      </span>
+                    </button>
+                  </div>
 
-                    <p
-                      :if={@provider_choices_results != []}
-                      class="text-[11px] text-base-content/40 mt-1"
-                    >
-                      Mostrando {length(@provider_choices_results)} de {length(@provider_choices)} proveedores para este modelo.
-                    </p>
-                  <% end %>
-                </div>
+                  <p
+                    :if={@provider_choices_results != []}
+                    class="text-[11px] text-base-content/40 mt-1"
+                  >
+                    Mostrando {length(@provider_choices_results)} de {length(@provider_choices)} proveedores para este modelo.
+                  </p>
+                <% end %>
+              </div>
 
-                <%!-- Fuente del lane: una key suelta (el camino de siempre) o un
+              <%!-- Fuente del lane: una key suelta (el camino de siempre) o un
                      pool de keys del MISMO proveedor, que rota por request. El
                      pool sólo aporta keys: prioridad, modelo y precio siguen
                      siendo del lane. --%>
-                <div class="mb-5">
-                  <label class="text-sm font-medium text-base-content">
-                    {gettext("Credential source")}
+              <div class="mb-5">
+                <label class="text-sm font-medium text-base-content">
+                  {gettext("Credential source")}
+                </label>
+                <p class="text-xs text-base-content/50 mb-2">
+                  {gettext(
+                    "A pool groups API keys of the same provider and rotates between them on every request."
+                  )}
+                </p>
+                <div class="flex gap-5">
+                  <label class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      id="lane-source-key"
+                      name="model_provider[source]"
+                      value="key"
+                      checked={@lane_source == "key"}
+                      class="radio radio-sm"
+                    />
+                    <.icon name="hero-key" class="w-4 h-4" /> {gettext("One API key")}
                   </label>
+                  <label class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      id="lane-source-pool"
+                      name="model_provider[source]"
+                      value="pool"
+                      checked={@lane_source == "pool"}
+                      class="radio radio-sm"
+                    />
+                    <.icon name="hero-rectangle-stack" class="w-4 h-4" />
+                    {gettext("A pool of keys")}
+                  </label>
+                </div>
+              </div>
+
+              <div class="grid md:grid-cols-2 gap-x-8 gap-y-5">
+                <div>
+                  <%= if @lane_source == "key" do %>
+                    <div class="flex items-end gap-2">
+                      <div class="flex-1">
+                        <.input
+                          field={@provider_form[:credential_id]}
+                          type="select"
+                          label={gettext("Credential (API key)")}
+                          options={credential_options(@credential_choices)}
+                          prompt={
+                            cond do
+                              @credential_choices == [] ->
+                                gettext("No active API keys")
+
+                              @provider_form_provider_key ->
+                                gettext("Pick an API key from this provider")
+
+                              true ->
+                                gettext("Pick the API key that will serve this model")
+                            end
+                          }
+                          required
+                          hint={
+                            gettext(
+                              "The specific API key that will serve this model. Picking it derives its provider, and with it the provider model and the list price when models.dev publishes them. Every credential has its own circuit breaker and priority."
+                            )
+                          }
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        phx-click="new_credential_inline"
+                        class="btn btn-sm btn-outline mb-6"
+                        id="new-credential-inline"
+                        title={gettext("Add another API key for this provider")}
+                      >
+                        <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New API key")}
+                      </button>
+                    </div>
+
+                    <div
+                      :if={!is_nil(@provider_form_provider_key) and @credential_choices == []}
+                      class="text-xs text-warning -mt-3 mb-2"
+                      id="no-credentials-hint"
+                    >
+                      {gettext(
+                        "This provider has no API keys yet. Use “New API key” to create the first one."
+                      )}
+                    </div>
+                  <% else %>
+                    <%!-- Modo pool: el select de pools del proveedor elegido más
+                         el alta inline de un pool nuevo con sus miembros. --%>
+                    <div class="space-y-2">
+                      <div>
+                        <label class="text-sm font-medium text-base-content" for="lane-pool-select">
+                          {gettext("Pool")}
+                        </label>
+                        <p class="text-xs text-base-content/50 mb-1">
+                          {gettext(
+                            "Pools of the selected provider. Every key in the pool rotates on each request."
+                          )}
+                        </p>
+                        <select
+                          id="lane-pool-select"
+                          name="model_provider[pool_id]"
+                          class="select select-sm w-full"
+                        >
+                          <option value="">{gettext("Pick a pool")}</option>
+                          <option
+                            :for={pool <- @provider_pools}
+                            value={pool.id}
+                            selected={@lane_pool_id == pool.id}
+                          >
+                            {pool.name} ({length(pool.members)} key(s))
+                          </option>
+                        </select>
+                        <div class="flex justify-end">
+                          <button
+                            type="button"
+                            phx-click="delete_pool"
+                            phx-value-id={@lane_pool_id || ""}
+                            data-confirm={gettext("Delete this pool? This cannot be undone.")}
+                            class="btn btn-xs btn-ghost text-error mt-1"
+                            id="delete-selected-pool"
+                            disabled={is_nil(@lane_pool_id)}
+                          >
+                            <.icon name="hero-trash" class="w-3 h-3" />
+                            {gettext("Delete pool")}
+                          </button>
+                        </div>
+                        <p
+                          :if={is_nil(@provider_form_provider_key)}
+                          id="pool-needs-provider"
+                          class="text-xs text-warning mt-1"
+                        >
+                          {gettext("Pick the provider the pool belongs to first.")}
+                        </p>
+                        <p
+                          :if={
+                            not is_nil(@provider_form_provider_key) and @provider_pools == [] and
+                              not @lane_new_pool_open
+                          }
+                          id="no-pools-hint"
+                          class="text-xs text-base-content/50 mt-1"
+                        >
+                          {gettext("This provider has no pools yet. Create one.")}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        phx-click="toggle_new_pool"
+                        class="btn btn-xs btn-outline"
+                        id="new-pool-toggle"
+                      >
+                        <.icon name="hero-plus" class="w-3 h-3" /> {gettext("New pool")}
+                      </button>
+
+                      <div
+                        :if={@lane_new_pool_open}
+                        id="new-pool-block"
+                        class="rounded-lg border border-base-300 p-3 space-y-2"
+                      >
+                        <div>
+                          <label class="text-sm font-medium text-base-content" for="new-pool-name">
+                            {gettext("Pool name")}
+                          </label>
+                          <input
+                            type="text"
+                            id="new-pool-name"
+                            name="model_provider[new_pool_name]"
+                            value={@provider_form[:new_pool_name].value}
+                            placeholder={gettext("Production keys")}
+                            class="input input-sm w-full"
+                            autocomplete="off"
+                          />
+                        </div>
+                        <p class="text-xs text-base-content/50">
+                          {gettext(
+                            "Pick the API keys that become members. All of them must belong to the same provider."
+                          )}
+                        </p>
+                        <div class="max-h-40 overflow-y-auto space-y-1">
+                          <label
+                            :for={credential <- @provider_credentials || []}
+                            class="flex items-center gap-2 text-xs"
+                          >
+                            <input
+                              type="checkbox"
+                              id={"new-pool-member-#{credential.id}"}
+                              name="model_provider[new_pool_member_ids][]"
+                              value={credential.id}
+                              checked={new_pool_member_checked?(@provider_form, credential.id)}
+                              class="checkbox checkbox-xs"
+                            />
+                            <span class="font-mono">
+                              {credential.name || gettext("unnamed key")}
+                            </span>
+                            <span class="text-base-content/40">
+                              {mask_key(credential.api_key_encrypted)}
+                            </span>
+                          </label>
+                        </div>
+                        <p
+                          :if={(@provider_credentials || []) == []}
+                          class="text-xs text-warning"
+                          id="new-pool-no-keys"
+                        >
+                          {gettext("This provider has no API keys yet.")}
+                        </p>
+                      </div>
+                    </div>
+                  <% end %>
+
+                  <p :if={@lane_pool_error} id="lane-pool-error" class="text-xs text-error">
+                    {@lane_pool_error}
+                  </p>
+                </div>
+
+                <%!-- El modelo del upstream que se pide para este lane. Las
+                       sugerencias salen del catálogo vivo del proveedor. --%>
+                <div>
+                  <%= if @provider_models_loading do %>
+                    <div class="flex items-center gap-2 text-sm text-base-content/50 py-2">
+                      <span class="loading loading-spinner loading-xs"></span>
+                      {gettext("Loading provider models…")}
+                    </div>
+                  <% end %>
+
+                  <.input
+                    field={@provider_form[:provider_model]}
+                    type="text"
+                    label={gettext("Provider model")}
+                    required
+                    placeholder={gettext("Type or pick the model (e.g. glm-5.2:dedicated)")}
+                    hint={
+                      gettext(
+                        "Suggestions from the provider catalog. You can type any value for dedicated or private tiers."
+                      )
+                    }
+                  />
+                  <%= if @provider_models != [] and !@provider_models_loading do %>
+                    <% search = String.downcase(@provider_model_search || "") %>
+                    <% filtered =
+                      Enum.filter(@provider_models, fn m ->
+                        String.contains?(String.downcase(m), search)
+                      end) %>
+                    <%= if filtered != [] do %>
+                      <div class="mt-1 max-h-32 overflow-y-auto rounded-lg border border-base-300 bg-base-200/50">
+                        <button
+                          :for={model <- filtered}
+                          type="button"
+                          phx-click="select_provider_model"
+                          phx-value-model={model}
+                          class="block w-full text-left px-3 py-1.5 text-sm font-mono hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0"
+                        >
+                          {model}
+                        </button>
+                      </div>
+                    <% end %>
+                  <% end %>
+                </div>
+              </div>
+            </div>
+
+            <%!-- Paso 2 — routing: alcance (global / perfil de límites / usuario),
+                 prioridad y service_tier. Un scope exclusivo exige destino antes
+                 de avanzar. --%>
+            <div
+              id="lane-step-routing"
+              data-step="routing"
+              data-active={to_string(@lane_step == "routing")}
+              class={["space-y-5", @lane_step != "routing" && "hidden"]}
+            >
+              <div class="space-y-1">
+                <%!-- Scope selector --%>
+                <div class="mb-2">
+                  <label class="text-sm font-medium text-base-content">{gettext("Scope")}</label>
                   <p class="text-xs text-base-content/50 mb-2">
                     {gettext(
-                      "A pool groups API keys of the same provider and rotates between them on every request."
+                      "Global = every member with access. Exclusive = only the selected member or limit profile."
                     )}
                   </p>
-                  <div class="flex gap-5">
-                    <label class="flex items-center gap-2 text-sm cursor-pointer">
-                      <input
-                        type="radio"
-                        id="lane-source-key"
-                        name="model_provider[source]"
-                        value="key"
-                        checked={@lane_source == "key"}
-                        class="radio radio-sm"
-                      />
-                      <.icon name="hero-key" class="w-4 h-4" /> {gettext("One API key")}
-                    </label>
-                    <label class="flex items-center gap-2 text-sm cursor-pointer">
-                      <input
-                        type="radio"
-                        id="lane-source-pool"
-                        name="model_provider[source]"
-                        value="pool"
-                        checked={@lane_source == "pool"}
-                        class="radio radio-sm"
-                      />
-                      <.icon name="hero-rectangle-stack" class="w-4 h-4" />
-                      {gettext("A pool of keys")}
-                    </label>
+                  <div class="flex gap-2">
+                    <button
+                      type="button"
+                      phx-click="change_scope"
+                      phx-value-scope="global"
+                      class={["btn btn-sm", @current_scope == "global" && "btn-primary"]}
+                    >
+                      <.icon name="hero-globe-alt" class="w-4 h-4" /> Global
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="change_scope"
+                      phx-value-scope="group"
+                      class={["btn btn-sm", @current_scope == "group" && "btn-info"]}
+                    >
+                      <.icon name="hero-users" class="w-4 h-4" /> {gettext("Limit profile")}
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="change_scope"
+                      phx-value-scope="member"
+                      class={["btn btn-sm", @current_scope == "member" && "btn-warning"]}
+                    >
+                      <.icon name="hero-user" class="w-4 h-4" /> Usuario
+                    </button>
                   </div>
                 </div>
 
-                <div class="grid md:grid-cols-2 gap-x-8 gap-y-5">
-                  <div>
-                    <%= if @lane_source == "key" do %>
-                      <div class="flex items-end gap-2">
-                        <div class="flex-1">
-                          <.input
-                            field={@provider_form[:credential_id]}
-                            type="select"
-                            label={gettext("Credential (API key)")}
-                            options={credential_options(@credential_choices)}
-                            prompt={
-                              cond do
-                                @credential_choices == [] ->
-                                  gettext("No active API keys")
-
-                                @provider_form_provider_key ->
-                                  gettext("Pick an API key from this provider")
-
-                                true ->
-                                  gettext("Pick the API key that will serve this model")
-                              end
-                            }
-                            required
-                            hint={
-                              gettext(
-                                "The specific API key that will serve this model. Picking it derives its provider, and with it the provider model and the list price when models.dev publishes them. Every credential has its own circuit breaker and priority."
-                              )
-                            }
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          phx-click="new_credential_inline"
-                          class="btn btn-sm btn-outline mb-6"
-                          id="new-credential-inline"
-                          title={gettext("Add another API key for this provider")}
-                        >
-                          <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New API key")}
-                        </button>
-                      </div>
-
-                      <div
-                        :if={!is_nil(@provider_form_provider_key) and @credential_choices == []}
-                        class="text-xs text-warning -mt-3 mb-2"
-                        id="no-credentials-hint"
-                      >
+                <%= if @current_scope == "member" do %>
+                  <% is_new? = @editing_ap_id == :new %>
+                  <div class="relative" phx-click-away="close_scope_pickers">
+                    <label class="text-sm font-medium text-base-content">{gettext("Exclusive user")}</label>
+                    <p class="text-xs text-base-content/50 mb-1">
+                      <%= if is_new? do %>
                         {gettext(
-                          "This provider has no API keys yet. Use “New API key” to create the first one."
+                          "You can select multiple users. An exclusive provider will be created for each one."
                         )}
-                      </div>
-                    <% else %>
-                      <%!-- Modo pool: el select de pools del proveedor elegido más
-                         el alta inline de un pool nuevo con sus miembros. --%>
-                      <div class="space-y-2">
-                        <div>
-                          <label class="text-sm font-medium text-base-content" for="lane-pool-select">
-                            {gettext("Pool")}
-                          </label>
-                          <p class="text-xs text-base-content/50 mb-1">
-                            {gettext(
-                              "Pools of the selected provider. Every key in the pool rotates on each request."
-                            )}
-                          </p>
-                          <select
-                            id="lane-pool-select"
-                            name="model_provider[pool_id]"
-                            class="select select-sm w-full"
-                          >
-                            <option value="">{gettext("Pick a pool")}</option>
-                            <option
-                              :for={pool <- @provider_pools}
-                              value={pool.id}
-                              selected={@lane_pool_id == pool.id}
-                            >
-                              {pool.name} ({length(pool.members)} key(s))
-                            </option>
-                          </select>
-                          <div class="flex justify-end">
-                            <button
-                              type="button"
-                              phx-click="delete_pool"
-                              phx-value-id={@lane_pool_id || ""}
-                              data-confirm={gettext("Delete this pool? This cannot be undone.")}
-                              class="btn btn-xs btn-ghost text-error mt-1"
-                              id="delete-selected-pool"
-                              disabled={is_nil(@lane_pool_id)}
-                            >
-                              <.icon name="hero-trash" class="w-3 h-3" />
-                              {gettext("Delete pool")}
-                            </button>
-                          </div>
-                          <p
-                            :if={is_nil(@provider_form_provider_key)}
-                            id="pool-needs-provider"
-                            class="text-xs text-warning mt-1"
-                          >
-                            {gettext("Pick the provider the pool belongs to first.")}
-                          </p>
-                          <p
-                            :if={
-                              not is_nil(@provider_form_provider_key) and @provider_pools == [] and
-                                not @lane_new_pool_open
-                            }
-                            id="no-pools-hint"
-                            class="text-xs text-base-content/50 mt-1"
-                          >
-                            {gettext("This provider has no pools yet. Create one.")}
-                          </p>
-                        </div>
-
-                        <button
-                          type="button"
-                          phx-click="toggle_new_pool"
-                          class="btn btn-xs btn-outline"
-                          id="new-pool-toggle"
-                        >
-                          <.icon name="hero-plus" class="w-3 h-3" /> {gettext("New pool")}
-                        </button>
-
-                        <div
-                          :if={@lane_new_pool_open}
-                          id="new-pool-block"
-                          class="rounded-lg border border-base-300 p-3 space-y-2"
-                        >
-                          <div>
-                            <label class="text-sm font-medium text-base-content" for="new-pool-name">
-                              {gettext("Pool name")}
-                            </label>
-                            <input
-                              type="text"
-                              id="new-pool-name"
-                              name="model_provider[new_pool_name]"
-                              value={@provider_form[:new_pool_name].value}
-                              placeholder={gettext("Production keys")}
-                              class="input input-sm w-full"
-                              autocomplete="off"
-                            />
-                          </div>
-                          <p class="text-xs text-base-content/50">
-                            {gettext(
-                              "Pick the API keys that become members. All of them must belong to the same provider."
-                            )}
-                          </p>
-                          <div class="max-h-40 overflow-y-auto space-y-1">
-                            <label
-                              :for={credential <- @provider_credentials || []}
-                              class="flex items-center gap-2 text-xs"
-                            >
-                              <input
-                                type="checkbox"
-                                id={"new-pool-member-#{credential.id}"}
-                                name="model_provider[new_pool_member_ids][]"
-                                value={credential.id}
-                                checked={new_pool_member_checked?(@provider_form, credential.id)}
-                                class="checkbox checkbox-xs"
-                              />
-                              <span class="font-mono">
-                                {credential.name || gettext("unnamed key")}
-                              </span>
-                              <span class="text-base-content/40">
-                                {mask_key(credential.api_key_encrypted)}
-                              </span>
-                            </label>
-                          </div>
-                          <p
-                            :if={(@provider_credentials || []) == []}
-                            class="text-xs text-warning"
-                            id="new-pool-no-keys"
-                          >
-                            {gettext("This provider has no API keys yet.")}
-                          </p>
-                        </div>
-                      </div>
-                    <% end %>
-
-                    <p :if={@lane_pool_error} id="lane-pool-error" class="text-xs text-error">
-                      {@lane_pool_error}
+                      <% else %>
+                        {gettext("Only this user will be able to use this API key for this model.")}
+                      <% end %>
                     </p>
+                    <%= if is_new? do %>
+                      <%!-- Multi-select chips for create mode --%>
+                      <% members_filtered =
+                        members_with_model_access(@members_for_select, @provider_form_model_id)
+                        |> Enum.filter(fn m ->
+                          search = String.downcase(@scope_member_search || "")
+                          email = if m.user, do: String.downcase(m.user.email), else: ""
 
-                    <%= if @provider_models_loading do %>
-                      <div class="flex items-center gap-2 text-sm text-base-content/50 py-2">
-                        <span class="loading loading-spinner loading-xs"></span>
-                        {gettext("Loading provider models…")}
-                      </div>
-                    <% end %>
+                          name =
+                            if m.user && m.user.name, do: String.downcase(m.user.name), else: ""
 
-                    <.input
-                      field={@provider_form[:provider_model]}
-                      type="text"
-                      label={gettext("Provider model")}
-                      required
-                      placeholder={gettext("Type or pick the model (e.g. glm-5.2:dedicated)")}
-                      hint={
-                        gettext(
-                          "Suggestions from the provider catalog. You can type any value for dedicated or private tiers."
-                        )
-                      }
-                    />
-                    <%= if @provider_models != [] and !@provider_models_loading do %>
-                      <% search = String.downcase(@provider_model_search || "") %>
-                      <% filtered =
-                        Enum.filter(@provider_models, fn m ->
-                          String.contains?(String.downcase(m), search)
+                          search == "" or String.contains?(email, search) or
+                            String.contains?(name, search)
                         end) %>
-                      <%= if filtered != [] do %>
-                        <div class="mt-1 max-h-32 overflow-y-auto rounded-lg border border-base-300 bg-base-200/50">
+                      <input
+                        type="text"
+                        name="model_provider[scope_member_id_display]"
+                        phx-change="scope_member_search"
+                        value={@scope_member_search}
+                        placeholder={gettext("Type to search a user…")}
+                        phx-focus="open_scope_picker"
+                        phx-value-picker="member"
+                        phx-debounce="200"
+                        class="input input-sm w-full"
+                        autocomplete="off"
+                      />
+                      <%= if @scope_member_open and members_filtered != [] do %>
+                        <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
                           <button
-                            :for={model <- filtered}
+                            :for={m <- Enum.take(members_filtered, 15)}
                             type="button"
-                            phx-click="select_provider_model"
-                            phx-value-model={model}
-                            class="block w-full text-left px-3 py-1.5 text-sm font-mono hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0"
+                            phx-click="toggle_scope_member"
+                            phx-value-member_id={m.id}
+                            class={[
+                              "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
+                              m.id in (@current_scope_member_ids || []) &&
+                                "bg-primary/10 font-semibold"
+                            ]}
                           >
-                            {model}
+                            <span class="text-sm font-medium">{m.user.email}</span>
+                            <span :if={m.user.name} class="text-xs text-base-content/50 ml-1">({m.user.name})</span>
+                            <span
+                              :if={m.id in (@current_scope_member_ids || [])}
+                              class="text-xs text-primary ml-2"
+                            >
+                              ✓
+                            </span>
                           </button>
                         </div>
                       <% end %>
-                    <% end %>
-                  </div>
-
-                  <div class="space-y-1">
-                    <%!-- Scope selector --%>
-                    <div class="mb-2">
-                      <label class="text-sm font-medium text-base-content">{gettext("Scope")}</label>
-                      <p class="text-xs text-base-content/50 mb-2">
-                        {gettext(
-                          "Global = every member with access. Exclusive = only the selected member or limit profile."
-                        )}
-                      </p>
-                      <div class="flex gap-2">
-                        <button
-                          type="button"
-                          phx-click="change_scope"
-                          phx-value-scope="global"
-                          class={["btn btn-sm", @current_scope == "global" && "btn-primary"]}
+                      <%!-- Selected chips --%>
+                      <div :if={@current_scope_member_ids != []} class="flex flex-wrap gap-1 mt-2">
+                        <span
+                          :for={mid <- @current_scope_member_ids}
+                          class="badge badge-warning badge-sm gap-1 cursor-pointer"
+                          phx-click="toggle_scope_member"
+                          phx-value-member_id={mid}
                         >
-                          <.icon name="hero-globe-alt" class="w-4 h-4" /> Global
-                        </button>
-                        <button
-                          type="button"
-                          phx-click="change_scope"
-                          phx-value-scope="group"
-                          class={["btn btn-sm", @current_scope == "group" && "btn-info"]}
-                        >
-                          <.icon name="hero-users" class="w-4 h-4" /> {gettext("Limit profile")}
-                        </button>
-                        <button
-                          type="button"
-                          phx-click="change_scope"
-                          phx-value-scope="member"
-                          class={["btn btn-sm", @current_scope == "member" && "btn-warning"]}
-                        >
-                          <.icon name="hero-user" class="w-4 h-4" /> Usuario
-                        </button>
+                          {case Enum.find(@members_for_select || [], &(&1.id == mid)) do
+                            %{user: %{email: e}} -> e
+                            _ -> mid
+                          end}
+                          <.icon name="hero-x-mark" class="w-3 h-3" />
+                        </span>
                       </div>
-                    </div>
-
-                    <%= if @current_scope == "member" do %>
-                      <% is_new? = @editing_ap_id == :new %>
-                      <div class="relative" phx-click-away="close_scope_pickers">
-                        <label class="text-sm font-medium text-base-content">{gettext(
-                          "Exclusive user"
-                        )}</label>
-                        <p class="text-xs text-base-content/50 mb-1">
-                          <%= if is_new? do %>
-                            {gettext(
-                              "You can select multiple users. An exclusive provider will be created for each one."
-                            )}
-                          <% else %>
-                            {gettext(
-                              "Only this user will be able to use this API key for this model."
-                            )}
-                          <% end %>
-                        </p>
-                        <%= if is_new? do %>
-                          <%!-- Multi-select chips for create mode --%>
-                          <% members_filtered =
-                            members_with_model_access(@members_for_select, @provider_form_model_id)
-                            |> Enum.filter(fn m ->
-                              search = String.downcase(@scope_member_search || "")
-                              email = if m.user, do: String.downcase(m.user.email), else: ""
-
-                              name =
-                                if m.user && m.user.name, do: String.downcase(m.user.name), else: ""
-
-                              search == "" or String.contains?(email, search) or
-                                String.contains?(name, search)
-                            end) %>
-                          <input
-                            type="text"
-                            name="model_provider[scope_member_id_display]"
-                            phx-change="scope_member_search"
-                            value={@scope_member_search}
-                            placeholder={gettext("Type to search a user…")}
-                            phx-focus="open_scope_picker"
-                            phx-value-picker="member"
-                            phx-debounce="200"
-                            class="input input-sm w-full"
-                            autocomplete="off"
-                          />
-                          <%= if @scope_member_open and members_filtered != [] do %>
-                            <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                              <button
-                                :for={m <- Enum.take(members_filtered, 15)}
-                                type="button"
-                                phx-click="toggle_scope_member"
-                                phx-value-member_id={m.id}
-                                class={[
-                                  "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
-                                  m.id in (@current_scope_member_ids || []) &&
-                                    "bg-primary/10 font-semibold"
-                                ]}
-                              >
-                                <span class="text-sm font-medium">{m.user.email}</span>
-                                <span :if={m.user.name} class="text-xs text-base-content/50 ml-1">({m.user.name})</span>
-                                <span
-                                  :if={m.id in (@current_scope_member_ids || [])}
-                                  class="text-xs text-primary ml-2"
-                                >
-                                  ✓
-                                </span>
-                              </button>
-                            </div>
-                          <% end %>
-                          <%!-- Selected chips --%>
-                          <div :if={@current_scope_member_ids != []} class="flex flex-wrap gap-1 mt-2">
-                            <span
-                              :for={mid <- @current_scope_member_ids}
-                              class="badge badge-warning badge-sm gap-1 cursor-pointer"
-                              phx-click="toggle_scope_member"
-                              phx-value-member_id={mid}
-                            >
-                              {case Enum.find(@members_for_select || [], &(&1.id == mid)) do
-                                %{user: %{email: e}} -> e
-                                _ -> mid
-                              end}
-                              <.icon name="hero-x-mark" class="w-3 h-3" />
-                            </span>
-                          </div>
-                        <% else %>
-                          <%!-- Single-select for edit mode --%>
-                          <input
-                            type="text"
-                            name="model_provider[scope_member_id_display]"
-                            phx-change="scope_member_search"
-                            value={@scope_member_search}
-                            placeholder={gettext("Type to search a user…")}
-                            phx-focus="open_scope_picker"
-                            phx-value-picker="member"
-                            phx-debounce="200"
-                            class="input input-sm w-full"
-                            autocomplete="off"
-                          />
-                          <% members_filtered =
-                            members_with_model_access(@members_for_select, @provider_form_model_id)
-                            |> Enum.filter(fn m ->
-                              search = String.downcase(@scope_member_search || "")
-                              email = if m.user, do: String.downcase(m.user.email), else: ""
-
-                              name =
-                                if m.user && m.user.name, do: String.downcase(m.user.name), else: ""
-
-                              search == "" or String.contains?(email, search) or
-                                String.contains?(name, search)
-                            end) %>
-                          <%= if @scope_member_open and members_filtered != [] do %>
-                            <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                              <button
-                                :for={m <- Enum.take(members_filtered, 10)}
-                                type="button"
-                                phx-click="select_scope_member_item"
-                                phx-value-member_id={m.id}
-                                phx-value-member_label={if(m.user, do: m.user.email, else: m.id)}
-                                class={[
-                                  "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
-                                  m.id == @current_scope_member_id && "bg-primary/10 font-semibold"
-                                ]}
-                              >
-                                <span class="text-sm font-medium">{m.user.email}</span>
-                                <span :if={m.user.name} class="text-xs text-base-content/50 ml-1">({m.user.name})</span>
-                                <span
-                                  :if={m.id == @current_scope_member_id}
-                                  class="text-xs text-primary ml-2"
-                                >
-                                  {gettext("(current)")}
-                                </span>
-                              </button>
-                            </div>
-                          <% end %>
-                          <input
-                            type="hidden"
-                            name="model_provider[scope_member_id]"
-                            value={@current_scope_member_id}
-                          />
-                        <% end %>
-                      </div>
-                    <% end %>
-
-                    <%= if @current_scope == "group" do %>
-                      <% is_new? = @editing_ap_id == :new %>
-                      <div class="relative" phx-click-away="close_scope_pickers">
-                        <label class="text-sm font-medium text-base-content">{gettext(
-                          "Exclusive limit profile"
-                        )}</label>
-                        <p class="text-xs text-base-content/50 mb-1">
-                          <%= if is_new? do %>
-                            {gettext(
-                              "You can select multiple limit profiles. An exclusive provider will be created for each one."
-                            )}
-                          <% else %>
-                            {gettext(
-                              "Only the members of this limit profile will be able to use this API key for this model."
-                            )}
-                          <% end %>
-                        </p>
-                        <%= if is_new? do %>
-                          <%!-- Multi-select chips for create mode --%>
-                          <% groups_filtered =
-                            groups_with_model_access(@groups_for_select, @provider_form_model_id)
-                            |> Enum.filter(fn t ->
-                              search = String.downcase(@scope_group_search || "")
-                              name = String.downcase(t.name || "")
-                              search == "" or String.contains?(name, search)
-                            end) %>
-                          <input
-                            type="text"
-                            name="model_provider[scope_group_id_display]"
-                            phx-change="scope_group_search"
-                            value={@scope_group_search}
-                            placeholder={gettext("Type to search a limit profile…")}
-                            phx-focus="open_scope_picker"
-                            phx-value-picker="group"
-                            phx-debounce="200"
-                            class="input input-sm w-full"
-                            autocomplete="off"
-                          />
-                          <%= if @scope_group_open and groups_filtered != [] do %>
-                            <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                              <button
-                                :for={t <- Enum.take(groups_filtered, 15)}
-                                type="button"
-                                phx-click="toggle_scope_group"
-                                phx-value-group_id={t.id}
-                                class={[
-                                  "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
-                                  t.id in (@current_scope_group_ids || []) &&
-                                    "bg-primary/10 font-semibold"
-                                ]}
-                              >
-                                <span class="text-sm font-medium">{t.name}</span>
-                                <span
-                                  :if={t.id in (@current_scope_group_ids || [])}
-                                  class="text-xs text-primary ml-2"
-                                >
-                                  ✓
-                                </span>
-                              </button>
-                            </div>
-                          <% end %>
-                          <%!-- Selected chips --%>
-                          <div :if={@current_scope_group_ids != []} class="flex flex-wrap gap-1 mt-2">
-                            <span
-                              :for={tid <- @current_scope_group_ids}
-                              class="badge badge-info badge-sm gap-1 cursor-pointer"
-                              phx-click="toggle_scope_group"
-                              phx-value-group_id={tid}
-                            >
-                              {case Enum.find(@groups_for_select || [], &(&1.id == tid)) do
-                                %{name: n} -> n
-                                _ -> tid
-                              end}
-                              <.icon name="hero-x-mark" class="w-3 h-3" />
-                            </span>
-                          </div>
-                        <% else %>
-                          <%!-- Single-select for edit mode --%>
-                          <input
-                            type="text"
-                            name="model_provider[scope_group_id_display]"
-                            phx-change="scope_group_search"
-                            value={@scope_group_search}
-                            placeholder={gettext("Type to search a limit profile…")}
-                            phx-focus="open_scope_picker"
-                            phx-value-picker="group"
-                            phx-debounce="200"
-                            class="input input-sm w-full"
-                            autocomplete="off"
-                          />
-                          <% groups_filtered =
-                            groups_with_model_access(@groups_for_select, @provider_form_model_id)
-                            |> Enum.filter(fn t ->
-                              search = String.downcase(@scope_group_search || "")
-                              name = String.downcase(t.name || "")
-                              search == "" or String.contains?(name, search)
-                            end) %>
-                          <%= if @scope_group_open and groups_filtered != [] do %>
-                            <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                              <button
-                                :for={t <- Enum.take(groups_filtered, 10)}
-                                type="button"
-                                phx-click="select_scope_group_item"
-                                phx-value-group_id={t.id}
-                                phx-value-group_label={t.name}
-                                class={[
-                                  "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
-                                  t.id == @current_scope_group_id && "bg-primary/10 font-semibold"
-                                ]}
-                              >
-                                <span class="text-sm font-medium">{t.name}</span>
-                                <span
-                                  :if={t.id == @current_scope_group_id}
-                                  class="text-xs text-primary ml-2"
-                                >
-                                  {gettext("(current)")}
-                                </span>
-                              </button>
-                            </div>
-                          <% end %>
-                          <input
-                            type="hidden"
-                            name="model_provider[scope_group_id]"
-                            value={@current_scope_group_id}
-                          />
-                        <% end %>
-                      </div>
-                    <% end %>
-                  </div>
-
-                  <div class="md:col-span-2">
-                    <div class="grid grid-cols-2 gap-3">
-                      <.input
-                        field={@provider_form[:priority]}
-                        type="number"
-                        label={gettext("Priority")}
-                        hint={gettext("Lower = tried first.")}
+                    <% else %>
+                      <%!-- Single-select for edit mode --%>
+                      <input
+                        type="text"
+                        name="model_provider[scope_member_id_display]"
+                        phx-change="scope_member_search"
+                        value={@scope_member_search}
+                        placeholder={gettext("Type to search a user…")}
+                        phx-focus="open_scope_picker"
+                        phx-value-picker="member"
+                        phx-debounce="200"
+                        class="input input-sm w-full"
+                        autocomplete="off"
                       />
-                      <%!-- El sticky es de lanes de UNA key: el router no lo
-                           consulta ni lo escribe en un lane de pool (ahí la
-                           elección de miembro ocurre después). --%>
-                      <%= if @lane_source != "pool" do %>
-                        <.input
-                          field={@provider_form[:sticky_ttl_seconds]}
-                          type="number"
-                          label={gettext("Sticky TTL (seconds)")}
-                          hint={
-                            gettext(
-                              "Empty uses the config default (180 s / 3 min) for every credential, regardless of billing. If you set a value, that one is always used. Minimum 1 s, maximum 86400 s (24 h). It is stored in milliseconds."
-                            )
-                          }
-                        />
-                      <% end %>
-                    </div>
+                      <% members_filtered =
+                        members_with_model_access(@members_for_select, @provider_form_model_id)
+                        |> Enum.filter(fn m ->
+                          search = String.downcase(@scope_member_search || "")
+                          email = if m.user, do: String.downcase(m.user.email), else: ""
 
-                    <%!-- El precio se cobra en la unidad que ESTE lane declara. Los
-                         tres campos de token sólo tienen sentido cuando la unidad es de
-                         tokens; un lane de imagen/tts/stt se cobra por unidad, y sin ese
-                         campo quedaba en $0 salvo que el upstream reportara el coste. --%>
-                    <div class="grid grid-cols-2 gap-3">
-                      <%!-- Select propio (no `<.input>`) porque necesita su PROPIO
-                           phx-change: es lo que conmuta los campos de abajo sin
-                           revalidar el form entero (los errores de validación de
-                           un form a medio llenar serían ruido). --%>
-                      <div class="fieldset mb-2">
-                        <label class="label" for="ap-pricing-unit">{gettext("Pricing unit")}</label>
-                        <select
-                          id="ap-pricing-unit"
-                          name="model_provider[pricing_unit]"
-                          phx-change="pick_pricing_unit"
-                          class="select w-full"
-                        >
-                          <option
-                            :for={{label, key} <- pricing_unit_options(@provider_form_model_id)}
-                            value={key}
-                            selected={@provider_form_pricing_unit == key}
+                          name =
+                            if m.user && m.user.name, do: String.downcase(m.user.name), else: ""
+
+                          search == "" or String.contains?(email, search) or
+                            String.contains?(name, search)
+                        end) %>
+                      <%= if @scope_member_open and members_filtered != [] do %>
+                        <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                          <button
+                            :for={m <- Enum.take(members_filtered, 10)}
+                            type="button"
+                            phx-click="select_scope_member_item"
+                            phx-value-member_id={m.id}
+                            phx-value-member_label={if(m.user, do: m.user.email, else: m.id)}
+                            class={[
+                              "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
+                              m.id == @current_scope_member_id && "bg-primary/10 font-semibold"
+                            ]}
                           >
-                            {label}
-                          </option>
-                        </select>
-                        <p class="text-xs text-base-content/50 mt-1">
-                          {gettext(
-                            "What this provider charges per. It defaults to the model's own unit; change it if this provider prices differently."
-                          )}
-                        </p>
-                      </div>
-                      <%= if not token_priced?(@provider_form_pricing_unit) do %>
-                        <.input
-                          field={@provider_form[:unit_cost]}
-                          type="number"
-                          step="0.000001"
-                          min="0"
-                          label={gettext("Unit cost (USD per unit)")}
-                          hint={
-                            gettext(
-                              "Fallback when the provider does not report cost. It is multiplied by what the call actually produced (images, megapixels, seconds, characters)."
-                            )
-                          }
-                        />
+                            <span class="text-sm font-medium">{m.user.email}</span>
+                            <span :if={m.user.name} class="text-xs text-base-content/50 ml-1">({m.user.name})</span>
+                            <span
+                              :if={m.id == @current_scope_member_id}
+                              class="text-xs text-primary ml-2"
+                            >
+                              {gettext("(current)")}
+                            </span>
+                          </button>
+                        </div>
                       <% end %>
-                    </div>
-
-                    <%= if token_priced?(@provider_form_pricing_unit) do %>
-                      <%!-- El rótulo del precio sigue a la UNIDAD del lane: un
-                           `per_1k_tokens` cobra USD por 1K, no por 1M. --%>
-                      <div class={[
-                        "grid gap-3",
-                        if(cache_write_priced?(@provider_form_provider_key),
-                          do: "grid-cols-2 md:grid-cols-4",
-                          else: "grid-cols-3"
-                        )
-                      ]}>
-                        <.input
-                          field={@provider_form[:input_cost_per_million]}
-                          type="number"
-                          step="0.000001"
-                          min="0"
-                          label={
-                            gettext("Input cost (USD / %{unit})",
-                              unit: Pricing.rate_suffix(@provider_form_pricing_unit)
-                            )
-                          }
-                          hint={
-                            gettext(
-                              "Non-cached input tokens. Fallback when the provider does not report cost."
-                            )
-                          }
-                        />
-                        <.input
-                          field={@provider_form[:cache_cost_per_million]}
-                          type="number"
-                          step="0.000001"
-                          min="0"
-                          label={
-                            gettext("Cache cost (USD / %{unit})",
-                              unit: Pricing.rate_suffix(@provider_form_pricing_unit)
-                            )
-                          }
-                          hint={
-                            gettext(
-                              "Input tokens with a cache hit (cheaper). Empty = use the input price for all of them."
-                            )
-                          }
-                        />
-                        <%= if cache_write_priced?(@provider_form_provider_key) do %>
-                          <.input
-                            field={@provider_form[:cache_write_cost_per_million]}
-                            type="number"
-                            step="0.000001"
-                            min="0"
-                            label={
-                              gettext("Cache write cost (USD / %{unit})",
-                                unit: Pricing.rate_suffix(@provider_form_pricing_unit)
-                              )
-                            }
-                            hint={
-                              gettext(
-                                "Tokens written into the prompt cache. Only charged when the call reports cache-write tokens; empty = not charged."
-                              )
-                            }
-                          />
-                        <% end %>
-                        <.input
-                          field={@provider_form[:output_cost_per_million]}
-                          type="number"
-                          step="0.000001"
-                          min="0"
-                          label={
-                            gettext("Output cost (USD / %{unit})",
-                              unit: Pricing.rate_suffix(@provider_form_pricing_unit)
-                            )
-                          }
-                          hint={gettext("Output tokens. Same fallback as input.")}
-                        />
-                      </div>
-                    <% end %>
-
-                    <%= if @provider_form_is_fireworks do %>
-                      <.input
-                        field={@provider_form[:service_tier_priority]}
-                        type="checkbox"
-                        label="Fireworks Priority (service_tier)"
-                        hint={
-                          gettext(
-                            "Sends service_tier: priority — more reliability at peak hours, billed at a premium depending on the model."
-                          )
-                        }
+                      <input
+                        type="hidden"
+                        name="model_provider[scope_member_id]"
+                        value={@current_scope_member_id}
                       />
-                      <p class="text-xs text-base-content/50 -mt-2">
-                        <.icon name="hero-bolt" class="w-3.5 h-3.5 inline text-success" />
-                        {gettext("Prompt cache:")} <b>{gettext("on by default")}</b>
-                        {gettext(
-                          "on Fireworks (prefix matching, cached tokens at a discount). TokenGate keeps conversations sticky via the x-session-affinity header and logs the cached tokens — no configuration required."
-                        )}
-                      </p>
                     <% end %>
-
-                    <.input
-                      field={@provider_form[:enabled]}
-                      type="checkbox"
-                      label={gettext("Enabled for this model")}
-                      hint={gettext("If it is off, this provider gets no traffic for the model.")}
-                    />
                   </div>
-                </div>
+                <% end %>
 
-                <div class="md:col-span-2 flex gap-2 pt-6 mt-8 border-t border-base-200 justify-end">
-                  <button type="button" phx-click="cancel_model_provider" class="btn btn-ghost btn-sm">
+                <%= if @current_scope == "group" do %>
+                  <% is_new? = @editing_ap_id == :new %>
+                  <div class="relative" phx-click-away="close_scope_pickers">
+                    <label class="text-sm font-medium text-base-content">{gettext(
+                      "Exclusive limit profile"
+                    )}</label>
+                    <p class="text-xs text-base-content/50 mb-1">
+                      <%= if is_new? do %>
+                        {gettext(
+                          "You can select multiple limit profiles. An exclusive provider will be created for each one."
+                        )}
+                      <% else %>
+                        {gettext(
+                          "Only the members of this limit profile will be able to use this API key for this model."
+                        )}
+                      <% end %>
+                    </p>
+                    <%= if is_new? do %>
+                      <%!-- Multi-select chips for create mode --%>
+                      <% groups_filtered =
+                        groups_with_model_access(@groups_for_select, @provider_form_model_id)
+                        |> Enum.filter(fn t ->
+                          search = String.downcase(@scope_group_search || "")
+                          name = String.downcase(t.name || "")
+                          search == "" or String.contains?(name, search)
+                        end) %>
+                      <input
+                        type="text"
+                        name="model_provider[scope_group_id_display]"
+                        phx-change="scope_group_search"
+                        value={@scope_group_search}
+                        placeholder={gettext("Type to search a limit profile…")}
+                        phx-focus="open_scope_picker"
+                        phx-value-picker="group"
+                        phx-debounce="200"
+                        class="input input-sm w-full"
+                        autocomplete="off"
+                      />
+                      <%= if @scope_group_open and groups_filtered != [] do %>
+                        <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                          <button
+                            :for={t <- Enum.take(groups_filtered, 15)}
+                            type="button"
+                            phx-click="toggle_scope_group"
+                            phx-value-group_id={t.id}
+                            class={[
+                              "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
+                              t.id in (@current_scope_group_ids || []) &&
+                                "bg-primary/10 font-semibold"
+                            ]}
+                          >
+                            <span class="text-sm font-medium">{t.name}</span>
+                            <span
+                              :if={t.id in (@current_scope_group_ids || [])}
+                              class="text-xs text-primary ml-2"
+                            >
+                              ✓
+                            </span>
+                          </button>
+                        </div>
+                      <% end %>
+                      <%!-- Selected chips --%>
+                      <div :if={@current_scope_group_ids != []} class="flex flex-wrap gap-1 mt-2">
+                        <span
+                          :for={tid <- @current_scope_group_ids}
+                          class="badge badge-info badge-sm gap-1 cursor-pointer"
+                          phx-click="toggle_scope_group"
+                          phx-value-group_id={tid}
+                        >
+                          {case Enum.find(@groups_for_select || [], &(&1.id == tid)) do
+                            %{name: n} -> n
+                            _ -> tid
+                          end}
+                          <.icon name="hero-x-mark" class="w-3 h-3" />
+                        </span>
+                      </div>
+                    <% else %>
+                      <%!-- Single-select for edit mode --%>
+                      <input
+                        type="text"
+                        name="model_provider[scope_group_id_display]"
+                        phx-change="scope_group_search"
+                        value={@scope_group_search}
+                        placeholder={gettext("Type to search a limit profile…")}
+                        phx-focus="open_scope_picker"
+                        phx-value-picker="group"
+                        phx-debounce="200"
+                        class="input input-sm w-full"
+                        autocomplete="off"
+                      />
+                      <% groups_filtered =
+                        groups_with_model_access(@groups_for_select, @provider_form_model_id)
+                        |> Enum.filter(fn t ->
+                          search = String.downcase(@scope_group_search || "")
+                          name = String.downcase(t.name || "")
+                          search == "" or String.contains?(name, search)
+                        end) %>
+                      <%= if @scope_group_open and groups_filtered != [] do %>
+                        <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                          <button
+                            :for={t <- Enum.take(groups_filtered, 10)}
+                            type="button"
+                            phx-click="select_scope_group_item"
+                            phx-value-group_id={t.id}
+                            phx-value-group_label={t.name}
+                            class={[
+                              "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
+                              t.id == @current_scope_group_id && "bg-primary/10 font-semibold"
+                            ]}
+                          >
+                            <span class="text-sm font-medium">{t.name}</span>
+                            <span
+                              :if={t.id == @current_scope_group_id}
+                              class="text-xs text-primary ml-2"
+                            >
+                              {gettext("(current)")}
+                            </span>
+                          </button>
+                        </div>
+                      <% end %>
+                      <input
+                        type="hidden"
+                        name="model_provider[scope_group_id]"
+                        value={@current_scope_group_id}
+                      />
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <.input
+                  field={@provider_form[:priority]}
+                  type="number"
+                  label={gettext("Priority")}
+                  hint={gettext("Lower = tried first.")}
+                />
+                <%!-- El sticky es de lanes de UNA key: el router no lo
+                     consulta ni lo escribe en un lane de pool (ahí la
+                     elección de miembro ocurre después). --%>
+                <%= if @lane_source != "pool" do %>
+                  <.input
+                    field={@provider_form[:sticky_ttl_seconds]}
+                    type="number"
+                    label={gettext("Sticky TTL (seconds)")}
+                    hint={
+                      gettext(
+                        "Empty uses the config default (180 s / 3 min) for every credential, regardless of billing. If you set a value, that one is always used. Minimum 1 s, maximum 86400 s (24 h). It is stored in milliseconds."
+                      )
+                    }
+                  />
+                <% end %>
+              </div>
+
+              <%= if @provider_form_is_fireworks do %>
+                <div class="space-y-2">
+                  <.input
+                    field={@provider_form[:service_tier_priority]}
+                    type="checkbox"
+                    label="Fireworks Priority (service_tier)"
+                    hint={
+                      gettext(
+                        "Sends service_tier: priority — more reliability at peak hours, billed at a premium depending on the model."
+                      )
+                    }
+                  />
+                  <p class="text-xs text-base-content/50">
+                    <.icon name="hero-bolt" class="w-3.5 h-3.5 inline text-success" />
+                    {gettext("Prompt cache:")} <b>{gettext("on by default")}</b>
+                    {gettext(
+                      "on Fireworks (prefix matching, cached tokens at a discount). TokenGate keeps conversations sticky via the x-session-affinity header and logs the cached tokens — no configuration required."
+                    )}
+                  </p>
+                </div>
+              <% end %>
+
+              <.input
+                field={@provider_form[:enabled]}
+                type="checkbox"
+                label={gettext("Enabled for this model")}
+                hint={gettext("If it is off, this provider gets no traffic for the model.")}
+              />
+            </div>
+
+            <%!-- Paso 3 — pricing: la unidad del lane, sus tarifas (condicionales
+                 por unidad) y el resumen de los pasos 1-2 antes de guardar. --%>
+            <div
+              id="lane-step-pricing"
+              data-step="pricing"
+              data-active={to_string(@lane_step == "pricing")}
+              class={["space-y-5", @lane_step != "pricing" && "hidden"]}
+            >
+              <%!-- El precio se cobra en la unidad que ESTE lane declara. Los
+                   tres campos de token sólo tienen sentido cuando la unidad es de
+                   tokens; un lane de imagen/tts/stt se cobra por unidad, y sin ese
+                   campo quedaba en $0 salvo que el upstream reportara el coste. --%>
+              <div class="grid grid-cols-2 gap-3">
+                <%!-- Select propio (no `<.input>`) porque necesita su PROPIO
+                     phx-change: es lo que conmuta los campos de abajo sin
+                     revalidar el form entero (los errores de validación de un
+                     form a medio llenar serían ruido). --%>
+                <div class="fieldset mb-2">
+                  <label class="label" for="ap-pricing-unit">{gettext("Pricing unit")}</label>
+                  <select
+                    id="ap-pricing-unit"
+                    name="model_provider[pricing_unit]"
+                    phx-change="pick_pricing_unit"
+                    class="select w-full"
+                  >
+                    <option
+                      :for={{label, key} <- pricing_unit_options(@provider_form_model_id)}
+                      value={key}
+                      selected={@provider_form_pricing_unit == key}
+                    >
+                      {label}
+                    </option>
+                  </select>
+                  <p class="text-xs text-base-content/50 mt-1">
+                    {gettext(
+                      "What this provider charges per. It defaults to the model's own unit; change it if this provider prices differently."
+                    )}
+                  </p>
+                </div>
+                <%= if not token_priced?(@provider_form_pricing_unit) do %>
+                  <.input
+                    field={@provider_form[:unit_cost]}
+                    type="number"
+                    step="0.000001"
+                    min="0"
+                    label={gettext("Unit cost (USD per unit)")}
+                    hint={
+                      gettext(
+                        "Fallback when the provider does not report cost. It is multiplied by what the call actually produced (images, megapixels, seconds, characters)."
+                      )
+                    }
+                  />
+                <% end %>
+              </div>
+
+              <%= if token_priced?(@provider_form_pricing_unit) do %>
+                <%!-- El rótulo del precio sigue a la UNIDAD del lane: un
+                     `per_1k_tokens` cobra USD por 1K, no por 1M. --%>
+                <div class={[
+                  "grid gap-3",
+                  if(cache_write_priced?(@provider_form_provider_key),
+                    do: "grid-cols-2 md:grid-cols-4",
+                    else: "grid-cols-3"
+                  )
+                ]}>
+                  <.input
+                    field={@provider_form[:input_cost_per_million]}
+                    type="number"
+                    step="0.000001"
+                    min="0"
+                    label={
+                      gettext("Input cost (USD / %{unit})",
+                        unit: Pricing.rate_suffix(@provider_form_pricing_unit)
+                      )
+                    }
+                    hint={
+                      gettext(
+                        "Non-cached input tokens. Fallback when the provider does not report cost."
+                      )
+                    }
+                  />
+                  <.input
+                    field={@provider_form[:cache_cost_per_million]}
+                    type="number"
+                    step="0.000001"
+                    min="0"
+                    label={
+                      gettext("Cache cost (USD / %{unit})",
+                        unit: Pricing.rate_suffix(@provider_form_pricing_unit)
+                      )
+                    }
+                    hint={
+                      gettext(
+                        "Input tokens with a cache hit (cheaper). Empty = use the input price for all of them."
+                      )
+                    }
+                  />
+                  <%= if cache_write_priced?(@provider_form_provider_key) do %>
+                    <.input
+                      field={@provider_form[:cache_write_cost_per_million]}
+                      type="number"
+                      step="0.000001"
+                      min="0"
+                      label={
+                        gettext("Cache write cost (USD / %{unit})",
+                          unit: Pricing.rate_suffix(@provider_form_pricing_unit)
+                        )
+                      }
+                      hint={
+                        gettext(
+                          "Tokens written into the prompt cache. Only charged when the call reports cache-write tokens; empty = not charged."
+                        )
+                      }
+                    />
+                  <% end %>
+                  <.input
+                    field={@provider_form[:output_cost_per_million]}
+                    type="number"
+                    step="0.000001"
+                    min="0"
+                    label={
+                      gettext("Output cost (USD / %{unit})",
+                        unit: Pricing.rate_suffix(@provider_form_pricing_unit)
+                      )
+                    }
+                    hint={gettext("Output tokens. Same fallback as input.")}
+                  />
+                </div>
+              <% end %>
+
+              <%!-- Resumen de los pasos 1-2: evita guardar un scope o una
+                   prioridad que no son los que el operador cree. --%>
+              <div
+                id="lane-summary"
+                class="rounded-lg border border-base-300 bg-base-200/40 p-4 space-y-1 text-sm"
+              >
+                <p>
+                  <span class="text-base-content/50">{gettext("Provider")}:</span>
+                  <span class="font-medium">{lane_summary_provider(assigns)}</span>
+                </p>
+                <p>
+                  <span class="text-base-content/50">{gettext("Credential (API key)")}:</span>
+                  <span class="font-medium">{lane_summary_credential(assigns)}</span>
+                </p>
+                <p>
+                  <span class="text-base-content/50">{gettext("Provider model")}:</span>
+                  <code class="text-xs">{@provider_form[:provider_model].value || "—"}</code>
+                </p>
+                <p>
+                  <span class="text-base-content/50">{gettext("Scope")}:</span>
+                  <span class="font-medium">{lane_summary_scope(assigns)}</span>
+                </p>
+                <p>
+                  <span class="text-base-content/50">{gettext("Priority")}:</span>
+                  <span class="font-medium">{@provider_form[:priority].value || "—"}</span>
+                </p>
+                <p>
+                  <span class="text-base-content/50">{gettext("Status")}:</span>
+                  <span class="font-medium">{enabled_label(@provider_form[:enabled].value == true)}</span>
+                </p>
+              </div>
+            </div>
+
+            <p
+              :if={@lane_step_error}
+              id="lane-step-error"
+              role="alert"
+              class="mt-4 text-xs text-error"
+            >
+              {@lane_step_error}
+            </p>
+          </.form>
+
+          <%!-- Inline API-key form. It is a SIBLING of the model_provider
+               form, never nested (a form inside a form is dropped by the
+               browser and the key could never be submitted). Creating the key
+               here leaves it selected, so the model is one click from
+               routable. It only shows on the credential step, but stays
+               mounted (hidden) so typing survives Back/Next. --%>
+          <%= if @credential_form do %>
+            <div
+              class={[
+                "mt-5 p-4 rounded-lg border border-primary/40 bg-primary/5",
+                @lane_step != "credential" && "hidden"
+              ]}
+              id="inline-credential-form"
+            >
+              <h3 class="text-sm font-semibold mb-1">
+                {gettext("New API key")}
+                <%= if @provider_form_provider_key do %>
+                  <span class="text-xs font-normal text-base-content/60">
+                    para {provider_label(@provider_choices, @provider_form_provider_key)}
+                  </span>
+                <% end %>
+              </h3>
+
+              <.form
+                for={@credential_form}
+                id="inline-credential"
+                phx-submit="save_new_credential"
+              >
+                <div class="grid sm:grid-cols-2 gap-x-4 gap-y-3">
+                  <.input
+                    field={@credential_form[:name]}
+                    type="text"
+                    label="Alias"
+                    placeholder={gettext("Production")}
+                    hint={gettext("Name to identify this credential.")}
+                  />
+                  <.input
+                    field={@credential_form[:api_key_encrypted]}
+                    type="password"
+                    label="API key"
+                    placeholder="sk-..."
+                    hint={gettext("The token the provider gives you.")}
+                  />
+                </div>
+                <div class="flex gap-2 mt-3 justify-end">
+                  <button
+                    type="button"
+                    phx-click="cancel_new_credential"
+                    class="btn btn-ghost btn-xs"
+                  >
                     {gettext("Cancel")}
                   </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-ap-btn">
-                    {gettext("Save")}
+                  <button
+                    type="submit"
+                    class="btn btn-primary btn-xs"
+                    id="save-inline-credential-btn"
+                  >
+                    {gettext("Create and use")}
                   </button>
                 </div>
               </.form>
-
-              <%!-- Inline API-key form. It is a SIBLING of the model_provider
-                   form, never nested (a form inside a form is dropped by the
-                   browser and the key could never be submitted). Creating the key
-                   here leaves it selected, so the model is one click from
-                   routable. --%>
-              <%= if @credential_form do %>
-                <div
-                  class="mt-5 p-4 rounded-lg border border-primary/40 bg-primary/5"
-                  id="inline-credential-form"
-                >
-                  <h3 class="text-sm font-semibold mb-1">
-                    {gettext("New API key")}
-                    <%= if @provider_form_provider_key do %>
-                      <span class="text-xs font-normal text-base-content/60">
-                        para {provider_label(@provider_choices, @provider_form_provider_key)}
-                      </span>
-                    <% end %>
-                  </h3>
-
-                  <.form
-                    for={@credential_form}
-                    id="inline-credential"
-                    phx-submit="save_new_credential"
-                  >
-                    <div class="grid sm:grid-cols-2 gap-x-4 gap-y-3">
-                      <.input
-                        field={@credential_form[:name]}
-                        type="text"
-                        label="Alias"
-                        placeholder={gettext("Production")}
-                        hint={gettext("Name to identify this credential.")}
-                      />
-                      <.input
-                        field={@credential_form[:api_key_encrypted]}
-                        type="password"
-                        label="API key"
-                        placeholder="sk-..."
-                        hint={gettext("The token the provider gives you.")}
-                      />
-                    </div>
-                    <div class="flex gap-2 mt-3 justify-end">
-                      <button
-                        type="button"
-                        phx-click="cancel_new_credential"
-                        class="btn btn-ghost btn-xs"
-                      >
-                        {gettext("Cancel")}
-                      </button>
-                      <button
-                        type="submit"
-                        class="btn btn-primary btn-xs"
-                        id="save-inline-credential-btn"
-                      >
-                        {gettext("Create and use")}
-                      </button>
-                    </div>
-                  </.form>
-                </div>
-              <% end %>
             </div>
-          </div>
-        </div>
+          <% end %>
+
+          <:footer>
+            <button
+              :if={@lane_step != "credential"}
+              type="button"
+              phx-click="lane_prev_step"
+              class="btn btn-ghost btn-sm"
+              id="lane-back-btn"
+            >
+              {gettext("Back")}
+            </button>
+            <button
+              :if={@lane_step != "pricing"}
+              type="button"
+              phx-click="lane_next_step"
+              class="btn btn-primary btn-sm"
+              id="lane-next-btn"
+            >
+              {gettext("Next")}
+            </button>
+            <button
+              :if={@lane_step == "pricing"}
+              type="submit"
+              form="model-provider-form"
+              class="btn btn-primary btn-sm"
+              id="save-ap-btn"
+            >
+              {gettext("Save")}
+            </button>
+          </:footer>
+        </.modal>
       </div>
     </Layouts.dashboard>
     """
