@@ -97,6 +97,16 @@ defmodule TokengateWeb.GroupsLiveTest do
 
     assert html =~ group.name
     assert has_element?(view, "#edit-#{group.id}")
+
+    # Contrato `.table` (antes eran cards): tbody `#groups` con los headers
+    # del listado y una fila por perfil de límites.
+    assert has_element?(view, "#groups")
+    assert has_element?(view, "table th", "Perfil de límites")
+    assert has_element?(view, "table th", "Miembros")
+    assert has_element?(view, "table th", "Límites")
+    assert has_element?(view, "table th", "Gasto/mes")
+    assert has_element?(view, "#group-credit-#{group.id}")
+    assert has_element?(view, "#edit-models-#{group.id}")
   end
 
   # --------------------------------------------------------------------------

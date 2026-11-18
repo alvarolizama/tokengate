@@ -493,84 +493,90 @@ defmodule TokengateWeb.GroupsLive do
           </div>
         </div>
 
-        <div id="groups" phx-update="stream">
-          <div :if={@groups_empty?} class="text-center py-12 text-base-content/40" id="groups-empty">
-            <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>{gettext("No limit profiles yet.")}</p>
-          </div>
-          <div
-            :for={{id, group} <- @streams.groups}
-            id={id}
-            class="card bg-base-100 border border-base-300 shadow-sm mb-3 transition-shadow hover:shadow-md"
+        <%!-- Listado: una fila por perfil de límites (antes eran cards). --%>
+        <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
+          <.table
+            id="groups"
+            rows={@streams.groups}
+            row_item={fn {_id, group} -> group end}
+            row_class="align-top"
+            empty?={@groups_empty?}
           >
-            <div class="card-body p-4">
-              <%!-- Header row: identity + compact stats + actions --%>
-              <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-                <div class="min-w-0 flex-1">
-                  <h3 class="font-semibold text-base-content truncate">{group.name}</h3>
-                  <p class="text-xs text-base-content/50">
-                    {length(group.group_members)} miembros · conc. {group.default_concurrency_limit} · {group.default_rpm_limit} RPM
-                  </p>
-                </div>
-
-                <%!-- Compact stats --%>
-                <% credit = group_credit(group, @group_budgets) %>
-                <div class="flex items-center gap-4 text-sm">
-                  <div class="text-center">
-                    <p class="text-[10px] uppercase tracking-wide text-base-content/40">
-                      {gettext("Spend/month")}
-                    </p>
-                    <p class="font-bold">${format_decimal(get_spend(group, @group_budgets))}</p>
-                  </div>
-                  <div class="text-center" id={"group-credit-#{group.id}"}>
-                    <p class="text-[10px] uppercase tracking-wide text-base-content/40">
-                      {credit.label}
-                    </p>
-                    <p class={["font-bold", credit.class]}>{credit.value}</p>
-                  </div>
-                  <%!-- Models badge --%>
-                  <button
-                    phx-click="edit_models"
-                    phx-value-id={group.id}
-                    class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
-                    id={"edit-models-#{group.id}"}
-                    title={gettext("Manage the limit profile models")}
-                  >
-                    <.icon name="hero-rectangle-stack" class="w-3 h-3" />
-                    {length(Map.get(@granted_models, group.id, []))} modelos
-                  </button>
-                </div>
-
-                <%!-- Actions --%>
-                <div class="flex gap-1 shrink-0">
-                  <.link
-                    navigate={~p"/budget/profiles/#{group}/members"}
-                    class="btn btn-sm btn-ghost"
-                    id={"members-link-#{group.id}"}
-                  >
-                    {gettext("Members")}
-                  </.link>
-                  <button
-                    phx-click="edit_group"
-                    phx-value-id={group.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"edit-#{group.id}"}
-                  >
-                    {gettext("Edit")}
-                  </button>
-                  <button
-                    phx-click="delete_group"
-                    phx-value-id={group.id}
-                    class="btn btn-sm btn-ghost text-error"
-                    id={"delete-#{group.id}"}
-                    data-confirm={gettext("Delete limit profile? This action cannot be undone.")}
-                  >
-                    {gettext("Delete")}
-                  </button>
-                </div>
+            <:col :let={group} label={gettext("Limit profile")}>
+              <p class="font-medium text-sm text-base-content truncate max-w-72">{group.name}</p>
+              <div class="flex items-center gap-1.5 mt-1 flex-wrap">
+                <button
+                  phx-click="edit_models"
+                  phx-value-id={group.id}
+                  class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
+                  id={"edit-models-#{group.id}"}
+                  title={gettext("Manage the limit profile models")}
+                >
+                  <.icon name="hero-rectangle-stack" class="w-3 h-3" />
+                  {gettext("%{count} models", count: length(Map.get(@granted_models, group.id, [])))}
+                </button>
               </div>
-            </div>
-          </div>
+            </:col>
+            <:col :let={group} label={gettext("Members")} align="right">
+              <span class="font-mono text-sm">{length(group.group_members)}</span>
+            </:col>
+            <:col :let={group} label={gettext("Limits")} align="right">
+              <div class="text-xs whitespace-nowrap">
+                <p class="flex items-center justify-end gap-1">
+                  <span class="text-base-content/50">Conc.</span>
+                  <span class="font-mono">{group.default_concurrency_limit}</span>
+                </p>
+                <p class="flex items-center justify-end gap-1">
+                  <span class="text-base-content/50">RPM</span>
+                  <span class="font-mono">{group.default_rpm_limit}</span>
+                </p>
+              </div>
+            </:col>
+            <:col :let={group} label={gettext("Spend/month")} align="right">
+              <% credit = group_credit(group, @group_budgets) %>
+              <p class="font-mono text-sm">${format_decimal(get_spend(group, @group_budgets))}</p>
+              <div
+                id={"group-credit-#{group.id}"}
+                class="text-[11px] whitespace-nowrap"
+                title={credit.label}
+              >
+                <span class={["font-medium", credit.class]}>{credit.value}</span>
+              </div>
+            </:col>
+            <:action :let={group}>
+              <.link
+                navigate={~p"/budget/profiles/#{group}/members"}
+                class="btn btn-xs btn-ghost gap-1"
+                id={"members-link-#{group.id}"}
+                title={gettext("Members")}
+              >
+                <.icon name="hero-users" class="w-3.5 h-3.5" /> {gettext("Members")}
+              </.link>
+              <button
+                phx-click="edit_group"
+                phx-value-id={group.id}
+                class="btn btn-xs btn-ghost gap-1"
+                id={"edit-#{group.id}"}
+                title={gettext("Edit")}
+              >
+                <.icon name="hero-pencil-square" class="w-3.5 h-3.5" /> {gettext("Edit")}
+              </button>
+              <button
+                phx-click="delete_group"
+                phx-value-id={group.id}
+                class="btn btn-xs btn-ghost text-error gap-1"
+                id={"delete-#{group.id}"}
+                title={gettext("Delete")}
+                data-confirm={gettext("Delete limit profile? This action cannot be undone.")}
+              >
+                <.icon name="hero-trash" class="w-3.5 h-3.5" /> {gettext("Delete")}
+              </button>
+            </:action>
+            <:empty>
+              <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+              <p>{gettext("No limit profiles yet.")}</p>
+            </:empty>
+          </.table>
         </div>
       </div>
     </Layouts.dashboard>

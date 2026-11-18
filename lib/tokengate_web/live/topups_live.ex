@@ -26,6 +26,10 @@ defmodule TokengateWeb.TopupsLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Credits.{Topup, Topups}
+  alias Tokengate.Logs.RequestLog
+  alias Tokengate.Repo
+
+  import Ecto.Query
 
   import TokengateWeb.TopupHelpers
 
@@ -81,22 +85,25 @@ defmodule TokengateWeb.TopupsLive do
 
   defp load_topups(socket) do
     topups = Topups.list_all()
-    archived = Enum.filter(topups, &archived?/1)
+    consumed = consumed_by_topup_id(topups)
+    archived = Enum.filter(topups, &archived?(&1, consumed))
+    visible = visible_topups(topups, consumed, socket)
 
     socket
+    |> assign(:consumed, consumed)
     |> assign(:archived_count, length(archived))
     |> assign(:all_topups, topups)
-    |> assign(:topups_empty?, visible_topups(topups, socket) == [])
-    |> stream(:topups, visible_topups(topups, socket), reset: true)
+    |> assign(:topups_empty?, visible == [])
+    |> stream(:topups, visible, reset: true)
   end
 
-  defp visible_topups(topups, socket) do
+  defp visible_topups(topups, consumed, socket) do
     assigns = socket.assigns
 
     topups
-    |> Enum.filter(fn t -> assigns.show_archived || not archived?(t) end)
+    |> Enum.filter(fn t -> assigns.show_archived || not archived?(t, consumed) end)
     |> filter_by_query(assigns.search_query)
-    |> sort(assigns.sort_field, assigns.sort_direction)
+    |> sort(assigns.sort_field, assigns.sort_direction, consumed)
   end
 
   defp filter_by_query(topups, ""), do: topups
@@ -110,19 +117,89 @@ defmodule TokengateWeb.TopupsLive do
     end)
   end
 
-  defp sort(topups, field, direction) do
+  defp sort(topups, field, direction, consumed) do
     sorted =
       Enum.sort_by(topups, fn t ->
         case field do
           :target -> owner_label(t)
           :amount -> Decimal.to_float(t.amount_usd)
           :expires_at -> t.expires_at || ~U[9999-12-31 00:00:00Z]
-          :status -> state_label(state(t))
+          :status -> state_label(row_state(t, consumed))
           :inserted_at -> t.inserted_at
         end
       end)
 
     if direction == :asc, do: sorted, else: Enum.reverse(sorted)
+  end
+
+  ## Consumo / estado de una fila -------------------------------------------
+
+  # La tabla pinta el consumo de CADA fila y el estado (agotado/archivado)
+  # depende de él. Resolverlo con `Topups.consumed_usd/1` —o con `state/1` y
+  # `archived?/1` de `TopupHelpers`, que lo llaman por dentro— costaba una
+  # query por fila, repetida en cada celda y en cada pasada del filtro: un
+  # N+1 sobre `request_logs`. Aquí el consumo se resuelve UNA vez por carga
+  # (una query agrupada) y viaja en el assign `:consumed`.
+  @consumption_grace_hours 24
+
+  defp consumed_by_topup_id([]), do: %{}
+
+  defp consumed_by_topup_id(topups) do
+    ids = Enum.map(topups, & &1.id)
+    floor = consumption_floor(topups)
+
+    RequestLog
+    |> where([rl], rl.credit_topup_id in ^ids)
+    |> where([rl], rl.inserted_at >= ^floor)
+    |> group_by([rl], rl.credit_topup_id)
+    |> select([rl], {rl.credit_topup_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
+    |> Repo.all()
+    |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+  end
+
+  # Misma cota que `Topups.consumed_usd/1` (creación menos la hora de gracia),
+  # aplicada una vez al lote: el top-up más antiguo es el instante más temprano
+  # en que cualquiera pudo ser debitado.
+  defp consumption_floor(topups) do
+    topups
+    |> Enum.map(& &1.inserted_at)
+    |> Enum.min_by(&DateTime.to_unix(&1, :microsecond))
+    |> DateTime.add(-@consumption_grace_hours * 3600, :second)
+    |> DateTime.truncate(:second)
+  end
+
+  defp row_consumed(topup, consumed), do: Map.get(consumed, topup.id, Decimal.new(0))
+
+  defp row_remaining(topup, consumed) do
+    remaining = Decimal.sub(topup.amount_usd, row_consumed(topup, consumed))
+
+    if Decimal.compare(remaining, 0) == :lt, do: Decimal.new(0), else: remaining
+  end
+
+  defp row_state(topup, consumed) do
+    cond do
+      topup.status == "revoked" -> :revoked
+      expired?(topup) -> :expired
+      Decimal.compare(row_remaining(topup, consumed), 0) != :gt -> :exhausted
+      true -> :active
+    end
+  end
+
+  defp archived?(topup, consumed), do: row_state(topup, consumed) in [:expired, :exhausted]
+
+  defp row_pct(topup, consumed) do
+    amount = topup.amount_usd
+
+    if Decimal.compare(amount, 0) != :gt do
+      0.0
+    else
+      row_consumed(topup, consumed)
+      |> Decimal.div(amount)
+      |> Decimal.mult(100)
+      |> Decimal.round(1)
+      |> Decimal.to_float()
+      |> min(100.0)
+    end
   end
 
   ## Events — búsqueda / orden / archivo -------------------------------------

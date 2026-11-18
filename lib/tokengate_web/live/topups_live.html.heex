@@ -185,124 +185,90 @@
       </div>
     </div>
 
-    <%!-- Compact table --%>
+    <%!-- Listado — una fila por top-up --%>
     <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>
-              <.sort_button
-                field={:target}
-                label={gettext("Owner")}
-                sort_field={@sort_field}
-                sort_direction={@sort_direction}
-              />
-            </th>
-            <th class="text-right">
-              <.sort_button
-                field={:amount}
-                label={gettext("Amount")}
-                sort_field={@sort_field}
-                sort_direction={@sort_direction}
-              />
-            </th>
-            <th class="text-right">{gettext("Consumption")}</th>
-            <th>
-              <.sort_button
-                field={:expires_at}
-                label={gettext("Expires")}
-                sort_field={@sort_field}
-                sort_direction={@sort_direction}
-              />
-            </th>
-            <th>
-              <.sort_button
-                field={:status}
-                label={gettext("Status")}
-                sort_field={@sort_field}
-                sort_direction={@sort_direction}
-              />
-            </th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="topups" phx-update="stream">
-          <tr
-            :for={{dom_id, topup} <- @streams.topups}
-            id={dom_id}
-            class={archived?(topup) && "opacity-50"}
-          >
-            <td>
-              <div class="font-medium">{owner_label(topup)}</div>
-              <div class="text-[10px] text-base-content/50">{owner_type(topup)}</div>
-            </td>
-            <td class="text-right font-mono">{usd(topup.amount_usd)}</td>
-            <td id={"topup-usage-#{topup.id}"} class="w-40">
-              <div class="flex items-center gap-2">
-                <div class="flex-1 h-1.5 rounded-full bg-base-300 overflow-hidden">
-                  <div
-                    class="h-full bg-primary"
-                    style={"width: #{consumed_pct(topup)}%"}
-                  />
-                </div>
-                <span class="text-xs font-mono">{usd(Topups.consumed_usd(topup))}</span>
-              </div>
-              <div :if={state(topup) == :revoked} class="text-[10px] text-warning mt-0.5">
-                {gettext("balance revoked")}
-              </div>
-            </td>
-            <td class="text-xs">{expires_label(topup.expires_at)}</td>
-            <td>
-              <div class="flex items-center gap-1">
-                <span class={["badge badge-sm", state_badge_class(state(topup))]}>
-                  {state_label(state(topup))}
-                </span>
-              </div>
-            </td>
-            <td class="text-right">
-              <div class="flex gap-1 justify-end">
-                <button
-                  phx-click="edit_topup"
-                  phx-value-id={topup.id}
-                  class="btn btn-ghost btn-xs"
-                  id={"edit-topup-#{topup.id}"}
-                >
-                  {gettext("Edit")}
-                </button>
-                <button
-                  phx-click="toggle_topup_status"
-                  phx-value-id={topup.id}
-                  class="btn btn-ghost btn-xs"
-                  id={"toggle-topup-status-#{topup.id}"}
-                >
-                  {if topup.status == "active",
-                    do: gettext("Deactivate"),
-                    else: gettext("Reactivate")}
-                </button>
-                <button
-                  phx-click="revoke_topup"
-                  phx-value-id={topup.id}
-                  data-confirm={
-                    gettext("Revoke this top-up? The remaining balance stops being granted.")
-                  }
-                  class="btn btn-ghost btn-xs text-error"
-                  id={"revoke-topup-#{topup.id}"}
-                >
-                  <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Revoke")}
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div
-        :if={@topups_empty?}
-        class="text-center py-12 text-base-content/40"
-        id="topups-empty"
+      <.table
+        id="topups"
+        rows={@streams.topups}
+        row_item={fn {_dom_id, topup} -> topup end}
+        sort_field={@sort_field}
+        sort_direction={@sort_direction}
+        sort_event="sort_topups"
+        empty?={@topups_empty?}
       >
-        <.icon name="hero-arrow-up-circle" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-        <p>{gettext("No top-ups — no subject has one-off credit.")}</p>
-      </div>
+        <:col :let={topup} label={gettext("Owner")} field={:target}>
+          <div class="font-medium">{owner_label(topup)}</div>
+          <div class="text-[10px] text-base-content/50">{owner_type(topup)}</div>
+        </:col>
+        <:col :let={topup} label={gettext("Amount")} field={:amount} align="right">
+          <span class="font-mono">{usd(topup.amount_usd)}</span>
+        </:col>
+        <:col :let={topup} label={gettext("Consumption")} align="right">
+          <div id={"topup-usage-#{topup.id}"} class="w-40 ml-auto">
+            <div class="flex items-center gap-2">
+              <div class="flex-1 h-1.5 rounded-full bg-base-300 overflow-hidden">
+                <div class="h-full bg-primary" style={"width: #{row_pct(topup, @consumed)}%"} />
+              </div>
+              <span class="text-xs font-mono">{usd(row_consumed(topup, @consumed))}</span>
+            </div>
+            <div
+              :if={row_state(topup, @consumed) == :revoked}
+              class="text-[10px] text-warning mt-0.5"
+            >
+              {gettext("balance revoked")}
+            </div>
+          </div>
+        </:col>
+        <:col :let={topup} label={gettext("Expires")} field={:expires_at}>
+          <span class="text-xs">{expires_label(topup.expires_at)}</span>
+        </:col>
+        <:col :let={topup} label={gettext("Status")} field={:status}>
+          <span class={["badge badge-sm", state_badge_class(row_state(topup, @consumed))]}>
+            {state_label(row_state(topup, @consumed))}
+          </span>
+        </:col>
+        <:action :let={topup}>
+          <button
+            phx-click="edit_topup"
+            phx-value-id={topup.id}
+            class="btn btn-ghost btn-xs"
+            id={"edit-topup-#{topup.id}"}
+            title={gettext("Edit")}
+          >
+            <.icon name="hero-pencil-square" class="w-4 h-4" />
+          </button>
+          <button
+            phx-click="toggle_topup_status"
+            phx-value-id={topup.id}
+            class="btn btn-ghost btn-xs"
+            id={"toggle-topup-status-#{topup.id}"}
+            title={
+              if topup.status == "active", do: gettext("Deactivate"), else: gettext("Reactivate")
+            }
+          >
+            <.icon
+              name={if topup.status == "active", do: "hero-pause", else: "hero-play"}
+              class="w-4 h-4"
+            />
+          </button>
+          <button
+            phx-click="revoke_topup"
+            phx-value-id={topup.id}
+            data-confirm={
+              gettext("Revoke this top-up? The remaining balance stops being granted.")
+            }
+            class="btn btn-ghost btn-xs text-error"
+            id={"revoke-topup-#{topup.id}"}
+            title={gettext("Revoke")}
+          >
+            <.icon name="hero-trash" class="w-4 h-4" />
+          </button>
+        </:action>
+        <:empty>
+          <.icon name="hero-arrow-up-circle" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+          <p>{gettext("No top-ups — no subject has one-off credit.")}</p>
+        </:empty>
+      </.table>
     </div>
   </div>
 </Layouts.dashboard>

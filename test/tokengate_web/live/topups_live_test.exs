@@ -94,9 +94,12 @@ defmodule TokengateWeb.TopupsLiveTest do
       conn = login(conn, admin, pass)
       {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
-      assert has_element?(view, "#topups")
+      # Sin top-ups el componente `.table` rinde sólo el empty-state: el id del
+      # tbody aparece en cuanto hay filas (ver el resto de tests).
+      assert has_element?(view, "#topups-empty")
+      assert has_element?(view, "#topups-empty", "No hay top-ups")
+      assert has_element?(view, "#new-topup-btn")
       assert render(view) =~ "Top-ups"
-      assert render(view) =~ "No hay top-ups"
       # La página ya no habla de suscripciones.
       refute render(view) =~ "Suscrip"
     end
@@ -114,7 +117,12 @@ defmodule TokengateWeb.TopupsLiveTest do
       user = user_fixture()
       service = service_fixture()
 
-      topup_fixture(%{"user_id" => user.id, "amount_usd" => "10.00", "label" => "para-usuario"})
+      user_topup =
+        topup_fixture(%{
+          "user_id" => user.id,
+          "amount_usd" => "10.00",
+          "label" => "para-usuario"
+        })
 
       topup_fixture(%{
         "service_id" => service.id,
@@ -125,11 +133,62 @@ defmodule TokengateWeb.TopupsLiveTest do
       conn = login(conn, admin, pass)
       {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
+      # Contrato `.table`: un tbody `#topups` con los headers del listado.
+      assert has_element?(view, "#topups")
+      assert has_element?(view, "table th", "Dueño")
+      assert has_element?(view, "table th", "Monto")
+      assert has_element?(view, "table th", "Consumo")
+      assert has_element?(view, "table th", "Estado")
+      assert has_element?(view, "#edit-topup-#{user_topup.id}")
+
       html = render(view)
       assert html =~ user.email
       assert html =~ service.name
       assert html =~ "$10.00"
       assert html =~ "$20.00"
+    end
+
+    # N+1: el consumo de cada fila se mide contra `request_logs`. Con una query
+    # por fila —y otra por cada `state/archived?`— pintar N filas costaba del
+    # orden de 3N lecturas. Ahora es UNA query agrupada por carga.
+    test "el consumo de la lista se resuelve en una sola query", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      user = user_fixture()
+
+      for _ <- 1..4 do
+        topup = topup_fixture(%{"user_id" => user.id, "amount_usd" => "10.00"})
+        consume(topup, "1.00")
+      end
+
+      ref = make_ref()
+      parent = self()
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
+
+      # Se engancha DESPUÉS del montaje (el montaje estático + el conectado
+      # cargan la lista dos veces) y se mide una recarga completa del listado.
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:tokengate, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if meta.source == "request_logs" and
+               String.contains?(to_string(meta.query), "credit_topup_id") do
+            send(parent, {:request_logs_query, ref})
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+
+      view |> element("#topup-search-form") |> render_change(%{"q" => ""})
+
+      # Exactamente una lectura de consumo para las 4 filas.
+      assert_received {:request_logs_query, ^ref}
+      refute_received {:request_logs_query, ^ref}
+
+      assert render(view) =~ "$1.00"
     end
 
     test "muestra lo consumido del top-up medido contra los logs", %{conn: conn} do
