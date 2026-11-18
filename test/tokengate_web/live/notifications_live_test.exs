@@ -47,6 +47,11 @@ defmodule TokengateWeb.NotificationsLiveTest do
     assert has_element?(view, "#notifications-links-card")
     assert has_element?(view, "#notifications-log-card")
     assert has_element?(view, "#link-form")
+
+    # Both streamed tables start empty and render their .table empty-state
+    # (the id is derived from the tbody id: "#links-empty", "#notifications-empty").
+    assert has_element?(view, "#links-empty", "No linked chats yet.")
+    assert has_element?(view, "#notifications-empty", "No notifications emitted yet.")
   end
 
   test "non-admins are redirected away", %{conn: conn} do

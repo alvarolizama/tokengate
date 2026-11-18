@@ -185,59 +185,50 @@ defmodule TokengateWeb.AuditLive do
           )}</button>
         </div>
 
-        <div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
-          <table class="table table-sm" id="audit-table">
-            <thead>
-              <tr>
-                <th>{gettext("Date")}</th>
-                <th>{gettext("Actor")}</th>
-                <th>{gettext("Action")}</th>
-                <th>{gettext("Entity")}</th>
-                <th>{gettext("Acting as")}</th>
-                <th>{gettext("IP")}</th>
-                <th>{gettext("Detail")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr :for={log <- @logs} id={"audit-#{log.id}"} class="align-top">
-                <td class="whitespace-nowrap">
-                  {format_ts(log.inserted_at, @timezone)}
-                </td>
-                <td>
-                  <div class="font-medium">{log.actor_email || "—"}</div>
-                  <div class="text-xs text-base-content/50">
-                    {if log.user_id, do: log.actor_role || "user", else: gettext("system")}
-                  </div>
-                </td>
-                <td>
-                  <span class="badge badge-ghost badge-sm font-mono">{log.action}</span>
-                </td>
-                <td>
-                  <div class="font-mono text-xs">{log.entity_type}</div>
-                  <div class="text-xs text-base-content/50">
-                    {log.target_label || log.entity_id}
-                  </div>
-                </td>
-                <td class="text-xs">
-                  {log.acting_as_email || "—"}
-                </td>
-                <td class="font-mono text-xs">{log.ip || "—"}</td>
-                <td class="max-w-xs">
-                  <details>
-                    <summary class="cursor-pointer text-xs text-base-content/60">
-                      {gettext("view")}
-                    </summary>
-                    <pre class="whitespace-pre-wrap break-all text-xs">{changes_text(log.changes)}</pre>
-                  </details>
-                </td>
-              </tr>
-              <tr :if={@logs == []}>
-                <td colspan="7" class="text-center text-base-content/50 py-8">
-                  {gettext("No events for the selected filters.")}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
+          <.table
+            id="audit-rows"
+            rows={@logs}
+            row_id={fn log -> "audit-#{log.id}" end}
+            row_class="align-top"
+          >
+            <:col :let={log} label={gettext("Date")}>
+              <span class="whitespace-nowrap">{format_ts(log.inserted_at, @timezone)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Actor")}>
+              <div class="font-medium">{log.actor_email || "—"}</div>
+              <div class="text-xs text-base-content/50">
+                {if log.user_id, do: log.actor_role || "user", else: gettext("system")}
+              </div>
+            </:col>
+            <:col :let={log} label={gettext("Action")}>
+              <span class="badge badge-ghost badge-sm font-mono">{log.action}</span>
+            </:col>
+            <:col :let={log} label={gettext("Entity")}>
+              <div class="font-mono text-xs">{log.entity_type}</div>
+              <div class="text-xs text-base-content/50">{log.target_label || log.entity_id}</div>
+            </:col>
+            <:col :let={log} label={gettext("Acting as")}>
+              <span class="text-xs">{log.acting_as_email || "—"}</span>
+            </:col>
+            <:col :let={log} label={gettext("IP")}>
+              <span class="font-mono text-xs">{log.ip || "—"}</span>
+            </:col>
+            <:col :let={log} label={gettext("Detail")}>
+              <div class="max-w-xs">
+                <details>
+                  <summary class="cursor-pointer text-xs text-base-content/60">
+                    {gettext("view")}
+                  </summary>
+                  <pre class="whitespace-pre-wrap break-all text-xs">{changes_text(log.changes)}</pre>
+                </details>
+              </div>
+            </:col>
+            <:empty>
+              <.icon name="hero-magnifying-glass" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+              <p>{gettext("No events for the selected filters.")}</p>
+            </:empty>
+          </.table>
         </div>
 
         <div class="flex justify-between">

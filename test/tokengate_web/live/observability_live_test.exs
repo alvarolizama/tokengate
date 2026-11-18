@@ -152,6 +152,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     assert has_element?(view, "#destinations")
     html = render(view)
     assert html =~ "New hook"
+    refute has_element?(view, "#destinations-empty")
     assert Repo.get_by!(Tokengate.Observability.Destination, name: "New hook")
   end
 
@@ -258,6 +259,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     |> render_click()
 
     refute has_element?(view, "#edit-destination-#{destination.id}")
+    assert has_element?(view, "#destinations-empty", "No webhooks configured.")
     refute Repo.get(Tokengate.Observability.Destination, destination.id)
   end
 end
