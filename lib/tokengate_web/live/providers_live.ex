@@ -1187,231 +1187,218 @@ defmodule TokengateWeb.ProvidersLive do
           </div>
         </div>
 
-        <div
-          :if={@providers == []}
-          class="text-center py-12 text-base-content/40"
-          id="providers-empty"
-        >
-          <.icon name="hero-server-stack" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-          <p>{gettext("No providers yet.")}</p>
-        </div>
-
         <%!-- Una sola lista en TABLA, sin tabs: builtin primero y custom al
              final (lo fija el `order_by` de `load_providers/1`). Las API keys
              no viven aquí: cada fila lleva a /catalog/providers/:id/keys. --%>
-        <div
-          :if={@providers != []}
-          class="card bg-base-100 border border-base-300 shadow-sm overflow-x-auto"
-        >
-          <table class="table table-sm" id="providers">
-            <thead>
-              <tr>
-                <th>{gettext("Provider")}</th>
-                <th>{gettext("Status")}</th>
-                <th>{gettext("Keys")}</th>
-                <th>{gettext("Models")}</th>
-                <th>{gettext("Limits")}</th>
-                <th>{gettext("Health")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr :for={provider <- @providers} id={"providers-#{provider.id}"}>
-                <td>
+        <div class="card bg-base-100 border border-base-300 shadow-sm overflow-x-auto">
+          <.table
+            id="providers"
+            rows={@providers}
+            row_id={fn provider -> "providers-#{provider.id}" end}
+            row_class="align-top"
+            empty?={@providers_empty?}
+          >
+            <:col :let={provider} label={gettext("Provider")}>
+              <div class="flex items-center gap-2">
+                <%!-- Chip claro fijo: los logos del catálogo usan
+                     fill="currentColor" y dentro de un <img> eso resuelve a
+                     negro — sobre el tema oscuro (dim) quedaban
+                     invisibles. El icono genérico (proveedor sin logo del
+                     catálogo, o sea los customs) se pinta oscuro para el
+                     mismo chip. --%>
+                <span class="flex items-center justify-center w-7 h-7 shrink-0 rounded-lg bg-white overflow-hidden">
+                  <img
+                    :if={provider.logo_url}
+                    src={provider.logo_url}
+                    alt=""
+                    data-logo
+                    class="w-4 h-4 object-contain"
+                    loading="lazy"
+                  />
+                  <.icon
+                    name="hero-server-stack"
+                    class={["w-4 h-4 text-neutral-600", provider.logo_url && "hidden"]}
+                  />
+                </span>
+                <div class="min-w-0">
                   <div class="flex items-center gap-2">
-                    <%!-- Chip claro fijo: los logos del catálogo usan
-                         fill="currentColor" y dentro de un <img> eso resuelve a
-                         negro — sobre el tema oscuro (dim) quedaban
-                         invisibles. El icono genérico (proveedor sin logo del
-                         catálogo, o sea los customs) se pinta oscuro para el
-                         mismo chip. --%>
-                    <span class="flex items-center justify-center w-7 h-7 shrink-0 rounded-lg bg-white overflow-hidden">
-                      <img
-                        :if={provider.logo_url}
-                        src={provider.logo_url}
-                        alt=""
-                        data-logo
-                        class="w-4 h-4 object-contain"
-                        loading="lazy"
-                      />
-                      <.icon
-                        name="hero-server-stack"
-                        class={["w-4 h-4 text-neutral-600", provider.logo_url && "hidden"]}
-                      />
-                    </span>
-                    <div class="min-w-0">
-                      <div class="flex items-center gap-2">
-                        <span class="font-medium truncate">{provider.name}</span>
-                        <code :if={provider.key} class="text-[10px] text-base-content/40 truncate">
-                          {provider.key}
-                        </code>
-                        <a
-                          :if={provider.doc_url}
-                          href={provider.doc_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          class="link link-hover text-base-content/50 shrink-0"
-                          id={"provider-docs-#{provider.id}"}
-                          title={gettext("Documentation")}
-                        >
-                          <.icon name="hero-arrow-top-right-on-square" class="w-3 h-3" />
-                        </a>
-                      </div>
-                      <p class="text-xs text-base-content/50 font-mono truncate max-w-[22rem]">
-                        {provider.base_url}
-                      </p>
-                    </div>
+                    <span class="font-medium truncate">{provider.name}</span>
+                    <code :if={provider.key} class="text-[10px] text-base-content/40 truncate">
+                      {provider.key}
+                    </code>
+                    <a
+                      :if={provider.doc_url}
+                      href={provider.doc_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="link link-hover text-base-content/50 shrink-0"
+                      id={"provider-docs-#{provider.id}"}
+                      title={gettext("Documentation")}
+                    >
+                      <.icon name="hero-arrow-top-right-on-square" class="w-3 h-3" />
+                    </a>
                   </div>
-                </td>
-                <td>
-                  <span class={[
-                    "badge badge-sm",
-                    if(provider.status == "active", do: "badge-success", else: "badge-ghost")
-                  ]}>
-                    {if provider.status == "active",
-                      do: gettext("Active"),
-                      else: gettext("Disabled")}
-                  </span>
-                </td>
-                <td>
-                  <% stats = credential_stats(provider.id, @credential_stats) %>
-                  <.link
-                    navigate={~p"/catalog/providers/#{provider.id}/keys"}
-                    class="link link-hover whitespace-nowrap inline-flex items-center gap-1"
-                    id={"provider-keys-#{provider.id}"}
-                    title={gettext("Manage the API keys of this provider")}
-                  >
-                    <.icon name="hero-key" class="w-3 h-3" /> {stats.keys}
-                  </.link>
-                  <%!-- Only the exception gets a line of its own: a healthy
-                       provider reads as a single number. --%>
-                  <p :if={stats.errored > 0} class="text-[11px] text-error font-semibold">
-                    {gettext("%{count} in error", count: stats.errored)}
+                  <p class="text-xs text-base-content/50 font-mono truncate max-w-[22rem]">
+                    {provider.base_url}
                   </p>
-                </td>
-                <td>
-                  <span class="badge badge-ghost badge-sm">
-                    {model_count(provider.id, @provider_model_counts)}
-                  </span>
-                </td>
-                <%!-- Provider-level limits: every key of this provider inherits
-                     them; they are edited here, never per key. --%>
-                <td>
-                  <div
-                    class="text-[11px] leading-snug text-base-content/60 whitespace-nowrap"
-                    id={"provider-limits-#{provider.id}"}
-                  >
-                    <div>
-                      RPM {provider.max_rpm || "∞"} · Conc. {provider.max_concurrent || "∞"}
-                    </div>
-                    <div>
-                      {gettext("Conc./user")} {provider.max_concurrent_per_user || "∞"} · {timeout_label(
-                        provider
-                      )}
-                    </div>
-                  </div>
-                </td>
-                <td>
-                  <% health =
-                    provider_health(
-                      provider.id,
-                      @credential_stats,
-                      @breaker_statuses,
-                      @credential_inflight
-                    ) %>
-                  <div class="flex items-center gap-1.5">
-                    <span
-                      class={[
-                        "badge badge-sm gap-1",
-                        if(health.inflight > 0, do: "badge-primary", else: "badge-ghost")
-                      ]}
-                      title={gettext("Requests in flight across this provider's keys")}
-                      id={"provider-inflight-#{provider.id}"}
-                    >
-                      <.icon name="hero-bolt" class="w-3 h-3" /> {health.inflight}
-                    </span>
-                    <span
-                      :if={health.open > 0}
-                      class="badge badge-sm badge-error gap-1"
-                      title={gettext("Keys whose circuit breaker is open")}
-                      id={"provider-breaker-#{provider.id}"}
-                    >
-                      <.icon name="hero-exclamation-triangle" class="w-3 h-3" /> {health.open}
-                    </span>
-                  </div>
-                </td>
-                <td class="text-right whitespace-nowrap">
-                  <div class="flex items-center justify-end gap-0.5">
-                    <button
-                      phx-click="toggle_provider"
-                      phx-value-id={provider.id}
-                      class="btn btn-sm btn-ghost px-2"
-                      id={"toggle-provider-#{provider.id}"}
-                      title={
-                        if provider.status == "active",
-                          do: gettext("Disable"),
-                          else: gettext("Enable")
-                      }
-                      aria-label={
-                        if provider.status == "active",
-                          do: gettext("Disable"),
-                          else: gettext("Enable")
-                      }
-                    >
-                      <.icon
-                        name={if provider.status == "active", do: "hero-pause", else: "hero-play"}
-                        class="w-4 h-4"
-                      />
-                    </button>
-                    <%!-- Capacidades: the per-service path overrides (base_url +
-                         path). Available on builtins too — paths are operational,
-                         not catalog identity. The badge counts the overridden
-                         services. --%>
-                    <button
-                      phx-click="edit_paths"
-                      phx-value-id={provider.id}
-                      class="btn btn-sm btn-ghost px-2"
-                      id={"paths-#{provider.id}"}
-                      title={gettext("Configure the path of each capability (base_url + path)")}
-                      aria-label={gettext("Capabilities")}
-                    >
-                      <.icon name="hero-adjustments-horizontal" class="w-4 h-4" />
-                      <span
-                        :if={path_override_count(provider) > 0}
-                        class="badge badge-xs badge-primary"
-                      >
-                        {path_override_count(provider)}
-                      </span>
-                    </button>
-                    <%!-- Builtins are editable too, but ONLY for their limits: the
-                         form renders the catalog identity read-only and the
-                         changeset drops any change to it. --%>
-                    <button
-                      phx-click="edit_provider"
-                      phx-value-id={provider.id}
-                      class="btn btn-sm btn-ghost px-2"
-                      id={"edit-#{provider.id}"}
-                      title={gettext("Edit")}
-                      aria-label={gettext("Edit")}
-                    >
-                      <.icon name="hero-pencil-square" class="w-4 h-4" />
-                    </button>
-                    <button
-                      phx-click="delete_provider"
-                      phx-value-id={provider.id}
-                      data-confirm={gettext("Delete this provider?")}
-                      class="btn btn-sm btn-ghost px-2 text-error"
-                      id={"delete-#{provider.id}"}
-                      title={gettext("Delete")}
-                      aria-label={gettext("Delete")}
-                    >
-                      <.icon name="hero-trash" class="w-4 h-4" />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                </div>
+              </div>
+            </:col>
+            <:col :let={provider} label={gettext("Status")}>
+              <span class={[
+                "badge badge-sm",
+                if(provider.status == "active", do: "badge-success", else: "badge-ghost")
+              ]}>
+                {if provider.status == "active",
+                  do: gettext("Active"),
+                  else: gettext("Disabled")}
+              </span>
+            </:col>
+            <:col
+              :let={provider}
+              label={gettext("Keys")}
+              align="right"
+              tooltip={gettext("Manage the API keys of this provider")}
+            >
+              <% stats = credential_stats(provider.id, @credential_stats) %>
+              <.link
+                navigate={~p"/catalog/providers/#{provider.id}/keys"}
+                class="link link-hover whitespace-nowrap inline-flex items-center gap-1"
+                id={"provider-keys-#{provider.id}"}
+                title={gettext("Manage the API keys of this provider")}
+              >
+                <.icon name="hero-key" class="w-3 h-3" /> {stats.keys}
+              </.link>
+              <%!-- Only the exception gets a line of its own: a healthy
+                   provider reads as a single number. --%>
+              <p :if={stats.errored > 0} class="text-[11px] text-error font-semibold">
+                {gettext("%{count} in error", count: stats.errored)}
+              </p>
+            </:col>
+            <:col :let={provider} label={gettext("Models")} align="right">
+              <span class="badge badge-ghost badge-sm">
+                {model_count(provider.id, @provider_model_counts)}
+              </span>
+            </:col>
+            <%!-- Provider-level limits: every key of this provider inherits
+                 them; they are edited here, never per key. --%>
+            <:col :let={provider} label={gettext("Limits")}>
+              <div
+                class="text-[11px] leading-snug text-base-content/60 whitespace-nowrap"
+                id={"provider-limits-#{provider.id}"}
+              >
+                <div>
+                  RPM {provider.max_rpm || "∞"} · Conc. {provider.max_concurrent || "∞"}
+                </div>
+                <div>
+                  {gettext("Conc./user")} {provider.max_concurrent_per_user || "∞"} · {timeout_label(
+                    provider
+                  )}
+                </div>
+              </div>
+            </:col>
+            <:col
+              :let={provider}
+              label={gettext("Health")}
+              tooltip={gettext("Requests in flight across this provider's keys")}
+            >
+              <% health =
+                provider_health(
+                  provider.id,
+                  @credential_stats,
+                  @breaker_statuses,
+                  @credential_inflight
+                ) %>
+              <div class="flex items-center gap-1.5">
+                <span
+                  class={[
+                    "badge badge-sm gap-1",
+                    if(health.inflight > 0, do: "badge-primary", else: "badge-ghost")
+                  ]}
+                  title={gettext("Requests in flight across this provider's keys")}
+                  id={"provider-inflight-#{provider.id}"}
+                >
+                  <.icon name="hero-bolt" class="w-3 h-3" /> {health.inflight}
+                </span>
+                <span
+                  :if={health.open > 0}
+                  class="badge badge-sm badge-error gap-1"
+                  title={gettext("Keys whose circuit breaker is open")}
+                  id={"provider-breaker-#{provider.id}"}
+                >
+                  <.icon name="hero-exclamation-triangle" class="w-3 h-3" /> {health.open}
+                </span>
+              </div>
+            </:col>
+            <:action :let={provider}>
+              <button
+                phx-click="toggle_provider"
+                phx-value-id={provider.id}
+                class="btn btn-sm btn-ghost px-2"
+                id={"toggle-provider-#{provider.id}"}
+                title={
+                  if provider.status == "active",
+                    do: gettext("Disable"),
+                    else: gettext("Enable")
+                }
+                aria-label={
+                  if provider.status == "active",
+                    do: gettext("Disable"),
+                    else: gettext("Enable")
+                }
+              >
+                <.icon
+                  name={if provider.status == "active", do: "hero-pause", else: "hero-play"}
+                  class="w-4 h-4"
+                />
+              </button>
+              <%!-- Capacidades: the per-service path overrides (base_url +
+                   path). Available on builtins too — paths are operational,
+                   not catalog identity. The badge counts the overridden
+                   services. --%>
+              <button
+                phx-click="edit_paths"
+                phx-value-id={provider.id}
+                class="btn btn-sm btn-ghost px-2"
+                id={"paths-#{provider.id}"}
+                title={gettext("Configure the path of each capability (base_url + path)")}
+                aria-label={gettext("Capabilities")}
+              >
+                <.icon name="hero-adjustments-horizontal" class="w-4 h-4" />
+                <span :if={path_override_count(provider) > 0} class="badge badge-xs badge-primary">
+                  {path_override_count(provider)}
+                </span>
+              </button>
+              <%!-- Builtins are editable too, but ONLY for their limits: the
+                   form renders the catalog identity read-only and the
+                   changeset drops any change to it. --%>
+              <button
+                phx-click="edit_provider"
+                phx-value-id={provider.id}
+                class="btn btn-sm btn-ghost px-2"
+                id={"edit-#{provider.id}"}
+                title={gettext("Edit")}
+                aria-label={gettext("Edit")}
+              >
+                <.icon name="hero-pencil-square" class="w-4 h-4" />
+              </button>
+              <button
+                phx-click="delete_provider"
+                phx-value-id={provider.id}
+                data-confirm={gettext("Delete this provider?")}
+                class="btn btn-sm btn-ghost px-2 text-error"
+                id={"delete-#{provider.id}"}
+                title={gettext("Delete")}
+                aria-label={gettext("Delete")}
+              >
+                <.icon name="hero-trash" class="w-4 h-4" />
+              </button>
+            </:action>
+            <:empty>
+              <.icon name="hero-server-stack" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+              <p>{gettext("No providers yet.")}</p>
+            </:empty>
+          </.table>
         </div>
       </div>
     </Layouts.dashboard>

@@ -438,20 +438,19 @@ defmodule TokengateWeb.ProviderKeysLive do
   def breaker_label(:half_open), do: "Half-Open"
   def breaker_label(_), do: "—"
 
+  @doc "Human-readable label for the lifecycle status of a credential."
+  def credential_status_label("active"), do: gettext("Active")
+  def credential_status_label("disabled"), do: gettext("Disabled")
+  def credential_status_label("error"), do: gettext("Error")
+  def credential_status_label(_), do: "—"
+
   @doc """
-  Row highlight class for credentials that need attention: error status,
-  open/half-open circuit breaker (red), or manually disabled (muted).
+  Badge class for the lifecycle status of a credential: error is red (the key
+  was rejected upstream and needs Reactivate), disabled is muted, active green.
   """
-  def credential_row_class(%Credential{status: "error"}, _breaker),
-    do: "bg-error/10 hover:bg-error/20"
-
-  def credential_row_class(_cred, breaker) when breaker in [:open, :half_open],
-    do: "bg-error/10 hover:bg-error/20"
-
-  def credential_row_class(%Credential{status: "disabled"}, _breaker),
-    do: "bg-warning/10 hover:bg-warning/20"
-
-  def credential_row_class(_cred, _breaker), do: nil
+  def credential_status_class("error"), do: "badge-error"
+  def credential_status_class("disabled"), do: "badge-warning"
+  def credential_status_class(_), do: "badge-success"
 
   ## Render ----------------------------------------------------------------
 
@@ -565,128 +564,122 @@ defmodule TokengateWeb.ProviderKeysLive do
           </div>
         </div>
 
+        <%!-- Las keys de ESTE proveedor, en tabla: alias, secreto enmascarado,
+             modelos, tráfico y breaker. El secreto NUNCA se renderiza
+             completo: `mask_key/1` deja solo los últimos 4 caracteres. --%>
         <div
-          :if={@credentials == []}
-          class="text-center py-12 text-base-content/40"
-          id="keys-empty"
-        >
-          <.icon name="hero-key" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-          <p>{gettext("This provider has no API keys yet.")}</p>
-        </div>
-
-        <div
-          :if={@credentials != []}
           class="card bg-base-100 border border-base-300 shadow-sm overflow-x-auto"
           id={"keys-panel-#{@provider.id}"}
         >
-          <table class="table table-sm" id="keys-table">
-            <thead>
-              <tr>
-                <th>{gettext("Alias")}</th>
-                <th>{gettext("Key")}</th>
-                <th>{gettext("Models")}</th>
-                <th>{gettext("In flight")}</th>
-                <th>{gettext("Breaker")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                :for={cred <- @credentials}
-                id={"credential-#{cred.id}"}
-                class={credential_row_class(cred, Map.get(@breaker_statuses, cred.id, :closed))}
-              >
-                <td>
-                  {cred.name || "—"}
-                </td>
-                <td>
-                  <code class="text-sm font-mono">{mask_key(cred.api_key_encrypted)}</code>
-                </td>
-                <td>
-                  <span class="badge badge-ghost badge-sm">
-                    {Map.get(@credential_model_counts, cred.id, 0)}
-                  </span>
-                </td>
-                <td>
-                  <% inflight = Map.get(@credential_inflight, cred.id, 0) %>
-                  <span class={[
+          <.table
+            id="keys-table"
+            rows={@credentials}
+            row_id={fn cred -> "credential-#{cred.id}" end}
+            row_class="align-top"
+          >
+            <:col :let={cred} label={gettext("Alias")}>
+              <div id={"credential-alias-#{cred.id}"}>
+                <p class="font-medium text-sm">{cred.name || "—"}</p>
+                <span class={["badge badge-xs mt-1", credential_status_class(cred.status)]}>
+                  {credential_status_label(cred.status)}
+                </span>
+              </div>
+            </:col>
+            <:col :let={cred} label={gettext("Key")}>
+              <code class="text-sm font-mono">{mask_key(cred.api_key_encrypted)}</code>
+            </:col>
+            <:col :let={cred} label={gettext("Models")} align="right">
+              <span class="badge badge-ghost badge-sm">
+                {Map.get(@credential_model_counts, cred.id, 0)}
+              </span>
+            </:col>
+            <:col :let={cred} label={gettext("In flight")} align="right">
+              <% inflight = Map.get(@credential_inflight, cred.id, 0) %>
+              <span class={[
+                "badge badge-sm",
+                if(inflight > 0, do: "badge-primary", else: "badge-ghost")
+              ]}>
+                {inflight}
+              </span>
+            </:col>
+            <:col :let={cred} label={gettext("Breaker")}>
+              <% breaker = Map.get(@breaker_statuses, cred.id, :closed) %>
+              <div class="flex items-center gap-2">
+                <span
+                  class={[
                     "badge badge-sm",
-                    if(inflight > 0, do: "badge-primary", else: "badge-ghost")
-                  ]}>
-                    {inflight}
-                  </span>
-                </td>
-                <td>
-                  <% breaker = Map.get(@breaker_statuses, cred.id, :closed) %>
-                  <div class="flex items-center gap-2">
-                    <span class={[
-                      "badge badge-sm",
-                      breaker == :closed && "badge-success",
-                      breaker == :open && "badge-error",
-                      breaker == :half_open && "badge-warning"
-                    ]}>
-                      {breaker_label(breaker)}
-                    </span>
-                    <button
-                      :if={breaker != :closed}
-                      phx-click="reset_breaker"
-                      phx-value-id={cred.id}
-                      class="btn btn-xs btn-ghost"
-                      id={"reset-breaker-#{cred.id}"}
-                    >
-                      <.icon name="hero-arrow-path" class="w-3 h-3" /> Reset
-                    </button>
-                  </div>
-                </td>
-                <td class="text-right">
-                  <%= if cred.status == "error" do %>
-                    <button
-                      phx-click="reactivate_credential"
-                      phx-value-id={cred.id}
-                      class="btn btn-xs btn-ghost btn-warning"
-                      id={"reactivate-credential-#{cred.id}"}
-                    >
-                      <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Reactivate")}
-                    </button>
-                  <% else %>
-                    <button
-                      phx-click="toggle_credential"
-                      phx-value-id={cred.id}
-                      class="btn btn-xs btn-ghost"
-                      id={"toggle-credential-btn-#{cred.id}"}
-                      title={
-                        if cred.status == "active",
-                          do: gettext("Disable"),
-                          else: gettext("Enable")
-                      }
-                    >
-                      <.icon
-                        name={if cred.status == "active", do: "hero-pause", else: "hero-play"}
-                        class="w-3 h-3"
-                      />
-                    </button>
-                  <% end %>
-                  <button
-                    phx-click="edit_credential"
-                    phx-value-id={cred.id}
-                    class="btn btn-xs btn-ghost"
-                    id={"edit-credential-#{cred.id}"}
-                  >
-                    <.icon name="hero-pencil-square" class="w-3 h-3" /> {gettext("Edit")}
-                  </button>
-                  <button
-                    phx-click="delete_credential"
-                    phx-value-id={cred.id}
-                    data-confirm={gettext("Delete this credential?")}
-                    class="btn btn-xs btn-ghost text-error"
-                    id={"delete-credential-#{cred.id}"}
-                  >
-                    {gettext("Delete")}
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                    breaker == :closed && "badge-success",
+                    breaker == :open && "badge-error",
+                    breaker == :half_open && "badge-warning"
+                  ]}
+                  id={"credential-breaker-#{cred.id}"}
+                >
+                  {breaker_label(breaker)}
+                </span>
+                <button
+                  :if={breaker != :closed}
+                  phx-click="reset_breaker"
+                  phx-value-id={cred.id}
+                  class="btn btn-xs btn-ghost"
+                  id={"reset-breaker-#{cred.id}"}
+                >
+                  <.icon name="hero-arrow-path" class="w-3 h-3" /> Reset
+                </button>
+              </div>
+            </:col>
+            <:action :let={cred}>
+              <%= if cred.status == "error" do %>
+                <button
+                  phx-click="reactivate_credential"
+                  phx-value-id={cred.id}
+                  class="btn btn-xs btn-ghost btn-warning"
+                  id={"reactivate-credential-#{cred.id}"}
+                >
+                  <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Reactivate")}
+                </button>
+              <% else %>
+                <button
+                  phx-click="toggle_credential"
+                  phx-value-id={cred.id}
+                  class="btn btn-xs btn-ghost"
+                  id={"toggle-credential-btn-#{cred.id}"}
+                  title={
+                    if cred.status == "active",
+                      do: gettext("Disable"),
+                      else: gettext("Enable")
+                  }
+                >
+                  <.icon
+                    name={if cred.status == "active", do: "hero-pause", else: "hero-play"}
+                    class="w-3 h-3"
+                  />
+                </button>
+              <% end %>
+              <button
+                phx-click="edit_credential"
+                phx-value-id={cred.id}
+                class="btn btn-xs btn-ghost"
+                id={"edit-credential-#{cred.id}"}
+              >
+                <.icon name="hero-pencil-square" class="w-3 h-3" /> {gettext("Edit")}
+              </button>
+              <button
+                phx-click="delete_credential"
+                phx-value-id={cred.id}
+                data-confirm={gettext("Delete this credential?")}
+                class="btn btn-xs btn-ghost text-error"
+                id={"delete-credential-#{cred.id}"}
+              >
+                {gettext("Delete")}
+              </button>
+            </:action>
+            <:empty>
+              <div id="keys-empty">
+                <.icon name="hero-key" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                <p>{gettext("This provider has no API keys yet.")}</p>
+              </div>
+            </:empty>
+          </.table>
         </div>
       </div>
     </Layouts.dashboard>
