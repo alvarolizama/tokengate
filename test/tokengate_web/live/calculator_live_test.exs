@@ -203,7 +203,6 @@ defmodule TokengateWeb.CalculatorLiveTest do
       view
       |> form("#calculator-form", %{
         model_id: model_.id,
-        period: "7d",
         cost_input: "3.00",
         cost_cache: "0.30",
         cost_output: "15.00"
@@ -228,7 +227,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
 
     html =
       view
-      |> form("#calculator-form", %{model_id: model_.id, period: "7d"})
+      |> form("#calculator-form", %{model_id: model_.id})
       |> render_change()
 
     refute has_element?(view, "#calc-market")
@@ -257,16 +256,16 @@ defmodule TokengateWeb.CalculatorLiveTest do
         output_cost_per_million: "14.00"
       })
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
     # The lane select is populated when the model is picked (with its label).
-    html = change(view, %{model_id: model_.id, period: "7d"})
+    html = change(view, %{model_id: model_.id})
     assert html =~ lane.provider_model
     assert html =~ "(P0)"
     assert html =~ "/1M"
 
     # Picking the lane brings its four prices.
-    html = change(view, %{model_id: model_.id, period: "7d", lane_id: lane.id})
+    html = change(view, %{model_id: model_.id, lane_id: lane.id})
 
     assert html =~ ~s(value="3.50")
     assert html =~ ~s(value="0.35")
@@ -292,10 +291,10 @@ defmodule TokengateWeb.CalculatorLiveTest do
         output_cost_per_million: "0.014"
       })
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
-    change(view, %{model_id: model_.id, period: "7d"})
-    html = change(view, %{model_id: model_.id, period: "7d", lane_id: lane.id})
+    change(view, %{model_id: model_.id})
+    html = change(view, %{model_id: model_.id, lane_id: lane.id})
 
     assert html =~ "/1K"
 
@@ -334,10 +333,10 @@ defmodule TokengateWeb.CalculatorLiveTest do
       cache_creation_tokens: 1_000_000
     })
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
-    change(view, %{model_id: model_.id, period: "7d"})
-    change(view, %{model_id: model_.id, period: "7d", lane_id: lane.id})
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id})
 
     # 1M × 2.00 + 0 × 0.20 + 1M × 2.50 + 1M × 10.00 = $14.50. Without the
     # additive cache-write term the estimate would be $12.00.
@@ -369,10 +368,10 @@ defmodule TokengateWeb.CalculatorLiveTest do
       completion_tokens: 1_000_000
     })
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
-    change(view, %{model_id: model_.id, period: "7d"})
-    change(view, %{model_id: model_.id, period: "7d", lane_id: lane.id})
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id})
 
     # (1M × 0.002 + 1M × 0.010) / 1000 = $12.00; the /1M divisor would give
     # $12,000, so this pins the lane unit.
@@ -393,13 +392,13 @@ defmodule TokengateWeb.CalculatorLiveTest do
         output_cost_per_million: "14.00"
       })
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
-    change(view, %{model_id: model_.id, period: "7d"})
-    change(view, %{model_id: model_.id, period: "7d", lane_id: lane.id})
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id})
     assert has_element?(view, "#cost-input[value='3.50']")
 
-    change(view, %{model_id: model_.id, period: "7d", lane_id: ""})
+    change(view, %{model_id: model_.id, lane_id: ""})
 
     # Prices from a lane that is no longer selected must not linger.
     assert has_element?(view, "#cost-input[value='3.00']")
@@ -426,20 +425,20 @@ defmodule TokengateWeb.CalculatorLiveTest do
         output_cost_per_million: "14.00"
       })
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
-    change(view, %{model_id: model_.id, period: "7d"})
-    change(view, %{model_id: model_.id, period: "7d", lane_id: lane.id})
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id})
 
     # Lo tecleado se envía en un change propio (el navegador manda un input
     # por evento) y queda en los assigns.
     html =
-      change(view, %{model_id: model_.id, period: "7d", lane_id: lane.id, cost_input: "9.99"})
+      change(view, %{model_id: model_.id, lane_id: lane.id, cost_input: "9.99"})
 
     assert html =~ ~s(value="9.99")
 
     # Segundo cambio sin tocar modelo ni lane: lo tecleado se conserva.
-    html = change(view, %{model_id: model_.id, period: "7d", lane_id: lane.id})
+    html = change(view, %{model_id: model_.id, lane_id: lane.id})
     assert html =~ ~s(value="9.99")
     # …y los otros tres siguen siendo los del lane.
     assert html =~ ~s(value="0.35")
@@ -467,13 +466,13 @@ defmodule TokengateWeb.CalculatorLiveTest do
     log(member, model_, %{lane_id: lane_a.id, credential_id: key_a.id, cost: "1.00"})
     log(member, model_, %{lane_id: lane_b.id, credential_id: key_b.id, cost: "5.00"})
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
-    change(view, %{model_id: model_.id, period: "7d"})
-    change(view, %{model_id: model_.id, period: "7d", lane_id: lane_a.id})
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane_a.id})
     assert real_text(view) =~ "$1.00"
 
-    change(view, %{model_id: model_.id, period: "7d", lane_id: lane_b.id})
+    change(view, %{model_id: model_.id, lane_id: lane_b.id})
     assert real_text(view) =~ "$5.00"
   end
 
@@ -494,13 +493,13 @@ defmodule TokengateWeb.CalculatorLiveTest do
     log(member, model_, %{lane_id: lane.id, credential_id: key_a.id, cost: "2.00"})
     log(member, model_, %{lane_id: lane.id, credential_id: key_b.id, cost: "3.00"})
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
-    html = change(view, %{model_id: model_.id, period: "7d"})
+    html = change(view, %{model_id: model_.id})
     assert html =~ "Pool"
     assert html =~ "(2 keys)"
 
-    change(view, %{model_id: model_.id, period: "7d", lane_id: lane.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id})
 
     assert has_element?(view, "#credential-select")
     assert has_element?(view, ~s(#credential-select option[value=""]))
@@ -513,7 +512,6 @@ defmodule TokengateWeb.CalculatorLiveTest do
     # Una key del pool acota el real a SU tráfico.
     change(view, %{
       model_id: model_.id,
-      period: "7d",
       lane_id: lane.id,
       credential_id: key_a.id
     })
@@ -541,9 +539,9 @@ defmodule TokengateWeb.CalculatorLiveTest do
     log(member, model_, %{lane_id: lane_a.id, credential_id: key_a.id, cost: "1.25"})
     log(member, model_, %{lane_id: lane_b.id, credential_id: key_b.id, cost: "2.75"})
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
-    change(view, %{model_id: model_.id, period: "7d"})
+    change(view, %{model_id: model_.id})
     assert real_text(view) =~ "$4.00"
     refute has_element?(view, "#credential-select")
   end
@@ -568,10 +566,10 @@ defmodule TokengateWeb.CalculatorLiveTest do
 
     log(member, model_, %{lane_id: lane.id, credential_id: credential.id, cost: "4.00"})
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
-    change(view, %{model_id: model_.id, period: "7d"})
-    change(view, %{model_id: model_.id, period: "7d", lane_id: lane.id})
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id})
 
     assert has_element?(view, "#lane-unit-notice")
     refute has_element?(view, "#calc-estimated")
@@ -604,16 +602,16 @@ defmodule TokengateWeb.CalculatorLiveTest do
     log(member, model_b, %{lane_id: lane_b1.id, credential_id: key_b1.id, cost: "2.00"})
     log(member, model_b, %{lane_id: lane_b2.id, credential_id: key_b2.id, cost: "3.00"})
 
-    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
 
-    change(view, %{model_id: model_a.id, period: "7d"})
-    change(view, %{model_id: model_a.id, period: "7d", lane_id: lane_a.id})
+    change(view, %{model_id: model_a.id})
+    change(view, %{model_id: model_a.id, lane_id: lane_a.id})
 
     assert real_text(view) =~ "$1.00"
     assert has_element?(view, "#credential-select")
 
     # Cambiar de modelo: las lanes del anterior desaparecen y la key se suelta.
-    change(view, %{model_id: model_b.id, period: "7d"})
+    change(view, %{model_id: model_b.id})
 
     refute has_element?(view, "#lane-select option[value='#{lane_a.id}']")
     refute has_element?(view, "#credential-select")
@@ -621,5 +619,321 @@ defmodule TokengateWeb.CalculatorLiveTest do
     assert has_element?(view, "#lane-select option[value='#{lane_b2.id}']")
     # Sin lane, el real vuelve a ser TODO el modelo nuevo.
     assert real_text(view) =~ "$5.00"
+  end
+
+  # ---------------------------------------------------------------------------
+  # (h) Periodo canónico en la URL (F1/P1)
+  # ---------------------------------------------------------------------------
+
+  test "the period selector offers the canonical set and lives in the URL", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_ = model_fixture()
+
+    {:ok, view, html} = live(login(conn, admin, password), ~p"/calculator")
+
+    # The canonical set, as patch links — no page-local literal list and no
+    # <select> of its own.
+    for period <- ~w(today yesterday week 30d) do
+      assert has_element?(view, "#period-#{period}[href='/calculator?period=#{period}']")
+    end
+
+    refute has_element?(view, "#period-7d")
+    refute has_element?(view, "#period-month")
+    refute has_element?(view, "#period-last_month")
+    refute html =~ "name=\"period\""
+
+    # Defaults to the canonical default when the URL says nothing.
+    assert has_element?(view, "#period-#{Tokengate.Periods.default_period()}.btn-primary")
+    assert has_element?(view, "#calc-empty")
+    _ = model_
+  end
+
+  test "an out-of-set bookmark degrades to the default instead of crashing", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    for bogus <- ~w(month last_month 7d banana) do
+      {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=#{bogus}")
+
+      assert has_element?(view, "#period-#{Tokengate.Periods.default_period()}.btn-primary")
+      assert has_element?(view, "#calculator-form")
+    end
+  end
+
+  test "patching the period repaints the real spend of the selected model", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_ = model_fixture()
+    member = group_member_fixture()
+    provider = provider_fixture()
+    credential = credential_fixture(provider)
+    lane = lane_fixture(model_, credential, %{provider_model: "period-lane-#{unique()}"})
+
+    # Inside 30d, outside the current week (10 days ago).
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        model_id: model_.id,
+        model_provider_id: lane.id,
+        credential_id: credential.id,
+        model_requested: model_.name,
+        model_responded: model_.name,
+        agent_type: "api",
+        status_code: 200,
+        prompt_tokens: 1_000,
+        completion_tokens: 500,
+        provider_cost_usd: Decimal.new("0.25"),
+        latency_ms: 10,
+        streaming: false,
+        inserted_at:
+          DateTime.utc_now() |> DateTime.add(-10 * 86_400, :second) |> DateTime.truncate(:second)
+      })
+
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
+    change(view, %{model_id: model_.id})
+
+    assert real_text(view) =~ "$0.25"
+
+    # The patch link is navigation, not a form event: handle_params reloads.
+    view |> element("#period-week") |> render_click()
+
+    assert real_text(view) =~ "$0"
+    refute real_text(view) =~ "$0.25"
+  end
+
+  # ---------------------------------------------------------------------------
+  # (i) Dinero y precios: sub-centavo visible, sin defaults silenciosos (F16/P14)
+  # ---------------------------------------------------------------------------
+
+  test "a sub-cent real spend stays visible instead of reading as zero", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_ = model_fixture()
+    member = group_member_fixture()
+    provider = provider_fixture()
+    credential = credential_fixture(provider)
+    lane = lane_fixture(model_, credential, %{provider_model: "tiny-lane-#{unique()}"})
+
+    log(member, model_, %{
+      lane_id: lane.id,
+      credential_id: credential.id,
+      cost: "0.000004",
+      prompt_tokens: 10,
+      completion_tokens: 5
+    })
+
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
+    change(view, %{model_id: model_.id})
+
+    # The money cell carries the sub-cent amount — the point of money/1 is
+    # exactly that it does not collapse to "$0.00".
+    assert view |> element("#calc-real p.tabular-nums") |> render() =~ "$0.000004"
+  end
+
+  test "a lane without a price prefills an empty field and is flagged", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_ = model_fixture()
+    provider = provider_fixture()
+    credential = credential_fixture(provider)
+
+    lane =
+      lane_fixture(model_, credential, %{
+        provider_model: "no-cache-price-#{unique()}",
+        pricing_unit: "per_1m_tokens",
+        input_cost_per_million: "3.00",
+        output_cost_per_million: "15.00"
+      })
+
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
+
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id})
+
+    # "no price" is NOT "free": the input stays empty (a "0.00" prefill read as
+    # a free lane) and the form says which rate carries no price.
+    assert has_element?(view, "#cost-cache[value='']")
+    assert has_element?(view, "#calc-price-issues")
+    assert view |> element("#calc-price-issues") |> render() =~ "cache"
+  end
+
+  test "a typed decimal comma is honored, not replaced by the default", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_ = model_fixture()
+    member = group_member_fixture()
+    provider = provider_fixture()
+    credential = credential_fixture(provider)
+
+    lane =
+      lane_fixture(model_, credential, %{
+        provider_model: "comma-lane-#{unique()}",
+        pricing_unit: "per_1m_tokens",
+        input_cost_per_million: "0",
+        cache_cost_per_million: "0",
+        cache_write_cost_per_million: "0",
+        output_cost_per_million: "0"
+      })
+
+    log(member, model_, %{
+      lane_id: lane.id,
+      credential_id: credential.id,
+      cost: "0.00",
+      prompt_tokens: 1_000_000,
+      completion_tokens: 0
+    })
+
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
+
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id})
+
+    html = change(view, %{model_id: model_.id, lane_id: lane.id, cost_input: "9,5"})
+
+    # The typed value survives as typed and the estimate uses 9.5 — the old
+    # parse dropped it and priced with the hardcoded 3.00.
+    assert html =~ ~s(value="9,5")
+    assert estimated_text(view) =~ "$9.5"
+    refute has_element?(view, "#calc-price-issues")
+  end
+
+  test "an invalid price is flagged and never silently becomes the default", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_ = model_fixture()
+    member = group_member_fixture()
+    provider = provider_fixture()
+    credential = credential_fixture(provider)
+
+    lane =
+      lane_fixture(model_, credential, %{
+        provider_model: "invalid-price-#{unique()}",
+        pricing_unit: "per_1m_tokens",
+        input_cost_per_million: "0",
+        cache_cost_per_million: "0",
+        cache_write_cost_per_million: "0",
+        output_cost_per_million: "0"
+      })
+
+    log(member, model_, %{
+      lane_id: lane.id,
+      credential_id: credential.id,
+      cost: "0.00",
+      prompt_tokens: 1_000_000,
+      completion_tokens: 0
+    })
+
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
+
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id, cost_input: "abc"})
+
+    assert has_element?(view, "#calc-price-issues")
+    assert view |> element("#calc-price-issues") |> render() =~ "input"
+    # Counted as $0, not as the old 3.00 default.
+    assert estimated_text(view) =~ "$0.00"
+  end
+
+  test "NaN is rejected as a price instead of poisoning the estimate", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_ = model_fixture()
+    member = group_member_fixture()
+    provider = provider_fixture()
+    credential = credential_fixture(provider)
+
+    lane =
+      lane_fixture(model_, credential, %{
+        provider_model: "nan-price-#{unique()}",
+        input_cost_per_million: "2.00",
+        output_cost_per_million: "10.00"
+      })
+
+    log(member, model_, %{
+      lane_id: lane.id,
+      credential_id: credential.id,
+      cost: "1.00",
+      prompt_tokens: 1_000_000,
+      completion_tokens: 1_000_000
+    })
+
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
+
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id})
+    change(view, %{model_id: model_.id, lane_id: lane.id, cost_input: "NaN"})
+
+    assert has_element?(view, "#calc-price-issues")
+    # $0 for the input term, not a NaN that would render "NaN" as money.
+    refute estimated_text(view) =~ "NaN"
+    assert estimated_text(view) =~ "$10"
+  end
+
+  test "the difference colors the sign right: overpaying is an error, underpaying success", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    model_ = model_fixture()
+    member = group_member_fixture()
+    provider = provider_fixture()
+    key_a = credential_fixture(provider)
+    key_b = credential_fixture(provider)
+
+    prices = %{
+      pricing_unit: "per_1m_tokens",
+      input_cost_per_million: "2.00",
+      cache_cost_per_million: "0",
+      cache_write_cost_per_million: "0",
+      output_cost_per_million: "10.00"
+    }
+
+    lane_a = lane_fixture(model_, key_a, Map.put(prices, :provider_model, "over-#{unique()}"))
+    lane_b = lane_fixture(model_, key_b, Map.put(prices, :provider_model, "under-#{unique()}"))
+
+    # 1M in + 1M out at those rates = $12.00 estimated on both lanes.
+    log(member, model_, %{
+      lane_id: lane_a.id,
+      credential_id: key_a.id,
+      cost: "20.00",
+      prompt_tokens: 1_000_000,
+      completion_tokens: 1_000_000
+    })
+
+    log(member, model_, %{
+      lane_id: lane_b.id,
+      credential_id: key_b.id,
+      cost: "5.00",
+      prompt_tokens: 1_000_000,
+      completion_tokens: 1_000_000
+    })
+
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
+
+    # Real $20 > estimate $12: paying MORE must not read as success.
+    change(view, %{model_id: model_.id})
+    change(view, %{model_id: model_.id, lane_id: lane_a.id})
+
+    difference = view |> element("#calc-difference") |> render()
+    assert difference =~ "text-error"
+    refute difference =~ "text-success"
+    assert difference =~ "+$8.00"
+
+    # Real $5 < estimate $12: the estimate was pessimistic.
+    change(view, %{model_id: model_.id, lane_id: lane_b.id})
+
+    difference = view |> element("#calc-difference") |> render()
+    assert difference =~ "text-success"
+    refute difference =~ "text-error"
+    assert difference =~ "−$7.00"
+  end
+
+  test "a client id that is not a UUID renders the empty state instead of crashing", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator?period=30d")
+
+    # A forged value cannot go through `form/3` (it validates select options):
+    # this is exactly the malformed payload the cast must absorb.
+    html =
+      view
+      |> element("#calculator-form")
+      |> render_change(%{"model_id" => "not-a-uuid"})
+
+    assert html =~ "Selecciona un modelo"
+    assert has_element?(view, "#calc-empty")
   end
 end

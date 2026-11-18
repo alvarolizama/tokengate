@@ -240,6 +240,76 @@ defmodule TokengateWeb.LabsLiveTest do
     end
   end
 
+  describe "formulario (F19/F6)" do
+    test "elegir un icono de la paleta NO borra el nombre ni el logo tecleados", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
+      view |> element("#new-lab-btn") |> render_click()
+
+      # Lo tecleado viaja al servidor en el phx-change…
+      view
+      |> form("#lab-form", %{
+        "lab" => %{
+          "name" => "Lab Tecleado",
+          "key" => "lab-tecleado",
+          "logo_url" => "https://cdn.example.com/typed.svg",
+          "icon" => "hero-beaker"
+        }
+      })
+      |> render_change()
+
+      # …y el click de la paleta es el SIGUIENTE render del servidor: sin el
+      # phx-change del form, el changeset volvía a los valores persistidos y el
+      # nombre/logo tecleados desaparecían de los inputs.
+      view |> element("#icon-choice-hero-fire") |> render_click()
+
+      assert has_element?(view, "#lab-form input[name='lab[name]'][value='Lab Tecleado']")
+
+      assert has_element?(
+               view,
+               "#lab-form input[name='lab[logo_url]'][value='https://cdn.example.com/typed.svg']"
+             )
+
+      assert has_element?(view, "#lab-form input[name='lab[icon]'][value='hero-fire']")
+    end
+
+    test "un key de lab inexistente no tumba la LiveView", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
+
+      render_click(view, "edit_lab", %{"key" => "no-existe"})
+      refute has_element?(view, "#lab-form")
+      assert has_element?(view, "#flash-error")
+
+      render_click(view, "confirm_delete", %{"key" => "no-existe"})
+      refute has_element?(view, "#delete-lab-modal")
+      assert has_element?(view, "#flash-error")
+
+      # A non-binary payload is not a key either.
+      render_click(view, "edit_lab", %{"key" => 123})
+      refute has_element?(view, "#lab-form")
+      assert has_element?(view, "#flash-error")
+    end
+
+    test "un lab de catálogo no se puede editar por un evento forjado", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
+
+      # La UI no ofrece el lápiz en un builtin; el evento directo tampoco abre
+      # el form (el lab lo escribe el refresh de models.dev).
+      render_click(view, "edit_lab", %{"key" => "openai"})
+
+      refute has_element?(view, "#lab-form")
+      assert has_element?(view, "#flash-error")
+    end
+
+    test "borrar un lab inexistente responde con error, no con un crash", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
+
+      render_click(view, "delete_lab", %{"id" => "no-existe"})
+
+      assert has_element?(view, "#flash-error")
+      assert has_element?(view, "#lab-name-openai")
+    end
+  end
+
   describe "marca (Lab.mark/1)" do
     test "la precedencia logo > icono > default", %{conn: _conn} do
       assert Lab.mark(%Lab{logo_url: "https://x/l.svg", icon: "hero-fire"}) ==

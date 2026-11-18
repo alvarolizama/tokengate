@@ -86,18 +86,44 @@ defmodule TokengateWeb.LabsLive do
   end
 
   def handle_event("edit_lab", %{"key" => key}, socket) do
-    lab = Providers.get_lab!(key)
-    changeset = Providers.change_lab(lab)
+    case custom_lab(key, :edit) do
+      {:ok, lab} ->
+        changeset = Providers.change_lab(lab)
 
-    {:noreply,
-     socket
-     |> assign(:form, to_form(changeset, as: :lab))
-     |> assign(:editing_key, lab.key)}
+        {:noreply,
+         socket
+         |> assign(:form, to_form(changeset, as: :lab))
+         |> assign(:editing_key, lab.key)}
+
+      {:error, message} ->
+        {:noreply, put_flash(socket, :error, message)}
+    end
   end
 
   def handle_event("cancel_form", _params, socket) do
     {:noreply, socket |> assign(:form, nil) |> assign(:editing_key, nil)}
   end
+
+  # Every keystroke is tracked in the changeset. Without this the form is
+  # client-only state and the NEXT server render (picking a palette icon, for
+  # one) repaints the persisted values, silently wiping the name/logo the
+  # operator just typed.
+  def handle_event("validate_lab", %{"lab" => params}, socket) do
+    case socket.assigns.form do
+      nil ->
+        {:noreply, socket}
+
+      form ->
+        changeset =
+          form.source.data
+          |> Ecto.Changeset.change()
+          |> Ecto.Changeset.cast(params, [:name, :key, :logo_url, :icon])
+
+        {:noreply, assign(socket, :form, to_form(changeset, as: :lab))}
+    end
+  end
+
+  def handle_event("validate_lab", _params, socket), do: {:noreply, socket}
 
   # El picker es un formulario aparte: cada icono es un botón con el mismo
   # nombre de param, de modo que elegir uno reemplaza al anterior sin JS propio.
@@ -113,12 +139,18 @@ defmodule TokengateWeb.LabsLive do
     save_lab(socket, socket.assigns.editing_key, params)
   end
 
+  def handle_event("save_lab", _params, socket), do: {:noreply, socket}
+
   ## Events — borrado -------------------------------------------------------
 
   def handle_event("confirm_delete", %{"key" => key}, socket) do
-    lab = Providers.get_lab!(key)
+    case custom_lab(key, :delete) do
+      {:ok, lab} ->
+        {:noreply, assign(socket, :delete_target, lab)}
 
-    {:noreply, assign(socket, :delete_target, lab)}
+      {:error, message} ->
+        {:noreply, put_flash(socket, :error, message)}
+    end
   end
 
   # Cerrar la confirmación (✕, Escape o click-away) olvida el objetivo.
@@ -129,25 +161,36 @@ defmodule TokengateWeb.LabsLive do
   # `admin_delete_modal` emite el valor por `phx-value-id`, así que el evento
   # llega como "id" aunque el sujeto sea la key del lab.
   def handle_event("delete_lab", %{"id" => key}, socket) do
-    lab = Providers.get_lab!(key)
+    lab = Providers.get_lab(key)
 
-    case Providers.delete_custom_lab(lab) do
-      {:ok, _} ->
-        audit(socket, "lab.delete", "lab", lab.key, %{"name" => lab.name})
-
+    cond do
+      is_nil(lab) ->
         {:noreply,
          socket
-         |> put_flash(:info, gettext("Lab “%{name}” deleted.", name: lab.name))
-         |> assign(:delete_target, nil)
-         |> load_labs()}
-
-      {:error, :builtin} ->
-        {:noreply,
-         socket
-         |> put_flash(:error, gettext("A catalog lab cannot be deleted."))
+         |> put_flash(:error, gettext("That lab does not exist."))
          |> assign(:delete_target, nil)}
+
+      true ->
+        case Providers.delete_custom_lab(lab) do
+          {:ok, _} ->
+            audit(socket, "lab.delete", "lab", lab.key, %{"name" => lab.name})
+
+            {:noreply,
+             socket
+             |> put_flash(:info, gettext("Lab “%{name}” deleted.", name: lab.name))
+             |> assign(:delete_target, nil)
+             |> load_labs()}
+
+          {:error, :builtin} ->
+            {:noreply,
+             socket
+             |> put_flash(:error, gettext("A catalog lab cannot be deleted."))
+             |> assign(:delete_target, nil)}
+        end
     end
   end
+
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   ## Private helpers — save ------------------------------------------------
 
@@ -169,23 +212,53 @@ defmodule TokengateWeb.LabsLive do
   end
 
   defp save_lab(socket, key, params) when is_binary(key) do
-    lab = Providers.get_lab!(key)
-
-    case Providers.update_custom_lab(lab, params) do
+    case custom_lab(key, :edit) do
       {:ok, lab} ->
-        audit(socket, "lab.update", "lab", lab.key, %{"name" => lab.name})
+        case Providers.update_custom_lab(lab, params) do
+          {:ok, lab} ->
+            audit(socket, "lab.update", "lab", lab.key, %{"name" => lab.name})
 
+            {:noreply,
+             socket
+             |> put_flash(:info, gettext("Lab “%{name}” updated.", name: lab.name))
+             |> assign(:form, nil)
+             |> assign(:editing_key, nil)
+             |> load_labs()}
+
+          {:error, changeset} ->
+            {:noreply, assign(socket, :form, to_form(changeset, as: :lab))}
+        end
+
+      {:error, message} ->
         {:noreply,
          socket
-         |> put_flash(:info, gettext("Lab “%{name}” updated.", name: lab.name))
+         |> put_flash(:error, message)
          |> assign(:form, nil)
-         |> assign(:editing_key, nil)
-         |> load_labs()}
-
-      {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :lab))}
+         |> assign(:editing_key, nil)}
     end
   end
+
+  ## Private helpers — lookup ----------------------------------------------
+
+  # A lab key comes from the client (a `phx-value-key`), so it is never trusted:
+  # an unknown key answers with a flash instead of raising `NoResultsError` and
+  # killing the LiveView. Builtins are catalog-owned here — only custom labs can
+  # be edited or deleted.
+  defp custom_lab(key, action) do
+    case Providers.get_lab(key) do
+      nil ->
+        {:error, gettext("That lab does not exist.")}
+
+      %Lab{source: "custom"} = lab ->
+        {:ok, lab}
+
+      %Lab{} ->
+        {:error, catalog_lab_message(action)}
+    end
+  end
+
+  defp catalog_lab_message(:delete), do: gettext("A catalog lab cannot be deleted.")
+  defp catalog_lab_message(_action), do: gettext("A catalog lab cannot be edited.")
 
   ## Render -----------------------------------------------------------------
 
@@ -293,7 +366,7 @@ defmodule TokengateWeb.LabsLive do
           {gettext("The key is the identifier models join the lab by: lowercase, no spaces.")}
         </p>
 
-        <.form for={@form} id="lab-form" phx-submit="save_lab">
+        <.form for={@form} id="lab-form" phx-change="validate_lab" phx-submit="save_lab">
           <div class="grid md:grid-cols-2 gap-x-6">
             <div>
               <.input

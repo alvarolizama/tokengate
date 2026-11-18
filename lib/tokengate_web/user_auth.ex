@@ -224,7 +224,9 @@ defmodule TokengateWeb.UserAuth do
   # LiveView en su misma ruta para que todo se pinte en el idioma nuevo (es un
   # navigate, no una recarga HTTP).
   defp reload_locale(socket) do
-    case socket.assigns[:current_path] do
+    # The URL keeps its query string: `?period=today`, `?new=1`, a filter… a
+    # locale switch is not a navigation and must not drop the page state.
+    case socket.assigns[:current_url] || socket.assigns[:current_path] do
       path when is_binary(path) -> Phoenix.LiveView.push_navigate(socket, to: path)
       _ -> socket
     end
@@ -234,14 +236,25 @@ defmodule TokengateWeb.UserAuth do
   # `handle_params` is the only LiveView callback that receives the URI, and
   # it runs both on the static render and on every live_patch / navigate, so
   # the sidebar highlight stays in sync without any per-LiveView plumbing.
+  # `:current_url` carries the query string too (path-only highlighting keeps
+  # using `:current_path`).
   defp attach_path_handler(socket) do
     Phoenix.LiveView.attach_hook(
       socket,
       :current_path_handler,
       :handle_params,
       fn _params, uri, socket ->
-        path = uri |> URI.parse() |> Map.get(:path)
-        {:cont, Phoenix.Component.assign(socket, :current_path, path)}
+        %{path: path, query: query} = URI.parse(uri)
+
+        socket =
+          socket
+          |> Phoenix.Component.assign(:current_path, path)
+          |> Phoenix.Component.assign(
+            :current_url,
+            if(query, do: path <> "?" <> query, else: path)
+          )
+
+        {:cont, socket}
       end
     )
   end

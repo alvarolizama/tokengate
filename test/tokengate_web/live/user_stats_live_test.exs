@@ -53,6 +53,15 @@ defmodule TokengateWeb.UserStatsLiveTest do
 
   defp fixture_user_with_memberships, do: fixture_group_member()
 
+  # Rows of the recent-logs stream, empty-state row excluded (it always lives in
+  # the markup, hidden by `only:table-row`).
+  defp log_rows(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#user-stats-logs tr:not(#user-stats-logs-empty)")
+  end
+
   describe "auth" do
     test "unauthenticated visitors are redirected to /login", %{conn: conn} do
       {_, user} = fixture_user_with_memberships()
@@ -176,6 +185,80 @@ defmodule TokengateWeb.UserStatsLiveTest do
 
       {:ok, _view, html} = live(conn, ~p"/access/users")
       assert html =~ ~s(id="stats-#{user.id}")
+    end
+  end
+
+  describe "filtros (F6/P15)" do
+    test "un user_id inexistente o no-UUID redirige en vez de romper el mount", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      assert {:error, {:live_redirect, %{to: "/stats/users"}}} =
+               live(conn, ~p"/stats/users/#{Ecto.UUID.generate()}")
+
+      assert {:error, {:live_redirect, %{to: "/stats/users"}}} =
+               live(conn, ~p"/stats/users/not-a-uuid")
+    end
+
+    test "Desde/Hasta parsean a datetime: una fecha inválida se ignora, no tumba el socket", %{
+      conn: conn
+    } do
+      {group, user} = fixture_user_with_memberships()
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      member = hd(Accounts.list_group_members_for_user(user.id))
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      old = DateTime.add(now, -10 * 86_400, :second)
+
+      for {name, inserted_at} <- [{"reciente-model", now}, {"viejo-model", old}] do
+        {:ok, _} =
+          Logs.log_request(%{
+            group_member_id: member.id,
+            group_id: group.id,
+            user_email: user.email,
+            model_requested: name,
+            status_code: 200,
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            provider_cost_usd: Decimal.new("0.001"),
+            latency_ms: 100,
+            inserted_at: inserted_at
+          })
+      end
+
+      {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      assert Enum.count(log_rows(view)) == 2
+
+      from = Date.add(Date.utc_today(), -5) |> Date.to_string()
+
+      view
+      |> form("#user-stats-filter-form", %{"filter" => %{"from" => from}})
+      |> render_change()
+
+      assert Enum.count(log_rows(view)) == 1
+      assert render(view) =~ "reciente-model"
+
+      # A value that is not a date drops the filter instead of reaching Ecto as
+      # a string (the old CastError killed the LiveView).
+      view
+      |> form("#user-stats-filter-form", %{"filter" => %{"from" => "no-es-fecha"}})
+      |> render_change()
+
+      assert Enum.count(log_rows(view)) == 2
+    end
+
+    test "un payload de filtro sin el mapa anidado no rompe", %{conn: conn} do
+      {_group, user} = fixture_user_with_memberships()
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+
+      html = render_change(view, "filter", %{"filter" => "wat"})
+
+      assert html =~ user.email
+      assert has_element?(view, "#user-stats-filter-form")
     end
   end
 end

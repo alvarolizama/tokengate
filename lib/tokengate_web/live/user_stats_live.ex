@@ -20,6 +20,7 @@ defmodule TokengateWeb.UserStatsLive do
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
   alias TokengateWeb.KpiHelpers
+  alias TokengateWeb.ServiceStatsBody
   alias TokengateWeb.StatsHelpers, as: Stats
 
   @page_size 50
@@ -27,34 +28,55 @@ defmodule TokengateWeb.UserStatsLive do
 
   @impl true
   def mount(%{"user_id" => user_id}, _session, socket) do
-    user = Accounts.get_user!(user_id)
-    memberships = Accounts.list_group_members_for_user(user.id)
+    case fetch_user(user_id) do
+      nil ->
+        # A forged/non-UUID/stale id must not raise `CastError`/`NoResultsError`
+        # inside mount (that kills the LiveView before it renders anything).
+        {:ok,
+         socket
+         |> put_flash(:error, gettext("That user does not exist."))
+         |> push_navigate(to: ~p"/stats/users")}
 
-    if connected?(socket) do
-      Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
+      user ->
+        memberships = Accounts.list_group_members_for_user(user.id)
+
+        if connected?(socket) do
+          Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
+        end
+
+        socket =
+          socket
+          |> assign(:page_title, gettext("Stats") <> " · #{user.email} · Tokengate")
+          |> assign(:user, user)
+          |> assign(:memberships, memberships)
+          |> assign(:timezone, socket.assigns[:timezone] || "Etc/UTC")
+          |> assign(:is_admin, socket.assigns[:current_user].global_role == "admin")
+          |> assign(:filters, default_filters())
+          |> assign(:form, to_form(default_filters(), as: :filter))
+          |> assign(:cursor, nil)
+          |> assign(:has_more, false)
+          |> assign(:page_size, @page_size)
+          |> assign(:summary_5d, default_summary())
+          |> assign(:summary_30d, default_summary())
+          |> assign(:summary_refresh_scheduled, false)
+          |> require_admin_hook()
+          |> load_summary()
+          |> load_logs(:reset)
+
+        {:ok, socket}
     end
-
-    socket =
-      socket
-      |> assign(:page_title, gettext("Stats") <> " · #{user.email} · Tokengate")
-      |> assign(:user, user)
-      |> assign(:memberships, memberships)
-      |> assign(:timezone, socket.assigns[:timezone] || "Etc/UTC")
-      |> assign(:is_admin, socket.assigns[:current_user].global_role == "admin")
-      |> assign(:filters, default_filters())
-      |> assign(:form, to_form(default_filters(), as: :filter))
-      |> assign(:cursor, nil)
-      |> assign(:has_more, false)
-      |> assign(:page_size, @page_size)
-      |> assign(:summary_5d, default_summary())
-      |> assign(:summary_30d, default_summary())
-      |> assign(:summary_refresh_scheduled, false)
-      |> require_admin_hook()
-      |> load_summary()
-      |> load_logs(:reset)
-
-    {:ok, socket}
   end
+
+  # `user_id` comes from the URL: cast it before it reaches Ecto, and read with
+  # the non-bang getter.
+  defp fetch_user(user_id) when is_binary(user_id) do
+    case Ecto.UUID.cast(user_id) do
+      {:ok, uuid} -> Accounts.get_user(uuid)
+      :error -> nil
+    end
+  end
+
+  defp fetch_user(_user_id), do: nil
 
   defp require_admin_hook(socket) do
     attach_hook(socket, :require_admin, :handle_event, fn _event, _params, socket ->
@@ -113,10 +135,13 @@ defmodule TokengateWeb.UserStatsLive do
 
   @impl true
   def handle_event("filter", params, socket) do
+    # A forged payload without the nested map (or with a non-map) must not
+    # raise: fall back to the defaults.
     filter_params =
-      params
-      |> Map.get("filter", %{})
-      |> then(&Map.merge(default_filters(), &1))
+      case Map.get(params, "filter") do
+        %{} = given -> Map.merge(default_filters(), given)
+        _ -> default_filters()
+      end
 
     socket =
       socket
@@ -135,6 +160,8 @@ defmodule TokengateWeb.UserStatsLive do
       {:noreply, socket}
     end
   end
+
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   ## Data loading ---------------------------------------------------------
 
@@ -166,11 +193,16 @@ defmodule TokengateWeb.UserStatsLive do
   end
 
   defp load_logs(socket, mode) do
-    # Filtrado por usuario (identidad durable): los logs post-rotación
-    # también aparecen.
+    # Filtered by user (durable identity): post-rotation logs show up too.
+    #
+    # "Desde"/"Hasta" arrive from the form as ISO dates: they are converted to
+    # the UTC datetimes `Logs.list_logs/1` expects (a value that does not parse
+    # is DROPPED — the filter is ignored) — the raw string used to reach Ecto
+    # and the CastError killed the socket.
     base_filters =
       socket.assigns.filters
       |> Map.put("user_ids", [socket.assigns.user.id])
+      |> ServiceStatsBody.parse_date_filters(socket.assigns.timezone)
       |> drop_empty_filters()
 
     logs =

@@ -30,6 +30,11 @@ defmodule TokengateWeb.NotificationsLiveTest do
 
   setup do
     Notifications.clear_throttle()
+    # Settings are a global singleton cached in ETS/Agent, so a token stored by
+    # one test would leak into the next (the DB sandbox rolls back, the cache
+    # does not).
+    Notifications.update_settings(%{"enabled_events" => %{}, "bot_username" => nil})
+    Notifications.clear_token()
     :ok
   end
 
@@ -80,5 +85,34 @@ defmodule TokengateWeb.NotificationsLiveTest do
 
     assert [link] = Notifications.list_links()
     assert link.thread_id == "15"
+  end
+
+  test "submitting an empty token keeps the stored one (F9/P9)", %{conn: conn} do
+    {:ok, _settings} = Notifications.put_token("123456:STORED-TOKEN")
+
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/operations/notifications")
+
+    assert has_element?(view, "#notifications-bot-card", "Stored token set")
+
+    # The input is never prefilled, so an empty submit must be a no-op — it
+    # used to clear the stored token.
+    view
+    |> form("#notifications-token-form", %{"token" => %{"bot_token" => "   "}})
+    |> render_submit()
+
+    settings = Notifications.get_settings()
+    refute is_nil(settings.bot_token)
+
+    assert {:ok, "123456:STORED-TOKEN"} =
+             Tokengate.Notifications.SecretBox.decrypt(settings.bot_token)
+
+    # The badge still says the stored token is there.
+    assert has_element?(view, "#notifications-bot-card", "Stored token set")
+
+    # Clearing has its own explicit button and still works.
+    view |> element("#clear-token-btn") |> render_click()
+
+    assert is_nil(Notifications.get_settings().bot_token)
+    refute has_element?(view, "#clear-token-btn")
   end
 end
