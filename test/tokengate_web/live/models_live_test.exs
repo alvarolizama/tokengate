@@ -1899,6 +1899,28 @@ defmodule TokengateWeb.ModelsLiveTest do
     end
   end
 
+  # El resultado del listado del wizard llega por MENSAJE (Task + handle_info),
+  # así que el render que devuelve el click no lo garantiza: se espera al
+  # re-render, con techo. Sin esto el assert depende del scheduling de la Task.
+  defp eventually(fun, timeout \\ 2_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_eventually(fun, deadline)
+  end
+
+  defp do_eventually(fun, deadline) do
+    cond do
+      fun.() ->
+        true
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        false
+
+      true ->
+        Process.sleep(20)
+        do_eventually(fun, deadline)
+    end
+  end
+
   # -- Marca del modelo (lab + icono) ---------------------------------------
 
   describe "marca del modelo" do
@@ -2408,7 +2430,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     # El listado falla: el motivo se ve, y NO se dice que el proveedor no
     # publica nada (manda a teclear un id que sí existe).
-    assert has_element?(view, "#wizard-models-error")
+    assert eventually(fn -> has_element?(view, "#wizard-models-error") end)
     refute has_element?(view, "#wizard-models-empty")
     # La semilla curada del tipo sigue ofreciéndose mientras tanto.
     assert has_element?(view, "#wizard-model-#{ModelsLive.dom_key("openai/gpt-image-2")}")

@@ -157,9 +157,10 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  # Una fila por modelo y, cuando el modelo ABRE sección, una fila separadora
-  # justo antes: el stream es una lista plana y cada item es UN elemento del DOM,
-  # así que la sección viaja como item propio (`kind: :section`).
+  # Una fila por modelo: el stream lleva SÓLO modelos (el `.table` dibuja un
+  # `<tr>` por item y no sabe de filas separadoras). La etiqueta de la sección
+  # viaja en `@model_sections` (model.id → meta) y la pinta la primera celda del
+  # modelo que abre el grupo.
   defp load_models(socket) do
     models =
       aliases_with_providers_query()
@@ -169,37 +170,19 @@ defmodule TokengateWeb.ModelsLive do
       # luego cada tipo en orden canónico, alfabético dentro del grupo.
       |> Enum.sort_by(&{not &1.pinned, type_rank(&1.model_type), String.downcase(&1.name)})
 
-    headers = model_group_headers(models)
-
-    items =
-      Enum.flat_map(models, fn model ->
-        case Map.get(headers, model.id) do
-          nil -> [model]
-          meta -> [section_item(meta), model]
-        end
-      end)
-
     socket
-    |> stream(:models, items, reset: true, dom_id: & &1.id)
+    |> stream(:models, models, reset: true, dom_id: & &1.id)
+    |> assign(:model_sections, model_group_headers(models))
     |> assign(:models_empty?, models == [])
-  end
-
-  defp section_item(meta) do
-    %{
-      id: "model-section-#{meta.type}",
-      kind: :section,
-      label: meta.label,
-      icon: meta.icon,
-      count: meta.count
-    }
   end
 
   # -- Agrupación del listado por tipo ---------------------------------------
   #
-  # El stream es UNA lista plana (phx-update="stream" sólo gestiona children
-  # con stream id), así que la agrupación visual viaja DENTRO del primer item
-  # de cada sección: `model_group_headers/1` marca qué modelo abre sección y
-  # qué etiqueta lleva el separador. No hay filtro: el listado sigue completo.
+  # El stream es UNA lista plana de modelos y `.table` dibuja un `<tr>` por
+  # item (sin filas separadoras ni colspan), así que la agrupación visual viaja
+  # como `model.id → meta`: la primera celda del modelo que abre sección pinta
+  # la etiqueta del grupo con su conteo. No hay filtro: el listado sigue
+  # completo.
 
   # Orden canónico de tipos = el del picker de alta (`model_type_choices/0`),
   # crudo porque un atributo de módulo no puede evaluar gettext.
@@ -1338,184 +1321,160 @@ defmodule TokengateWeb.ModelsLive do
 
         <%!-- Una fila por modelo. Las API keys que lo sirven viven en su propia
              página (/catalog/models/:id): aquí sólo se cuentan. El estado vacío
-             va FUERA del contenedor del stream — phx-update="stream" sólo
-             gestiona hijos con stream id. --%>
-        <div
-          :if={@models_empty?}
-          id="models-empty"
-          class="text-center py-12 text-base-content/40"
-        >
-          <.icon name="hero-cpu-chip" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-          <p>{empty_state_message()}</p>
-        </div>
-
-        <div
-          :if={not @models_empty?}
-          class="card bg-base-100 border border-base-300 shadow-sm overflow-x-auto"
-        >
-          <table class="table table-sm" id="models-table">
-            <thead>
-              <tr>
-                <th>{gettext("Model")}</th>
-                <th>{gettext("Type")}</th>
-                <th>{gettext("Keys")}</th>
-                <th>{gettext("Providers")}</th>
-                <th>{gettext("Price")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="models" phx-update="stream">
-              <%= for {id, item} <- @streams.models do %>
-                <%= if Map.get(item, :kind) == :section do %>
-                  <tr id={id}>
-                    <td colspan="6" class="py-1.5">
-                      <div class="flex items-center gap-2">
-                        <.icon name={item.icon} class="w-3.5 h-3.5 text-base-content/40" />
-                        <span class="text-[11px] font-semibold uppercase tracking-wider text-base-content/40">
-                          {item.label}
-                        </span>
-                        <span class="badge badge-xs badge-ghost">{item.count}</span>
-                      </div>
-                    </td>
-                  </tr>
-                <% else %>
-                  <% model = item %>
-                  <tr id={id}>
-                    <td>
-                      <div class="flex items-center gap-2">
-                        <.mark_badge
-                          mark={Model.mark(model, @labs_by_key)}
-                          id={"model-mark-#{model.id}"}
-                        />
-                        <div class="min-w-0">
-                          <.link
-                            navigate={~p"/catalog/models/#{model.id}"}
-                            class="font-medium link link-hover truncate block"
-                            id={"model-link-#{model.id}"}
-                          >
-                            {model.name}
-                          </.link>
-                          <span class="text-[11px] text-base-content/40">
-                            {format_compact(model.context_window)} ctx
-                          </span>
-                        </div>
-                        <span
-                          :if={model.pinned}
-                          class="text-warning shrink-0"
-                          id={"model-pinned-#{model.id}"}
-                          title={gettext("Pinned")}
-                        >
-                          <.icon name="hero-star-solid" class="w-3 h-3" />
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="flex flex-col gap-0.5">
-                        <span
-                          id={"model-badge-#{model.id}"}
-                          class="badge badge-sm badge-outline badge-info w-fit"
-                        >
-                          {model.model_type}
-                        </span>
-                        <span
-                          :if={endpoint = type_endpoint(model.model_type)}
-                          id={"model-endpoint-#{model.id}"}
-                          class="font-mono text-[10px] text-base-content/40 whitespace-nowrap"
-                          title={gettext("Endpoint that serves this model type")}
-                        >
-                          {endpoint}
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <.link
-                        navigate={~p"/catalog/models/#{model.id}"}
-                        class="link link-hover whitespace-nowrap inline-flex items-center gap-1"
-                        id={"model-keys-#{model.id}"}
-                        title={gettext("Manage the API keys that serve this model")}
-                      >
-                        <.icon name="hero-key" class="w-3 h-3" /> {lane_count(model)}
-                      </.link>
-                    </td>
-                    <td>
-                      <span class="badge badge-ghost badge-sm">{lane_provider_count(model)}</span>
-                    </td>
-                    <td>
-                      <%= case price_summary(model) do %>
-                        <% nil -> %>
-                          <span class="text-base-content/30">—</span>
-                        <% :mixed -> %>
-                          <span class="text-[11px] text-base-content/40">
-                            {gettext("mixed units")}
-                          </span>
-                        <% {unit, amount} -> %>
-                          <span class="text-sm whitespace-nowrap" title={Pricing.label(unit)}>
-                            ${fmt_price(amount)}
-                            <span class="text-[10px] text-base-content/40">
-                              /{Pricing.rate_suffix(unit)}
-                            </span>
-                          </span>
-                      <% end %>
-                    </td>
-                    <td class="text-right whitespace-nowrap">
-                      <div class="flex items-center justify-end gap-0.5">
-                        <%= if @is_admin do %>
-                          <button
-                            phx-click="toggle_pin"
-                            phx-value-id={model.id}
-                            class="btn btn-sm btn-ghost px-2"
-                            id={"pin-model-#{model.id}"}
-                            title={if model.pinned, do: gettext("Unpin"), else: gettext("Pin to top")}
-                            aria-label={
-                              if model.pinned,
-                                do: gettext("Unpin"),
-                                else: gettext("Pin to top")
-                            }
-                          >
-                            <.icon
-                              name={if model.pinned, do: "hero-star-solid", else: "hero-star"}
-                              class={["w-4 h-4", model.pinned && "text-warning"]}
-                            />
-                          </button>
-                          <button
-                            phx-click="edit_guard_rails"
-                            phx-value-id={model.id}
-                            class="btn btn-sm btn-ghost px-2"
-                            id={"guard-rails-#{model.id}"}
-                            title={gettext("Guard Rails")}
-                            aria-label={gettext("Guard Rails")}
-                          >
-                            <.icon name="hero-shield-check" class="w-4 h-4" />
-                          </button>
-                          <button
-                            phx-click="edit_model"
-                            phx-value-id={model.id}
-                            class="btn btn-sm btn-ghost px-2"
-                            id={"edit-model-#{model.id}"}
-                            title={gettext("Edit")}
-                            aria-label={gettext("Edit")}
-                          >
-                            <.icon name="hero-pencil-square" class="w-4 h-4" />
-                          </button>
-                          <button
-                            phx-click="delete_model"
-                            phx-value-id={model.id}
-                            data-confirm={gettext("Delete this model? This action cannot be undone.")}
-                            class="btn btn-sm btn-ghost px-2 text-error"
-                            id={"delete-model-#{model.id}"}
-                            title={gettext("Delete")}
-                            aria-label={gettext("Delete")}
-                          >
-                            <.icon name="hero-trash" class="w-4 h-4" />
-                          </button>
-                        <% end %>
-                      </div>
-                    </td>
-                  </tr>
-                <% end %>
+             lo pinta `.table` (`:empty`): con stream no puede inferirlo, así que
+             llega en `empty?`. La etiqueta de sección viaja en la primera celda
+             del modelo que abre el grupo (`@model_sections`). --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm overflow-x-auto">
+          <.table
+            id="models"
+            rows={@streams.models}
+            row_item={fn {_id, model} -> model end}
+            row_class="align-top"
+            empty?={@models_empty?}
+          >
+            <:col :let={model} label={gettext("Model")}>
+              <div
+                :if={section = Map.get(@model_sections, model.id)}
+                id={"model-section-#{section.type}"}
+                class="flex items-center gap-1.5 mb-1.5"
+              >
+                <.icon name={section.icon} class="w-3.5 h-3.5 text-base-content/40" />
+                <span class="text-[11px] font-semibold uppercase tracking-wider text-base-content/40">
+                  {section.label}
+                </span>
+                <span class="badge badge-xs badge-ghost">{section.count}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <.mark_badge
+                  mark={Model.mark(model, @labs_by_key)}
+                  id={"model-mark-#{model.id}"}
+                />
+                <div class="min-w-0">
+                  <.link
+                    navigate={~p"/catalog/models/#{model.id}"}
+                    class="font-medium link link-hover truncate block"
+                    id={"model-link-#{model.id}"}
+                  >
+                    {model.name}
+                  </.link>
+                  <span class="text-[11px] text-base-content/40">
+                    {format_compact(model.context_window)} ctx
+                  </span>
+                </div>
+                <span
+                  :if={model.pinned}
+                  class="text-warning shrink-0"
+                  id={"model-pinned-#{model.id}"}
+                  title={gettext("Pinned")}
+                >
+                  <.icon name="hero-star-solid" class="w-3 h-3" />
+                </span>
+              </div>
+            </:col>
+            <:col :let={model} label={gettext("Type")}>
+              <div class="flex flex-col gap-0.5">
+                <span
+                  id={"model-badge-#{model.id}"}
+                  class="badge badge-sm badge-outline badge-info w-fit"
+                >
+                  {model.model_type}
+                </span>
+                <span
+                  :if={endpoint = type_endpoint(model.model_type)}
+                  id={"model-endpoint-#{model.id}"}
+                  class="font-mono text-[10px] text-base-content/40 whitespace-nowrap"
+                  title={gettext("Endpoint that serves this model type")}
+                >
+                  {endpoint}
+                </span>
+              </div>
+            </:col>
+            <:col
+              :let={model}
+              label={gettext("Keys")}
+              align="right"
+              tooltip={gettext("Manage the API keys that serve this model")}
+            >
+              <.link
+                navigate={~p"/catalog/models/#{model.id}"}
+                class="link link-hover whitespace-nowrap inline-flex items-center gap-1"
+                id={"model-keys-#{model.id}"}
+                title={gettext("Manage the API keys that serve this model")}
+              >
+                <.icon name="hero-key" class="w-3 h-3" /> {lane_count(model)}
+              </.link>
+            </:col>
+            <:col :let={model} label={gettext("Providers")} align="right">
+              <span class="badge badge-ghost badge-sm">{lane_provider_count(model)}</span>
+            </:col>
+            <:col :let={model} label={gettext("Price")} align="right">
+              <%= case price_summary(model) do %>
+                <% nil -> %>
+                  <span class="text-base-content/30">—</span>
+                <% :mixed -> %>
+                  <span class="text-[11px] text-base-content/40">
+                    {gettext("mixed units")}
+                  </span>
+                <% {unit, amount} -> %>
+                  <span class="text-sm whitespace-nowrap" title={Pricing.label(unit)}>
+                    ${fmt_price(amount)}
+                    <span class="text-[10px] text-base-content/40">
+                      /{Pricing.rate_suffix(unit)}
+                    </span>
+                  </span>
               <% end %>
-            </tbody>
-          </table>
+            </:col>
+            <:action :let={model} :if={@is_admin}>
+              <button
+                phx-click="toggle_pin"
+                phx-value-id={model.id}
+                class="btn btn-xs btn-ghost"
+                id={"pin-model-#{model.id}"}
+                title={if model.pinned, do: gettext("Unpin"), else: gettext("Pin to top")}
+                aria-label={if model.pinned, do: gettext("Unpin"), else: gettext("Pin to top")}
+              >
+                <.icon
+                  name={if model.pinned, do: "hero-star-solid", else: "hero-star"}
+                  class={["w-3.5 h-3.5", model.pinned && "text-warning"]}
+                />
+              </button>
+              <button
+                phx-click="edit_guard_rails"
+                phx-value-id={model.id}
+                class="btn btn-xs btn-ghost"
+                id={"guard-rails-#{model.id}"}
+                title={gettext("Guard Rails")}
+                aria-label={gettext("Guard Rails")}
+              >
+                <.icon name="hero-shield-check" class="w-3.5 h-3.5" />
+              </button>
+              <button
+                phx-click="edit_model"
+                phx-value-id={model.id}
+                class="btn btn-xs btn-ghost"
+                id={"edit-model-#{model.id}"}
+                title={gettext("Edit")}
+                aria-label={gettext("Edit")}
+              >
+                <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
+              </button>
+              <button
+                phx-click="delete_model"
+                phx-value-id={model.id}
+                data-confirm={gettext("Delete this model? This action cannot be undone.")}
+                class="btn btn-xs btn-ghost text-error"
+                id={"delete-model-#{model.id}"}
+                title={gettext("Delete")}
+                aria-label={gettext("Delete")}
+              >
+                <.icon name="hero-trash" class="w-3.5 h-3.5" />
+              </button>
+            </:action>
+            <:empty>
+              <.icon name="hero-cpu-chip" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+              <p>{empty_state_message()}</p>
+            </:empty>
+          </.table>
         </div>
 
         <%!-- Paso 0: selector de tipo. Un modelo nuevo se elige AQUÍ, no en el

@@ -175,7 +175,28 @@ defmodule TokengateWeb.ModelProvidersLive do
       )
       |> Repo.all()
 
-    assign(socket, :model_providers, lanes)
+    socket
+    |> assign(:model_providers, lanes)
+    |> assign(:lane_scope_headers, lane_scope_headers(lanes))
+  end
+
+  # Rótulo del bloque de scope (global → perfil de límites → usuario). `.table`
+  # dibuja un `<tr>` por lane y no tiene filas separadoras ni colspan, así que
+  # la etiqueta viaja en la PRIMERA celda del primer lane de cada grupo. El
+  # grupo global no lleva rótulo (`scope_group_label/1` devuelve nil).
+  defp lane_scope_headers(lanes) do
+    {_prev, headers} =
+      Enum.reduce(lanes, {nil, %{}}, fn ap, {prev, acc} ->
+        group = scope_group(ap)
+
+        cond do
+          is_nil(scope_group_label(group)) -> {group, acc}
+          group == prev -> {group, acc}
+          true -> {group, Map.put(acc, ap.id, scope_group_label(group))}
+        end
+      end)
+
+    headers
   end
 
   defp open_new_lane(socket) do
@@ -2389,216 +2410,85 @@ defmodule TokengateWeb.ModelProvidersLive do
           <p class="text-sm whitespace-pre-line">{@model.guard_rails}</p>
         </div>
 
-        <div
-          :if={Enum.empty?(@model_providers)}
-          id="lanes-empty"
-          class="text-center py-12 text-base-content/40"
-        >
-          <.icon name="hero-key" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-          <p>{gettext("No API key assigned: nothing can route to it.")}</p>
-        </div>
-
-        <div
-          :if={not Enum.empty?(@model_providers)}
-          class="card bg-base-100 border border-base-300 shadow-sm"
-        >
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body p-4">
             <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
               {gettext("Served by (API keys)")}
             </h4>
             <div class="overflow-x-auto">
-              <table class="table table-sm table-fixed w-full" id="lanes-table">
-                <thead>
-                  <tr>
-                    <th :if={@is_admin} class="w-8" title={gettext("Drag to reorder priority")}></th>
-                    <%!-- Para un admin la fila se identifica por su KEY (lo que
-                               sirve al modelo); sin permiso para ver keys, por el
-                               proveedor que las posee. --%>
-                    <th>
-                      {if @is_admin, do: gettext("API key"), else: gettext("Provider")}
-                    </th>
-                    <th>{gettext("Model")}</th>
-                    <th>{gettext("Priority")}</th>
-                    <th>{gettext("Scope")}</th>
-                    <th>{gettext("Status")}</th>
-                    <%= if @is_admin do %>
-                      <th>{gettext("Actions")}</th>
-                    <% end %>
-                  </tr>
-                </thead>
-                <tbody
-                  id={"ap-sortable-#{@model.id}"}
-                  phx-hook="SortableProviders"
-                  data-model-id={@model.id}
+              <.table
+                id={"ap-sortable-#{@model.id}"}
+                rows={@model_providers}
+                row_id={fn ap -> "model-provider-#{ap.id}" end}
+                row_class="align-top"
+                empty?={Enum.empty?(@model_providers)}
+              >
+                <:col
+                  :let={ap}
+                  label={if @is_admin, do: gettext("API key"), else: gettext("Provider")}
                 >
-                  <% providers = @model_providers %>
-                  <% groups = Enum.map(providers, &scope_group/1) %>
-                  <% prev_groups = [nil | Enum.drop(groups, -1)] %>
-                  <%= for {ap, prev_group} <- Enum.zip(providers, prev_groups) do %>
-                    <% current_group = scope_group(ap) %>
-                    <%!-- Group separator: a divider line + subtitle row when
-                               the scope group changes (global → group → member). --%>
-                    <%= if current_group != prev_group && not is_nil(scope_group_label(current_group)) do %>
-                      <tr class="pointer-events-none border-t-2 border-base-300">
-                        <td
-                          colspan={if @is_admin, do: "7", else: "5"}
-                          class="py-1.5 text-xs font-semibold uppercase tracking-wide text-base-content/50"
-                        >
-                          {scope_group_label(current_group)}
-                        </td>
-                      </tr>
-                    <% end %>
-                    <tr
-                      id={"model-provider-#{ap.id}"}
-                      data-id={ap.id}
-                      draggable={to_string(@is_admin)}
-                      class={[@is_admin && "cursor-grab active:cursor-grabbing"]}
-                    >
-                      <td :if={@is_admin} class="w-8 text-base-content/30">
-                        <.icon name="hero-bars-3" class="w-4 h-4" />
-                      </td>
-                      <td class="font-medium">
-                        <%!-- Credential name and key suffix expose internal
-                                   topology — admins only. Non-admins see just the
-                                   provider name. --%>
-                        <%= cond do %>
-                          <% @is_admin && ap.pool -> %>
-                            <span class="inline-flex items-center gap-1 align-middle">
-                              <.icon
-                                name="hero-rectangle-stack"
-                                class="w-3.5 h-3.5 text-base-content/40 shrink-0"
-                              />
-                              <span class="text-xs font-semibold" id={"pool-name-#{ap.id}"}>
-                                {ap.pool.name}
-                              </span>
-                              <span
-                                class="badge badge-xs badge-info font-normal"
-                                id={"pool-member-count-#{ap.id}"}
-                                title={gettext("API keys in this pool: rotation per request")}
-                              >
-                                {pool_member_count(ap)} key(s)
-                              </span>
-                              <span
-                                class="badge badge-xs badge-outline font-normal"
-                                id={"ap-provider-#{ap.id}"}
-                                title={gettext("Provider that owns this API key")}
-                              >
-                                {provider_name(ap)}
-                              </span>
-                              <button
-                                type="button"
-                                phx-click="toggle_pool_members"
-                                phx-value-id={ap.id}
-                                class="btn btn-xs btn-ghost"
-                                id={"pool-members-toggle-#{ap.id}"}
-                                title={gettext("Show the API keys in this pool")}
-                              >
-                                <.icon
-                                  name={
-                                    if pool_expanded?(@expanded_pools, ap.id),
-                                      do: "hero-chevron-up",
-                                      else: "hero-chevron-down"
-                                  }
-                                  class="w-3 h-3"
-                                />
-                              </button>
-                            </span>
-                          <% @is_admin && ap.credential -> %>
-                            <span class="font-mono text-xs">
-                              {ap.credential.name || gettext("unnamed key")}
-                            </span>
-                            <span class="text-xs text-base-content/40 ml-1">
-                              {mask_key(ap.credential.api_key_encrypted)}
-                            </span>
-                            <%!-- Dueño de la key: la columna «API key» sola no
-                                     dice a qué proveedor pertenece la key que
-                                     sirve a este modelo. --%>
-                            <span
-                              class="badge badge-xs badge-outline font-normal ml-1"
-                              id={"ap-provider-#{ap.id}"}
-                              title={gettext("Provider that owns this API key")}
-                            >
-                              {provider_name(ap)}
-                            </span>
-                          <% true -> %>
-                            {provider_name(ap)}
-                        <% end %>
+                  <%!-- Rótulo del bloque de scope: `.table` no tiene filas
+                       separadoras, así que encabeza la fila que abre el grupo. --%>
+                  <p
+                    :if={group_label = Map.get(@lane_scope_headers, ap.id)}
+                    id={"lane-scope-#{ap.id}"}
+                    class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-base-content/50"
+                  >
+                    {group_label}
+                  </p>
 
+                  <%!-- Credential name and key suffix expose internal topology —
+                       admins only. Non-admins see just the provider name. --%>
+                  <%= cond do %>
+                    <% @is_admin && ap.pool -> %>
+                      <div class="flex flex-wrap items-center gap-1">
+                        <.icon
+                          name="hero-rectangle-stack"
+                          class="w-3.5 h-3.5 text-base-content/40 shrink-0"
+                        />
+                        <span class="text-xs font-semibold" id={"pool-name-#{ap.id}"}>
+                          {ap.pool.name}
+                        </span>
                         <span
-                          :if={service_tier_priority?(ap)}
-                          class="badge badge-xs badge-outline font-normal ml-1 badge-warning"
-                          title={gettext("Sends service_tier: priority — premium serving path.")}
+                          class="badge badge-xs badge-info font-normal"
+                          id={"pool-member-count-#{ap.id}"}
+                          title={gettext("API keys in this pool: rotation per request")}
                         >
-                          <.icon name="hero-bolt" class="w-3 h-3" />
-                          {gettext("Priority")}
+                          {pool_member_count(ap)} key(s)
                         </span>
-                      </td>
-                      <td><code class="text-sm">{ap.provider_model}</code></td>
-                      <td>
-                        <span class="badge badge-xs badge-ghost">{ap.priority || "—"}</span>
-                      </td>
-                      <td>
-                        <span class={["badge", "badge-sm", scope_badge(ap)]}>
-                          {scope_label(ap)}
-                        </span>
-                        <%= if ap.exclusive_to_group_member_id || ap.exclusive_to_group_id do %>
-                          <span class="text-xs text-base-content/40 ml-1">
-                            {scope_target_label(ap, assigns)}
-                          </span>
-                        <% end %>
-                      </td>
-                      <td>
                         <span
-                          class={["badge", "badge-sm", enabled_badge(provider_active?(ap))]}
-                          title={credential_status_label(ap)}
+                          class="badge badge-xs badge-outline font-normal"
+                          id={"ap-provider-#{ap.id}"}
+                          title={gettext("Provider that owns this API key")}
                         >
-                          {enabled_label(provider_active?(ap))}
+                          {provider_name(ap)}
                         </span>
-                      </td>
-                      <%= if @is_admin do %>
-                        <td>
-                          <div class="flex gap-1">
-                            <button
-                              phx-click="toggle_model_provider"
-                              phx-value-id={ap.id}
-                              class="btn btn-xs btn-ghost"
-                              id={"toggle-ap-#{ap.id}"}
-                              title={toggle_title(ap)}
-                            >
-                              <.icon
-                                name={if provider_active?(ap), do: "hero-pause", else: "hero-play"}
-                                class="w-3 h-3"
-                              />
-                            </button>
-                            <button
-                              phx-click="edit_model_provider"
-                              phx-value-id={ap.id}
-                              class="btn btn-xs btn-ghost"
-                              id={"edit-ap-#{ap.id}"}
-                            >
-                              <.icon name="hero-pencil-square" class="w-3 h-3" />
-                            </button>
-                            <button
-                              phx-click="delete_model_provider"
-                              phx-value-id={ap.id}
-                              data-confirm={gettext("Remove this provider from the model?")}
-                              class="btn btn-xs btn-ghost text-error"
-                              id={"delete-ap-#{ap.id}"}
-                            >
-                              <.icon name="hero-trash" class="w-3 h-3" />
-                            </button>
-                          </div>
-                        </td>
-                      <% end %>
-                    </tr>
-                    <%!-- Miembros del pool: el pool sólo aporta keys; la fila del
-                         lane conserva prioridad, provider_model y precio. --%>
-                    <tr
-                      :if={ap.pool && pool_expanded?(@expanded_pools, ap.id)}
-                      id={"pool-members-#{ap.id}"}
-                      class="bg-base-200/40"
-                    >
-                      <td colspan={if @is_admin, do: "7", else: "5"} class="p-3">
+                        <button
+                          type="button"
+                          phx-click="toggle_pool_members"
+                          phx-value-id={ap.id}
+                          class="btn btn-xs btn-ghost"
+                          id={"pool-members-toggle-#{ap.id}"}
+                          title={gettext("Show the API keys in this pool")}
+                        >
+                          <.icon
+                            name={
+                              if pool_expanded?(@expanded_pools, ap.id),
+                                do: "hero-chevron-up",
+                                else: "hero-chevron-down"
+                            }
+                            class="w-3 h-3"
+                          />
+                        </button>
+                      </div>
+
+                      <%!-- Miembros del pool: el pool sólo aporta keys; la fila
+                           conserva prioridad, provider_model y precio. --%>
+                      <div
+                        :if={pool_expanded?(@expanded_pools, ap.id)}
+                        id={"pool-members-#{ap.id}"}
+                        class="mt-2 rounded-lg border border-base-300 bg-base-200/40 p-3"
+                      >
                         <p class="text-xs font-semibold uppercase tracking-wide text-base-content/50 mb-2">
                           {gettext("API keys in this pool: rotation per request")}
                         </p>
@@ -2661,11 +2551,101 @@ defmodule TokengateWeb.ModelProvidersLive do
                             <.icon name="hero-plus" class="w-3 h-3" /> {gettext("Add")}
                           </button>
                         </form>
-                      </td>
-                    </tr>
+                      </div>
+                    <% @is_admin && ap.credential -> %>
+                      <div class="flex flex-wrap items-center gap-1">
+                        <span class="font-mono text-xs">
+                          {ap.credential.name || gettext("unnamed key")}
+                        </span>
+                        <span class="text-xs text-base-content/40">
+                          {mask_key(ap.credential.api_key_encrypted)}
+                        </span>
+                        <%!-- Dueño de la key: la columna «API key» sola no dice a
+                             qué proveedor pertenece la key que sirve a este modelo. --%>
+                        <span
+                          class="badge badge-xs badge-outline font-normal"
+                          id={"ap-provider-#{ap.id}"}
+                          title={gettext("Provider that owns this API key")}
+                        >
+                          {provider_name(ap)}
+                        </span>
+                      </div>
+                    <% true -> %>
+                      <span class="font-medium">{provider_name(ap)}</span>
                   <% end %>
-                </tbody>
-              </table>
+
+                  <span
+                    :if={service_tier_priority?(ap)}
+                    class="badge badge-xs badge-outline font-normal mt-1 badge-warning"
+                    title={gettext("Sends service_tier: priority — premium serving path.")}
+                  >
+                    <.icon name="hero-bolt" class="w-3 h-3" />
+                    {gettext("Priority")}
+                  </span>
+                </:col>
+                <:col :let={ap} label={gettext("Model")}>
+                  <code class="text-sm">{ap.provider_model}</code>
+                </:col>
+                <:col :let={ap} label={gettext("Priority")} align="right">
+                  <span class="badge badge-xs badge-ghost">{ap.priority || "—"}</span>
+                </:col>
+                <:col :let={ap} label={gettext("Scope")}>
+                  <span class={["badge", "badge-sm", scope_badge(ap)]}>
+                    {scope_label(ap)}
+                  </span>
+                  <span
+                    :if={ap.exclusive_to_group_member_id || ap.exclusive_to_group_id}
+                    class="text-xs text-base-content/40 ml-1"
+                  >
+                    {scope_target_label(ap, assigns)}
+                  </span>
+                </:col>
+                <:col :let={ap} label={gettext("Status")}>
+                  <span
+                    class={["badge", "badge-sm", enabled_badge(provider_active?(ap))]}
+                    title={credential_status_label(ap)}
+                  >
+                    {enabled_label(provider_active?(ap))}
+                  </span>
+                </:col>
+                <:action :let={ap} :if={@is_admin}>
+                  <button
+                    phx-click="toggle_model_provider"
+                    phx-value-id={ap.id}
+                    class="btn btn-xs btn-ghost"
+                    id={"toggle-ap-#{ap.id}"}
+                    title={toggle_title(ap)}
+                  >
+                    <.icon
+                      name={if provider_active?(ap), do: "hero-pause", else: "hero-play"}
+                      class="w-3 h-3"
+                    />
+                  </button>
+                  <button
+                    phx-click="edit_model_provider"
+                    phx-value-id={ap.id}
+                    class="btn btn-xs btn-ghost"
+                    id={"edit-ap-#{ap.id}"}
+                  >
+                    <.icon name="hero-pencil-square" class="w-3 h-3" />
+                  </button>
+                  <button
+                    phx-click="delete_model_provider"
+                    phx-value-id={ap.id}
+                    data-confirm={gettext("Remove this provider from the model?")}
+                    class="btn btn-xs btn-ghost text-error"
+                    id={"delete-ap-#{ap.id}"}
+                  >
+                    <.icon name="hero-trash" class="w-3 h-3" />
+                  </button>
+                </:action>
+                <:empty>
+                  <div id="lanes-empty">
+                    <.icon name="hero-key" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                    <p>{gettext("No API key assigned: nothing can route to it.")}</p>
+                  </div>
+                </:empty>
+              </.table>
             </div>
           </div>
         </div>

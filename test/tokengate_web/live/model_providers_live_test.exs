@@ -175,7 +175,8 @@ defmodule TokengateWeb.ModelProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
 
-    assert has_element?(view, "table#lanes-table")
+    assert has_element?(view, "table tbody#ap-sortable-#{model.id}")
+    assert has_element?(view, "table thead th", "Model")
     assert has_element?(view, "#model-provider-#{lane.id}")
     refute has_element?(view, "#model-provider-#{foreign.id}")
     refute has_element?(view, "#lanes-empty")
