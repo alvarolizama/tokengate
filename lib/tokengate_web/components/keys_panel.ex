@@ -11,6 +11,44 @@ defmodule TokengateWeb.KeysPanel do
 
   El botón de conteo de la tabla (`keys_badge/1`) también vive aquí para que
   ambas tablas lo rendericen igual y en la misma columna.
+
+  ## Contrato de eventos (W6/W7/W8)
+
+  El panel no escribe: emite eventos y el LiveView decide. Los eventos
+  obligatorios y el lifecycle que deben cablear:
+
+    * `@create_event` — `phx-submit` con `%{"key" => %{"label" => _}}`. El
+      LiveView crea la key y guarda el token en `new_token`.
+    * `@revoke_event` — `phx-click` con `phx-value-key-id`. **Revocar = emitir
+      una nueva y anular la anterior**: el handler llama
+      `Accounts.revoke_and_replace_api_key/1` y deja el token nuevo en
+      `new_token` (se muestra una sola vez aquí). No hay botón de "regenerar"
+      ni de "reactivar": ese es el ciclo de vida completo.
+    * `@dismiss_event` — oculta el token nuevo.
+    * `@sticky_event` — opcional; limpia el ruteo sticky del sujeto
+      (`phx-value-id` = `@subject_id`).
+    * `@rename_event` / `@cancel_rename_event` — **opt-in**: con
+      `@rename_event` presente, cada fila activa muestra un lápiz que abre el
+      form inline (payload `%{"key-id" => _, "key" => %{"label" => _}}`);
+      `@editing_key_id` marca la fila en edición. El handler debe llamar
+      `Accounts.rename_api_key/3` con el `:user_id`/`:service_id` del panel
+      (el contexto hace el chequeo de pertenencia y audita `api_key.rename`).
+    * `@hide_event` — **opt-in**: botón «Borrar» por fila (`phx-value-key-id`).
+      Borrar es **soft-hide**: el handler llama `Accounts.hide_api_key/1` (o
+      `delete_api_key/1`, que es el mismo camino) y recarga el panel. La fila
+      desaparece de todas las superficies y el histórico de `request_logs`
+      conserva su atribución.
+
+  `@reactivate_event` se conserva declarado sólo para los llamadores viejos
+  que todavía lo pasan: el panel **no** renderiza ningún control de
+  reactivación y el attr se ignora (W6/W7 lo quitan).
+
+  ## Nunca renderiza la clave
+
+  El panel no tiene acceso al token guardado: las filas muestran únicamente
+  `key_prefix` y la etiqueta. El único token que aparece es el recién emitido
+  (`@new_token`), que el LiveView pone en el assign al crear/revocar y limpia
+  con `@dismiss_event`.
   """
 
   use Phoenix.Component
@@ -45,16 +83,7 @@ defmodule TokengateWeb.KeysPanel do
   @doc """
   Cuerpo del panel de claves. Se renderiza dentro de un `<.modal>`.
 
-  Eventos esperados en el LiveView:
-    * `@create_event` — `phx-submit` del form con `%{"key" => %{"label" => _}}`.
-    * `@revoke_event` — `phx-click` con `phx-value-key-id`.
-    * `@dismiss_event` — oculta el token nuevo.
-    * `@sticky_event` — opcional; limpia el ruteo sticky del sujeto
-      (`phx-value-id` = `@subject_id`).
-    * `@rename_event` / `@cancel_rename_event` — opcionales; renombrar el
-      label de una key. Con `@rename_event` presente, cada fila activa muestra
-      un lápiz que abre el form inline (payload `%{"key-id" => _, "key" =>
-      %{"label" => _}}`); `@editing_key_id` marca la fila en edición.
+  Ver el moduledoc para el contrato de eventos y el ciclo de vida.
   """
   attr :subject_kind, :string, required: true, doc: ~s("user" | "service")
   attr :subject_id, :string, required: true
@@ -63,12 +92,17 @@ defmodule TokengateWeb.KeysPanel do
   attr :new_token, :string, default: nil
   attr :create_event, :string, required: true
   attr :revoke_event, :string, required: true
-  attr :reactivate_event, :string, default: nil
+
+  attr :reactivate_event, :string,
+    default: nil,
+    doc: "Deprecated and ignored: reactivating a token is not part of the lifecycle."
+
   attr :revoked_keys, :list, default: []
   attr :dismiss_event, :string, required: true
   attr :sticky_event, :string, default: nil
   attr :rename_event, :string, default: nil
   attr :cancel_rename_event, :string, default: nil
+  attr :hide_event, :string, default: nil
   attr :editing_key_id, :string, default: nil
   attr :empty_text, :string, default: "This subject has no active keys."
 
@@ -200,11 +234,30 @@ defmodule TokengateWeb.KeysPanel do
             phx-value-key-id={key.id}
             class="btn btn-xs btn-ghost text-error shrink-0"
             id={"revoke-key-#{key.id}"}
-            title={gettext("Revoke this key")}
-            aria-label={gettext("Revoke this key")}
-            data-confirm={gettext("Revoke this key? The token stops working.")}
+            title={gettext("Revocar esta clave")}
+            aria-label={gettext("Revocar esta clave")}
+            data-confirm={
+              gettext("¿Revocar esta clave? Se emite una nueva y este token deja de funcionar.")
+            }
           >
-            {gettext("Revoke")}
+            {gettext("Revocar")}
+          </button>
+          <button
+            :if={@hide_event}
+            type="button"
+            phx-click={@hide_event}
+            phx-value-key-id={key.id}
+            class="btn btn-xs btn-ghost shrink-0"
+            id={"hide-key-#{key.id}"}
+            title={gettext("Borrar esta clave")}
+            aria-label={gettext("Borrar esta clave")}
+            data-confirm={
+              gettext(
+                "¿Borrar esta clave? Desaparece de los listados y su token deja de funcionar; el consumo histórico se conserva."
+              )
+            }
+          >
+            {gettext("Borrar")}
           </button>
         </div>
       </div>
@@ -213,8 +266,9 @@ defmodule TokengateWeb.KeysPanel do
       </p>
     </div>
 
-    <%!-- Revocadas: siguen existiendo (revocar solo cambia el status) y el
-         admin puede reactivarlas. La lista de arriba solo trae las activas. --%>
+    <%!-- Revocadas: la fila sigue existiendo (revocar no la borra) para que el
+         histórico y el consumo sigan atribuidos. Es sólo lectura: no hay
+         reactivación — el lifecycle emite una nueva. --%>
     <div :if={@revoked_keys != []} class="space-y-2 mb-4" id="revoked-keys">
       <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
         {gettext("Revoked keys")}
@@ -233,19 +287,6 @@ defmodule TokengateWeb.KeysPanel do
           </div>
           <div class="text-xs font-mono text-base-content/40">{key.key_prefix}••••</div>
         </div>
-        <button
-          :if={@reactivate_event}
-          type="button"
-          phx-click={@reactivate_event}
-          phx-value-key-id={key.id}
-          class="btn btn-xs btn-ghost text-success shrink-0"
-          id={"reactivate-key-#{key.id}"}
-          title={gettext("Reactivate this key")}
-          aria-label={gettext("Reactivate this key")}
-          data-confirm={gettext("Reactivate this key? The token works again.")}
-        >
-          {gettext("Reactivate")}
-        </button>
       </div>
     </div>
 

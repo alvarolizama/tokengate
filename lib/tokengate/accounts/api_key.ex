@@ -3,7 +3,22 @@ defmodule Tokengate.Accounts.ApiKey do
   API key unificada. `subject_type` distingue el dueño:
   `"member"` — key de un GroupMember (usuario en un perfil de límites);
   `"service"` — key de un Service.
+
+  ## Lifecycle
+
+    * **revocar** = emitir una key nueva y anular la anterior: la fila vieja
+      queda con `status: "revoked"` (su hash sigue siendo el token presentado,
+      así que el token muere) y la nueva fila nace `active` con hash nuevo.
+      Las dos escrituras viven en una transacción (`Accounts.revoke_and_replace_api_key/1`).
+    * **borrar** = soft-hide: `hidden_at` marca la fila como invisible en TODAS
+      las superficies (listados del contexto, paneles, `spend_by_api_key/2`)
+      sin borrarla, porque `request_logs.api_key_id` no tiene FK hacia esta
+      tabla y la atribución histórica debe sobrevivir.
+
+  `hidden_at` se setea programáticamente (nunca por `cast/3`: un form no puede
+  resucitar ni ocultar filas).
   """
+
   use Ecto.Schema
 
   import Ecto.Changeset
@@ -22,6 +37,7 @@ defmodule Tokengate.Accounts.ApiKey do
     field :key_hash, :string
     field :key_prefix, :string
     field :status, :string, default: "active"
+    field :hidden_at, :utc_datetime
 
     timestamps(type: :utc_datetime)
   end
@@ -42,6 +58,27 @@ defmodule Tokengate.Accounts.ApiKey do
     |> unique_constraint(:key_hash)
     |> assoc_constraint(:group_member)
     |> assoc_constraint(:service)
+    # `api_keys.user_id` es CASCADE (structure.sql): borrar un usuario arrastra
+    # sus keys. Declararlo convierte una violación en changeset (flash) en vez
+    # de Ecto.ConstraintError.
+    |> assoc_constraint(:user)
+  end
+
+  @doc """
+  Soft-hide changeset: marks the key as deleted without removing the row.
+
+  Sets `hidden_at` and revokes the key in the same write — a hidden key must
+  never authenticate again. Both fields are set programmatically (they are not
+  castable), so this is the only path that hides a key.
+  """
+  @spec hide_changeset(t()) :: Ecto.Changeset.t()
+  def hide_changeset(%__MODULE__{} = api_key, hidden_at \\ nil) do
+    hidden_at = hidden_at || DateTime.utc_now() |> DateTime.truncate(:second)
+
+    api_key
+    |> change()
+    |> put_change(:hidden_at, hidden_at)
+    |> put_change(:status, "revoked")
   end
 
   # Exactamente un subject seteado y consistente con subject_type.

@@ -103,24 +103,34 @@ defmodule Tokengate.Accounts.ApiKeysPerSubjectTest do
       assert labels == ["ci", "laptop", "server"]
     end
 
-    test "revocar una key no afecta a las otras" do
+    test "revocar una key emite una nueva y no afecta a las otras" do
       user = user_fixture()
+      group = group_fixture()
+      _member = member_fixture(user, group)
       {k1, t1} = create_key_for(user, "revocar")
       {_k2, t2} = create_key_for(user, "seguir-1")
       {_k3, t3} = create_key_for(user, "seguir-2")
 
-      assert {:ok, revoked} = Accounts.revoke_api_key(k1)
-      assert revoked.status == "revoked"
+      # Revocar = emitir una nueva y anular la anterior (misma semántica que
+      # servicios): el token viejo muere y el nuevo nace activo con la etiqueta.
+      assert {:ok, nueva, t_nueva} = Accounts.revoke_and_replace_api_key(k1)
+      assert nueva.id != k1.id
+      assert nueva.label == "revocar"
 
       # La revocada ya no resuelve…
       assert {:error, :not_found} = Accounts.get_group_member_by_api_key(t1)
 
       # …y las otras siguen vivas.
       activas = Accounts.list_api_keys_for_user(user.id)
-      assert length(activas) == 2
-      refute k1.id in Enum.map(activas, & &1.id)
+      ids = Enum.map(activas, & &1.id)
+      assert length(activas) == 3
+      refute k1.id in ids
+      assert nueva.id in ids
 
-      _ = {t2, t3}
+      # El token nuevo autentica y los ajenos no se tocaron.
+      assert {:ok, _} = Accounts.get_group_member_by_api_key(t_nueva)
+      assert {:ok, _} = Accounts.get_group_member_by_api_key(t2)
+      assert {:ok, _} = Accounts.get_group_member_by_api_key(t3)
     end
 
     test "un servicio también puede tener N keys activas con label" do
@@ -242,6 +252,40 @@ defmodule Tokengate.Accounts.ApiKeysPerSubjectTest do
       desde = DateTime.add(now, -60, :second)
 
       assert Accounts.spend_by_api_key([k1.id], desde) == %{}
+    end
+
+    test "una key con soft-hide no aparece en el mapa y el log conserva la atribución" do
+      user = user_fixture()
+      group = group_fixture()
+      member = member_fixture(user, group)
+      {k1, _t1} = create_key_for(user, "se-oculta")
+
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          subject_type: "user",
+          model_requested: "m",
+          provider_cost_usd: "3.00",
+          api_key_id: k1.id,
+          api_key_prefix: k1.key_prefix
+        })
+
+      # Antes de borrar, el consumo se ve.
+      assert %{requests: 1} = Map.fetch!(Accounts.spend_by_api_key([k1.id]), k1.id)
+
+      assert {:ok, hidden} = Accounts.hide_api_key(k1)
+      refute is_nil(hidden.hidden_at)
+
+      # Borrar oculta la fila en TODAS las superficies, incluido el consumo…
+      assert Accounts.spend_by_api_key([k1.id]) == %{}
+
+      # …pero `request_logs` sigue apuntando a la key (no hay FK): la fila
+      # histórica no se toca.
+      assert Repo.aggregate(
+               from(rl in Tokengate.Logs.RequestLog, where: rl.api_key_id == ^k1.id),
+               :count,
+               :id
+             ) == 1
     end
   end
 

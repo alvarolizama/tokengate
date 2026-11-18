@@ -956,75 +956,241 @@ defmodule Tokengate.AccountsTest do
     end
   end
 
-  describe "reactivate_api_key/1" do
-    test "returns a revoked user key to active and lists it again" do
+  # Ciclo de vida del owner: revocar = emitir una nueva y anular la anterior;
+  # borrar = soft-hide (la fila sobrevive, invisible en todas las superficies).
+  # Reemplaza el describe viejo de `reactivate_api_key/1`: reactivar el token
+  # viejo ya no es parte del contrato (la función queda como shim deprecado
+  # sólo para las superficies viejas, y ninguna UI la ofrece).
+  describe "api key lifecycle (revoke = new key, delete = soft-hide)" do
+    test "revoke_and_replace_api_key/1 issues a new key and revokes the previous row" do
       user = user_fixture()
-      {:ok, key} = create_user_key(user, "laptop")
+      group = group_fixture()
+      {:ok, _member} = Accounts.create_group_member(valid_group_member_attrs(user, group))
+      {old_key, old_token} = user_key_with_token(user, "laptop")
 
-      assert {:ok, %ApiKey{status: "revoked"}} = Accounts.revoke_api_key(key)
-      assert Accounts.list_api_keys_for_user(user.id) == []
-      assert [%ApiKey{id: revoked_id}] = Accounts.list_api_keys_for_user_all(user.id)
-      assert revoked_id == key.id
+      assert {:ok, new_key, new_token} = Accounts.revoke_and_replace_api_key(old_key)
 
-      assert {:ok, %ApiKey{status: "active"}} = Accounts.reactivate_api_key(key)
+      assert new_key.id != old_key.id
+      assert new_key.status == "active"
+      assert new_key.label == "laptop"
+      assert new_key.user_id == user.id
+      assert new_key.key_hash == Accounts.hash_api_key(new_token)
+      assert new_token != old_token
 
-      assert Enum.map(Accounts.list_api_keys_for_user(user.id), & &1.id) == [key.id]
-      assert [%ApiKey{status: "active"}] = Accounts.list_api_keys_for_user_all(user.id)
+      # La fila vieja sobrevive, revocada y con su hash/prefijo intactos: es lo
+      # que sostiene la atribución histórica de request_logs.
+      reloaded = Accounts.get_api_key!(old_key.id)
+      assert reloaded.status == "revoked"
+      assert reloaded.key_hash == old_key.key_hash
+      assert reloaded.key_prefix == old_key.key_prefix
+      assert is_nil(reloaded.hidden_at)
+
+      # El token viejo muere; el nuevo autentica.
+      assert {:error, :not_found} = Accounts.get_group_member_by_api_key(old_token)
+      assert {:ok, resolved} = Accounts.get_group_member_by_api_key(new_token)
+      assert resolved.api_key.id == new_key.id
+
+      # Sólo la nueva queda activa para el panel.
+      assert Enum.map(Accounts.list_api_keys_for_user(user.id), & &1.id) == [new_key.id]
     end
 
-    test "returns a revoked service key to active and lists it again" do
+    test "revoke_and_replace_api_key/1 behaves the same for service keys" do
       service = service_fixture()
-      {:ok, key} = create_service_key(service, "batch")
+      {old_key, old_token} = service_key_with_token(service, "ingest")
 
-      assert {:ok, %ApiKey{status: "revoked"}} = Accounts.revoke_service_api_key(key)
-      assert Accounts.list_api_keys_for_service(service.id) == []
+      assert {:ok, new_key, new_token} = Accounts.revoke_and_replace_api_key(old_key)
 
-      assert {:ok, %ApiKey{status: "active"}} = Accounts.reactivate_api_key(key)
-      assert Enum.map(Accounts.list_api_keys_for_service(service.id), & &1.id) == [key.id]
+      assert new_key.subject_type == "service"
+      assert new_key.service_id == service.id
+      assert new_key.label == "ingest"
+
+      assert Accounts.get_service_by_api_key(old_token) == {:error, :not_found}
+      assert {:ok, resolved} = Accounts.get_service_by_api_key(new_token)
+      assert resolved.api_key.id == new_key.id
+
+      assert Accounts.get_api_key!(old_key.id).status == "revoked"
+      assert Enum.map(Accounts.list_api_keys_for_service(service.id), & &1.id) == [new_key.id]
     end
 
-    test "drops the cached auth entry by hash and by owner, so the token works again immediately" do
+    test "revoking an already revoked key does not mint a second replacement" do
       user = user_fixture()
-      {:ok, key} = create_user_key(user, "reactivar")
+      {key, _token} = user_key_with_token(user, "una-vez")
 
-      # Prime the auth cache with the entry the proxy would have stored.
-      Tokengate.Accounts.ApiKeyCache.fetch(key.key_hash, fn -> %{member: %{id: user.id}} end)
-      assert [_] = :ets.lookup(Tokengate.Accounts.ApiKeyCache.table(), key.key_hash)
+      assert {:ok, _new_key, _new_token} = Accounts.revoke_and_replace_api_key(key)
 
-      assert {:ok, _} = Accounts.revoke_api_key(key)
-      assert [] = :ets.lookup(Tokengate.Accounts.ApiKeyCache.table(), key.key_hash)
-
-      # Re-prime, then reactivate: the reactivation must drop it too, or the
-      # next request would keep serving the revoked entry until the TTL.
-      Tokengate.Accounts.ApiKeyCache.fetch(key.key_hash, fn -> %{member: %{id: user.id}} end)
-      assert [_] = :ets.lookup(Tokengate.Accounts.ApiKeyCache.table(), key.key_hash)
-
-      assert {:ok, _} = Accounts.reactivate_api_key(key)
-      assert [] = :ets.lookup(Tokengate.Accounts.ApiKeyCache.table(), key.key_hash)
+      assert {:error, :not_active} = Accounts.revoke_and_replace_api_key(key)
+      assert length(Accounts.list_api_keys_for_user(user.id)) == 1
     end
 
-    defp create_user_key(user, label) do
-      {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+    test "revoking a hidden key is not found (soft-hidden rows are gone for every path)" do
+      user = user_fixture()
+      {key, _token} = user_key_with_token(user, "oculta")
 
-      Accounts.create_api_key(%{
-        "subject_type" => "member",
-        "user_id" => user.id,
-        "key_hash" => key_hash,
-        "key_prefix" => key_prefix,
-        "label" => label
-      })
+      assert {:ok, hidden} = Accounts.hide_api_key(key)
+      refute is_nil(hidden.hidden_at)
+
+      assert {:error, :not_found} = Accounts.revoke_and_replace_api_key(key)
     end
 
-    defp create_service_key(service, label) do
+    test "hide_api_key/1 removes the row from every listing but keeps it in the DB" do
+      user = user_fixture()
+      {key, token} = user_key_with_token(user, "borrar")
+
+      assert {:ok, hidden} = Accounts.hide_api_key(key)
+
+      assert hidden.status == "revoked"
+      refute is_nil(hidden.hidden_at)
+
+      # Nada en las superficies…
+      assert Accounts.list_api_keys_for_user(user.id) == []
+      assert Accounts.list_api_keys_for_user_all(user.id) == []
+      assert Accounts.count_active_api_keys_by_user([user.id]) == %{}
+
+      # …pero la fila existe (atribución de request_logs, sin FK).
+      assert %ApiKey{id: id} = Accounts.get_api_key!(key.id)
+      assert id == key.id
+
+      # Y el token ya no autentica.
+      assert {:error, :not_found} = Accounts.get_group_member_by_api_key(token)
+    end
+
+    test "delete_api_key/1 is the same soft-hide path" do
+      service = service_fixture()
+      {key, token} = service_key_with_token(service, "borrar-servicio")
+
+      assert {:ok, deleted} = Accounts.delete_api_key(key)
+
+      refute is_nil(deleted.hidden_at)
+      assert Accounts.list_api_keys_for_service_all(service.id) == []
+      assert Accounts.list_api_keys_for_service(service.id) == []
+      assert Accounts.get_api_key(key.id).hidden_at == deleted.hidden_at
+      # Un servicio con su única clave oculta ya no autentica con ese token.
+      assert Accounts.get_service_by_api_key(token) == {:error, :not_found}
+    end
+
+    test "rename_api_key/3 renames and audits api_key.rename for a user key" do
+      user = user_fixture()
+      {key, _token} = user_key_with_token(user, "antes")
+
+      assert {:ok, renamed} = Accounts.rename_api_key(key, "  después  ", user_id: user.id)
+      assert renamed.label == "después"
+
+      assert [audit] =
+               Tokengate.Auditing.list_audit_logs(%{
+                 action: "api_key.rename",
+                 entity_id: key.id
+               })
+
+      assert audit.changes["old_label"] == "antes"
+      assert audit.changes["new_label"] == "después"
+      assert audit.entity_type == "api_key"
+    end
+
+    test "rename_api_key/3 enforces ownership of the panel subject" do
+      owner = user_fixture()
+      stranger = user_fixture()
+      {key, _token} = user_key_with_token(owner, "dueña")
+
+      assert {:error, :not_found} = Accounts.rename_api_key(key, "ajena", user_id: stranger.id)
+      assert Accounts.get_api_key!(key.id).label == "dueña"
+
+      # Un id de servicio sobre una key de usuario tampoco pasa.
+      assert {:error, :not_found} =
+               Accounts.rename_api_key(key, "ajena", service_id: Ecto.UUID.generate())
+    end
+
+    test "rename_api_key/3 validates the label and refuses hidden keys" do
+      user = user_fixture()
+      {key, _token} = user_key_with_token(user, "corta")
+
+      assert {:error, changeset} = Accounts.rename_api_key(key, String.duplicate("x", 65))
+      assert "should be at most 64 character(s)" in errors_on(changeset).label
+
+      {:ok, _hidden} = Accounts.hide_api_key(key)
+      assert {:error, :not_found} = Accounts.rename_api_key(key, "tarde")
+    end
+
+    test "ApiKey declares assoc_constraint(:user): a missing owner is a changeset, not a crash" do
       {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
 
-      Accounts.create_api_key(%{
-        "subject_type" => "service",
-        "service_id" => service.id,
-        "key_hash" => key_hash,
-        "key_prefix" => key_prefix,
-        "label" => label
-      })
+      assert {:error, changeset} =
+               Accounts.create_api_key(%{
+                 "subject_type" => "member",
+                 "user_id" => Ecto.UUID.generate(),
+                 "key_hash" => key_hash,
+                 "key_prefix" => key_prefix,
+                 "label" => "huérfana"
+               })
+
+      assert errors_on(changeset).user != []
+    end
+
+    test "sync_user_sub/2 moves the membership atomically: a failed insert keeps the old one" do
+      group = group_fixture()
+      user = user_fixture()
+      {:ok, member} = Accounts.create_group_member(valid_group_member_attrs(user, group))
+
+      # Destino inexistente: el INSERT falla y la transacción entera revierte.
+      assert {:error, _reason} = Accounts.sync_user_sub(user.id, Ecto.UUID.generate())
+
+      memberships = Accounts.list_group_members_for_user(user.id)
+      assert Enum.map(memberships, & &1.id) == [member.id]
+    end
+
+    test "sync_user_sub/2 moves the user between subs in one transaction" do
+      old_group = group_fixture(%{"name" => "Vieja"})
+      new_group = group_fixture(%{"name" => "Nueva"})
+      user = user_fixture()
+      {:ok, _member} = Accounts.create_group_member(valid_group_member_attrs(user, old_group))
+
+      # Una key del usuario (sin group_member_id) sobrevive el movimiento: su
+      # entry cacheado lleva la membresía vieja y tiene que caer con el move.
+      {key, token} = user_key_with_token(user, "sobrevive")
+      assert %{member: %{id: old_member_id}} = Accounts.resolve_auth_by_api_key(token)
+      key_hash = Accounts.hash_api_key(token)
+      assert [_] = :ets.lookup(Tokengate.Accounts.ApiKeyCache.table(), key_hash)
+
+      assert :ok = Accounts.sync_user_sub(user.id, new_group.id)
+
+      assert [membership] = Accounts.list_group_members_for_user(user.id)
+      assert membership.group_id == new_group.id
+      assert membership.id != old_member_id
+
+      # La entrada vieja se tiró: el siguiente resolve ve la membresía nueva.
+      assert [] = :ets.lookup(Tokengate.Accounts.ApiKeyCache.table(), key_hash)
+      assert %{member: %{id: new_member_id}} = Accounts.resolve_auth_by_api_key(token)
+      assert new_member_id == membership.id
+      assert Accounts.get_api_key(key.id).status == "active"
+    end
+
+    defp user_key_with_token(user, label) do
+      {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      {:ok, key} =
+        Accounts.create_api_key(%{
+          "subject_type" => "member",
+          "user_id" => user.id,
+          "key_hash" => key_hash,
+          "key_prefix" => key_prefix,
+          "label" => label
+        })
+
+      {key, token}
+    end
+
+    defp service_key_with_token(service, label) do
+      {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      {:ok, key} =
+        Accounts.create_api_key(%{
+          "subject_type" => "service",
+          "service_id" => service.id,
+          "key_hash" => key_hash,
+          "key_prefix" => key_prefix,
+          "label" => label
+        })
+
+      {key, token}
     end
   end
 end
