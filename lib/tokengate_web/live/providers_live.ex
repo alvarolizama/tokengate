@@ -1037,7 +1037,7 @@ defmodule TokengateWeb.ProvidersLive do
           steps={if length(@provider_steps) > 1, do: @provider_steps, else: nil}
           current_step={@provider_step}
         >
-          <div class="max-h-[65vh] overflow-y-auto pr-1">
+          <div class="pr-1">
             <%= if @provider_step == "pick" do %>
               <p class="text-xs text-base-content/60 mb-3" id="catalog-subtitle">
                 {gettext(
@@ -1355,7 +1355,7 @@ defmodule TokengateWeb.ProvidersLive do
           on_close="cancel_paths"
           max_w="max-w-3xl"
         >
-          <div class="max-h-[65vh] overflow-y-auto pr-1">
+          <div class="pr-1">
             <p class="text-xs text-base-content/60 mb-3">
               {gettext("Path of each service of")} <span class="font-medium">{@paths_provider_name}</span>. {gettext(
                 "It resolves as"

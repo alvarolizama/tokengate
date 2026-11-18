@@ -854,8 +854,8 @@ defmodule TokengateWeb.CoreComponents do
     >
       <div class="absolute inset-0 bg-black/50" phx-click={@on_close} />
       <div class={["relative card bg-base-100 border border-base-300 shadow-xl w-full", @max_w]}>
-        <div class="card-body p-6">
-          <div class="flex items-center justify-between gap-4 mb-2">
+        <div class="card-body p-6 max-h-[85vh] flex flex-col">
+          <div class="flex items-center justify-between gap-4 mb-2 shrink-0">
             <h2 class="text-lg font-semibold">{@title}</h2>
             <button
               type="button"
@@ -867,10 +867,12 @@ defmodule TokengateWeb.CoreComponents do
             </button>
           </div>
           <.steps :if={@steps} steps={@steps} current={@current_step} id={@id <> "-steps"} />
-          {render_slot(@inner_block)}
+          <div class="overflow-y-auto flex-1 min-h-0">
+            {render_slot(@inner_block)}
+          </div>
           <div
             :if={@footer != []}
-            class="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-base-200"
+            class="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-base-200 shrink-0"
           >
             {render_slot(@footer)}
           </div>
@@ -900,6 +902,7 @@ defmodule TokengateWeb.CoreComponents do
       <span
         :for={{key, label} <- @steps}
         id={"wizard-crumb-#{key}"}
+        aria-current={if @current == key, do: "step"}
         class={[
           "px-2 py-0.5 rounded-full border",
           if(@current == key,

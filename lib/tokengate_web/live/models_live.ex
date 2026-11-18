@@ -1545,7 +1545,7 @@ defmodule TokengateWeb.ModelsLive do
           steps={if @editing_model_id == :new, do: wizard_steps(), else: nil}
           current_step={@wizard_step}
         >
-          <div class="max-h-[70vh] overflow-y-auto">
+          <div class="min-h-0">
             <%= if @wizard_step == "provider" do %>
               <p class="text-sm text-base-content/60 mb-3">
                 {gettext(
