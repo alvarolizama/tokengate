@@ -11,12 +11,20 @@ defmodule TokengateWeb.DashboardLive do
   multiple connected dashboards for the same user share one set of
   Postgres queries instead of re-querying on every PubSub broadcast.
 
+  The first paint never waits on Postgres: mount renders a skeleton and the
+  bundle is computed by an async task (`start_async/3`), whose result lands in
+  `handle_async/3`. The previous-period summary — a closed, immutable window —
+  is cached on its own 60s entry so the 5s refresh does not re-run it.
+
   Real-time updates come from `Phoenix.PubSub` on the `"metrics:updated"`
   topic (broadcast by `Tokengate.Metrics.Collector.record_request/1`).
   On `{:metrics_updated, _}` the LiveView debounces and re-reads from
   cache — a cache hit skips all Postgres queries.
 
-  A period selector lets the user choose: Hoy (24h), 7d, 30d, Mes pasado.
+  The period selector offers the canonical windows only — Hoy (UTC day),
+  Ayer (closed UTC day), Esta semana, 30 días — and the active period travels
+  in the URL (`?period=week`), so a bookmark reopens the same window and an
+  out-of-set bookmark degrades to the default instead of raising.
   All UI strings are in Spanish (the app's UI language).
   """
 
@@ -25,7 +33,14 @@ defmodule TokengateWeb.DashboardLive do
   import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
   import TokengateWeb.KeysPanel
 
+  # `period_selector/1` and `period_label/1` come from the shared stats
+  # helpers: the four canonical windows have ONE source
+  # (`Periods.canonical_periods/0`), and the dashboard must not grow its own
+  # copy of the list or of the labels again.
+  import TokengateWeb.StatsHelpers, only: [period_label: 1, period_selector: 1]
+
   alias Tokengate.Accounts
+  alias Tokengate.Accounts.ApiKey
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Metrics.StatsQueries
@@ -36,7 +51,10 @@ defmodule TokengateWeb.DashboardLive do
 
   @pubsub Tokengate.PubSub
   @metrics_topic "metrics:updated"
-  @reload_interval_ms 2_000
+  @reload_interval_ms 5_000
+  # The previous window is closed: its summary can be reused far longer than
+  # the live bundle (same TTL as the /stats structural cache).
+  @prev_summary_cache_ttl 60_000
 
   @impl true
   def mount(_params, _session, socket) do
@@ -49,7 +67,7 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:loading, true)
       |> assign(:displayed_period, nil)
       |> assign(:reload_scheduled, false)
-      |> assign(:period, "today")
+      |> assign(:period, Periods.default_period())
       |> assign(:metrics, empty_metrics())
       |> assign(:cost_series, [])
       |> assign(:requests_series, [])
@@ -77,32 +95,40 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:keys, [])
       |> assign(:keys_spend, %{})
       |> assign(:new_key_token, nil)
+      |> assign(:editing_key_id, nil)
       |> load_personal_data(user)
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @metrics_topic)
     end
 
-    # Mount is synchronous: the static render and the test client both
-    # expect data to be present right after `live/2`. The async path is
-    # reserved for period switches and background reloads (below).
-    socket = load_metrics_sync(socket, user)
-
+    # Mount paints the shell only (skeleton): the metrics bundle is kicked off
+    # by `handle_params/3`, which LiveView runs right after mount on the
+    # connected socket, so the Postgres work never blocks the first paint. The
+    # dead render keeps the same skeleton until the socket connects.
     {:ok, socket}
   end
 
+  # The active period lives in the URL. A bookmark (`?period=30d`) reopens the
+  # same window; anything outside the canonical set — `?period=month`,
+  # `?period=7d`, a forged non-binary — degrades to `Periods.default_period/0`
+  # instead of being reinterpreted as another window.
   @impl true
-  def handle_params(unsigned_params, _uri, socket) do
-    case Map.get(unsigned_params, "period") do
-      period when period in ~w(today 7d 30d last_month) ->
-        {:noreply,
-         socket
-         |> assign(:period, period)
-         |> load_personal_data(socket.assigns.current_user)
-         |> load_metrics_async(socket.assigns.current_user)}
+  def handle_params(params, _uri, socket) do
+    period = Periods.normalize_period(Map.get(params, "period"))
+    user = socket.assigns[:current_user]
 
-      _ ->
-        {:noreply, socket}
+    socket = assign(socket, :period, period)
+
+    # A patch that lands on the period already on screen must not re-query:
+    # the selector also patches when the user re-clicks the active button.
+    if socket.assigns.displayed_period == period do
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> load_personal_data(user)
+       |> load_metrics_async()}
     end
   end
 
@@ -140,11 +166,15 @@ defmodule TokengateWeb.DashboardLive do
   def handle_info(:reload_metrics, socket) do
     user = socket.assigns[:current_user]
 
+    # Refresh path: both reads go through `DashboardCache` first, so a burst of
+    # pubsub broadcasts collapses into one computation per TTL window (5s) and
+    # every viewer of the scope shares it. A miss lands async, keeping the
+    # previous bundle on screen.
     {:noreply,
      socket
      |> assign(:reload_scheduled, false)
      |> load_personal_data(user)
-     |> load_metrics_async(user)}
+     |> load_metrics_async()}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -159,53 +189,115 @@ defmodule TokengateWeb.DashboardLive do
     Accounts.count_services_for_supervisor(user.id)
   end
 
-  @impl true
-  def handle_event("replace_key", %{"id" => member_id}, socket) do
+  ## Events — membership key lifecycle --------------------------------------
+
+  # Revoke = issue a new key and void the previous one. The row is NOT rotated in
+  # place: a new `api_keys` row is inserted and the old one is flipped to
+  # `revoked`, so `request_logs` keeps pointing at the token that was actually
+  # used. The new token is shown once, in the one-time alert.
+  def handle_event("revoke_key", %{"id" => member_id}, socket) do
     user = socket.assigns[:current_user]
 
-    case Enum.find(socket.assigns[:memberships], &(&1.id == member_id)) do
+    case find_membership(socket, member_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, "No autorizado.")}
+        {:noreply, put_flash(socket, :error, gettext("No autorizado."))}
+
+      %{api_key: nil} ->
+        {:noreply, put_flash(socket, :error, gettext("This membership has no key."))}
 
       member ->
-        case Accounts.replace_api_key(member) do
-          {:ok, _api_key, new_token} ->
+        case Accounts.revoke_and_replace_api_key(member.api_key) do
+          {:ok, replacement, new_token} ->
+            audit(socket, "api_key.revoke", "api_key", member.api_key.id, %{
+              "label" => member.api_key.label,
+              "replacement_id" => replacement.id,
+              "user_id" => user.id
+            })
+
             {:noreply,
              socket
              |> assign(:new_token, new_token)
              |> assign(:new_token_group, member.group.name)
              |> reload_personal_data(user)
-             |> put_flash(:info, gettext("Key regenerated successfully."))}
+             |> reload_open_keys_panel(user)
+             |> put_flash(:info, gettext("Clave revocada. Se emitió una nueva: cópiala ahora."))}
 
-          {:error, _changeset} ->
-            {:noreply, put_flash(socket, :error, gettext("Could not regenerate the key."))}
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
         end
     end
   end
 
-  def handle_event("revoke_key", %{"id" => member_id}, socket) do
+  # Borrar = soft-hide: the row leaves every listing and stops authenticating,
+  # but it is not deleted (its historical consumption stays attributed).
+  def handle_event("hide_key", %{"id" => member_id}, socket) do
     user = socket.assigns[:current_user]
 
-    case Enum.find(socket.assigns[:memberships], &(&1.id == member_id)) do
+    case find_membership(socket, member_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, "No autorizado.")}
+        {:noreply, put_flash(socket, :error, gettext("No autorizado."))}
+
+      %{api_key: nil} ->
+        {:noreply, put_flash(socket, :error, gettext("This membership has no key."))}
 
       member ->
-        case member.api_key do
-          nil ->
-            {:noreply, put_flash(socket, :error, gettext("This membership has no key."))}
+        case Accounts.hide_api_key(member.api_key) do
+          {:ok, hidden} ->
+            audit(socket, "api_key.hide", "api_key", hidden.id, %{
+              "label" => hidden.label,
+              "user_id" => user.id
+            })
 
-          api_key ->
-            case Accounts.revoke_api_key(api_key) do
-              {:ok, _} ->
-                {:noreply,
-                 socket
-                 |> reload_personal_data(user)
-                 |> put_flash(:info, gettext("Key revoked."))}
+            {:noreply,
+             socket
+             |> reload_personal_data(user)
+             |> reload_open_keys_panel(user)
+             |> put_flash(:info, gettext("Clave borrada."))}
 
-              {:error, _} ->
-                {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
-            end
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, gettext("Could not delete the key."))}
+        end
+    end
+  end
+
+  # First key of a membership that has none (or whose key was hidden): issues a
+  # fresh row instead of reviving the old one.
+  def handle_event("generate_key", %{"id" => member_id}, socket) do
+    user = socket.assigns[:current_user]
+
+    case find_membership(socket, member_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, gettext("No autorizado."))}
+
+      member ->
+        {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+        attrs = %{
+          "subject_type" => "member",
+          "user_id" => user.id,
+          "group_member_id" => member.id,
+          "key_hash" => key_hash,
+          "key_prefix" => key_prefix,
+          "status" => "active"
+        }
+
+        case Accounts.create_api_key(attrs) do
+          {:ok, api_key} ->
+            audit(socket, "api_key.create", "api_key", api_key.id, %{
+              "label" => api_key.label,
+              "user_id" => user.id
+            })
+
+            {:noreply,
+             socket
+             |> assign(:new_token, token)
+             |> assign(:new_token_group, member.group.name)
+             |> reload_personal_data(user)
+             |> reload_open_keys_panel(user)
+             |> put_flash(:info, gettext("Key created. Copy it now: it is not shown again."))}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, gettext("Could not create the key."))}
         end
     end
   end
@@ -272,31 +364,96 @@ defmodule TokengateWeb.DashboardLive do
     end
   end
 
+  # Revoke = issue a new one and void the previous one — the same lifecycle the
+  # group card and the service panel use. The previous row keeps its hash for
+  # `request_logs` attribution; the token of the replacement is shown once in
+  # the panel's `new_token` slot.
   def handle_event("revoke_user_key", %{"key-id" => api_key_id}, socket) do
     user = socket.assigns[:current_user]
 
-    # Solo las claves del propio usuario: el id llega del cliente, así que se
-    # verifica la propiedad antes de revocar.
-    with %{} = api_key <- Accounts.get_api_key(api_key_id),
-         true <- api_key.user_id == user.id do
-      case Accounts.revoke_api_key(api_key) do
-        {:ok, _} ->
-          audit(socket, "api_key.revoke", "api_key", api_key.id, %{
-            "label" => api_key.label,
-            "user_id" => user.id
-          })
+    # The id arrives from the client: cast it first (a non-UUID used to raise
+    # Ecto.Query.CastError and kill the LiveView) and check ownership before
+    # touching the row.
+    with {:ok, api_key_id} <- Ecto.UUID.cast(api_key_id),
+         %{} = api_key <- Accounts.get_api_key(api_key_id),
+         true <- api_key.user_id == user.id and is_nil(api_key.hidden_at),
+         {:ok, _replacement, token} <- Accounts.revoke_and_replace_api_key(api_key) do
+      audit(socket, "api_key.revoke", "api_key", api_key.id, %{
+        "label" => api_key.label,
+        "user_id" => user.id
+      })
 
-          {:noreply,
-           socket
-           |> put_flash(:info, gettext("Key revoked."))
-           |> load_user_keys(user.id)}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
-      end
+      {:noreply,
+       socket
+       |> assign(:new_key_token, token)
+       |> put_flash(:info, gettext("Clave revocada. Se emitió una nueva: cópiala ahora."))
+       |> load_user_keys(user.id)
+       |> reload_personal_data(user)}
     else
       _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
     end
+  end
+
+  # Borrar = soft-hide. The row disappears from the panel and the card; the
+  # historical consumption stays attributed to it.
+  def handle_event("hide_user_key", %{"key-id" => api_key_id}, socket) do
+    user = socket.assigns[:current_user]
+
+    with {:ok, api_key_id} <- Ecto.UUID.cast(api_key_id),
+         %{} = api_key <- Accounts.get_api_key(api_key_id),
+         true <- api_key.user_id == user.id and is_nil(api_key.hidden_at),
+         {:ok, hidden} <- Accounts.hide_api_key(api_key) do
+      audit(socket, "api_key.hide", "api_key", hidden.id, %{
+        "label" => hidden.label,
+        "user_id" => user.id
+      })
+
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Clave borrada."))
+       |> load_user_keys(user.id)
+       |> reload_personal_data(user)}
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
+    end
+  end
+
+  # Inline rename submit. Its pattern is a SUPERSET of the pencil click (the
+  # submit payload also carries "key-id"), so this clause comes FIRST — Elixir
+  # takes the first matching clause and a broader one above would no-op the
+  # save. `rename_api_key/3` owns the ownership check and audits
+  # `api_key.rename` with the old/new label, so users and services produce the
+  # same entry.
+  def handle_event("rename_user_key", %{"key-id" => key_id, "key" => %{"label" => label}}, socket)
+      when is_binary(label) do
+    user = socket.assigns[:current_user]
+
+    with {:ok, key_id} <- Ecto.UUID.cast(key_id),
+         {:ok, _renamed} <-
+           Accounts.rename_api_key(%ApiKey{id: key_id}, label,
+             user_id: user.id,
+             actor: user
+           ) do
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Key renamed."))
+       |> assign(:editing_key_id, nil)
+       |> load_user_keys(user.id)
+       |> reload_personal_data(user)}
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Could not rename the key."))}
+    end
+  end
+
+  # Pencil: opens the inline editor for that row.
+  def handle_event("rename_user_key", %{"key-id" => key_id}, socket) when is_binary(key_id) do
+    {:noreply, assign(socket, :editing_key_id, key_id)}
+  end
+
+  def handle_event("rename_user_key", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel_rename_key", _params, socket) do
+    {:noreply, assign(socket, :editing_key_id, nil)}
   end
 
   def handle_event("dismiss_new_key_token", _params, socket) do
@@ -315,19 +472,7 @@ defmodule TokengateWeb.DashboardLive do
      |> load_user_keys(user.id)}
   end
 
-  ## Events — period selector -----------------------------------------------
-
-  @impl true
-  def handle_event("set_period", %{"period" => period}, socket)
-      when period in ~w(today 7d 30d last_month) do
-    user = socket.assigns[:current_user]
-
-    {:noreply,
-     socket
-     |> assign(:period, period)
-     |> load_personal_data(user)
-     |> load_metrics_async(user)}
-  end
+  ## Events — breakdown tabs ------------------------------------------------
 
   def handle_event("set_breakdown", %{"tab" => tab}, socket)
       when tab in ~w(model member group) do
@@ -351,18 +496,37 @@ defmodule TokengateWeb.DashboardLive do
     |> assign(:has_access, data.has_access)
   end
 
-  # Invalidación explícita: los eventos que mutan la membresía o su clave
-  # (regenerar/revocar) no pueden esperar al TTL para reflejar el cambio.
+  # Explicit invalidation: events that mutate the membership or its key
+  # (revoke/hide/rename) cannot wait for the TTL to show the change.
   defp reload_personal_data(socket, user) do
     DashboardCache.invalidate({:dashboard_personal, user.id})
     load_personal_data(socket, user)
   end
+
+  defp reload_open_keys_panel(socket, user) do
+    if socket.assigns[:keys_modal_open] do
+      load_user_keys(socket, user.id)
+    else
+      socket
+    end
+  end
+
+  defp find_membership(socket, member_id) when is_binary(member_id) do
+    Enum.find(socket.assigns[:memberships] || [], &(&1.id == member_id))
+  end
+
+  defp find_membership(_socket, _member_id), do: nil
 
   # El resumen del sujeto (límite efectivo + top-ups) se resuelve en lote:
   # una pasada para todas las membresías.
   defp build_personal_data(user) do
     memberships = Accounts.list_group_members_for_user(user.id)
     summaries = Tokengate.Credits.summaries(memberships)
+    # Revoking inserts a NEW row for the same membership, so the `has_one`
+    # preload can hand back the revoked one. The card resolves the user's
+    # visible active key from ONE batched read instead (keys belong to the
+    # user, not to the profile).
+    active_keys = Accounts.list_api_keys_for_user(user.id)
 
     groups =
       Enum.map(memberships, fn membership ->
@@ -371,7 +535,7 @@ defmodule TokengateWeb.DashboardLive do
         %{
           membership: membership,
           group: membership.group,
-          api_key: membership.api_key,
+          api_key: card_key(membership, active_keys),
           monthly_limit: summary && summary.limit_usd,
           monthly_spend: (summary && summary.spend_usd) || Decimal.new(0),
           credit: summary
@@ -387,6 +551,13 @@ defmodule TokengateWeb.DashboardLive do
     }
   end
 
+  # The key shown on the card: the one bound to this membership, otherwise the
+  # user's first visible active key (a hidden or revoked row is never shown).
+  defp card_key(membership, active_keys) do
+    Enum.find(active_keys, &(&1.group_member_id == membership.id)) ||
+      List.first(active_keys)
+  end
+
   # Keys activas del usuario logueado + consumo por key (una sola query por
   # lote). Se cargan solo al abrir el modal: el dashboard no paga el costo en
   # cada render.
@@ -399,54 +570,54 @@ defmodule TokengateWeb.DashboardLive do
     |> assign(:keys_spend, spend)
   end
 
-  # Synchronous load used at mount (static render + tests need the data
-  # right after `live/2`). Cache hit applies directly; miss computes inline.
-  defp load_metrics_sync(socket, user) do
-    period = socket.assigns[:period] || "today"
-    timezone = socket.assigns[:timezone] || "Etc/UTC"
-    cache_key = DashboardCache.build_key(user.id, period, timezone)
-    user_ids = socket.assigns[:scope_user_ids] || []
-
-    bundle =
-      DashboardCache.fetch_or_compute(cache_key, fn ->
-        compute_metrics_bundle(user_ids, period, timezone)
-      end)
-
-    apply_metrics_bundle(socket, bundle)
-  end
-
-  # Event-path load (period switches + background reloads).
+  # Loads the metrics bundle for the period on screen.
   #
   # Fast path: a DashboardCache hit applies the bundle synchronously — zero
-  # Postgres queries, so the click reply carries the fresh render.
+  # Postgres queries.
   #
-  # Slow path: a cache miss (every first visit to a period within the 5s
-  # TTL) dispatches the Postgres work to `start_async/3` so the click
-  # replies instantly while `loading: true`; the bundle lands via
-  # `handle_async/3`. The task closure captures only plain values (user id,
-  # period, timezone, user ids) — never the socket.
-  defp load_metrics_async(socket, user) do
-    period = socket.assigns[:period] || "today"
+  # Slow path: a miss dispatches the Postgres work to `start_async/3` so the
+  # render (first paint included) is never blocked; the bundle lands via
+  # `handle_async/3` while `loading: true` keeps the skeleton (first load) or
+  # the previous bundle (period switch) on screen. The task closure captures
+  # only plain values (period, timezone, user ids) — never the socket.
+  #
+  # On the dead render there is no LiveView process to receive the result, so
+  # the task is only started once connected; `handle_params/3` runs again on
+  # the connected mount and starts it then.
+  defp load_metrics_async(socket) do
+    period = socket.assigns[:period] || Periods.default_period()
     timezone = socket.assigns[:timezone] || "Etc/UTC"
-    cache_key = DashboardCache.build_key(user.id, period, timezone)
     user_ids = socket.assigns[:scope_user_ids] || []
+    cache_key = bundle_cache_key(user_ids, period, timezone)
 
     case DashboardCache.fetch(cache_key) do
       {:ok, bundle} ->
         apply_metrics_bundle(socket, bundle)
 
       :miss ->
-        socket
-        |> assign(:loading, true)
-        |> start_async(:metrics_bundle, fn ->
-          bundle =
-            DashboardCache.fetch_or_compute(cache_key, fn ->
-              compute_metrics_bundle(user_ids, period, timezone)
-            end)
+        if connected?(socket) do
+          socket
+          |> assign(:loading, true)
+          |> start_async(:metrics_bundle, fn ->
+            bundle =
+              DashboardCache.fetch_or_compute(cache_key, fn ->
+                compute_metrics_bundle(user_ids, period, timezone)
+              end)
 
-          {period, bundle}
-        end)
+            {period, bundle}
+          end)
+        else
+          socket
+        end
     end
+  end
+
+  # Bundle cache key: the WINDOW plus the SCOPE that decides which rows the
+  # bundle contains — never the socket's user id. Every socket of the same
+  # scope shares one entry per TTL window, and carrying the scope in the key
+  # keeps a personal bundle from ever being served to a different user.
+  defp bundle_cache_key(user_ids, period, timezone) do
+    {:dashboard_bundle, period, timezone, user_ids}
   end
 
   # Computes the full metrics bundle from Postgres. This is the expensive
@@ -597,12 +768,22 @@ defmodule TokengateWeb.DashboardLive do
     )
   end
 
-  # Previous equivalent period (e.g. yesterday, previous 7d) for the KPI
-  # deltas — same computation as /stats (`StatsLive.previous_summary/3`).
+  # The previous window is CLOSED and immutable: its summary cannot change
+  # between refreshes, yet it used to be re-aggregated on every 5s reload, per
+  # viewer. It goes through `DashboardCache` with a 60s entry covering
+  # everything that changes the result (scope, period, timezone) — the current
+  # period's counter stays uncached, because a stale live KPI reads as a broken
+  # number.
   defp fetch_prev_summary(user_ids, period, timezone) do
-    %{from: from, to: to} = Periods.previous_period_bounds(period, timezone)
+    DashboardCache.fetch_or_compute(
+      {:dashboard_prev_summary, period, timezone, user_ids},
+      fn ->
+        %{from: from, to: to} = Periods.previous_period_bounds(period, timezone)
 
-    StatsQueries.summary(from: from, to: to, user_ids: user_ids)
+        StatsQueries.summary(from: from, to: to, user_ids: user_ids)
+      end,
+      ttl: @prev_summary_cache_ttl
+    )
   end
 
   # Delta percentages vs the previous period; nil when the previous value is
@@ -704,7 +885,7 @@ defmodule TokengateWeb.DashboardLive do
     end)
   end
 
-  defp bucket_label(hour, period, timezone) when period in ["today", "7d"] do
+  defp bucket_label(hour, period, timezone) when period in ["today", "yesterday", "week"] do
     TokengateWeb.TimezoneHelper.format_bucket(hour, timezone)
   end
 
@@ -844,13 +1025,8 @@ defmodule TokengateWeb.DashboardLive do
   defp format_chart_value(val) when val > 0, do: "#{Float.round(val, 2)}"
   defp format_chart_value(_), do: "0"
 
-  def period_label("today"), do: gettext("Today")
-  def period_label("7d"), do: gettext("7 days")
-  def period_label("30d"), do: gettext("30 days")
-  def period_label("last_month"), do: gettext("Last month")
-  def period_label(_), do: gettext("Today")
-
-  def period_active?(current, target), do: current == target
+  # Labels come from the shared stats helpers (`period_label/1` is imported):
+  # one msgid per canonical window, so the dashboard cannot drift again.
 
   def breakdown_tab_active?(current, target), do: current == target
 
@@ -863,9 +1039,9 @@ defmodule TokengateWeb.DashboardLive do
     base =
       case period do
         "today" -> gettext("per hour")
-        "7d" -> gettext("per hour (7d)")
+        "yesterday" -> gettext("por hora (ayer)")
+        "week" -> gettext("por hora (semana)")
         "30d" -> gettext("per day (30d)")
-        "last_month" -> gettext("per day (last month)")
         _ -> gettext("per hour")
       end
 

@@ -16,7 +16,9 @@
         </:subtitle>
       </.header>
 
-      <%!-- Period selector + loading spinner (mismo patrón que /stats) --%>
+      <%!-- Period selector + loading spinner. The selector is the SHARED
+           canonical one (same four windows and labels as /stats) and it
+           patches the query string, so the active period lives in the URL. --%>
       <div :if={@has_access} class="flex items-center gap-3">
         <span
           :if={@loading and @displayed_period != nil}
@@ -24,33 +26,19 @@
           id="dashboard-loading"
           title={gettext("Refreshing metrics…")}
         ></span>
-        <div class="join" id="period-selector" role="tablist">
-          <button
-            :for={period <- ~w(today 7d 30d last_month)}
-            phx-click="set_period"
-            phx-value-period={period}
-            class={[
-              "join-item btn btn-sm",
-              if(period_active?(@period, period), do: "btn-primary", else: "btn-ghost")
-            ]}
-            id={"period-#{period}"}
-          >
-            <span
-              :if={@loading and period_active?(@period, period)}
-              class="loading loading-spinner loading-xs"
-            ></span>
-            {period_label(period)}
-          </button>
-        </div>
+        <.period_selector target={~p"/dashboard"} period={@period} />
       </div>
     </div>
 
     <%!-- One-time new token alert — verde de éxito: es una clave CREADA, no una
-         advertencia; mismo tratamiento que el banner de /services. --%>
+         advertencia; mismo tratamiento que el banner de /services. El token
+         vive aquí y SOLO aquí: es el único momento en que se puede copiar. --%>
     <div :if={@new_token} class="alert alert-success shadow-lg" id="new-token-alert" role="alert">
       <.icon name="hero-key" class="w-5 h-5 shrink-0" />
       <div class="flex-1">
-        <p class="font-semibold">Nueva clave generada para {@new_token_group}</p>
+        <p class="font-semibold">
+          {gettext("Nueva clave generada para %{group}", group: @new_token_group)}
+        </p>
         <div class="relative mt-2">
           <code
             class="block p-2 pr-24 bg-black/10 rounded text-sm font-mono break-all select-all"
@@ -61,12 +49,14 @@
           <button
             type="button"
             id="copy-token-btn"
-            aria-label="Copiar al portapapeles"
-            phx-hook="CopyToClipboard"
-            data-target="new-token-value"
+            aria-label={gettext("Copiar la clave al portapapeles")}
+            title={gettext("Copiar la clave al portapapeles")}
+            phx-hook=".CopyToken"
+            data-source="new-token-value"
             class="absolute right-2 top-1/2 -translate-y-1/2 btn btn-xs btn-ghost"
           >
-            {gettext("Copy")}
+            <.icon name="hero-clipboard-document" class="w-3.5 h-3.5" />
+            <span data-copy-label>{gettext("Copiar")}</span>
           </button>
         </div>
         <p class="text-xs mt-2 opacity-80">
@@ -77,11 +67,37 @@
         phx-click="dismiss_token"
         class="btn btn-sm btn-ghost"
         id="dismiss-token-btn"
-        aria-label="Cerrar"
+        aria-label={gettext("Cerrar")}
       >
         <.icon name="hero-x-mark" class="w-4 h-4" />
       </button>
     </div>
+
+    <%!-- Copy hook for the one-time token. It copies the VISIBLE token and
+         swaps only the label span, so the clipboard icon survives the
+         "¡Copiado!" feedback — the global CopyToClipboard hook rewrites the
+         button's whole textContent and eats the icon after the first click. --%>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyToken">
+      export default {
+        mounted() {
+          this.el.addEventListener("click", () => {
+            const source = document.getElementById(this.el.dataset.source)
+            if (!source) return
+            navigator.clipboard.writeText(source.textContent.trim()).then(() => {
+              const label = this.el.querySelector("[data-copy-label]")
+              if (!label || label.dataset.copied) return
+              const original = label.textContent
+              label.dataset.copied = "true"
+              label.textContent = "¡Copiado!"
+              setTimeout(() => {
+                label.textContent = original
+                delete label.dataset.copied
+              }, 1500)
+            })
+          })
+        }
+      }
+    </script>
 
     <%!-- Groups + models catalog + supervised services — arriba de métricas --%>
     <section id="groups-section">
@@ -114,7 +130,10 @@
                   </div>
                 </div>
 
-                <%!-- API key section --%>
+                <%!-- API key section. Only the PREFIX is rendered: the token
+                     itself is never in the DOM after issuance, so there is
+                     nothing to copy here (a "copy" button here would copy a
+                     mask that does not authenticate). --%>
                 <div class="mt-3">
                   <div class="flex items-center justify-between gap-2">
                     <p class="text-xs text-base-content/50 uppercase tracking-wide">
@@ -127,93 +146,86 @@
                       id={"manage-keys-#{t.group.id}"}
                       title={gettext("View, create and revoke your API keys")}
                     >
-                      <.icon name="hero-key" class="w-3.5 h-3.5" /> Gestionar llaves
+                      <.icon name="hero-key" class="w-3.5 h-3.5" /> {gettext("Gestionar llaves")}
                     </button>
                   </div>
                   <div class="flex items-center gap-1" id={"api-key-row-#{t.membership.id}"}>
                     <code class="text-sm font-mono" id={"api-key-text-#{t.membership.id}"}>
                       {masked_key(t)}
                     </code>
-                    <button
-                      type="button"
-                      phx-hook="CopyToClipboard"
-                      data-target={"api-key-text-#{t.membership.id}"}
-                      aria-label={gettext("Copy API key")}
-                      title={gettext("Copy API key")}
-                      class="btn btn-ghost btn-xs btn-square"
-                      id={"copy-key-#{t.membership.id}"}
-                    >
-                      <.icon name="hero-clipboard-document" class="w-3.5 h-3.5" />
-                    </button>
                   </div>
                 </div>
 
-                <%= if t.api_key do %>
+                <%= if t.api_key && t.api_key.status == "active" do %>
                   <p class="text-xs text-base-content/40 mt-1">
-                    Creada el {format_date(t.api_key.inserted_at, @timezone)}
+                    {gettext("Creada el %{date}",
+                      date: format_date(t.api_key.inserted_at, @timezone)
+                    )}
                   </p>
 
                   <div class="flex gap-2 mt-3">
+                    <%!-- Revoke = issue a new key and void the previous one. --%>
                     <button
-                      phx-click="replace_key"
+                      phx-click="revoke_key"
                       phx-value-id={t.membership.id}
                       data-confirm={
                         gettext(
-                          "Regenerate key? The current key stops working immediately and a new one is issued."
+                          "¿Revocar esta clave? Se emite una nueva y este token deja de funcionar."
                         )
                       }
                       class="btn btn-sm btn-primary"
-                      id={"replace-#{t.membership.id}"}
+                      id={"revoke-#{t.membership.id}"}
+                      title={
+                        gettext("Revocar: emite una clave nueva y anula la anterior al instante.")
+                      }
+                    >
+                      <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("Revocar")}
+                    </button>
+
+                    <%!-- Delete = soft-hide: it leaves the listings and the
+                         historical consumption keeps its attribution. --%>
+                    <button
+                      phx-click="hide_key"
+                      phx-value-id={t.membership.id}
+                      data-confirm={
+                        gettext(
+                          "¿Borrar esta clave? Desaparece de los listados y su token deja de funcionar; el consumo histórico se conserva."
+                        )
+                      }
+                      class="btn btn-sm btn-ghost text-error"
+                      id={"hide-#{t.membership.id}"}
                       title={
                         gettext(
-                          "Regenerate: issues a new key and voids the current one. The limit profile keeps working, now with the new key."
+                          "Borrar: oculta la clave de todas las superficies y conserva el consumo histórico."
                         )
                       }
                     >
-                      <.icon name="hero-arrow-path" class="w-4 h-4" /> Regenerar clave
+                      <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Borrar")}
                     </button>
-
-                    <%= if t.api_key.status == "active" do %>
-                      <button
-                        phx-click="revoke_key"
-                        phx-value-id={t.membership.id}
-                        data-confirm={
-                          gettext("Revoke key? The key is voided and NO other is issued.")
-                        }
-                        class="btn btn-sm btn-ghost text-error"
-                        id={"revoke-#{t.membership.id}"}
-                        title={
-                          gettext(
-                            "Revoke: voids the key without issuing a new one. The limit profile loses access until you generate another."
-                          )
-                        }
-                      >
-                        <.icon name="hero-no-symbol" class="w-4 h-4" /> Revocar
-                      </button>
-                    <% end %>
                   </div>
 
-                  <%= if t.api_key.status == "active" do %>
-                    <p
-                      class="text-xs text-base-content/40 mt-2"
-                      id={"key-actions-help-#{t.membership.id}"}
-                    >
-                      <span class="font-medium">{gettext("Regenerate")}</span>
-                      emite una clave nueva (la anterior deja de servir al instante) ·
-                      <span class="font-medium">{gettext("Revoke")}</span>
-                      {gettext("it only voids it, without issuing another.")}
-                    </p>
-                  <% end %>
+                  <p
+                    class="text-xs text-base-content/40 mt-2"
+                    id={"key-actions-help-#{t.membership.id}"}
+                  >
+                    {gettext(
+                      "Revocar emite una clave nueva y anula la anterior · Borrar oculta la clave de los listados y conserva el consumo histórico."
+                    )}
+                  </p>
                 <% else %>
-                  <p class="text-xs text-base-content/40 mt-1">{gettext("No key generated")}</p>
+                  <p class="text-xs text-base-content/40 mt-1">
+                    {if t.api_key,
+                      do: gettext("Clave revocada"),
+                      else: gettext("No key generated")}
+                  </p>
                   <div class="mt-3">
                     <button
-                      phx-click="replace_key"
+                      phx-click="generate_key"
                       phx-value-id={t.membership.id}
                       class="btn btn-sm btn-primary"
                       id={"generate-#{t.membership.id}"}
                     >
-                      <.icon name="hero-key" class="w-4 h-4" /> Generar clave
+                      <.icon name="hero-key" class="w-4 h-4" /> {gettext("Generar clave")}
                     </button>
                   </div>
                 <% end %>
@@ -290,13 +302,38 @@
     </section>
 
     <%= if @has_access do %>
-      <%!-- Metrics section. The full-screen spinner shows only on the very
-           first load; period switches keep the previous bundle visible
-           (dimmed) until the new one lands, so the click feels instant. --%>
+      <%!-- Metrics section. The skeleton shows only on the very first load
+           (the bundle lands async after mount); period switches keep the
+           previous bundle visible (dimmed) until the new one lands, so the
+           click feels instant. --%>
       <%= if @loading and @displayed_period == nil do %>
-        <div class="flex items-center justify-center py-20">
-          <span class="loading loading-spinner loading-lg text-primary"></span>
-          <span class="ml-3 text-base-content/60">{gettext("Loading metrics…")}</span>
+        <div id="metrics-skeleton" class="space-y-6" aria-busy="true" aria-live="polite">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div
+              :for={i <- 1..4}
+              class="card bg-base-100 border border-base-300 shadow-sm animate-pulse"
+              data-skeleton={i}
+            >
+              <div class="card-body p-5 space-y-3">
+                <div class="h-3 w-24 rounded bg-base-300"></div>
+                <div class="h-7 w-32 rounded bg-base-300"></div>
+                <div class="h-2 w-20 rounded bg-base-200"></div>
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <div
+              :for={i <- 1..4}
+              class="card bg-base-100 border border-base-300 shadow-sm animate-pulse"
+              data-skeleton-chart={i}
+            >
+              <div class="card-body p-5 space-y-3">
+                <div class="h-3 w-20 rounded bg-base-300"></div>
+                <div class="h-40 rounded bg-base-200"></div>
+              </div>
+            </div>
+          </div>
+          <span class="sr-only">{gettext("Loading metrics…")}</span>
         </div>
       <% else %>
         <% title_period = @displayed_period || @period %>
@@ -606,6 +643,10 @@
       new_token={@new_key_token}
       create_event="create_key"
       revoke_event="revoke_user_key"
+      hide_event="hide_user_key"
+      rename_event="rename_user_key"
+      cancel_rename_event="cancel_rename_key"
+      editing_key_id={@editing_key_id}
       dismiss_event="dismiss_new_key_token"
       sticky_event="clear_user_sticky_routes"
       empty_text={gettext("You have no active keys yet.")}
