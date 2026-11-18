@@ -417,7 +417,7 @@ defmodule TokengateWeb.ServicesLiveTest do
       assert has_element?(view, "#new-key-token")
     end
 
-    test "una clave revocada se lista aparte y no ofrece reactivación", %{conn: conn} do
+    test "una clave revocada se oculta (soft-delete) y no ofrece reactivación", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       service = service_fixture()
       k1 = create_service_key(service, "volver")
@@ -431,12 +431,12 @@ defmodule TokengateWeb.ServicesLiveTest do
       view |> element("#keys-#{service.id}") |> render_click()
 
       refute has_element?(view, "#key-#{k1.id}")
-      assert has_element?(view, "#revoked-key-#{k1.id}", "volver")
+      refute has_element?(view, "#revoked-key-#{k1.id}")
       assert has_element?(view, "#revoke-key-#{k2.id}")
 
-      # W2 contract: the panel never resurrects tokens. Revoking means issuing
-      # a new one, so the revoked row is read-only — neither "reactivate" nor
-      # "revoke" renders on it again.
+      # Soft-delete: the revoked key is hidden from the panel entirely. The
+      # panel never resurrects tokens — neither "reactivate" nor "revoke"
+      # renders on the revoked row again.
       refute has_element?(view, "#reactivate-key-#{k1.id}")
       refute has_element?(view, "#revoke-key-#{k1.id}")
       # ...while the active key does carry its delete (soft-hide) button.

@@ -97,7 +97,6 @@ defmodule TokengateWeb.KeysPanel do
     default: nil,
     doc: "Deprecated and ignored: reactivating a token is not part of the lifecycle."
 
-  attr :revoked_keys, :list, default: []
   attr :dismiss_event, :string, required: true
   attr :sticky_event, :string, default: nil
   attr :rename_event, :string, default: nil
@@ -132,8 +131,8 @@ defmodule TokengateWeb.KeysPanel do
       </button>
     </div>
 
-    <div :if={@new_token} class="alert alert-success mb-4 py-2" id="new-key-token">
-      <div class="w-full">
+    <div :if={@new_token} class="alert alert-success mb-4 py-2 flex" id="new-key-token">
+      <div class="w-full flex flex-col">
         <p class="text-xs mb-1 font-semibold">
           {gettext("Copy it now: it is not shown again.")}
         </p>
@@ -264,30 +263,6 @@ defmodule TokengateWeb.KeysPanel do
       <p :if={@keys == []} class="text-sm text-base-content/50 py-2" id="no-keys">
         {TokengateWeb.Gettext.translate(@empty_text)}
       </p>
-    </div>
-
-    <%!-- Revocadas: la fila sigue existiendo (revocar no la borra) para que el
-         histórico y el consumo sigan atribuidos. Es sólo lectura: no hay
-         reactivación — el lifecycle emite una nueva. --%>
-    <div :if={@revoked_keys != []} class="space-y-2 mb-4" id="revoked-keys">
-      <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-        {gettext("Revoked keys")}
-      </p>
-      <div
-        :for={key <- @revoked_keys}
-        class="flex items-center justify-between gap-2 p-2 rounded-lg bg-base-200/30"
-        id={"revoked-key-#{key.id}"}
-      >
-        <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <span class="text-sm font-semibold truncate text-base-content/60">
-              {key.label || gettext("no label")}
-            </span>
-            <span class="badge badge-xs badge-ghost">{gettext("Revoked")}</span>
-          </div>
-          <div class="text-xs font-mono text-base-content/40">{key.key_prefix}••••</div>
-        </div>
-      </div>
     </div>
 
     <.form

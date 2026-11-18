@@ -57,7 +57,6 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:keys_user_id, nil)
       |> assign(:keys_user_name, nil)
       |> assign(:keys, [])
-      |> assign(:revoked_keys, [])
       |> assign(:keys_spend, %{})
       |> assign(:keys_counts, %{})
       |> assign(:editing_key_id, nil)
@@ -521,7 +520,6 @@ defmodule TokengateWeb.UsersLive do
      |> assign(:keys_user_id, nil)
      |> assign(:keys_user_name, nil)
      |> assign(:keys, [])
-     |> assign(:revoked_keys, [])
      |> assign(:keys_spend, %{})
      |> assign(:editing_key_id, nil)
      |> assign(:new_key_token, nil)}
@@ -916,15 +914,14 @@ defmodule TokengateWeb.UsersLive do
   end
 
   # Keys activas del usuario + consumo por key (una sola query por lote).
+  # Revoked keys are soft-deleted: only active keys render. The revoked rows
+  # stay in the DB for attribution but are never listed in the panel.
   defp load_user_keys(socket, user_id) do
-    all = Accounts.list_api_keys_for_user_all(user_id)
-    keys = Enum.filter(all, &(&1.status == "active"))
-    revoked_keys = Enum.reject(all, &(&1.status == "active"))
-    spend = Accounts.spend_by_api_key(Enum.map(all, & &1.id))
+    keys = Accounts.list_api_keys_for_user(user_id)
+    spend = Accounts.spend_by_api_key(Enum.map(keys, & &1.id))
 
     socket
     |> assign(:keys, keys)
-    |> assign(:revoked_keys, revoked_keys)
     |> assign(:keys_spend, spend)
   end
 
@@ -1480,7 +1477,6 @@ defmodule TokengateWeb.UsersLive do
           subject_kind="user"
           subject_id={@keys_user_id}
           keys={@keys}
-          revoked_keys={@revoked_keys}
           spend={@keys_spend}
           new_token={@new_key_token}
           create_event="create_key"

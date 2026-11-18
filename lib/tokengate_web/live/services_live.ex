@@ -58,7 +58,6 @@ defmodule TokengateWeb.ServicesLive do
         |> assign(:keys_service_id, nil)
         |> assign(:keys_service_name, nil)
         |> assign(:keys, [])
-        |> assign(:revoked_keys, [])
         |> assign(:keys_spend, %{})
         |> assign(:keys_by_service, %{})
         |> assign(:editing_key_id, nil)
@@ -452,7 +451,6 @@ defmodule TokengateWeb.ServicesLive do
      |> assign(:keys_service_id, nil)
      |> assign(:keys_service_name, nil)
      |> assign(:keys, [])
-     |> assign(:revoked_keys, [])
      |> assign(:keys_spend, %{})
      |> assign(:new_token, nil)
      |> assign(:editing_key_id, nil)}
@@ -815,15 +813,14 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   # Keys activas del servicio + consumo por key, cargadas solo al abrir el panel.
+  # Revoked keys are soft-deleted: only active keys render (attribution survives
+  # in the DB, but revoked rows are never listed in the panel).
   defp load_service_keys(socket, service_id) do
-    all = Accounts.list_api_keys_for_service_all(service_id)
-    keys = Enum.filter(all, &(&1.status == "active"))
-    revoked_keys = Enum.reject(all, &(&1.status == "active"))
-    spend = Accounts.spend_by_api_key(Enum.map(all, & &1.id))
+    keys = Accounts.list_api_keys_for_service(service_id)
+    spend = Accounts.spend_by_api_key(Enum.map(keys, & &1.id))
 
     socket
     |> assign(:keys, keys)
-    |> assign(:revoked_keys, revoked_keys)
     |> assign(:keys_spend, spend)
   end
 
@@ -1044,7 +1041,6 @@ defmodule TokengateWeb.ServicesLive do
             subject_kind="service"
             subject_id={@keys_service_id}
             keys={@keys}
-            revoked_keys={@revoked_keys}
             spend={@keys_spend}
             new_token={@new_token}
             create_event="create_service_key"

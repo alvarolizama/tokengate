@@ -974,10 +974,10 @@ defmodule TokengateWeb.UsersLiveTest do
       assert html =~ "Clave revocada"
       assert has_element?(view, "#new-key-token")
 
-      # La vieja sale de las activas (su sección de revocadas la conserva)…
+      # La vieja queda oculta (soft-delete): no se lista ni como activa ni como
+      # revocada. La otra sigue viva, intacta.
       refute has_element?(view, "#key-#{k1.id}")
-      assert has_element?(view, "#revoked-key-#{k1.id}", "revocar")
-      # …y la otra sigue viva, intacta.
+      refute has_element?(view, "#revoked-key-#{k1.id}")
       assert has_element?(view, "#key-#{k2.id}", "seguir")
 
       assert Accounts.get_api_key(k1.id).status == "revoked"
@@ -994,7 +994,7 @@ defmodule TokengateWeb.UsersLiveTest do
       assert replacement.status == "active"
     end
 
-    test "a revoked key stays in the panel as read-only (no reactivation)", %{conn: conn} do
+    test "a revoked key is hidden from the panel (soft-delete, no reactivation)", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       %{user: target} = register("user")
       k1 = create_key(target, "volver")
@@ -1007,10 +1007,10 @@ defmodule TokengateWeb.UsersLiveTest do
 
       view |> element("#keys-#{target.id}") |> render_click()
 
-      # La revocada no está en la lista de activas: vive en su propia sección,
-      # sólo lectura. Reactivar no forma parte del lifecycle.
+      # Soft-delete: la revocada queda oculta del panel (ni activa ni revocada).
+      # Reactivar no forma parte del lifecycle; la otra activa sigue visible.
       refute has_element?(view, "#key-#{k1.id}")
-      assert has_element?(view, "#revoked-key-#{k1.id}", "volver")
+      refute has_element?(view, "#revoked-key-#{k1.id}")
       assert has_element?(view, "#revoke-key-#{k2.id}")
       refute has_element?(view, "#reactivate-key-#{k1.id}")
 
