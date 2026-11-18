@@ -409,6 +409,10 @@ defmodule TokengateWeb.CoreComponents do
     default: nil,
     doc: "phx-hook for the <tbody> (e.g. SortableProviders for drag sorting)"
 
+  attr :tbody_model_id, :string,
+    default: nil,
+    doc: "data-model-id for the <tbody> (read by the SortableProviders hook)"
+
   attr :row_item, :any,
     default: &Function.identity/1,
     doc: "the function for mapping each row before calling the :col and :action slots"
@@ -482,7 +486,12 @@ defmodule TokengateWeb.CoreComponents do
           </th>
         </tr>
       </thead>
-      <tbody id={@id} phx-update={@stream? && "stream"} phx-hook={@tbody_hook}>
+      <tbody
+        id={@id}
+        phx-update={@stream? && "stream"}
+        phx-hook={@tbody_hook}
+        data-model-id={@tbody_model_id}
+      >
         <tr
           :for={row <- @rows}
           id={@row_id && @row_id.(row)}

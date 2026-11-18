@@ -2420,13 +2420,23 @@ defmodule TokengateWeb.ModelProvidersLive do
                 id={"ap-sortable-#{@model.id}"}
                 rows={@model_providers}
                 row_id={fn ap -> "model-provider-#{ap.id}" end}
-                row_class="align-top"
+                row_class={
+                  fn _ap -> ["align-top", @is_admin && "cursor-grab active:cursor-grabbing"] end
+                }
+                row_attrs={fn ap -> [draggable: to_string(@is_admin), data_id: ap.id] end}
+                tbody_hook={if @is_admin, do: "SortableProviders"}
+                tbody_model_id={@model.id}
                 empty?={Enum.empty?(@model_providers)}
               >
                 <:col
                   :let={ap}
                   label={if @is_admin, do: gettext("API key"), else: gettext("Provider")}
                 >
+                  <.icon
+                    :if={@is_admin}
+                    name="hero-bars-3"
+                    class="w-4 h-4 text-base-content/30 inline-block align-middle mr-1"
+                  />
                   <%!-- Rótulo del bloque de scope: `.table` no tiene filas
                        separadoras, así que encabeza la fila que abre el grupo. --%>
                   <p
