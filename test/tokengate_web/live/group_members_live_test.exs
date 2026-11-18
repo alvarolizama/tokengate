@@ -380,4 +380,74 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     assert cell =~ "144"
     assert cell =~ "propio"
   end
+
+  # --------------------------------------------------------------------------
+  # Ids del cliente + stream de miembros (F6)
+  # --------------------------------------------------------------------------
+
+  test "a malformed profile id redirects instead of crashing", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    assert {:error, {:redirect, %{to: "/budget/profiles"}}} =
+             live(conn, "/budget/profiles/no-es-un-uuid/members")
+  end
+
+  test "an unknown profile id redirects instead of crashing", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    assert {:error, {:redirect, %{to: "/budget/profiles"}}} =
+             live(conn, "/budget/profiles/#{Ecto.UUID.generate()}/members")
+  end
+
+  test "malformed member ids never crash the member handlers", %{conn: conn} do
+    %{group: group, member: member, model: model_} = group_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    for {event, params} <- [
+          {"remove_member", %{"id" => "no-es-un-uuid"}},
+          {"open_details", %{"id" => "no-es-un-uuid"}},
+          {"toggle_extra_model", %{"target-id" => "no-es-un-uuid", "model-id" => model_.id}},
+          {"remove_member", %{"id" => Ecto.UUID.generate()}}
+        ] do
+      html = render_hook(view, event, params)
+      assert html =~ "no pertenece a este perfil de límites"
+    end
+
+    # La vista sigue viva y el miembro real intacto.
+    assert has_element?(view, "#remove-#{member.id}")
+    refute has_element?(view, "#member-details-no-es-un-uuid")
+  end
+
+  test "a member of another profile cannot be touched from this page", %{conn: conn} do
+    %{group: group} = group_with_member()
+    %{member: foreign} = group_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    html = render_hook(view, "remove_member", %{"id" => foreign.id})
+    assert html =~ "no pertenece a este perfil de límites"
+    assert Repo.get(Tokengate.Accounts.GroupMember, foreign.id)
+
+    html = render_hook(view, "open_details", %{"id" => foreign.id})
+    assert html =~ "no pertenece a este perfil de límites"
+    refute has_element?(view, "#member-details-#{foreign.id}")
+  end
+
+  test "members are rendered as a stream with per-row DOM ids", %{conn: conn} do
+    %{group: group, member: member} = group_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    assert has_element?(view, "#members-rows[phx-update='stream']")
+    assert has_element?(view, "tr#members-#{member.id}")
+  end
 end

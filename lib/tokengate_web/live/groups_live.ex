@@ -148,7 +148,13 @@ defmodule TokengateWeb.GroupsLive do
   end
 
   def handle_event("edit_models", %{"id" => group_id}, socket) do
-    {:noreply, assign(socket, :editing_models_group_id, group_id)}
+    case fetch_group(group_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, gettext("Perfil de límites no encontrado."))}
+
+      group ->
+        {:noreply, assign(socket, :editing_models_group_id, group.id)}
+    end
   end
 
   def handle_event("close_models", _params, socket) do
@@ -156,13 +162,18 @@ defmodule TokengateWeb.GroupsLive do
   end
 
   def handle_event("edit_group", %{"id" => group_id}, socket) do
-    group = Accounts.get_group!(group_id)
-    changeset = Accounts.change_group(group)
+    case fetch_group(group_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, gettext("Perfil de límites no encontrado."))}
 
-    {:noreply,
-     socket
-     |> assign(:form, to_form(changeset, as: :group))
-     |> assign(:editing_group_id, group.id)}
+      group ->
+        changeset = Accounts.change_group(group)
+
+        {:noreply,
+         socket
+         |> assign(:form, to_form(changeset, as: :group))
+         |> assign(:editing_group_id, group.id)}
+    end
   end
 
   def handle_event("save_group", %{"group" => group_params}, socket) do
@@ -170,8 +181,49 @@ defmodule TokengateWeb.GroupsLive do
   end
 
   def handle_event("delete_group", %{"id" => group_id}, socket) do
-    group = Accounts.get_group!(group_id)
+    case fetch_group(group_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, gettext("Perfil de límites no encontrado."))}
 
+      group ->
+        delete_group(socket, group)
+    end
+  end
+
+  ## Events — model grants ------------------------------------------------
+
+  def handle_event("toggle_model", %{"target-id" => group_id, "model-id" => model_id}, socket) do
+    case fetch_group(group_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, gettext("Perfil de límites no encontrado."))}
+
+      group ->
+        toggle_group_model(socket, group.id, model_id)
+    end
+  end
+
+  # Catch-all: an event with an unexpected payload (or from a stale client)
+  # leaves the socket untouched instead of raising FunctionClauseError and
+  # killing the LiveView.
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  ## Private helpers — save ----------------------------------------------
+
+  # Surgical refresh: only the table that actually changed, instead of the
+  # full load_groups() (groups + members + models + destinations + 2 spend
+  # aggregates).
+  defp refresh_granted_models(socket) do
+    granted_models =
+      from(tma in GroupModel, select: {tma.group_id, tma.model_id})
+      |> Repo.all()
+      |> Enum.group_by(fn {group_id, _} -> group_id end, fn {_, model_id} -> model_id end)
+
+    assign(socket, :granted_models, granted_models)
+  end
+
+  # Body of `delete_group`: only a row that actually exists reaches the
+  # context, so a stale/forged id becomes a flash instead of a crash.
+  defp delete_group(socket, %Group{} = group) do
     case Accounts.delete_group(group) do
       {:ok, _} ->
         audit(socket, "group.delete", "group", group.id, %{"name" => group.name})
@@ -194,9 +246,8 @@ defmodule TokengateWeb.GroupsLive do
     end
   end
 
-  ## Events — model grants ------------------------------------------------
-
-  def handle_event("toggle_model", %{"target-id" => group_id, "model-id" => model_id}, socket) do
+  # Body of `toggle_model` (grant <-> revoke) for a profile that exists.
+  defp toggle_group_model(socket, group_id, model_id) do
     group_alias_ids = Map.get(socket.assigns.granted_models, group_id, [])
 
     granted? = model_id not in group_alias_ids
@@ -225,19 +276,16 @@ defmodule TokengateWeb.GroupsLive do
     end
   end
 
-  # Surgical refresh: only the table that actually changed, instead of the
-  # full load_groups() (groups + members + models + destinations + 2 spend
-  # aggregates).
-  defp refresh_granted_models(socket) do
-    granted_models =
-      from(tma in GroupModel, select: {tma.group_id, tma.model_id})
-      |> Repo.all()
-      |> Enum.group_by(fn {group_id, _} -> group_id end, fn {_, model_id} -> model_id end)
-
-    assign(socket, :granted_models, granted_models)
+  # A client-supplied id reaches `Repo.get` as a string: a non-UUID would raise
+  # `Ecto.Query.CastError` and kill the LiveView, so it is cast first and a
+  # missing row is just `nil` (the caller shows a flash).
+  defp fetch_group(group_id) do
+    with {:ok, group_id} <- Ecto.UUID.cast(group_id) do
+      Accounts.get_group(group_id)
+    else
+      _ -> nil
+    end
   end
-
-  ## Private helpers — save ----------------------------------------------
 
   # A submit already in flight lands right after Cancel cleared the editing
   # id: no-op instead of a FunctionClauseError that would lose the form.
@@ -261,8 +309,16 @@ defmodule TokengateWeb.GroupsLive do
   end
 
   defp save_group(socket, group_id, group_params) when is_binary(group_id) do
-    group = Accounts.get_group!(group_id)
+    case fetch_group(group_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, gettext("Perfil de límites no encontrado."))}
 
+      group ->
+        update_group(socket, group, group_params)
+    end
+  end
+
+  defp update_group(socket, %Group{} = group, group_params) do
     case Accounts.update_group(group, group_params) do
       {:ok, updated} ->
         audit(socket, "group.update", "group", updated.id, %{

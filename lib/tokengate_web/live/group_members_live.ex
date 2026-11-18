@@ -29,8 +29,22 @@ defmodule TokengateWeb.GroupMembersLive do
   @impl true
   def mount(%{"id" => group_id}, _session, socket) do
     user = socket.assigns[:current_user]
-    group = Accounts.get_group!(group_id)
 
+    case fetch_group(group_id) do
+      nil ->
+        # A non-UUID or a deleted profile must not raise: empty state + back
+        # to the list, never a dead LiveView.
+        {:ok,
+         socket
+         |> put_flash(:error, gettext("Perfil de límites no encontrado."))
+         |> redirect(to: "/budget/profiles")}
+
+      group ->
+        mount_group(socket, user, group)
+    end
+  end
+
+  defp mount_group(socket, user, group) do
     case check_access(user, group) do
       :ok ->
         socket =
@@ -42,7 +56,7 @@ defmodule TokengateWeb.GroupMembersLive do
           |> assign(:add_form, add_member_form())
           |> assign(:add_member_error, nil)
           |> assign(:email_suggestions, [])
-          |> assign(:member_search, "")
+          |> stream_configure(:members, dom_id: &"members-#{&1.id}")
           |> load_data()
           |> load_usage_tiers()
 
@@ -68,21 +82,8 @@ defmodule TokengateWeb.GroupMembersLive do
 
   defp load_data(socket) do
     group = socket.assigns.group
-    search = socket.assigns[:member_search] || ""
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     members = Accounts.list_group_members_for_group(group.id)
-
-    members =
-      if search == "" do
-        members
-      else
-        search_down = String.downcase(search)
-
-        Enum.filter(members, fn m ->
-          String.contains?(String.downcase(m.user.email), search_down) or
-            String.contains?(String.downcase(m.user.name || ""), search_down)
-        end)
-      end
 
     # Get all available models
     org_alias_ids =
@@ -150,7 +151,10 @@ defmodule TokengateWeb.GroupMembersLive do
       Map.new(members, fn m -> {m.id, Accounts.effective_limits(%{m | group: group})} end)
 
     socket
-    |> assign(:members, members)
+    |> stream(:members, members, reset: true)
+    # The details modal needs one row by id; streams are not enumerable, so the
+    # lookup lives in its own map instead of an Enum.find over the stream.
+    |> assign(:members_by_id, Map.new(members, &{&1.id, &1}))
     |> assign(:member_limits, member_limits)
     |> assign(:member_budgets, Map.new(member_budgets, fn b -> {b.member_id, b} end))
     |> assign(:members_empty?, members == [])
@@ -179,11 +183,6 @@ defmodule TokengateWeb.GroupMembersLive do
   end
 
   ## Events — add member --------------------------------------------------
-
-  @impl true
-  def handle_event("search_members", %{"member_search" => search}, socket) do
-    {:noreply, socket |> assign(:member_search, search) |> load_data()}
-  end
 
   @impl true
   def handle_event("new_member", _params, socket) do
@@ -278,9 +277,81 @@ defmodule TokengateWeb.GroupMembersLive do
 
   @impl true
   def handle_event("remove_member", %{"id" => member_id}, socket) do
-    member = Accounts.get_group_member!(member_id)
+    case fetch_group_member(member_id) do
+      {:ok, member} ->
+        remove_member(socket, member)
 
-    # Verify the member belongs to this group
+      :error ->
+        {:noreply,
+         put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
+    end
+  end
+
+  ## Events — details modal (modelos del miembro) ---------------------------
+
+  @impl true
+  def handle_event("open_details", %{"id" => member_id}, socket) do
+    case fetch_group_member(member_id) do
+      {:ok, %{group_id: group_id} = member} when group_id == socket.assigns.group.id ->
+        {:noreply, assign(socket, :editing_details_member_id, member.id)}
+
+      _ ->
+        {:noreply,
+         put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
+    end
+  end
+
+  @impl true
+  def handle_event("close_details", _params, socket) do
+    {:noreply, assign(socket, :editing_details_member_id, nil)}
+  end
+
+  ## Events — extra model grants / denies (picker de 3 estados) ------------
+
+  @impl true
+  def handle_event(
+        "toggle_extra_model",
+        %{"target-id" => member_id, "model-id" => model_id},
+        socket
+      ) do
+    case fetch_group_member(member_id) do
+      {:ok, member} ->
+        toggle_extra_model(socket, member, model_id)
+
+      :error ->
+        {:noreply,
+         put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
+    end
+  end
+
+  # Catch-all: an event with an unexpected payload (or from a stale client)
+  # leaves the socket untouched instead of raising FunctionClauseError and
+  # killing the LiveView.
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  ## Helpers --------------------------------------------------------------
+
+  # A client-supplied id reaches `Repo.get` as a string: a non-UUID would raise
+  # `Ecto.Query.CastError` and kill the LiveView, so it is cast first.
+  defp fetch_group(group_id) do
+    with {:ok, group_id} <- Ecto.UUID.cast(group_id) do
+      Accounts.get_group(group_id)
+    else
+      _ -> nil
+    end
+  end
+
+  defp fetch_group_member(member_id) do
+    with {:ok, member_id} <- Ecto.UUID.cast(member_id),
+         %{} = member <- Accounts.get_group_member(member_id) do
+      {:ok, member}
+    else
+      _ -> :error
+    end
+  end
+
+  # Body of `remove_member`: the row must belong to THIS profile.
+  defp remove_member(socket, member) do
     if member.group_id != socket.assigns.group.id do
       {:noreply,
        put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
@@ -304,27 +375,10 @@ defmodule TokengateWeb.GroupMembersLive do
     end
   end
 
-  ## Events — details modal (modelos del miembro) ---------------------------
-
-  @impl true
-  def handle_event("open_details", %{"id" => member_id}, socket) do
-    {:noreply, assign(socket, :editing_details_member_id, member_id)}
-  end
-
-  @impl true
-  def handle_event("close_details", _params, socket) do
-    {:noreply, assign(socket, :editing_details_member_id, nil)}
-  end
-
-  ## Events — extra model grants / denies (picker de 3 estados) ------------
-
-  @impl true
-  def handle_event(
-        "toggle_extra_model",
-        %{"target-id" => member_id, "model-id" => model_id},
-        socket
-      ) do
-    member = Accounts.get_group_member!(member_id)
+  # Body of `toggle_extra_model` (picker de 3 estados) for a member of THIS
+  # profile.
+  defp toggle_extra_model(socket, member, model_id) do
+    member_id = member.id
 
     if member.group_id != socket.assigns.group.id do
       {:noreply,
@@ -368,40 +422,6 @@ defmodule TokengateWeb.GroupMembersLive do
       end
     end
   end
-
-  @impl true
-  def handle_event(
-        "save_alias_extra",
-        %{"model_extra" => params},
-        socket
-      ) do
-    member_id = params["member_id"]
-    model_id = params["model_id"]
-
-    member = Accounts.get_group_member!(member_id)
-
-    if member.group_id != socket.assigns.group.id do
-      {:noreply,
-       put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
-    else
-      case Providers.set_extra_model(member_id, model_id) do
-        {:ok, _} ->
-          audit(socket, "group_member.extra_model_update", "group_member", member_id, %{
-            "model_id" => model_id
-          })
-
-          {:noreply,
-           socket
-           |> put_flash(:info, "Alias actualizado.")
-           |> load_data()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
-      end
-    end
-  end
-
-  ## Helpers --------------------------------------------------------------
 
   defp add_member_form do
     to_form(%{"email" => ""}, as: :add_member)
@@ -601,8 +621,8 @@ defmodule TokengateWeb.GroupMembersLive do
                   <th class="text-right">{gettext("Actions")}</th>
                 </tr>
               </thead>
-              <tbody>
-                <tr :for={member <- @members} id={"members-#{member.id}"} class="align-top">
+              <tbody id="members-rows" phx-update="stream">
+                <tr :for={{dom_id, member} <- @streams.members} id={dom_id} class="align-top">
                   <% mb = Map.get(@member_budgets, member.id, %{monthly_spend: Decimal.new(0)}) %>
                   <% limits = Map.fetch!(@member_limits, member.id) %>
                   <% own_conc? = not is_nil(member.user.default_concurrency_limit) %>
@@ -728,7 +748,7 @@ defmodule TokengateWeb.GroupMembersLive do
           <div class="absolute inset-0 bg-black/50" phx-click="close_details" />
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
-              <% member = Enum.find(@members, &(&1.id == @editing_details_member_id)) %>
+              <% member = Map.get(@members_by_id, @editing_details_member_id) %>
               <div :if={member}>
                 <h2 class="text-lg font-semibold mb-1">{member.user.email}</h2>
                 <p class="text-xs text-base-content/50 mb-4">{member.user.name}</p>

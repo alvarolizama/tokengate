@@ -53,6 +53,11 @@ defmodule Tokengate.Accounts.Service do
     |> validate_number(:concurrency_limit, greater_than: 0)
     |> validate_number(:rpm_limit, greater_than: 0)
     |> validate_number(:monthly_spend_limit_usd, greater_than_or_equal_to: 0)
+    # `services.name` carries a real unique index (w6_services_name_unique):
+    # without this declaration a duplicate would surface as a 500-style
+    # Ecto.ConstraintError instead of a field error on the form. The index name
+    # is explicit because it is not Ecto's default (`services_name_index`).
+    |> unique_constraint(:name, name: :services_name_unique)
   end
 
   @doc "Defaults de límites cuando el service no define los suyos."
