@@ -44,6 +44,34 @@ defmodule TokengateWeb.ProxyControllerTest do
     ])
   end
 
+  # Same canonical upload with an audio file of a KNOWN size: the stt cost of a
+  # per_second/per_minute lane is derived from it (160_000 bytes ≈ 10 s at the
+  # 128 kbps the extractor documents).
+  defp multipart_body_of_size(model, audio_bytes) do
+    IO.iodata_to_binary([
+      "--",
+      @boundary,
+      "\r\n",
+      ~s(content-disposition: form-data; name="model"\r\n\r\n),
+      "#{model}\r\n",
+      "--",
+      @boundary,
+      "\r\n",
+      ~s(content-disposition: form-data; name="file"; filename="audio.wav"\r\n),
+      "content-type: audio/wav\r\n\r\n",
+      audio_bytes,
+      "\r\n--",
+      @boundary,
+      "--\r\n"
+    ])
+  end
+
+  # `bytes` bytes of WAV-flavoured audio: enough for the parser to report a
+  # `%MediaFile{size}` the cost path can turn into seconds.
+  defp audio_of_bytes(bytes) do
+    "RIFF" <> <<4::32>> <> "WAVE" <> :binary.copy(<<0>>, bytes - 12)
+  end
+
   # The model part of a multipart body travels as the CLIENT wrote it, so the
   # gateway maps it to the lane's upstream id (`AudioMultipart.rewrite_model/3`).
   # The fixture's lanes answer as `gpt-4o-real-<unique>`.
@@ -134,6 +162,22 @@ defmodule TokengateWeb.ProxyControllerTest do
         # payload at fault, not a provider-specific rejection).
         "notfound" in conn.path_info ->
           json(conn, 404, %{"error" => %{"message" => "model not found upstream"}})
+
+        # A `403 tier_restricted` from the OpenAI-compatible media cluster
+        # (Helmcode/NaN): the MODEL is outside the credential's plan. It must
+        # not disable the credential — every other lane keeps working.
+        "tierrestricted" in conn.path_info ->
+          json(conn, 403, %{
+            "error" => %{
+              "message" => "your plan does not include this model",
+              "type" => "invalid_request_error",
+              "code" => "tier_restricted"
+            }
+          })
+
+        # A `403` about the key itself: this one DOES disable the credential.
+        "keyforbidden" in conn.path_info ->
+          json(conn, 403, %{"error" => %{"message" => "invalid api key", "code" => nil}})
 
         # A tts surface that answers with real audio bytes instead of JSON —
         # the binary passthrough the client must receive untouched.
@@ -453,6 +497,104 @@ defmodule TokengateWeb.ProxyControllerTest do
     end
   end
 
+  # Bandit/Plug refuse to SEND a 524: it is not an RFC status code, and Plug
+  # raises while building the reason phrase. The documented 524 (Helmcode/NaN
+  # answer it for oversized audio) is exactly what P13 must see, so this helper
+  # speaks HTTP/1.1 on its own socket: accept, drain one request, answer 524,
+  # close — and count the connections, so a same-key retry is observable.
+  defmodule Edge524Server do
+    @moduledoc false
+
+    def start do
+      parent = self()
+      pid = spawn_link(fn -> listen(parent) end)
+
+      receive do
+        {:edge_524_port, ^pid, port} -> {pid, port}
+      after
+        2_000 -> raise "the 524 server did not start"
+      end
+    end
+
+    defp listen(parent) do
+      {:ok, listen} =
+        :gen_tcp.listen(0, [
+          :binary,
+          packet: :raw,
+          active: false,
+          reuseaddr: true,
+          ip: {127, 0, 0, 1}
+        ])
+
+      {:ok, port} = :inet.port(listen)
+      send(parent, {:edge_524_port, self(), port})
+      loop(listen, parent, 0)
+    end
+
+    defp loop(listen, parent, hits) do
+      case :gen_tcp.accept(listen) do
+        {:ok, socket} ->
+          drain(socket)
+          send(parent, {:edge_524_hit, hits + 1})
+
+          body = ~s({"error":{"message":"request timeout"}})
+
+          :gen_tcp.send(socket, [
+            "HTTP/1.1 524 Gateway Timeout\r\n",
+            "content-type: application/json\r\n",
+            "content-length: #{byte_size(body)}\r\n",
+            "connection: close\r\n\r\n",
+            body
+          ])
+
+          :gen_tcp.close(socket)
+          loop(listen, parent, hits + 1)
+
+        {:error, _reason} ->
+          :ok
+      end
+    end
+
+    # The client must finish writing before the answer, or Finch sees a reset:
+    # headers first, then exactly the bytes `content-length` announced.
+    defp drain(socket, acc \\ "") do
+      case :binary.split(acc, "\r\n\r\n") do
+        [head, rest] ->
+          read_body(socket, byte_size(rest), content_length(head))
+
+        [_partial] ->
+          case :gen_tcp.recv(socket, 0, 5_000) do
+            {:ok, chunk} -> drain(socket, acc <> chunk)
+            _ -> :ok
+          end
+      end
+    end
+
+    defp content_length(head) do
+      head
+      |> String.split("\r\n")
+      |> Enum.find_value(0, fn line ->
+        case String.split(line, ":", parts: 2) do
+          [key, value] ->
+            if String.downcase(String.trim(key)) == "content-length",
+              do: String.to_integer(String.trim(value))
+
+          _ ->
+            nil
+        end
+      end)
+    end
+
+    defp read_body(_socket, have, length) when have >= length, do: :ok
+
+    defp read_body(socket, have, length) do
+      case :gen_tcp.recv(socket, 0, 5_000) do
+        {:ok, chunk} -> read_body(socket, have + byte_size(chunk), length)
+        _ -> :ok
+      end
+    end
+  end
+
   setup do
     :persistent_term.put({ProviderPlug, :test_pid}, self())
     :persistent_term.put({ProviderPlug, :reject_body_fields}, [])
@@ -511,15 +653,18 @@ defmodule TokengateWeb.ProxyControllerTest do
     member = Repo.preload(member, :api_key)
 
     provider_url =
-      case Map.get(opts, :down) do
-        true ->
+      cond do
+        url = Map.get(opts, :base_url) ->
+          url
+
+        Map.get(opts, :down) ->
           "http://localhost:#{@port}/down"
 
-        _ ->
-          case Map.get(opts, :provider_path) do
-            nil -> "http://localhost:#{@port}"
-            segment -> "http://localhost:#{@port}/#{segment}"
-          end
+        segment = Map.get(opts, :provider_path) ->
+          "http://localhost:#{@port}/#{segment}"
+
+        true ->
+          "http://localhost:#{@port}"
       end
 
     {:ok, provider} =
@@ -3284,7 +3429,10 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   test "POST /v1/audio/speech lands on base_url + /audio/speech", %{conn: conn} do
     conn =
-      assert_service_route(conn, "/v1/audio/speech", "/audio/speech", "tts", %{"input" => "hola"})
+      assert_service_route(conn, "/v1/audio/speech", "/audio/speech", "tts", %{
+        "input" => "hola",
+        "voice" => "af_heart"
+      })
 
     assert json_body(conn)["audio"] == "SUQzBAAAAAA"
   end
@@ -3551,7 +3699,11 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/audio/speech", %{"model" => model.name, "input" => "hola mundo"})
+      |> post(~p"/v1/audio/speech", %{
+        "model" => model.name,
+        "input" => "hola mundo",
+        "voice" => "af_heart"
+      })
 
     assert json_response(conn, 200)
 
@@ -3563,6 +3715,127 @@ defmodule TokengateWeb.ProxyControllerTest do
     log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
     assert log.request_type == "tts"
     assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000150"))
+  end
+
+  # F15/F26: the parameters the gateway can verify against the wire's own
+  # OpenAPI are refused locally, with the gateway's own code and zero provider
+  # calls. Nothing is translated: the voice vocabulary of a Kokoro lane is not
+  # the OpenAI one, but the pack names are per provider and cannot be verified
+  # without a real key (owner verifies in W15), so the gateway enforces only what
+  # the schema itself states.
+  test "tts: a request without voice is a local 400 (the wire requires it)", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "tts"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/audio/speech", %{"model" => model.name, "input" => "hola"})
+
+    assert %{"error" => %{"code" => "missing_voice", "message" => message}} =
+             json_response(conn, 400)
+
+    assert message =~ "voice"
+    refute_receive {:provider_request_path, _path}, 100
+  end
+
+  test "tts: a response_format outside the documented enum is a local 400", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "tts"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/audio/speech", %{
+        "model" => model.name,
+        "input" => "hola",
+        "voice" => "af_heart",
+        "response_format" => "ogg"
+      })
+
+    assert %{"error" => %{"code" => "unsupported_response_format", "message" => message}} =
+             json_response(conn, 400)
+
+    assert message =~ "mp3"
+    refute_receive {:provider_request_path, _path}, 100
+  end
+
+  test "tts: the enum the wire serves reaches the upstream", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "tts"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/audio/speech", %{
+        "model" => model.name,
+        "input" => "hola",
+        "voice" => "ef_dora",
+        "response_format" => "opus"
+      })
+
+    assert json_response(conn, 200)["audio"] == "SUQzBAAAAAA"
+    assert_receive {:provider_request, sent}
+    assert sent["voice"] == "ef_dora"
+    assert sent["response_format"] == "opus"
+  end
+
+  test "image: a size the wire cannot parse is a local 400", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "image"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/images/generations", %{
+        "model" => model.name,
+        "prompt" => "un gato",
+        "size" => "enorme"
+      })
+
+    assert %{"error" => %{"code" => "invalid_image_parameter", "message" => message}} =
+             json_response(conn, 400)
+
+    assert message =~ "size"
+    refute_receive {:provider_request_path, _path}, 100
+  end
+
+  test "image: n must be a positive integer", %{} do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "image"})
+
+    for n <- [0, -1, "dos"] do
+      conn =
+        build_conn()
+        |> authed_conn(token)
+        |> post(~p"/v1/images/generations", %{
+          "model" => model.name,
+          "prompt" => "un gato",
+          "n" => n
+        })
+
+      assert %{"error" => %{"code" => "invalid_image_parameter"}} = json_response(conn, 400)
+    end
+
+    refute_receive {:provider_request_path, _path}, 100
+  end
+
+  # The gate must not over-reject: `auto` and a real size are what the docs
+  # serve, and they still reach the upstream (the per-model RANGES are the
+  # catalog's business, not the gateway's).
+  test "image: auto and WxH sizes still reach the upstream", %{} do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "image"})
+
+    for size <- ["auto", "1024x1024"] do
+      conn =
+        build_conn()
+        |> authed_conn(token)
+        |> post(~p"/v1/images/generations", %{
+          "model" => model.name,
+          "prompt" => "un gato",
+          "size" => size,
+          "n" => 2
+        })
+
+      assert %{"data" => [%{"b64_json" => "aW1n"}]} = json_response(conn, 200)
+      assert_receive {:provider_request, sent}
+      assert sent["size"] == size
+    end
   end
 
   # Un lane de media SIN precio unitario sigue siendo el $0 honesto: no se
@@ -3607,6 +3880,165 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.request_type == "stt"
     assert log.prompt_tokens > 0
     assert log.completion_tokens == 0
+  end
+
+  # P12 (F13): the canonical multipart upload carries the DEFAULT
+  # `response_format` (`json`), whose answer has no `duration` — only
+  # `verbose_json` reports it. The billable quantity of a per_second/per_minute
+  # lane therefore has to come from the audio the parser measured: the
+  # `%MediaFile{size}`. Before, the extractor only understood base64 request
+  # bodies, so every multipart transcription billed $0 in silence.
+  test "stt: a multipart json upload bills per_second from the file size", %{conn: conn} do
+    %{token: token, model: model, member: member, model_provider: lane} =
+      proxy_fixture(%{credit_units: 100, model_type: "stt"})
+
+    {:ok, _lane} =
+      Providers.update_model_provider(lane, %{pricing_unit: "per_second", unit_cost: "0.0060"})
+
+    # 160_000 bytes at the documented 128 kbps = 10 s → 10 × $0.006 = $0.06.
+    body = multipart_body_of_size(model.name, audio_of_bytes(160_000))
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", body)
+
+    assert json_response(conn, 200)["text"] == "hola mundo"
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.060000"]
+    assert %{consumed_micro: 60_000} = Budgets.limit_spend({:user, member.user_id})
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == "stt"
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.060000"))
+  end
+
+  test "stt: a multipart json upload bills per_minute from the file size", %{conn: conn} do
+    %{token: token, model: model, member: member, model_provider: lane} =
+      proxy_fixture(%{credit_units: 100, model_type: "stt"})
+
+    {:ok, _lane} =
+      Providers.update_model_provider(lane, %{pricing_unit: "per_minute", unit_cost: "0.1200"})
+
+    body = multipart_body_of_size(model.name, audio_of_bytes(160_000))
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", body)
+
+    assert json_response(conn, 200)["text"] == "hola mundo"
+
+    # 10 s = 1/6 min × $0.12 = $0.02.
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.020000"]
+    assert %{consumed_micro: 20_000} = Budgets.limit_spend({:user, member.user_id})
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.020000"))
+  end
+
+  # P13 (F14): a `403 tier_restricted` means the MODEL is outside the
+  # credential's plan (whisper-1 was the owner-verified case) — not that the key
+  # is dead. The gateway used to classify every 401/402/403 as `:auth_error` and
+  # disable the whole credential, taking every other lane of that provider down
+  # until a manual reactivation. Now the refusal is scoped: the lane is skipped
+  # for this request, the credential stays enabled, and the client gets the
+  # upstream's own 403 with a reason it can act on.
+  test "a 403 tier_restricted for one model does not disable the credential", %{conn: conn} do
+    %{token: token, model: model, member: member, credential: credential} =
+      proxy_fixture(%{model_type: "stt", provider_path: "tierrestricted"})
+
+    Phoenix.PubSub.subscribe(Tokengate.PubSub, "alerts")
+    credential_id = credential.id
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", stt_multipart(model.name, "json"))
+
+    # The scoped reason reaches the client (not "auth_error", which is what the
+    # credential-disabling path answers).
+    assert %{"error" => %{"code" => "model_not_available"}} = json_response(conn, 403)
+
+    # The disable path is the ONLY place that broadcasts `:credential_error`, and
+    # it is only reached from the `:auth_error` clause: its absence is the
+    # proof that this refusal never ran it. (The DB write of that Task is not
+    # observable here — it runs outside the sandbox ownership — so the broadcast
+    # is the assertion that matters.)
+    refute_receive {:credential_error, ^credential_id, _reason}, 150
+    assert Providers.get_credential!(credential.id).status == "active"
+
+    # A scoped refusal is deterministic: one attempt, no same-key retry.
+    assert_receive {:provider_request_path, "/tierrestricted/audio/transcriptions"}, 1_000
+    refute_receive {:provider_request_path, _path}, 200
+
+    assert %{failure: 0, success: drained} = Oban.drain_queue(queue: :logs)
+    assert drained >= 1
+
+    log =
+      Repo.one(
+        from l in RequestLog,
+          where: l.group_member_id == ^member.id and l.error_reason == "model_not_available"
+      )
+
+    assert log.status_code == 403
+  end
+
+  # The other side of F14: a 403 that says nothing about a plan or a model is
+  # still the credential's own failure and must keep disabling it.
+  #
+  # This only became assertable with the `error_at` fix in
+  # `disable_credential_async/3`: `DateTime.utc_now/0` carries microseconds and
+  # the `:utc_datetime` column rejects them, so the Task used to die before the
+  # update AND before the broadcast — the disable was a silent no-op.
+  test "a 403 about the key itself still disables the credential", %{conn: conn} do
+    %{token: token, model: model, credential: credential} =
+      proxy_fixture(%{model_type: "stt", provider_path: "keyforbidden"})
+
+    Phoenix.PubSub.subscribe(Tokengate.PubSub, "alerts")
+    credential_id = credential.id
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", stt_multipart(model.name, "json"))
+
+    # No candidate left once the credential is disabled.
+    assert conn.status == 503
+
+    assert_receive {:credential_error, ^credential_id, "auth_error_403"}, 1_000
+    assert Providers.get_credential!(credential_id).status == "error"
+  end
+
+  # P13 (F25): a 524 is the upstream's own edge timing out. The credential is
+  # healthy and the same key would just wait out another gateway timeout, so the
+  # gateway excludes it for this request instead of retrying it — and the 5xx
+  # bucket no longer counts it against the breaker.
+  test "a 524 is not retried with the same key", %{conn: conn} do
+    {_server, port} = Edge524Server.start()
+
+    %{token: token, model: model} =
+      proxy_fixture(%{base_url: "http://127.0.0.1:#{port}"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    # One attempt: the first upstream call, and no same-key retry behind it.
+    assert_receive {:edge_524_hit, 1}, 1_000
+    refute_receive {:edge_524_hit, 2}, 250
+
+    # Exhausted cascade for a healthy-but-timed-out lane: the client gets a 503,
+    # not the 200 the old "retry three times" never produced either.
+    assert conn.status == 503
   end
 
   # Regresión del lane de CHAT cobrado por llamada: el formulario ofrece
@@ -3836,64 +4268,59 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert_receive {:provider_request_path, "/chat/completions"}
   end
 
-  # OpenRouter's transcription endpoint rejects `text` with a 400; the dialect
-  # adapter asks the upstream for `json` and answers the transcript as
-  # `text/plain` (see `Tokengate.Proxy.OpenRouterAdapter`).
-  test "an openrouter transcription with response_format=text comes back as plain text", %{
-    conn: conn
-  } do
-    %{token: token, model: model, provider: provider} = proxy_fixture(%{model_type: "stt"})
-    {:ok, _provider} = Providers.update_provider(provider, %{dialect: "openrouter"})
-    body = stt_multipart(model.name, "text")
+  # P11 (F12): `response_format` on the transcription surface is a CLOSED enum of
+  # `json`/`verbose_json` for every multipart dialect — OpenRouter documents it,
+  # and so does the openai-dialect media cluster the catalog ships (Helmcode/NaN,
+  # `enum: [json, verbose_json]` in both OpenAPIs, verified 2026-11-17). The
+  # gateway used to translate `text` for OpenRouter and forward the rest, so the
+  # SAME body answered 200 on one provider and 400 on another. Now every
+  # unsupported value is refused locally, with the gateway's own code and zero
+  # provider calls — same body, same answer, whichever lane the router picks.
+  test "response_format outside json/verbose_json is a local 400 on every multipart dialect" do
+    for dialect <- ["openai", "openrouter"],
+        format <- ["text", "srt", "vtt"] do
+      %{token: token, model: model, provider: provider} = proxy_fixture(%{model_type: "stt"})
+      {:ok, _provider} = Providers.update_provider(provider, %{dialect: dialect})
 
-    conn =
-      conn
-      |> authed_conn(token)
-      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
-      |> post(~p"/v1/audio/transcriptions", body)
+      conn =
+        build_conn()
+        |> authed_conn(token)
+        |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+        |> post(~p"/v1/audio/transcriptions", stt_multipart(model.name, format))
 
-    assert conn.status == 200
-    assert response(conn, 200) == "hola mundo"
-    assert get_resp_header(conn, "content-type") |> hd() =~ "text/plain"
+      assert %{"error" => %{"code" => "unsupported_response_format", "message" => message}} =
+               json_response(conn, 400)
 
-    assert_receive {:provider_raw_body, sent, _headers}
-    assert sent =~ ~s(name="response_format"\r\n\r\njson)
-    refute sent =~ ~s(name="response_format"\r\n\r\ntext)
+      assert message =~ "verbose_json"
+      assert message =~ ~s("#{format}")
+
+      # Zero upstream calls: the rejection happens before routing spends an
+      # attempt, a credential or a hold.
+      refute_receive {:provider_raw_body, _sent, _headers}, 50
+    end
   end
 
-  test "an openrouter transcription with response_format=srt is a local 400", %{conn: conn} do
-    %{token: token, model: model, provider: provider} = proxy_fixture(%{model_type: "stt"})
-    {:ok, _provider} = Providers.update_provider(provider, %{dialect: "openrouter"})
-    body = stt_multipart(model.name, "srt")
+  # The formats the wire DOES serve cross untouched, on both dialects.
+  test "json and verbose_json reach the upstream unchanged" do
+    for dialect <- ["openai", "openrouter"],
+        format <- ["json", "verbose_json"] do
+      %{token: token, model: model, provider: provider} = proxy_fixture(%{model_type: "stt"})
+      {:ok, _provider} = Providers.update_provider(provider, %{dialect: dialect})
+      body = stt_multipart(model.name, format)
 
-    conn =
-      conn
-      |> authed_conn(token)
-      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
-      |> post(~p"/v1/audio/transcriptions", body)
+      conn =
+        build_conn()
+        |> authed_conn(token)
+        |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+        |> post(~p"/v1/audio/transcriptions", body)
 
-    assert %{"error" => %{"code" => "unsupported_response_format", "message" => message}} =
-             json_response(conn, 400)
+      assert json_response(conn, 200)["text"] == "hola mundo"
 
-    assert message =~ "verbose_json"
-    refute_receive {:provider_raw_body, _sent, _headers}, 100
-  end
-
-  # The other dialects keep receiving `text` verbatim: the translation is a
-  # property of the openrouter dialect, not of the STT surface.
-  test "an openai-dialect lane still receives response_format=text", %{conn: conn} do
-    %{token: token, model: model} = proxy_fixture(%{model_type: "stt"})
-    body = stt_multipart(model.name, "text")
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
-      |> post(~p"/v1/audio/transcriptions", body)
-
-    assert json_response(conn, 200)["text"] == "hola mundo"
-    assert_receive {:provider_raw_body, sent, _headers}
-    assert sent =~ ~s(name="response_format"\r\n\r\ntext)
+      # The lane's upstream id differs from the client's name, so the body is
+      # rebuilt — but the `response_format` the client asked for survives.
+      assert_receive {:provider_raw_body, sent, _headers}
+      assert sent =~ ~s(name="response_format"\r\n\r\n#{format})
+    end
   end
 
   test "a binary upstream response reaches the client with its content-type", %{conn: conn} do
@@ -3903,7 +4330,11 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/audio/speech", %{"model" => model.name, "input" => "hola"})
+      |> post(~p"/v1/audio/speech", %{
+        "model" => model.name,
+        "input" => "hola",
+        "voice" => "af_heart"
+      })
 
     # The bytes, not a JSON wrapper: `json/1` would have sent `{}`.
     assert conn.status == 200
@@ -3938,7 +4369,11 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/audio/speech", %{"model" => model.name, "input" => "hola"})
+      |> post(~p"/v1/audio/speech", %{
+        "model" => model.name,
+        "input" => "hola",
+        "voice" => "af_heart"
+      })
 
     assert response(conn, 200) == <<0xFF, 0xFB, 0x90, 0x01>>
     assert get_resp_header(conn, "x-tokengate-cost") == ["0.000420"]
@@ -3963,7 +4398,11 @@ defmodule TokengateWeb.ProxyControllerTest do
       conn
       |> authed_conn(token)
       |> put_req_header("accept", "audio/mpeg")
-      |> post(~p"/v1/audio/speech", %{"model" => model.name, "input" => "hola"})
+      |> post(~p"/v1/audio/speech", %{
+        "model" => model.name,
+        "input" => "hola",
+        "voice" => "af_heart"
+      })
 
     assert response(conn, 200) == <<0xFF, 0xFB, 0x90, 0x00>>
     assert get_resp_header(conn, "content-type") |> hd() =~ "audio/mpeg"

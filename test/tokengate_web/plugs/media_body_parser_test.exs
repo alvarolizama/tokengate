@@ -102,4 +102,32 @@ defmodule TokengateWeb.Plugs.MediaBodyParserTest do
 
     assert MediaBodyParser.call(conn, ["/v1/"]) == conn
   end
+
+  # F27: the cap follows the upstream's documented 25 MB upload limit. The plug
+  # used to take 50 MB, so a 26 MB upload was fully buffered and forwarded just
+  # to earn the provider's announced 413.
+  test "a body over the documented upload limit is a 413" do
+    body = :binary.copy(<<0x52>>, 26_100_000)
+    conn = MediaBodyParser.call(multipart_conn(body), ["/v1/"])
+
+    assert conn.status == 413
+    assert conn.halted
+    assert Jason.decode!(conn.resp_body)["error"]["code"] == "request_too_large"
+  end
+
+  # F27: a non-JSON body the gateway cannot describe (a raw audio/*) used to be
+  # buffered whole and forwarded with empty params. It carries no `model`, so it
+  # can only fail later: 415 says it now, before the bytes are read.
+  test "a media type outside the gateway contract is a 415" do
+    conn =
+      :post
+      |> Plug.Test.conn("/v1/audio/transcriptions", <<0xFF, 0xFB, 0x90, 0x00>>)
+      |> Plug.Conn.put_req_header("content-type", "audio/mpeg")
+
+    conn = MediaBodyParser.call(conn, ["/v1/"])
+
+    assert conn.status == 415
+    assert conn.halted
+    assert Jason.decode!(conn.resp_body)["error"]["code"] == "unsupported_media_type"
+  end
 end

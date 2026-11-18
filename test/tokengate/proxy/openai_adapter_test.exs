@@ -102,6 +102,34 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
         "emptybody" in conn.path_info ->
           send_resp(conn, 200, "")
 
+        # A transcript answered as `text/plain` whose bytes happen to be valid
+        # JSON: it is text, not a number/boolean, and must cross verbatim.
+        "jsontranscript" in conn.path_info ->
+          conn
+          |> put_resp_content_type("text/plain")
+          |> send_resp(200, "123")
+
+        # Scoped refusals the plan-level classification owns: `403
+        # tier_restricted` (a model outside the plan) and `402` (no balance).
+        "planrestricted" in conn.path_info ->
+          json(conn, 403, %{
+            "error" => %{
+              "message" => "your plan does not include this model",
+              "type" => "invalid_request_error",
+              "code" => "tier_restricted"
+            }
+          })
+
+        "nobalance" in conn.path_info ->
+          json(conn, 402, %{
+            "error" => %{"message" => "credits exhausted", "code" => "credits_exhausted"}
+          })
+
+        # A 403 that says nothing about a plan or a model: the credential itself
+        # is what the upstream is refusing.
+        "forbidden" in conn.path_info ->
+          json(conn, 403, %{"error" => %{"message" => "invalid api key"}})
+
         # Only reachable through a provider path override: the generic surface
         # would book /chat/completions.
         conn.request_path == "/custom/chat/completions" ->
@@ -477,6 +505,55 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
                OpenAIAdapter.service_post(provider, credential, :image, %{"model" => "v"})
 
       assert body == %{}
+    end
+
+    # F27: a `text/plain` transcript that happens to be valid JSON ("123",
+    # "true", "hola") is TEXT the client asked for — decoding it first turned it
+    # into a number/boolean and `json/1` answered `123` instead of `"123"`.
+    test "a text/plain body that is valid JSON stays raw bytes", %{credential: credential} do
+      provider = provider_to("/jsontranscript")
+
+      assert {:ok, body, _latency, headers} =
+               OpenAIAdapter.service_post(provider, credential, :stt, %{"model" => "whisper-1"})
+
+      assert %Tokengate.Proxy.RawResponse{body: "123", content_type: ct} = body
+      assert ct =~ "text/plain"
+      assert {"content-type", "text/plain; charset=utf-8"} in headers
+    end
+
+    # F14/F25: the adapter classifies with the upstream's own error envelope, so
+    # a scoped refusal (model outside the plan, no balance) is not read as a dead
+    # credential, and the documented 524 is a gateway timeout.
+    test "a 403 tier_restricted is a scoped :model_not_available, not an :auth_error", %{
+      credential: credential
+    } do
+      provider = provider_to("/planrestricted")
+
+      assert {:error, :model_not_available, 403, message} =
+               OpenAIAdapter.service_post(provider, credential, :stt, %{"model" => "whisper-1"})
+
+      assert message =~ "plan"
+    end
+
+    test "a 402 is a :billing_error, never an :auth_error", %{credential: credential} do
+      provider = provider_to("/nobalance")
+
+      assert {:error, :billing_error, 402, message} =
+               OpenAIAdapter.service_post(provider, credential, :image, %{"model" => "v"})
+
+      assert message =~ "credits"
+    end
+
+    # NOTE: a 524 cannot be produced by an in-process Bandit server (Plug
+    # refuses to send a non-RFC status code), so the 524 classification is
+    # covered in `provider_adapter_test.exs` and its retry policy end-to-end in
+    # `proxy_controller_test.exs` against a raw HTTP/1.1 socket.
+
+    test "an unreadable 403 keeps the conservative :auth_error", %{credential: credential} do
+      provider = provider_to("/forbidden")
+
+      assert {:error, :auth_error, 403, _message} =
+               OpenAIAdapter.service_post(provider, credential, :stt, %{"model" => "whisper-1"})
     end
   end
 

@@ -5,6 +5,7 @@ defmodule Tokengate.Proxy.ServiceUsageTest do
   """
   use ExUnit.Case, async: true
 
+  alias Tokengate.Proxy.MediaFile
   alias Tokengate.Proxy.ServiceUsage
   alias Tokengate.Providers.Pricing
 
@@ -120,6 +121,32 @@ defmodule Tokengate.Proxy.ServiceUsageTest do
     test "cuenta los caracteres de la transcripción cuando el upstream la trae" do
       q = ServiceUsage.quantities("stt", %{}, %{"text" => "hola"})
       assert q["per_1k_characters"] == 4
+    end
+
+    # F13: el upload canónico es multipart y su `response_format` por defecto es
+    # `json`, que NO trae `duration` (solo `verbose_json`). El tamaño del audio
+    # está en el `%MediaFile{size}` que dejó el parser: sin leerlo, todo STT
+    # multipart facturaba $0 en lanes per_second/per_minute.
+    test "sin duración reportada, la estima del %MediaFile{} del multipart" do
+      # 160_000 bytes → 10 s a 128 kbps.
+      payload = %{
+        "file" => %MediaFile{filename: "audio.wav", content_type: "audio/wav", size: 160_000}
+      }
+
+      q = ServiceUsage.quantities("stt", payload, %{"text" => "hola mundo"})
+
+      assert q["per_second"] == 10.0
+      assert q["per_minute"] == 10.0 / 60
+    end
+
+    test "la duración reportada por el upstream gana sobre el tamaño del archivo" do
+      payload = %{
+        "file" => %MediaFile{filename: "audio.wav", content_type: "audio/wav", size: 160_000}
+      }
+
+      q = ServiceUsage.quantities("stt", payload, %{"duration" => 3.5, "text" => "hola"})
+
+      assert q["per_second"] == 3.5
     end
   end
 

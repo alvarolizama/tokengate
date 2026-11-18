@@ -92,6 +92,10 @@ defmodule TokengateWeb.ProxyController do
   @max_attempts 9
   @max_retries_per_provider 3
 
+  # The `response_format` enum of the TTS surface — identical in OpenAI's audio
+  # docs and in the OpenAPI of the openai-dialect media cluster (Helmcode/NaN).
+  @tts_response_formats ~w(mp3 wav flac aac pcm opus)
+
   # $0 as a Decimal: the cost a cache hit reports (the upstream was paid when
   # the entry was filled, this request never reached it).
   @zero_cost Decimal.new(0)
@@ -249,14 +253,115 @@ defmodule TokengateWeb.ProxyController do
   defp service_passthrough(conn, service) do
     payload = conn.body_params
 
-    simple_proxy(
-      conn,
-      payload,
-      Atom.to_string(service),
-      &adapter_service(&1, &2, &3, &4, service),
-      service,
-      on_route: &canonical_upload(&1, service, &2)
-    )
+    with :ok <- validate_service_contract(service, payload) do
+      simple_proxy(
+        conn,
+        payload,
+        Atom.to_string(service),
+        &adapter_service(&1, &2, &3, &4, service),
+        service,
+        on_route: &canonical_upload(&1, service, &2)
+      )
+    else
+      {:error, error} -> render_proxy_error(conn, error)
+    end
+  end
+
+  # Contract of the non-chat services that the gateway can decide WITHOUT a
+  # provider round trip — verified against the OpenAPI of the openai-dialect
+  # media cluster in the catalog (Helmcode/NaN, same platform) and against
+  # OpenAI's own surface:
+  #
+  #   * tts: `voice` is required by the wire (omitting it earned a 400/422 after
+  #     the request had already been routed, held and billed as an attempt), and
+  #     `response_format` is the closed enum `mp3|wav|flac|aac|pcm|opus`.
+  #   * image: `n` is a positive integer and `size` is `auto` or `WxH` with
+  #     positive sides. The per-model RANGES (256–1536 for `flux-2-klein`,
+  #     512–1280 for `qwen-image-2.1`, `n` ≤ 4) are deliberately NOT enforced
+  #     here: they are lane knowledge that lives in the catalog (W14) and differ
+  #     per model, and the same body is perfectly valid on another provider.
+  #
+  # Nothing is translated and nothing is invented: a value the wire documents as
+  # unservable is refused with the gateway's own code and zero provider calls;
+  # the rest travels verbatim and the upstream decides (F15/F26 stay local
+  # rejections until a real key verifies them in W15).
+  defp validate_service_contract(:tts, %{"model" => model} = payload) when is_binary(model) do
+    with :ok <- require_tts_voice(payload),
+         :ok <- validate_tts_format(payload["response_format"]) do
+      :ok
+    end
+  end
+
+  defp validate_service_contract(:image, %{"model" => model} = payload) when is_binary(model) do
+    with :ok <- validate_image_count(payload["n"]),
+         :ok <- validate_image_size(payload["size"]) do
+      :ok
+    end
+  end
+
+  # No model yet: `simple_proxy/6` owns that error (and its log row).
+  defp validate_service_contract(_service, _payload), do: :ok
+
+  defp require_tts_voice(%{"voice" => voice}) when is_binary(voice) do
+    if String.trim(voice) == "" do
+      {:error, {:missing_voice, missing_voice_message()}}
+    else
+      :ok
+    end
+  end
+
+  defp require_tts_voice(_payload), do: {:error, {:missing_voice, missing_voice_message()}}
+
+  defp missing_voice_message do
+    "voice is required: name one of the provider's voice packs (the OpenAI voice " <>
+      "names do not exist in every upstream — e.g. Kokoro serves af_heart/ef_dora)"
+  end
+
+  defp validate_tts_format(nil), do: :ok
+
+  defp validate_tts_format(format) when format in @tts_response_formats, do: :ok
+
+  defp validate_tts_format(format) do
+    {:error,
+     {:unsupported_response_format,
+      "response_format \"#{format}\" is not supported by this endpoint: use one of " <>
+        Enum.join(@tts_response_formats, ", ")}}
+  end
+
+  defp validate_image_count(nil), do: :ok
+  defp validate_image_count(n) when is_integer(n) and n > 0, do: :ok
+
+  # JSON numbers arrive as floats when the client writes `2.0`: a whole positive
+  # float is still a valid count.
+  defp validate_image_count(n) when is_float(n) and n > 0 and n == trunc(n), do: :ok
+
+  defp validate_image_count(n) do
+    {:error, {:invalid_image_parameter, "n must be a positive integer (got: #{inspect(n)})"}}
+  end
+
+  defp validate_image_size(nil), do: :ok
+  defp validate_image_size("auto"), do: :ok
+
+  defp validate_image_size(size) when is_binary(size) do
+    case String.split(size, "x", parts: 2) do
+      [w, h] -> if positive_integer?(w) and positive_integer?(h), do: :ok, else: bad_size(size)
+      _ -> bad_size(size)
+    end
+  end
+
+  defp validate_image_size(size), do: bad_size(size)
+
+  defp positive_integer?(value) do
+    case Integer.parse(value) do
+      {n, ""} -> n > 0
+      _ -> false
+    end
+  end
+
+  defp bad_size(size) do
+    {:error,
+     {:invalid_image_parameter,
+      "size must be \"auto\" or \"WIDTHxHEIGHT\" with positive sides (got: #{inspect(size)})"}}
   end
 
   # The audio gate runs AFTER routing on purpose: a request for a model this key
@@ -300,24 +405,30 @@ defmodule TokengateWeb.ProxyController do
      )}
   end
 
-  # OpenRouter's transcription endpoint only speaks `json`/`verbose_json`, while
-  # the other multipart dialects accept `srt`/`vtt` (Helmcode, NaN). Rejecting
-  # here costs no attempt and no provider call, and names the way out instead of
-  # forwarding a body the upstream answers with an opaque 400.
-  defp reject_unsupported_format(%{dialect: "openrouter"}, payload) do
+  # `response_format` on the multipart transcription surface is a closed enum of
+  # `json`/`verbose_json` for EVERY dialect the gateway can send it to: OpenRouter
+  # documents that enum, and so does the openai-dialect media cluster
+  # (Helmcode/NaN — `enum: [json, verbose_json]`). The old gate only guarded
+  # OpenRouter, so the same body answered 200 there (translated) and 400 on the
+  # other two. Rejecting here costs no attempt and no provider call, and names
+  # the way out instead of forwarding a body the upstream refuses.
+  defp reject_unsupported_format(_provider, payload) do
     case payload["response_format"] do
-      format when format in ["srt", "vtt"] ->
-        {:error,
-         {:unsupported_response_format,
-          "response_format \"#{format}\" is not supported by this provider: ask for " <>
-            "\"verbose_json\" and build the subtitles, or \"text\" for the plain transcript"}}
-
-      _ ->
+      nil ->
         :ok
+
+      format ->
+        if AudioMultipart.stt_response_format_supported?(format) do
+          :ok
+        else
+          {:error,
+           {:unsupported_response_format,
+            "response_format \"#{format}\" is not supported by this provider: ask for " <>
+              "\"verbose_json\" and build the subtitles, or omit it for the plain " <>
+              "transcript (json)"}}
+        end
     end
   end
-
-  defp reject_unsupported_format(_provider, _payload), do: :ok
 
   # The raw capture travels to the adapter through the route opts so a retry or a
   # fallback resends the same bytes; a JSON request carries none and is encoded
@@ -723,6 +834,16 @@ defmodule TokengateWeb.ProxyController do
           provider_retries: provider_retries
         )
 
+      {:error, :no_available_provider} when reason in [:model_not_available, :billing_error] ->
+        # A scoped refusal (the model is outside this credential's plan, or the
+        # account is out of balance) with no candidate left: the client gets the
+        # upstream's own 4xx plus the reason, never a 503 — the pool is fine,
+        # this lane simply cannot serve this body.
+        log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
+          error_reason: safe_reason(reason),
+          error_message: error_message
+        )
+
       {:error, :no_available_provider} when reason in [:bad_request, :client_error] ->
         # Every remaining candidate rejected the body with the same 4xx. That is
         # not a provider outage, so the client gets the upstream 4xx it can act
@@ -1006,9 +1127,27 @@ defmodule TokengateWeb.ProxyController do
     {[route.credential.id | exclude], 0}
   end
 
+  # 524: the upstream's own edge gave up on the request (Helmcode/NaN document
+  # it for oversized audio). The credential is healthy and the same key would
+  # just wait out another gateway timeout, so it is excluded at once — exactly
+  # like a receive timeout, but the failure never counts against the breaker
+  # (`breaker_reason/1` keeps it out of @counting_reasons).
+  defp next_candidate(route, exclude, _provider_retries, :gateway_timeout) do
+    {[route.credential.id | exclude], 0}
+  end
+
   # 404 (marketplace sin sellers del modelo): ver la nota de política arriba —
   # exclusión inmediata, la siguiente credencial de la lista intenta.
   defp next_candidate(route, exclude, _provider_retries, :client_error) do
+    {[route.credential.id | exclude], 0}
+  end
+
+  # Scoped refusals — `403 tier_restricted` (model outside the plan) and `402`
+  # (out of balance). The credential is NOT dead, so it is never deactivated;
+  # but the refusal is deterministic, so this cascade excludes it at once
+  # instead of resending the same body to the same key.
+  defp next_candidate(route, exclude, _provider_retries, reason)
+       when reason in [:model_not_available, :billing_error] do
     {[route.credential.id | exclude], 0}
   end
 
@@ -1672,13 +1811,19 @@ defmodule TokengateWeb.ProxyController do
   # Permanently disable a credential after an auth/billing failure (401/402/403).
   # Runs in a background Task to avoid blocking the hot path. The credential's
   # status is set to "error" so the router excludes it from the candidate pool.
+  #
+  # `error_at` is a `:utc_datetime` column: `DateTime.utc_now/0` carries
+  # microseconds and Ecto raises on them, so the value is truncated to the
+  # second. Without this the whole Task died inside `update_credential/2` and a
+  # dead credential was never actually disabled (the broadcast never fired
+  # either) — the disable path was silently a no-op.
   defp disable_credential_async(credential, reason, error_message \\ nil) do
     Task.start(fn ->
       Providers.update_credential(credential, %{
         status: "error",
         error_reason: reason,
         error_message: error_message,
-        error_at: DateTime.utc_now()
+        error_at: DateTime.utc_now() |> DateTime.truncate(:second)
       })
 
       Phoenix.PubSub.broadcast(
@@ -1733,6 +1878,16 @@ defmodule TokengateWeb.ProxyController do
     case Router.route(route.model.name, member, request_context) do
       {:ok, new_route} ->
         execute(conn, new_route, payload, member, attempts_left - 1, exclude, provider_retries)
+
+      {:error, :no_available_provider} when reason in [:model_not_available, :billing_error] ->
+        # A scoped refusal (the model is outside this credential's plan, or the
+        # account is out of balance) with no candidate left: the client gets the
+        # upstream's own 4xx plus the reason, never a 503 — the pool is fine,
+        # this lane simply cannot serve this body.
+        log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
+          error_reason: safe_reason(reason),
+          error_message: error_message
+        )
 
       {:error, :no_available_provider} when reason in [:bad_request, :client_error] ->
         # Every remaining candidate rejected the body with the same 4xx. That is
@@ -1985,6 +2140,16 @@ defmodule TokengateWeb.ProxyController do
           attempts_left - 1,
           exclude,
           provider_retries
+        )
+
+      {:error, :no_available_provider} when reason in [:model_not_available, :billing_error] ->
+        # A scoped refusal (the model is outside this credential's plan, or the
+        # account is out of balance) with no candidate left: the client gets the
+        # upstream's own 4xx plus the reason, never a 503 — the pool is fine,
+        # this lane simply cannot serve this body.
+        log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
+          error_reason: safe_reason(reason),
+          error_message: error_message
         )
 
       {:error, :no_available_provider} when reason in [:bad_request, :client_error] ->
@@ -3162,6 +3327,13 @@ defmodule TokengateWeb.ProxyController do
   # breaker ignores (see CircuitBreaker.@counting_reasons).
   defp breaker_reason(:bad_request), do: :bad_request
   defp breaker_reason(:client_error), do: :client_error
+  # Scoped refusals and a provider edge timeout are NOT symptoms of credential
+  # health: they pass through as themselves, which the breaker ignores (it only
+  # counts @counting_reasons). Without these clauses the catch-all below would
+  # count them as :server_error and burn a healthy provider's breaker.
+  defp breaker_reason(:model_not_available), do: :model_not_available
+  defp breaker_reason(:billing_error), do: :billing_error
+  defp breaker_reason(:gateway_timeout), do: :gateway_timeout
   defp breaker_reason(_), do: :server_error
 
   defp render_proxy_error(conn, error, upstream_message \\ nil) do
@@ -3213,6 +3385,16 @@ defmodule TokengateWeb.ProxyController do
   # for; the message names the supported alternatives.
   defp error_details({:unsupported_response_format, msg}),
     do: {400, "invalid_request_error", "unsupported_response_format", msg}
+
+  # The speech surface requires a `voice`; without one the upstream would answer
+  # 400/422 after the request had already been routed and held (F15).
+  defp error_details({:missing_voice, msg}),
+    do: {400, "invalid_request_error", "missing_voice", msg}
+
+  # An image parameter the wire's schema cannot describe (`n` not a positive
+  # integer, `size` neither "auto" nor "WIDTHxHEIGHT").
+  defp error_details({:invalid_image_parameter, msg}),
+    do: {400, "invalid_request_error", "invalid_image_parameter", msg}
 
   defp error_details({:rate_limited, retry_ms}),
     do: {429, "rate_limit_error", "rate_limited", "Rate limit exceeded, retry in #{retry_ms}ms"}

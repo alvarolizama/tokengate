@@ -36,12 +36,15 @@ defmodule Tokengate.Proxy.ProviderAdapter do
 
   @type failure_reason ::
           :timeout
+          | :gateway_timeout
           | :server_error
           | :rate_limited
           | :client_error
           | :bad_request
           | :connection_error
           | :auth_error
+          | :model_not_available
+          | :billing_error
 
   @type chat_result ::
           {:ok, body :: map(), latency_ms :: non_neg_integer(),
@@ -168,6 +171,10 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   @doc """
   Classifies an HTTP status code into a failure reason.
 
+  This is the **status-only** reading: it is what a caller uses when the
+  upstream's error body is not available (health checks, model listings) and
+  it assumes the worst of a credential-family status.
+
     * `400` -> `:bad_request` (the provider rejected *this* body for its own
       reasons: an unsupported field or parameter, a limit only that model
       enforces, a prefix over its context window…). The same body can be
@@ -175,13 +182,20 @@ defmodule Tokengate.Proxy.ProviderAdapter do
       the rejection carries no consequence for the credential that issued it:
       the breaker never counts it and the credential is never deactivated.
     * `401`, `402`, `403` -> `:auth_error` (credential is bad — disable it
-      permanently and fall back to the next provider).
+      permanently and fall back to the next provider). An adapter that HAS the
+      upstream error body classifies through `classify_response/2` instead:
+      a `403` naming a plan/tier/model, or a `402`, is scoped and must not
+      disable the whole credential.
     * `429`, `529` -> `:rate_limited` (selects the short rate-limit cooldown
       of the circuit breaker, then falls back).
     * other `4xx` -> `:client_error` (the rejection is not credential-agnostic
       like a caller's `422`: a marketplace's `404` "no available sellers" is
       route-specific, so the cascade tries the next key — but the failure
       never counts against the breaker).
+    * `524` -> `:gateway_timeout` (the upstream's own edge/gateway timed the
+      request out — Helmcode/NaN document it for oversized audio: the
+      provider itself is healthy, so it must not retry the same key nor count
+      against the breaker).
     * `5xx` -> `:server_error` (selects the standard circuit-breaker cooldown,
       then falls back).
 
@@ -192,8 +206,71 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   def classify_status(400), do: :bad_request
   def classify_status(status) when status in [401, 402, 403], do: :auth_error
   def classify_status(status) when status in [429, 529], do: :rate_limited
+  def classify_status(524), do: :gateway_timeout
   def classify_status(status) when status >= 400 and status < 500, do: :client_error
   def classify_status(status) when status >= 500 and status < 600, do: :server_error
+
+  # The scoped-rejection signals an upstream uses when it refuses a MODEL or an
+  # ENDPOINT for the credential's plan — not the credential itself. Verified
+  # wording: Helmcode/NaN answer `403 tier_restricted` ("Your plan/tier can't
+  # access this endpoint or model") and `402` for an exhausted balance
+  # (`credits_exhausted`, `subscription_required`, `monthly_cap_reached`).
+  @scoped_codes ~w(tier_restricted model_not_allowed model_not_available plan_required)
+  @scoped_message ~r/\b(plan|tier|subscription|entitlement)\b|not (included|allowed|available)|does not have access|no access to/
+
+  @doc """
+  Classifies a real upstream error RESPONSE: the status plus the provider's
+  own error envelope (decoded map, the raw body, or `nil`).
+
+  Status-only (`classify_status/1`) cannot tell a dead key from a lane the
+  plan does not include, and that difference decides whether the gateway
+  disables a credential or just skips it for one model:
+
+    * `402` -> `:billing_error`. The account is out of balance/quota: the key
+      is fine, so the credential is never deactivated; the request falls back.
+    * `401`/`403` whose envelope names a plan/tier/model restriction ->
+      `:model_not_available`. Only the affected lane/model is out of reach
+      (`whisper-1` outside the plan used to disable every lane of the
+      provider). Never deactivates the credential.
+    * any other `401`/`403` (invalid key, revoked key, IP not allowed) ->
+      `:auth_error`, the credential-wide failure that disables it.
+    * everything else -> `classify_status/1` unchanged.
+
+  A body the gateway cannot read is treated conservatively: an unreadable
+  `403` keeps the historical `:auth_error` (disable + alarm) instead of
+  silently hammering a key that may be dead.
+  """
+  @spec classify_response(non_neg_integer(), map() | String.t() | nil) :: failure_reason()
+  def classify_response(402, _error), do: :billing_error
+
+  def classify_response(status, error) when status in [401, 403] do
+    if scoped_rejection?(error), do: :model_not_available, else: classify_status(status)
+  end
+
+  def classify_response(status, _error), do: classify_status(status)
+
+  defp scoped_rejection?(%{} = error) do
+    scoped_text?(Map.get(error, "code")) or scoped_text?(Map.get(error, "message"))
+  end
+
+  defp scoped_rejection?(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"error" => %{} = error}} -> scoped_rejection?(error)
+      {:ok, %{} = other} -> scoped_rejection?(other)
+      _ -> scoped_text?(body)
+    end
+  end
+
+  defp scoped_rejection?(_error), do: false
+
+  defp scoped_text?(text) when is_binary(text) do
+    downcased = String.downcase(text)
+
+    Enum.any?(@scoped_codes, &String.contains?(downcased, &1)) or
+      Regex.match?(@scoped_message, downcased)
+  end
+
+  defp scoped_text?(_text), do: false
 
   @doc """
   Classifies a transport or Finch error into a failure reason.

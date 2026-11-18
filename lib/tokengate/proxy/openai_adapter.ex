@@ -186,7 +186,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
         {:ok, decoded, latency, normalize_headers(resp_headers)}
 
       {:ok, %Finch.Response{status: status, body: resp_body}} ->
-        {:error, ProviderAdapter.classify_status(status), status,
+        {:error, ProviderAdapter.classify_response(status, error_envelope(resp_body)), status,
          extract_error_message(resp_body)}
 
       {:error, error} ->
@@ -228,7 +228,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
         {:ok, decode_service_body(resp_body, resp_headers), latency, resp_headers}
 
       {:ok, %Finch.Response{status: status, body: resp_body}} ->
-        {:error, ProviderAdapter.classify_status(status), status,
+        {:error, ProviderAdapter.classify_response(status, error_envelope(resp_body)), status,
          extract_error_message(resp_body)}
 
       {:error, error} ->
@@ -262,7 +262,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
         {:ok, decode!(resp_body), latency, normalize_headers(resp_headers)}
 
       {:ok, %Finch.Response{status: status, body: resp_body}} ->
-        {:error, ProviderAdapter.classify_status(status), status,
+        {:error, ProviderAdapter.classify_response(status, error_envelope(resp_body)), status,
          extract_error_message(resp_body)}
 
       {:error, error} ->
@@ -320,14 +320,19 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   # (audio bytes, an image asset) is kept byte-for-byte together with
   # the upstream's content-type so the controller can hand it to the client.
   # An empty body keeps the historical `%{}`.
+  #
+  # Only a JSON OBJECT/ARRAY is a decoded body. A `text/plain` transcript that
+  # happens to be valid JSON (`"123"`, `"true"`, `"hola"`) stays raw bytes: it
+  # is text the client asked to receive verbatim, and decoding it used to answer
+  # a number/boolean (or a JSON-encoded string) in its place.
   defp decode_service_body("", _resp_headers), do: %{}
 
   defp decode_service_body(resp_body, resp_headers) do
     case Jason.decode(resp_body) do
-      {:ok, decoded} ->
+      {:ok, decoded} when is_map(decoded) or is_list(decoded) ->
         decoded
 
-      {:error, _} ->
+      _ ->
         %RawResponse{body: resp_body, content_type: response_content_type(resp_headers)}
     end
   end
@@ -428,7 +433,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
             send(
               caller,
               {:sse_error,
-               {ProviderAdapter.classify_status(status), status,
+               {ProviderAdapter.classify_response(status, acc.error_body), status,
                 extract_error_message(acc.error_body)}}
             )
 
@@ -701,6 +706,21 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   end
 
   defp extract_error_message(_), do: nil
+
+  # The provider's error envelope as a map, which is what
+  # `ProviderAdapter.classify_response/2` reads: `error.code` / `error.message`
+  # decide whether a 401/403 is scoped to a model or plan (do not disable the
+  # credential) or means the key itself is dead. An unreadable body is nil and
+  # the classifier stays conservative.
+  defp error_envelope(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"error" => %{} = error}} -> error
+      {:ok, %{} = other} -> other
+      _ -> nil
+    end
+  end
+
+  defp error_envelope(_body), do: nil
 
   defp sanitize_msg(msg), do: msg |> scrub_secrets() |> truncate_msg()
 

@@ -8,11 +8,21 @@ defmodule Tokengate.Proxy.OpenRouterAdapter do
     * embedding models are listed at `{base_url}/embeddings/models` instead of
       `{base_url}/models`;
     * its transcription endpoint only accepts `json` and `verbose_json` as
-      `response_format` — `text`, `srt` and `vtt` are rejected with a `400`
-      (OpenRouter's own docs). Helmcode and NaN accept those three, so the same
-      client body works in one provider and fails in the other. When the client
-      asks for plain text, this adapter asks the upstream for `json` and hands
-      the transcript back as `text/plain`.
+      `response_format` (OpenRouter's own docs).
+
+  That last deviation is NOT OpenRouter-only, which is what the old comment got
+  wrong: the OpenAI-compatible media cluster in the catalog (Helmcode and NaN —
+  the same platform, `403 tier_restricted` when a model is outside the plan)
+  documents the very same `json`/`verbose_json` enum in its OpenAPI. `text`,
+  `srt` and `vtt` are rejected by the upstream with a `400`, so the gateway
+  refuses them itself before routing (`unsupported_response_format`, zero
+  provider calls) and the same client body no longer answers `200` on one
+  provider and `400` on the other.
+
+  The translation below therefore never runs for a proxied request: it stays
+  for adapter-level callers that hand `response_format: "text"` straight to
+  `service_post/5` — ask the upstream for `json` (the format it does serve) and
+  answer the transcript alone as `text/plain`.
 
   Everything else is delegated to `OpenAIAdapter` untouched.
   """
@@ -22,7 +32,8 @@ defmodule Tokengate.Proxy.OpenRouterAdapter do
   alias Tokengate.Proxy.OpenAIAdapter
   alias Tokengate.Proxy.RawResponse
 
-  # The one format this endpoint cannot serve that the other STT providers can.
+  # The one format this endpoint cannot serve while the client asked for the
+  # plainest transcript: `json` is asked upstream and the text handed back.
   @plain_text "text"
 
   @impl true

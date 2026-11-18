@@ -21,7 +21,10 @@ defmodule TokengateWeb.Plugs.MediaBodyParser do
       inflight registry keep working — they read `payload["model"]`. A file
       part is exposed as a `Tokengate.Proxy.MediaFile` (metadata only: the
       bytes live once, in the captured raw body);
-    * parses `application/x-www-form-urlencoded` the same way.
+    * parses `application/x-www-form-urlencoded` the same way;
+    * answers `415 unsupported_media_type` for any other non-JSON type (a raw
+      `audio/mpeg`, `application/octet-stream`): those carry no field to name
+      the model, so they can only fail later — after buffering the body.
 
   JSON bodies are left alone (`Plug.Parsers` handles them as always), as
   are other methods, other prefixes, and requests whose `body_params` were
@@ -31,14 +34,17 @@ defmodule TokengateWeb.Plugs.MediaBodyParser do
 
   @behaviour Plug
 
-  # Cap of the RAW body this plug accepts. The audio upstreams document 25 MB
-  # (Helmcode, NaN) and the base64 form of the same clip is ~1.37× bigger, so
-  # 50 MB leaves room for one 25 MB upload either way. It is NOT the endpoint's
-  # `Plug.Parsers` limit: JSON/urlencoded bodies are still parsed there under its
-  # own cap — this one governs the bodies captured here (multipart, urlencoded
-  # and any other non-JSON under `/v1/`). The cost is memory: the bytes are held
-  # once per in-flight request, because the passthrough needs the whole binary.
-  @max_body_bytes 50_000_000
+  # The upstream's DOCUMENTED upload limit for a transcription: 25 MB per
+  # request (Helmcode/NaN OpenAPI, `/audio/transcriptions`), and the same
+  # ceiling OpenAI publishes. The plug used to accept 50 MB, so an upload
+  # between 25 and 50 MB spent an attempt, a credential and up to 50 MB of
+  # buffering to earn an announced rejection. The envelope (boundaries, form
+  # fields, one file part header) is a few hundred bytes, so a megabyte of
+  # headroom keeps a 25 MB file itself passing and stops anything the upstream
+  # would refuse anyway.
+  @max_upload_bytes 25_000_000
+  @envelope_bytes 1_000_000
+  @max_body_bytes @max_upload_bytes + @envelope_bytes
   @multipart_subtypes ~w(form-data mixed)
 
   @raw_body_key :tokengate_raw_body
@@ -87,8 +93,21 @@ defmodule TokengateWeb.Plugs.MediaBodyParser do
       {:urlencoded, _value} ->
         read_and_store(conn, fn body -> Plug.Conn.Query.decode(body) end)
 
+      # Not a type the gateway describes. The proxy's contract for a body it
+      # reads itself is `multipart/form-data` (the audio upload) or
+      # `application/x-www-form-urlencoded`; JSON is `Plug.Parsers`'. Anything
+      # else (a raw `audio/mpeg`, `application/octet-stream`) carries no field
+      # to name the model, so it could only ever fail later as "model is
+      # required" after buffering the whole body — answering 415 here says what
+      # went wrong without spending memory or an upstream call.
       {:other, _value} ->
-        read_and_store(conn, fn _body -> %{} end)
+        respond(
+          conn,
+          415,
+          "Unsupported media type: send application/json, multipart/form-data or " <>
+            "application/x-www-form-urlencoded",
+          "unsupported_media_type"
+        )
 
       :missing ->
         conn

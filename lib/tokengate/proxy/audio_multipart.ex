@@ -32,6 +32,14 @@ defmodule Tokengate.Proxy.AudioMultipart do
 
   @audio_fields ~w(file audio upload data input_audio)
 
+  # The `response_format` values the multipart transcription surface serves.
+  # Verified against the OpenAPI of every multipart dialect in the catalog:
+  # OpenRouter documents `json`/`verbose_json`, and so does the OpenAI-compatible
+  # media cluster (Helmcode/NaN — `enum: [json, verbose_json]`, `default: json`).
+  # `text`, `srt` and `vtt` are answered `400` by those upstreams, so the gateway
+  # rejects them itself (see `ProxyController`) instead of spending an attempt.
+  @stt_response_formats ~w(json verbose_json)
+
   # Dialects whose `service_post` forwards the client's body as multipart and
   # therefore need a real `file` part. Everything else has its own wire and its
   # own audio sources.
@@ -50,6 +58,29 @@ defmodule Tokengate.Proxy.AudioMultipart do
   """
   @spec multipart_upload?(String.t() | nil) :: boolean()
   def multipart_upload?(dialect), do: dialect in @multipart_dialects
+
+  @doc """
+  The `response_format` values the multipart transcription surface serves.
+  """
+  @spec stt_response_formats() :: [String.t()]
+  def stt_response_formats, do: @stt_response_formats
+
+  @doc """
+  True when the transcription surface can serve this `response_format` — an
+  absent value is the upstream default (`json`) and always passes.
+
+      iex> Tokengate.Proxy.AudioMultipart.stt_response_format_supported?("verbose_json")
+      true
+
+      iex> Tokengate.Proxy.AudioMultipart.stt_response_format_supported?("srt")
+      false
+
+      iex> Tokengate.Proxy.AudioMultipart.stt_response_format_supported?(nil)
+      true
+  """
+  @spec stt_response_format_supported?(String.t() | nil) :: boolean()
+  def stt_response_format_supported?(nil), do: true
+  def stt_response_format_supported?(format), do: format in @stt_response_formats
 
   @doc """
   Returns the body the upstream must receive and whether it was rebuilt.
@@ -182,8 +213,9 @@ defmodule Tokengate.Proxy.AudioMultipart do
 
   Same contract as `rewrite_model/3`: the body is only re-encoded when the part
   is missing or carries another value. It exists to make a dialect-specific
-  field fit (OpenRouter's transcription endpoint only accepts `json`/`verbose_json`
-  as its `response_format`), never to reshape the payload.
+  field fit (the transcription surface only accepts `json`/`verbose_json` as its
+  `response_format` — OpenRouter and the OpenAI-compatible media cluster alike),
+  never to reshape the payload.
   """
   @spec rewrite_field(binary() | nil, String.t() | nil, String.t(), String.t() | nil) ::
           {binary() | nil, String.t() | nil}

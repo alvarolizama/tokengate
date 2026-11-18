@@ -22,12 +22,15 @@ defmodule Tokengate.Proxy.ServiceUsage do
   cualquier precio da `$0`. Nunca se inventa un número.
 
   La única estimación que no sale de la request es la **duración de audio**
-  (`stt` emitido como bytes o como data URL): se deriva del tamaño a
-  128 kbps, que es el bitrate nominal de los formatos que estos endpoints
-  aceptan. Está documentada en `audio_seconds_from_bytes/1` y es una
-  aproximación — por eso el coste reportado por el upstream, cuando existe,
-  siempre la pisa.
+  (`stt` emitido como bytes, como data URL o como `multipart/form-data`): se
+  deriva del tamaño a 128 kbps, que es el bitrate nominal de los formatos que
+  estos endpoints aceptan. El tamaño de un upload multipart es el `size` del
+  `%Tokengate.Proxy.MediaFile{}` que dejó el parser (los bytes no se copian).
+  Está documentada en `audio_seconds_from_bytes/1` y es una aproximación — por
+  eso el coste reportado por el upstream, cuando existe, siempre la pisa.
   """
+
+  alias Tokengate.Proxy.MediaFile
 
   # Bitrate nominal para estimar la duración de un audio cuando nadie la
   # reporta: 128 kbps es el modo más común de los formatos que aceptan los
@@ -83,8 +86,10 @@ defmodule Tokengate.Proxy.ServiceUsage do
   end
 
   # STT: por minuto (o segundo) de audio transcrito. La duración sale del
-  # `usage` del upstream si lo reporta (algunos lo hacen) o de los bytes de
-  # audio.
+  # `usage` del upstream si lo reporta, o de los bytes de audio de la request:
+  # el `%MediaFile{size}` que deja el parser multipart, o el base64 de un
+  # `input_audio` (`json`, que es el `response_format` por defecto, NO trae
+  # `duration` — solo `verbose_json` la trae).
   defp per_type("stt", payload, body) do
     seconds = reported_audio_seconds(body) |> fallback_audio_seconds(input_audio_bytes(payload))
 
@@ -205,10 +210,12 @@ defmodule Tokengate.Proxy.ServiceUsage do
     Float.round(bytes * 8 / @nominal_bits_per_second, 3)
   end
 
-  # Bytes de audio de la request: un data URL base64 (`input_audio.data`) o un
-  # `audio_url` http (cuyo tamaño no conocemos desde aquí → nil).
+  # Bytes de audio de la request: el `size` que el parser multipart ya midió
+  # (`%MediaFile{}` — los bytes viven una sola vez, en el raw body), el base64 de
+  # un `input_audio.data`, o el `file`/`input_audio` de un body JSON.
   defp input_audio_bytes(payload) do
     case audio_data(payload) do
+      %MediaFile{size: size} when is_integer(size) -> size
       data when is_binary(data) -> base64_bytes(data)
       _ -> nil
     end
@@ -218,6 +225,7 @@ defmodule Tokengate.Proxy.ServiceUsage do
     cond do
       is_map(payload["input_audio"]) -> payload["input_audio"]["data"]
       is_binary(payload["file"]) -> payload["file"]
+      match?(%MediaFile{}, payload["file"]) -> payload["file"]
       is_binary(payload["input_audio"]) -> payload["input_audio"]
       true -> nil
     end

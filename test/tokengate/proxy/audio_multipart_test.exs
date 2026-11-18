@@ -16,6 +16,26 @@ defmodule Tokengate.Proxy.AudioMultipartTest do
   @mp3 <<0xFF, 0xFB, 0x90, 0x64>>
   @wav <<"RIFF", 36::32, "WAVE", "fmt ">>
 
+  describe "stt_response_formats/0" do
+    # F12: el enum verificado de TODOS los dialectos multipart es json/verbose_json
+    # (OpenRouter y el clúster OpenAI-compatible Helmcode/NaN). El gateway rechaza
+    # el resto él mismo, así que este vocabulario es el contrato del filtro.
+    test "json y verbose_json son los únicos formatos servibles" do
+      assert AudioMultipart.stt_response_formats() == ~w(json verbose_json)
+
+      assert AudioMultipart.stt_response_format_supported?("json")
+      assert AudioMultipart.stt_response_format_supported?("verbose_json")
+      # Sin `response_format` el upstream aplica su default (json).
+      assert AudioMultipart.stt_response_format_supported?(nil)
+    end
+
+    test "text, srt y vtt no los sirve ningún dialecto multipart" do
+      refute AudioMultipart.stt_response_format_supported?("text")
+      refute AudioMultipart.stt_response_format_supported?("srt")
+      refute AudioMultipart.stt_response_format_supported?("vtt")
+    end
+  end
+
   defp multipart(parts) do
     body =
       parts

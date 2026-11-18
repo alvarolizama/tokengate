@@ -40,6 +40,65 @@ defmodule Tokengate.Proxy.ProviderAdapterTest do
       assert ProviderAdapter.classify_status(503) == :server_error
       assert ProviderAdapter.classify_status(599) == :server_error
     end
+
+    # F25: 524 is the upstream's own EDGE timing out (Helmcode/NaN document it
+    # for oversized audio), not the model server failing. It used to fall in the
+    # 5xx bucket, so the gateway retried the same key three times and fed the
+    # breaker of a healthy provider.
+    test "524 maps to :gateway_timeout, not :server_error" do
+      assert ProviderAdapter.classify_status(524) == :gateway_timeout
+    end
+  end
+
+  describe "classify_response/2" do
+    # F14: the same status means different things depending on what the upstream
+    # says. Only a credential-wide refusal may disable the key; a plan/model
+    # refusal or an empty balance must leave every other lane of that credential
+    # working.
+    test "a 403 tier_restricted is scoped to the model, not the credential" do
+      error = %{
+        "message" => "your plan does not include this model",
+        "code" => "tier_restricted"
+      }
+
+      assert ProviderAdapter.classify_response(403, error) == :model_not_available
+    end
+
+    test "a 403 that names a tier is scoped even without the code" do
+      assert ProviderAdapter.classify_response(403, %{"message" => "your tier lacks access"}) ==
+               :model_not_available
+    end
+
+    test "a 403 about the key itself stays an :auth_error" do
+      assert ProviderAdapter.classify_response(403, %{"message" => "invalid api key"}) ==
+               :auth_error
+
+      assert ProviderAdapter.classify_response(401, %{"message" => "Incorrect API key provided"}) ==
+               :auth_error
+    end
+
+    test "a 402 is a :billing_error — the key is fine, the balance is not" do
+      assert ProviderAdapter.classify_response(402, %{"code" => "credits_exhausted"}) ==
+               :billing_error
+
+      assert ProviderAdapter.classify_response(402, nil) == :billing_error
+    end
+
+    test "the raw JSON body is read the same way as the decoded envelope" do
+      body = Jason.encode!(%{"error" => %{"message" => "model outside your plan"}})
+
+      assert ProviderAdapter.classify_response(403, body) == :model_not_available
+      assert ProviderAdapter.classify_response(401, "not json at all") == :auth_error
+      assert ProviderAdapter.classify_response(403, nil) == :auth_error
+    end
+
+    test "every other status keeps the status-only reading" do
+      assert ProviderAdapter.classify_response(400, %{"message" => "bad field"}) == :bad_request
+      assert ProviderAdapter.classify_response(429, nil) == :rate_limited
+      assert ProviderAdapter.classify_response(404, nil) == :client_error
+      assert ProviderAdapter.classify_response(500, nil) == :server_error
+      assert ProviderAdapter.classify_response(524, nil) == :gateway_timeout
+    end
   end
 
   describe "classify_error/1" do
