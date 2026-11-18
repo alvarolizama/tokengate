@@ -5,13 +5,34 @@ import Config
 # The MIX_TEST_PARTITION environment variable can be used
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
+# Pool size per OS-process partition. Defaults to schedulers*2 (baseline),
+# overridable so N parallel partitions can share Postgres' max_connections:
+# keep N * TEST_POOL_SIZE <= max_connections - headroom (~80 of 100 here).
+pool_size =
+  case System.get_env("TEST_POOL_SIZE") do
+    nil ->
+      System.schedulers_online() * 2
+
+    "" ->
+      System.schedulers_online() * 2
+
+    value ->
+      case Integer.parse(value) do
+        {size, ""} when size > 0 ->
+          size
+
+        _ ->
+          raise "TEST_POOL_SIZE must be a positive integer, got: #{inspect(value)}"
+      end
+  end
+
 config :tokengate, Tokengate.Repo,
   username: "postgres",
   password: "postgres",
   hostname: "localhost",
   database: "tokengate_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: System.schedulers_online() * 2
+  pool_size: pool_size
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.

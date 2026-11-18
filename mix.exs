@@ -87,6 +87,9 @@ defmodule Tokengate.MixProject do
       "ecto.demo": ["run priv/repo/demo_seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      # Parallel suite across OS-process partitions (own VM + own DB each):
+      # `mix test.parallel` == scripts/test-parallel.sh; pass -n/-p/-m through.
+      "test.parallel": ["cmd scripts/test-parallel.sh"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind tokengate", "esbuild tokengate"],
       "assets.deploy": [
