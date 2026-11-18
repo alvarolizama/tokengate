@@ -172,25 +172,42 @@ defmodule Tokengate.Proxy.AudioMultipart do
           {binary() | nil, String.t() | nil}
   def rewrite_model(raw_body, content_type, model)
       when is_binary(raw_body) and is_binary(model) do
+    rewrite_field(raw_body, content_type, "model", model)
+  end
+
+  def rewrite_model(raw_body, content_type, _model), do: {raw_body, content_type}
+
+  @doc """
+  Replaces the VALUE of one part, leaving every other part and its bytes alone.
+
+  Same contract as `rewrite_model/3`: the body is only re-encoded when the part
+  is missing or carries another value. It exists to make a dialect-specific
+  field fit (OpenRouter's transcription endpoint only accepts `json`/`verbose_json`
+  as its `response_format`), never to reshape the payload.
+  """
+  @spec rewrite_field(binary() | nil, String.t() | nil, String.t(), String.t() | nil) ::
+          {binary() | nil, String.t() | nil}
+  def rewrite_field(raw_body, content_type, name, value)
+      when is_binary(raw_body) and is_binary(name) and is_binary(value) do
     with {:ok, boundary} <- boundary(content_type),
          parts when parts != [] <- parse(raw_body, boundary),
-         false <- carries_model?(parts, model) do
-      encode(replace_model(parts, model))
+         false <- carries?(parts, name, value) do
+      encode(replace_part(parts, name, value))
     else
       _ -> {raw_body, content_type}
     end
   end
 
-  def rewrite_model(raw_body, content_type, _model), do: {raw_body, content_type}
+  def rewrite_field(raw_body, content_type, _name, _value), do: {raw_body, content_type}
 
-  defp carries_model?(parts, model) do
-    Enum.any?(parts, &(&1.name == "model" and &1.value == model))
+  defp carries?(parts, name, value) do
+    Enum.any?(parts, &(&1.name == name and &1.value == value))
   end
 
-  defp replace_model(parts, model) do
-    case Enum.find_index(parts, &(&1.name == "model")) do
-      nil -> parts ++ [%{name: "model", filename: nil, content_type: nil, value: model}]
-      index -> List.update_at(parts, index, &%{&1 | value: model})
+  defp replace_part(parts, name, value) do
+    case Enum.find_index(parts, &(&1.name == name)) do
+      nil -> parts ++ [%{name: name, filename: nil, content_type: nil, value: value}]
+      index -> List.update_at(parts, index, &%{&1 | value: value})
     end
   end
 

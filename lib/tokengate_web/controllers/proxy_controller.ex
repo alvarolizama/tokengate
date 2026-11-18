@@ -271,19 +271,21 @@ defmodule TokengateWeb.ProxyController do
     raw_content_type = conn.private[MediaBodyParser.raw_content_type_key()]
 
     if AudioMultipart.multipart_upload?(provider.dialect) do
-      # A rebuilt body is built from the payload, so it takes the lane's upstream
-      # id — same rule the JSON surfaces get from `execute_simple`.
-      payload = Map.put(conn.body_params, "model", route.model_responded)
+      with :ok <- reject_unsupported_format(provider, conn.body_params) do
+        # A rebuilt body is built from the payload, so it takes the lane's
+        # upstream id — same rule the JSON surfaces get from `execute_simple`.
+        payload = Map.put(conn.body_params, "model", route.model_responded)
 
-      case AudioMultipart.canonicalize(raw_body, raw_content_type, payload) do
-        {:ok, body, content_type, :unchanged} ->
-          {:ok, conn, media_opts(body, content_type)}
+        case AudioMultipart.canonicalize(raw_body, raw_content_type, payload) do
+          {:ok, body, content_type, :unchanged} ->
+            {:ok, conn, media_opts(body, content_type)}
 
-        {:ok, body, content_type, :rebuilt} ->
-          {:ok, conn, media_opts(body, content_type)}
+          {:ok, body, content_type, :rebuilt} ->
+            {:ok, conn, media_opts(body, content_type)}
 
-        {:error, message} ->
-          {:error, {:missing_audio, message}}
+          {:error, message} ->
+            {:error, {:missing_audio, message}}
+        end
       end
     else
       {:ok, conn, media_opts(raw_body, raw_content_type)}
@@ -297,6 +299,25 @@ defmodule TokengateWeb.ProxyController do
        conn.private[MediaBodyParser.raw_content_type_key()]
      )}
   end
+
+  # OpenRouter's transcription endpoint only speaks `json`/`verbose_json`, while
+  # the other multipart dialects accept `srt`/`vtt` (Helmcode, NaN). Rejecting
+  # here costs no attempt and no provider call, and names the way out instead of
+  # forwarding a body the upstream answers with an opaque 400.
+  defp reject_unsupported_format(%{dialect: "openrouter"}, payload) do
+    case payload["response_format"] do
+      format when format in ["srt", "vtt"] ->
+        {:error,
+         {:unsupported_response_format,
+          "response_format \"#{format}\" is not supported by this provider: ask for " <>
+            "\"verbose_json\" and build the subtitles, or \"text\" for the plain transcript"}}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp reject_unsupported_format(_provider, _payload), do: :ok
 
   # The raw capture travels to the adapter through the route opts so a retry or a
   # fallback resends the same bytes; a JSON request carries none and is encoded
@@ -3187,6 +3208,11 @@ defmodule TokengateWeb.ProxyController do
   # log row says `missing_audio` instead of a generic invalid request.
   defp error_details({:missing_audio, msg}),
     do: {400, "invalid_request_error", "missing_audio", msg}
+
+  # The provider's dialect cannot serve the `response_format` the client asked
+  # for; the message names the supported alternatives.
+  defp error_details({:unsupported_response_format, msg}),
+    do: {400, "invalid_request_error", "unsupported_response_format", msg}
 
   defp error_details({:rate_limited, retry_ms}),
     do: {429, "rate_limit_error", "rate_limited", "Rate limit exceeded, retry in #{retry_ms}ms"}

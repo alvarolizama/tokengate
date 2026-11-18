@@ -337,6 +337,61 @@ defmodule Tokengate.Proxy.AudioMultipartTest do
     end
   end
 
+  describe "rewrite_field/4" do
+    test "replaces only that part and keeps the audio bytes" do
+      {body, content_type} =
+        multipart([
+          {"model", value: "openai/whisper-large-v3"},
+          {"response_format", value: "text"},
+          {"file", filename: "nota.ogg", content_type: "audio/ogg", value: @ogg}
+        ])
+
+      {rebuilt, _content_type} =
+        AudioMultipart.rewrite_field(body, content_type, "response_format", "json")
+
+      assert rebuilt =~ ~s(name="response_format"\r\n\r\njson)
+      assert rebuilt =~ ~s(name="model"\r\n\r\nopenai/whisper-large-v3)
+      assert contains?(rebuilt, @ogg)
+      refute rebuilt =~ ~s(name="response_format"\r\n\r\ntext)
+    end
+
+    test "leaves the body untouched when the part already carries the value" do
+      {body, content_type} =
+        multipart([
+          {"response_format", value: "json"},
+          {"file", filename: "nota.ogg", content_type: "audio/ogg", value: @ogg}
+        ])
+
+      assert {^body, ^content_type} =
+               AudioMultipart.rewrite_field(body, content_type, "response_format", "json")
+    end
+
+    test "adds the part when the body has none" do
+      {body, content_type} =
+        multipart([{"file", filename: "nota.ogg", content_type: "audio/ogg", value: @ogg}])
+
+      {rebuilt, _content_type} =
+        AudioMultipart.rewrite_field(body, content_type, "response_format", "json")
+
+      assert rebuilt =~ ~s(name="response_format"\r\n\r\njson)
+      assert contains?(rebuilt, @ogg)
+    end
+
+    test "rewrite_model/3 is the same operation on the model part" do
+      {body, content_type} =
+        multipart([
+          {"model", value: "whisper"},
+          {"file", filename: "nota.ogg", content_type: "audio/ogg", value: @ogg}
+        ])
+
+      {rebuilt, rebuilt_type} = AudioMultipart.rewrite_model(body, content_type, "whisper-1")
+
+      assert rebuilt_type =~ "multipart/form-data; boundary=tokengate-"
+      assert rebuilt =~ ~s(name="model"\r\n\r\nwhisper-1)
+      assert contains?(rebuilt, @ogg)
+    end
+  end
+
   describe "multipart_upload?/1" do
     test "only the dialects that post the body as multipart" do
       assert AudioMultipart.multipart_upload?("openai")

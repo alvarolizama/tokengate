@@ -52,6 +52,32 @@ defmodule TokengateWeb.ProxyControllerTest do
     refute raw =~ client_model
   end
 
+  # Same canonical upload plus an explicit `response_format`, the field each STT
+  # provider treats differently.
+  defp stt_multipart(model, response_format) do
+    IO.iodata_to_binary([
+      "--",
+      @boundary,
+      "\r\n",
+      ~s(content-disposition: form-data; name="model"\r\n\r\n),
+      "#{model}\r\n",
+      "--",
+      @boundary,
+      "\r\n",
+      ~s(content-disposition: form-data; name="response_format"\r\n\r\n),
+      "#{response_format}\r\n",
+      "--",
+      @boundary,
+      "\r\n",
+      ~s(content-disposition: form-data; name="file"; filename="audio.wav"\r\n),
+      "content-type: audio/wav\r\n\r\n",
+      <<0x52, 0x49, 0xFF, 0x00, 0x46, 0x4D>>,
+      "\r\n--",
+      @boundary,
+      "--\r\n"
+    ])
+  end
+
   defmodule ProviderPlug do
     @moduledoc false
     import Plug.Conn
@@ -3808,6 +3834,66 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert conn.status == 200
     assert_receive {:provider_request_path, "/chat/completions"}
+  end
+
+  # OpenRouter's transcription endpoint rejects `text` with a 400; the dialect
+  # adapter asks the upstream for `json` and answers the transcript as
+  # `text/plain` (see `Tokengate.Proxy.OpenRouterAdapter`).
+  test "an openrouter transcription with response_format=text comes back as plain text", %{
+    conn: conn
+  } do
+    %{token: token, model: model, provider: provider} = proxy_fixture(%{model_type: "stt"})
+    {:ok, _provider} = Providers.update_provider(provider, %{dialect: "openrouter"})
+    body = stt_multipart(model.name, "text")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", body)
+
+    assert conn.status == 200
+    assert response(conn, 200) == "hola mundo"
+    assert get_resp_header(conn, "content-type") |> hd() =~ "text/plain"
+
+    assert_receive {:provider_raw_body, sent, _headers}
+    assert sent =~ ~s(name="response_format"\r\n\r\njson)
+    refute sent =~ ~s(name="response_format"\r\n\r\ntext)
+  end
+
+  test "an openrouter transcription with response_format=srt is a local 400", %{conn: conn} do
+    %{token: token, model: model, provider: provider} = proxy_fixture(%{model_type: "stt"})
+    {:ok, _provider} = Providers.update_provider(provider, %{dialect: "openrouter"})
+    body = stt_multipart(model.name, "srt")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", body)
+
+    assert %{"error" => %{"code" => "unsupported_response_format", "message" => message}} =
+             json_response(conn, 400)
+
+    assert message =~ "verbose_json"
+    refute_receive {:provider_raw_body, _sent, _headers}, 100
+  end
+
+  # The other dialects keep receiving `text` verbatim: the translation is a
+  # property of the openrouter dialect, not of the STT surface.
+  test "an openai-dialect lane still receives response_format=text", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "stt"})
+    body = stt_multipart(model.name, "text")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", body)
+
+    assert json_response(conn, 200)["text"] == "hola mundo"
+    assert_receive {:provider_raw_body, sent, _headers}
+    assert sent =~ ~s(name="response_format"\r\n\r\ntext)
   end
 
   test "a binary upstream response reaches the client with its content-type", %{conn: conn} do
