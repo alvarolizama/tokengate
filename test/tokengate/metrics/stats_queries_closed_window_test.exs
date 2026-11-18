@@ -2,14 +2,24 @@ defmodule Tokengate.Metrics.StatsQueriesClosedWindowTest do
   # async: false — flips the global rollup flag and populates whole-time buckets.
   use Tokengate.DataCase, async: false
 
+  import Ecto.Query
+
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.{Rollup, StatsQueries}
   alias Tokengate.Metrics.Rollup.HourlyAggregate
   alias Tokengate.Periods
   alias Tokengate.Providers
+  alias Tokengate.Repo
 
-  test "last_month hybrid aggregates respect the closed upper bound" do
+  # `yesterday` is the only CLOSED window in the canonical set (today/week/30d
+  # end at `now`). The original spec pinned `last_month`; that builder left the
+  # canonical vocabulary in W1 (still documented in `Periods`, no longer
+  # offered anywhere), so the same contract is pinned here on the canonical
+  # closed day: an aggregate must never add the rows that follow the window,
+  # and that holds for BOTH halves of a hybrid read — the rollup side is where
+  # the old `from`-only reads silently summed the next month.
+  test "a closed canonical window (yesterday) respects the upper bound on both halves" do
     original = Application.get_env(:tokengate, :stats_rollup)
     Application.put_env(:tokengate, :stats_rollup, hybrid: true)
     on_exit(fn -> Application.put_env(:tokengate, :stats_rollup, original) end)
@@ -38,15 +48,14 @@ defmodule Tokengate.Metrics.StatsQueriesClosedWindowTest do
         "base_url" => "http://closed-window.test"
       })
 
-    %{from: from, to: to} = Periods.period_bounds("last_month", "Etc/UTC")
+    %{from: from, to: to} = Periods.period_bounds("yesterday", "Etc/UTC")
     inside = DateTime.add(from, 12 * 3600, :second)
+    # First hour AFTER the closed window: aggregated into the rollup on
+    # purpose, so the assertions below prove the read bound — not a missing
+    # aggregate — keeps it out.
+    outside = DateTime.add(to, 3600, :second)
 
-    for {at, count} <- [
-          {inside, 1},
-          # Older than the raw tail and inside the current calendar month:
-          # it winds up in the rollup, but MUST stay outside `last_month`.
-          {DateTime.add(DateTime.utc_now(), -6 * 3600, :second), 10}
-        ] do
+    for {at, count} <- [{inside, 1}, {outside, 10}] do
       for _ <- 1..count do
         {:ok, _} =
           Logs.log_request(%{
@@ -65,11 +74,15 @@ defmodule Tokengate.Metrics.StatsQueriesClosedWindowTest do
       end
     end
 
+    # Rollup covers the whole closed day AND the hour after it.
+    {:ok, _} = HourlyAggregate.aggregate_hours(from, to)
+
     {:ok, _} =
-      HourlyAggregate.aggregate_hours(
-        %{from | minute: 0, second: 0, microsecond: {0, 0}},
-        DateTime.add(DateTime.utc_now(), -3 * 3600, :second)
-      )
+      HourlyAggregate.aggregate_hours(to, DateTime.add(to, 2 * 3600, :second))
+
+    # The out-of-window traffic really is in the rollup (10 requests), so a
+    # reader that ignored `to` on the rollup side would return 11.
+    assert rollup_requests_from(outside) == 10
 
     opts = [from: from, to: to, timezone: "Etc/UTC"]
     hybrid_summary = StatsQueries.summary(opts)
@@ -107,5 +120,14 @@ defmodule Tokengate.Metrics.StatsQueriesClosedWindowTest do
 
     assert Enum.sum(Enum.map(hybrid_hours, & &1.request_count)) ==
              Enum.sum(Enum.map(raw_hours, & &1.request_count))
+  end
+
+  defp rollup_requests_from(hour) do
+    Repo.one(
+      from(m in Tokengate.Metrics.RequestMetricsHourly,
+        where: m.hour_utc == ^hour,
+        select: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count)
+      )
+    )
   end
 end

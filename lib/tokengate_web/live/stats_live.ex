@@ -16,7 +16,9 @@ defmodule TokengateWeb.StatsLive do
     * `:users`   — per-user consolidated breakdown (all memberships)
     * `:credits` — budgets (calendar counters, no period)
 
-  Periods: Hoy, Esta semana, Este mes, Mes pasado, 30d (all but :live/:credits).
+  Periods: Hoy, Ayer, Esta semana, 30d (all but :live/:credits) — the canonical
+  set in `Tokengate.Periods`; a legacy `?period=month|last_month|7d` bookmark
+  degrades to the default instead of resolving to another window.
 
   Scoping by role:
     * admin   — org-wide
@@ -271,24 +273,33 @@ defmodule TokengateWeb.StatsLive do
 
   ## Data loading ---------------------------------------------------------
 
-  # TTL del bundle estructural del Resumen: describe el período, no el
-  # tráfico del momento (los KPIs viven en la carga de contadores, que no se
-  # cachea). 60s ≈ lo que tardan las queries frías de ventana larga; pasado
-  # el TTL, el siguiente viewer repuebla el cache.
+  # TTL of the structural bundle of a stats tab: it describes the period, not
+  # the traffic of the instant (the KPIs of the Resumen live in the counters
+  # load, which has its own, shorter TTL). 60s ≈ what a cold long-window
+  # query takes; past the TTL the next viewer repopulates the cache.
   #
-  # En tests el cache se apaga (config :stats_structural_cache): los tests
-  # comparten el ETS de la app y se pasarían bundles entre sí.
+  # In tests the cache is off (config :stats_structural_cache): specs share
+  # the app's ETS table and would hand each other bundles.
   @structural_cache_ttl 60_000
+
+  # TTL of the Resumen counters (current-window summary + the previous one).
+  # Must outlive `@reload_interval_ms` (3s) so a viewer's next tick reads the
+  # entry the previous tick published instead of computing its own — with N
+  # viewers that is one aggregate per window instead of N every 3s. Same
+  # rationale as the 3.5s realtime pulse.
+  @counters_cache_ttl 3_500
 
   defp structural_cache_enabled?,
     do: Application.get_env(:tokengate, :stats_structural_cache, enabled: true)[:enabled] != false
 
   # La llave describe TODO lo que cambia el bundle: pestaña, período,
-  # timezone (horas locales), drilldown activo y scope (member_ids nil =
-  # admin global).
+  # timezone (horas locales), drilldown activo y scope (`nil` = admin global).
+  # El orden de las tablas NO entra: se aplica al asignar
+  # (ver `apply_sorting/2`), así dos visores con distinto sort comparten el
+  # mismo cálculo.
   defp structural_cache_key(params) do
     {:stats_structural, params.live_action, params.period, params.timezone, params.model_filter,
-     params.group_filter, params.group_id, params.provider_id, params.scope_member_ids}
+     params.group_filter, params.group_id, params.provider_id, cache_scope(params)}
   end
 
   # Lectura/escritura del cache con el flag de tests: deshabilitado, ambos
@@ -312,49 +323,58 @@ defmodule TokengateWeb.StatsLive do
   # load automatically.
   defp start_data_load(socket) do
     params = data_params(socket.assigns)
+    key = structural_cache_key(params)
 
-    socket =
-      case params.live_action do
-        :index ->
-          # El Resumen se parte en dos cargas: los contadores (resumen del
-          # período + el anterior → deltas) y los agregados estructurales
-          # (perfil horario, modelo×proveedor, picos y el sweep de
-          # concurrencia). Sólo los contadores se recargan con `logs:new`;
-          # lo estructural espera a un cambio de período, un refresh o un
-          # cambio de pestaña. Las demás pestañas conservan su bundle único.
-          #
-          # Lo estructural va cacheado (TTL corto): en producción las queries
-          # frías de ventana larga tardan decenas de segundos y el bundle no
-          # depende del instante — igual que el dashboard, el hit responde
-          # sin spinner y el miss calcula una vez para todos los viewers con
-          # el mismo scope/pestaña/periodo.
-          structural_cache_key(params)
-          |> cached_structural_bundle()
-          |> case do
+    case params.live_action do
+      # El Resumen se parte en dos cargas: los contadores (resumen del
+      # período + el anterior → deltas) y los agregados estructurales
+      # (perfil horario, modelo×proveedor, picos y el sweep de
+      # concurrencia). Sólo los contadores se recargan con `logs:new`;
+      # lo estructural espera a un cambio de período, un refresh o un
+      # cambio de pestaña.
+      #
+      # Las dos mitades van por `DashboardCache` con single-flight: un
+      # bundle estructural que tarda decenas de segundos se calcula UNA vez
+      # por scope/pestaña/período y los contadores se comparten entre
+      # visores dentro de su TTL corto.
+      :index ->
+        socket =
+          case cached_structural_bundle(key) do
             {:ok, bundle} ->
-              # Even on a structural hit the counters must still load: their
-              # fresh state is period-scoped and not cached, so skipping the
-              # async would leave stats_loading true and no KPIs for later
-              # viewers inside the structural TTL.
-              socket
-              |> assign(bundle)
-              |> start_async(:stats_counters, fn -> compute_counter_assigns(params) end)
+              assign(socket, bundle)
 
             :miss ->
-              socket
-              |> start_async(:stats_counters, fn -> compute_counter_assigns(params) end)
-              |> start_async(:stats_data, fn ->
-                cached_structural_bundle(structural_cache_key(params), fn ->
-                  compute_structural_assigns(params)
-                end)
+              start_async(socket, :stats_data, fn ->
+                cached_structural_bundle(key, fn -> compute_structural_assigns(params) end)
               end)
           end
 
-        _ ->
-          start_async(socket, :stats_data, fn -> compute_data_assigns(params) end)
-      end
+        socket
+        |> start_async(:stats_counters, fn -> compute_counter_assigns(params) end)
+        |> assign(:stats_loading, true)
 
-    assign(socket, :stats_loading, true)
+      # El resto de las pestañas: el mismo bundle único de siempre, ahora
+      # bajo la clave estructural (rankings con percentile_cont, picos,
+      # presupuestos de perfiles/servicios/usuarios: un cálculo por minuto
+      # y scope en vez de uno por clic y visor). El hit responde ya, sin
+      # spinner: el bundle no describe el instante.
+      _ ->
+        case cached_structural_bundle(key) do
+          {:ok, bundle} ->
+            socket
+            |> assign(:stats_loading, false)
+            |> assign(:load_error, false)
+            |> assign(empty_structural_assigns(params.live_action))
+            |> assign(apply_sorting(bundle, params))
+
+          :miss ->
+            socket
+            |> start_async(:stats_data, fn ->
+              cached_structural_bundle(key, fn -> compute_data_assigns(params) end)
+            end)
+            |> assign(:stats_loading, true)
+        end
+    end
   end
 
   # Recarga de contadores del Resumen, sin la parte estructural: la usa el
@@ -389,7 +409,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:stats_loading, false)
       |> assign(:load_error, false)
       |> assign(empty_structural_assigns(socket.assigns.live_action))
-      |> assign(data)
+      |> assign(apply_sorting(data, data_params(socket.assigns)))
 
     {:noreply, socket}
   end
@@ -522,16 +542,36 @@ defmodule TokengateWeb.StatsLive do
   # Pure orchestration: no socket, no assigns — everything runs off plain
   # values so it can execute inside an async task (queries in parallel).
   # Bundle completo de las pestañas de datos (Modelos, Perfiles de límites, Servicios,
-  # Usuarios, Proveedores): contadores + desgloses.
+  # Usuarios, Proveedores): contadores (sólo si el template los lee) + desgloses.
   defp compute_data_assigns(params) do
     opts = period_opts(params)
 
-    (counter_tasks(params, opts) ++ breakdown_tasks(params, opts))
+    (metric_task_if_read(params, opts) ++ breakdown_tasks(params, opts))
     |> run_parallel()
     |> Map.new()
     |> derive_series_labels()
-    |> apply_sorting(params)
-    |> merge_prev_metrics()
+  end
+
+  # Only the views whose template renders `@metrics` ask for the period
+  # summary; the rest used to compute it (behind the rollup coverage guard)
+  # and drop it in the render. These views don't render deltas either, so
+  # they need the CURRENT window only — not the previous one.
+  defp metric_task_if_read(%{live_action: :model} = params, opts), do: metric_task(params, opts)
+
+  defp metric_task_if_read(%{live_action: :models, model_filter: id} = params, opts)
+       when is_binary(id),
+       do: metric_task(params, opts)
+
+  defp metric_task_if_read(%{live_action: :group} = params, opts), do: metric_task(params, opts)
+
+  defp metric_task_if_read(%{live_action: :groups, group_filter: id} = params, opts)
+       when is_binary(id),
+       do: metric_task(params, opts)
+
+  defp metric_task_if_read(_params, _opts), do: []
+
+  defp metric_task(params, opts) do
+    [fn -> {:metrics, summary_to_metrics(fetch_current_summary(params, opts))} end]
   end
 
   # Contadores del Resumen (:index): resumen del período + del anterior (los
@@ -555,7 +595,6 @@ defmodule TokengateWeb.StatsLive do
     |> run_parallel()
     |> Map.new()
     |> derive_series_labels()
-    |> apply_sorting(params)
   end
 
   # drilldown_series_labels se deriva EN MEMORIA de la daily series que ya se
@@ -577,7 +616,7 @@ defmodule TokengateWeb.StatsLive do
 
   defp counter_tasks(params, opts) do
     [
-      fn -> {:metrics, summary_to_metrics(fetch_summary(params, opts))} end,
+      fn -> {:metrics, summary_to_metrics(fetch_current_summary(params, opts))} end,
       fn ->
         {:prev_metrics,
          summary_to_metrics(previous_summary(params, params.period, params.timezone))}
@@ -585,9 +624,37 @@ defmodule TokengateWeb.StatsLive do
     ]
   end
 
-  # Fetch the previous period's summary for delta comparison. `previous_period_bounds`
-  # handles every period; "last_month" (closed calendar month) is fully inside
-  # the 90-day retention, so it needs no special-casing.
+  # Both halves of the Resumen counters are shared between viewers: the
+  # previous window for 60s (closed and immutable) and the current one for
+  # `@counters_cache_ttl` (long enough to outlive the per-viewer 3s reload).
+  # With N open overviews, the 3s tick used to run N pairs of hybrid
+  # summaries — each with its rollup coverage guard — against the same pool
+  # the proxy is using. Now it runs one pair per window.
+  defp fetch_current_summary(params, opts) do
+    if structural_cache_enabled?() do
+      DashboardCache.fetch_or_compute(
+        {:stats_current_summary, params.model_filter, params.group_filter, params.period,
+         params.timezone, cache_scope(params)},
+        fn -> fetch_summary(params, opts) end,
+        ttl: @counters_cache_ttl
+      )
+    else
+      fetch_summary(params, opts)
+    end
+  end
+
+  # Cache-scope element. Admins share one global entry (`nil`); every other
+  # role sees its own numbers, so the key carries the USER id — not the
+  # membership ids: a user with no live membership has `[]`, the same list a
+  # manager has, and both would collide with each other's answer.
+  defp cache_scope(%{user: %{global_role: "admin"}}), do: nil
+  defp cache_scope(%{user: %{id: id}}), do: {:user, id}
+  defp cache_scope(_params), do: :anonymous
+
+  # Fetch the previous period's summary for delta comparison.
+  # `previous_period_bounds` handles the whole canonical set (today, yesterday,
+  # week, 30d) plus the legacy builders; every one of them stays inside the
+  # retention window.
   defp previous_summary(params, period, timezone) do
     cached_prev_summary(params, period, timezone)
   end
@@ -621,7 +688,7 @@ defmodule TokengateWeb.StatsLive do
 
   defp prev_summary_cache_key(params, period, timezone) do
     {:stats_prev_summary, params.model_filter, params.group_filter, period, timezone,
-     params.scope_member_ids}
+     cache_scope(params)}
   end
 
   # Merge prev_metrics into the :metrics map as delta percentages.
@@ -1173,9 +1240,12 @@ defmodule TokengateWeb.StatsLive do
 
   ## Helpers --------------------------------------------------------------
 
+  # The period lives in the URL; anything outside the canonical vocabulary
+  # (`?period=month`, `last_month`, `7d`, a forged value) degrades to the
+  # canonical default (week) instead of being reinterpreted as another window.
+  # A missing param keeps the page's own default (today).
   defp parse_period(nil), do: "today"
-  defp parse_period(period) when period in ~w(today week month last_month 30d), do: period
-  defp parse_period(_), do: "today"
+  defp parse_period(period), do: Periods.normalize_period(period)
 
   defp empty_metrics do
     %{

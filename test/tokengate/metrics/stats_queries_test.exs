@@ -855,6 +855,28 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
       assert Enum.map(StatsQueries.breakdown_by_group(opts), & &1.request_count) == [3]
       assert Enum.map(StatsQueries.breakdown_by_user(opts), & &1.request_count) == [3]
 
+      # Charts go through the same guard: with an interior hole they must not
+      # draw the rollup-covered slice and silently undercount next to the KPI
+      # card. Raw over the whole window is the answer.
+      raw_opts = [from: from, to: to, timezone: "Etc/UTC"]
+
+      for {hybrid_chart, raw_chart} <- [
+            {StatsQueries.usage_by_hour_of_day_by_provider(raw_opts),
+             Tokengate.Metrics.Rollup.usage_by_hour_of_day_by_provider(raw_opts)},
+            {StatsQueries.usage_by_model_provider_stacked(raw_opts),
+             Tokengate.Metrics.Rollup.usage_by_model_provider_stacked(raw_opts)},
+            {StatsQueries.busiest_hours(nil, raw_opts),
+             Tokengate.Metrics.Rollup.busiest_hours(nil, raw_opts)}
+          ] do
+        field =
+          if Map.has_key?(hd(hybrid_chart), :total_requests),
+            do: :total_requests,
+            else: :request_count
+
+        assert Enum.sum(Enum.map(hybrid_chart, &Map.fetch!(&1, field))) ==
+                 Enum.sum(Enum.map(raw_chart, &Map.fetch!(&1, field)))
+      end
+
       {batch_models, _batch_members} =
         StatsQueries.breakdown_by_model_and_member(opts ++ [user_ids: [member.user_id]])
 
@@ -1059,6 +1081,106 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
 
       total = Enum.reduce(hybrid, 0, &(&1.request_count + &2))
       assert total == Enum.reduce(raw, 0, &(&1.request_count + &2))
+    end
+  end
+
+  describe "rollup coverage guard cache" do
+    setup do
+      rollup = Application.get_env(:tokengate, :stats_rollup)
+      structural = Application.get_env(:tokengate, :stats_structural_cache)
+
+      Application.put_env(:tokengate, :stats_rollup, hybrid: true)
+      Application.put_env(:tokengate, :stats_structural_cache, enabled: true)
+      Tokengate.Metrics.DashboardCache.invalidate_all()
+
+      on_exit(fn ->
+        Application.put_env(:tokengate, :stats_rollup, rollup)
+        Application.put_env(:tokengate, :stats_structural_cache, structural)
+        Tokengate.Metrics.DashboardCache.invalidate_all()
+      end)
+
+      :ok
+    end
+
+    test "one reconciliation COUNT per (scope, closed window) and TTL" do
+      {member, _group} = group_member_fixture()
+      log_request(member.id, hours_ago(48))
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      # A CLOSED, hour-aligned window: the same question twice inside one TTL
+      # is answered from the memoized verdict.
+      from = floor_to_hour(hours_ago(48))
+      to = DateTime.add(from, 3600, :second)
+      opts = [from: from, to: to, timezone: "Etc/UTC"]
+
+      {count, results} =
+        count_queries(fn ->
+          # Two "viewers" (separate processes) reading the same window.
+          first = StatsQueries.summary(opts)
+          second = Task.async(fn -> StatsQueries.summary(opts) end) |> Task.await()
+
+          {first.request_count, second.request_count}
+        end)
+
+      assert results == {1, 1}
+      assert count == 1
+    end
+
+    test "the verdict is keyed by scope: a different filter re-runs the reconciliation" do
+      {member, _group} = group_member_fixture()
+      log_request(member.id, hours_ago(48))
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = floor_to_hour(hours_ago(48))
+      to = DateTime.add(from, 3600, :second)
+
+      {count, _} =
+        count_queries(fn ->
+          StatsQueries.summary(from: from, to: to, timezone: "Etc/UTC")
+          StatsQueries.summary(from: from, to: to, timezone: "Etc/UTC", member_ids: [member.id])
+        end)
+
+      assert count == 2
+    end
+  end
+
+  # Counts the `request_logs` COUNT queries the coverage guard issues within
+  # `fun`. The guard's reconciliation is the only plain `SELECT count(...)`
+  # over that table in these reads: `Logs.cost_summary` also projects a
+  # `count(id)`, but inside a SUM/AVG row.
+  defp count_queries(fun) do
+    parent = self()
+    ref = make_ref()
+    handler_id = {__MODULE__, ref}
+
+    :telemetry.attach(
+      handler_id,
+      [:tokengate, :repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        sql = metadata[:query] || ""
+
+        if String.starts_with?(String.trim_leading(sql), "SELECT count(") and
+             String.contains?(sql, "request_logs") do
+          send(parent, {ref, :guard_count})
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    result = fun.()
+    :telemetry.detach(handler_id)
+
+    count = collect_guard_counts(ref, 0)
+    {count, result}
+  end
+
+  defp collect_guard_counts(ref, acc) do
+    receive do
+      {^ref, :guard_count} -> collect_guard_counts(ref, acc + 1)
+    after
+      0 -> acc
     end
   end
 end

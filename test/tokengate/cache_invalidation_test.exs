@@ -140,6 +140,76 @@ defmodule Tokengate.CacheInvalidationTest do
     end
   end
 
+  describe "routing cache single-flight" do
+    test "concurrent misses on the same key run the query once" do
+      group = "g-sf-#{System.unique_integer([:positive])}"
+      call_count = :counters.new(1, [:atomics])
+
+      query = fn ->
+        :counters.add(call_count, 1, 1)
+        Process.sleep(50)
+        [:model]
+      end
+
+      results =
+        1..10
+        |> Enum.map(fn _ ->
+          Task.async(fn -> Routing.Cache.fetch_accessible_models(group, "member", query) end)
+        end)
+        |> Task.await_many(5_000)
+
+      assert results == List.duplicate([:model], 10)
+      assert :counters.get(call_count, 1) == 1
+
+      assert [] ==
+               :ets.lookup(
+                 Routing.Cache.table(),
+                 {:__computing__, {:accessible_models, group, "member"}}
+               )
+    end
+
+    test "a crashing query releases the lock instead of wedging the key" do
+      group = "g-sf-crash-#{System.unique_integer([:positive])}"
+
+      assert_raise RuntimeError, "boom", fn ->
+        Routing.Cache.fetch_accessible_models(group, "member", fn -> raise "boom" end)
+      end
+
+      assert Routing.Cache.fetch_accessible_models(group, "member", fn -> [:recovered] end) ==
+               [:recovered]
+    end
+  end
+
+  describe "routing invalidate_all" do
+    test "staggers expiry instead of wiping every model at once" do
+      table = Routing.Cache.table()
+      :ets.delete_all_objects(table)
+
+      for i <- 1..4 do
+        Routing.Cache.fetch_accessible_models("g-stag", "m#{i}", fn -> [:model] end)
+      end
+
+      :ets.insert(table, {:disabled_credentials, MapSet.new(["cred-1"]), future()})
+
+      before = :ets.tab2list(table)
+      assert length(before) == 5
+
+      :ok = Routing.Cache.invalidate_all()
+
+      after_entries = :ets.tab2list(table)
+      # No entry was dropped: a catalog write no longer leaves every model
+      # recomputing on the next request...
+      assert length(after_entries) == 4
+      # ...but their deadlines were pulled inside the stagger window.
+      now = System.monotonic_time(:millisecond)
+
+      assert Enum.all?(after_entries, fn {_key, _value, deadline} -> deadline <= now + 1_000 end)
+
+      # The disabled-credential set is correctness-critical: dropped at once.
+      assert [] == :ets.lookup(table, :disabled_credentials)
+    end
+  end
+
   defp deliver_remote(target, op) do
     send(CacheInvalidation, {CacheInvalidation, target, op, @remote})
     _ = :sys.get_state(CacheInvalidation)

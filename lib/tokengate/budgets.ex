@@ -16,6 +16,7 @@ defmodule Tokengate.Budgets do
   alias Tokengate.Accounts.GroupMember
   alias Tokengate.Budgets.Manager
   alias Tokengate.Logs.RequestLog
+  alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.RequestMetricsHourly
   alias Tokengate.Periods
 
@@ -31,6 +32,13 @@ defmodule Tokengate.Budgets do
 
   defp stats_timeout,
     do: Application.get_env(:tokengate, :stats_query_timeout_ms, @stats_timeout)
+
+  # TTL of the shared spend reads (`spend_by_user/1`, `list_group_budgets/1`).
+  # They back admin dashboards that reload every ~5s per open page: with N
+  # viewers each one re-ran the member list + two spend aggregates + the
+  # subject summaries. Short enough that the number still reads "live", and
+  # the outer surfaces cache their own bundle on top.
+  @read_cache_ttl_ms 3_000
 
   @type member_budget :: %{
           member: GroupMember.t(),
@@ -214,7 +222,9 @@ defmodule Tokengate.Budgets do
 
   @spec list_group_budgets(String.t()) :: [group_budget()]
   def list_group_budgets(timezone) do
-    list_member_budgets(timezone) |> rollup_group_budgets()
+    cached_read({:budgets_group_rollup, timezone}, fn ->
+      list_member_budgets(timezone) |> rollup_group_budgets()
+    end)
   end
 
   @doc """
@@ -317,7 +327,9 @@ defmodule Tokengate.Budgets do
           }
         }
   def spend_by_user(timezone) do
-    list_member_budgets(timezone) |> rollup_user_spend()
+    cached_read({:budgets_spend_by_user, timezone}, fn ->
+      list_member_budgets(timezone) |> rollup_user_spend()
+    end)
   end
 
   defp rollup_user_spend(member_budgets) do
@@ -592,6 +604,10 @@ defmodule Tokengate.Budgets do
       [m],
       m.group_member_id in ^member_ids and m.hour_utc >= ^from and m.hour_utc < ^to
     )
+    # The rollup is partitioned by `day`; without the day bound the planner
+    # has to probe every live day partition of the month even though the
+    # hour_utc range already excludes them.
+    |> where([m], m.day >= ^DateTime.to_date(from) and m.day <= ^DateTime.to_date(to))
     |> group_by([m], m.group_member_id)
     |> select([m], {m.group_member_id, fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)})
     |> Repo.all(timeout: stats_timeout())
@@ -607,6 +623,25 @@ defmodule Tokengate.Budgets do
   defp rollup_hybrid? do
     Application.get_env(:tokengate, :stats_rollup, [])[:hybrid] != false
   end
+
+  # Shared spend reads. The key carries the scope that changes the answer
+  # (the timezone moves the local-day window) and the entry rides
+  # `DashboardCache`, so the single-flight and the TTL sweep are the same
+  # ones the stats surfaces use.
+  #
+  # Off in the test env through the same `:stats_structural_cache` switch the
+  # stats caches read: specs share one ETS table, and a spend figure cached by
+  # one test must never answer the next one.
+  defp cached_read(key, fun) do
+    if read_cache_enabled?() and DashboardCache.available?() do
+      DashboardCache.fetch_or_compute(key, fun, ttl: @read_cache_ttl_ms)
+    else
+      fun.()
+    end
+  end
+
+  defp read_cache_enabled?,
+    do: Application.get_env(:tokengate, :stats_structural_cache, enabled: true)[:enabled] != false
 
   defp rollup_cutoff do
     DateTime.add(DateTime.utc_now(), -@rollup_tail_hours * 3600, :second)

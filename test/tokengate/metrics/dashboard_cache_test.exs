@@ -233,6 +233,74 @@ defmodule Tokengate.Metrics.DashboardCacheTest do
       assert elapsed < 15_000_000
       refute match?([_], :ets.lookup(:tokengate_dashboard_cache, {:__computing__, key}))
     end
+
+    test "waiters do not drop out of a slow computation (no stampede past 1.5s)" do
+      # A cold structural bundle takes tens of seconds. Waiters used to give up
+      # after 1.5s and each run the same ~12 queries: five viewers, five
+      # bundles. The lock must hold them for as long as the holder lives.
+      key = {:single_flight_slow, System.unique_integer([:positive])}
+      call_count = :counters.new(1, [:atomics])
+
+      compute = fn ->
+        :counters.add(call_count, 1, 1)
+        Process.sleep(2_000)
+        %{v: :slow}
+      end
+
+      results =
+        1..5
+        |> Enum.map(fn _ ->
+          Task.async(fn -> DashboardCache.fetch_or_compute(key, compute) end)
+        end)
+        |> Task.await_many(15_000)
+
+      assert results == List.duplicate(%{v: :slow}, 5)
+      assert :counters.get(call_count, 1) == 1
+    end
+
+    test "the periodic sweep never frees a live holder, whatever the entry TTL" do
+      key = {:single_flight_sweep, System.unique_integer([:positive])}
+      parent = self()
+
+      # Entry TTL of 0 ms: the value is expired the instant it is written, so a
+      # TTL-based lock deadline (the old behavior) would be reaped by the very
+      # next sweep while the holder is still computing.
+      holder =
+        spawn(fn ->
+          DashboardCache.fetch_or_compute(
+            key,
+            fn ->
+              send(parent, {:computing, self()})
+
+              receive do
+                :release -> :ok
+              after
+                5_000 -> :ok
+              end
+
+              %{v: :published}
+            end,
+            ttl: 0
+          )
+        end)
+
+      assert_receive {:computing, ^holder}, 1_000
+      lock = {:__computing__, key}
+      assert match?([_], :ets.lookup(:tokengate_dashboard_cache, lock))
+
+      DashboardCache.sweep_expired()
+      assert match?([_], :ets.lookup(:tokengate_dashboard_cache, lock))
+
+      ref = Process.monitor(holder)
+      send(holder, :release)
+      assert_receive {:DOWN, ^ref, :process, ^holder, :normal}, 5_000
+
+      # Released, and the key answers again instead of staying wedged.
+      refute match?([_], :ets.lookup(:tokengate_dashboard_cache, lock))
+
+      assert DashboardCache.fetch_or_compute(key, fn -> %{v: :next} end, ttl: 60_000) ==
+               %{v: :next}
+    end
   end
 
   describe "build_key/3" do

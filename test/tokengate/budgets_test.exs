@@ -502,6 +502,48 @@ defmodule Tokengate.BudgetsTest do
       assert user_spend.real_monthly_usd == Decimal.new(0)
       assert user_spend.exhausted?
     end
+
+    # The two admin reads (`spend_by_user/1` and `list_group_budgets/1`) run
+    # on every open page's 5s refresh, per viewer. They share one computation
+    # per TTL through `DashboardCache` (same single-flight every stats read
+    # uses), so the second read inside the window must NOT see new traffic.
+    test "spend_by_user/1 and list_group_budgets/1 are shared for the TTL" do
+      previous = Application.get_env(:tokengate, :stats_structural_cache)
+      Application.put_env(:tokengate, :stats_structural_cache, enabled: true)
+
+      on_exit(fn ->
+        Application.put_env(:tokengate, :stats_structural_cache, previous)
+        Tokengate.Metrics.DashboardCache.invalidate_all()
+      end)
+
+      Tokengate.Metrics.DashboardCache.invalidate_all()
+
+      user = user_fixture()
+      group = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+      member = member_fixture(group, user)
+      record_limit_log(member, "2.00")
+
+      spend = Budgets.spend_by_user("Etc/UTC")
+      assert Decimal.eq?(Map.fetch!(spend, user.id).monthly_usd, Decimal.new("2.00"))
+
+      budgets = Budgets.list_group_budgets("Etc/UTC")
+      row = Enum.find(budgets, &(&1.group.id == group.id))
+      assert Decimal.eq?(row.monthly_spend_usd, Decimal.new("2.00"))
+
+      record_limit_log(member, "3.00")
+
+      # Served from the shared entry: the fresh log is not in the number yet.
+      assert Budgets.spend_by_user("Etc/UTC") == spend
+      assert Budgets.list_group_budgets("Etc/UTC") == budgets
+
+      # And once the entry is gone the next read sees it.
+      Tokengate.Metrics.DashboardCache.invalidate_all()
+
+      assert Decimal.eq?(
+               Map.fetch!(Budgets.spend_by_user("Etc/UTC"), user.id).monthly_usd,
+               Decimal.new("5.00")
+             )
+    end
   end
 
   describe "list_group_budgets/0" do
