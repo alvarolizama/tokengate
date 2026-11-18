@@ -631,7 +631,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
-    assert html =~ "Activa"
+    assert html =~ "Activo"
 
     html = view |> element("#hide-#{member.id}") |> render_click()
 

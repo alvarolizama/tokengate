@@ -1073,8 +1073,8 @@ defmodule TokengateWeb.DashboardLive do
   def key_status_badge(%{api_key: %{status: "revoked"}}), do: "badge-error"
   def key_status_badge(_), do: "badge-ghost"
 
-  def key_status_label(%{api_key: %{status: "active"}}), do: "Activa"
-  def key_status_label(%{api_key: %{status: "revoked"}}), do: "Revocada"
+  def key_status_label(%{api_key: %{status: "active"}}), do: gettext("Active")
+  def key_status_label(%{api_key: %{status: "revoked"}}), do: gettext("Revoked")
   def key_status_label(_), do: gettext("No key")
 
   ## Budget helpers -------------------------------------------------------

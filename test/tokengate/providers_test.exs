@@ -359,18 +359,26 @@ defmodule Tokengate.ProvidersTest do
       assert {:error, :not_found} = Providers.delete_provider(provider)
     end
 
-    test "delete_provider/1 drops the routing snapshot after it commits" do
+    test "delete_provider/1 invalidates the routing snapshot after it commits" do
       provider = provider_fixture()
       model_id = Ecto.UUID.generate()
+      key = {:model_providers, model_id, :global}
       warm = fn -> [:warm] end
 
       assert Routing.Cache.fetch_model_providers(model_id, nil, warm) == [:warm]
       assert Routing.Cache.fetch_model_providers(model_id, nil, fn -> [:db] end) == [:warm]
+      [{^key, [:warm], ttl_deadline}] = :ets.lookup(Routing.Cache.table(), key)
 
       assert {:ok, _} = Providers.delete_provider(provider)
 
-      # The cached list is gone: the next read recomputes.
-      assert Routing.Cache.fetch_model_providers(model_id, nil, fn -> [:db] end) == [:db]
+      # invalidate_all/0 no longer wipes the table (anti-stampede, W9): it pulls
+      # every routing deadline into a <=1s per-key stagger window so a deleted
+      # provider stops being routed promptly without K simultaneous
+      # recomputations. The snapshot is invalidated, just not on this millisecond.
+      now = System.monotonic_time(:millisecond)
+      assert [{^key, [:warm], deadline}] = :ets.lookup(Routing.Cache.table(), key)
+      assert deadline <= now + 1_000
+      assert deadline < ttl_deadline
     end
 
     test "delete_provider_if_unused/1 deletes a provider no lane mounts" do
@@ -432,19 +440,25 @@ defmodule Tokengate.ProvidersTest do
       assert {:error, :not_found} = Providers.delete_pool(pool)
     end
 
-    test "delete_pool/1 drops the routing snapshot after it commits" do
+    test "delete_pool/1 invalidates the routing snapshot after it commits" do
       provider = provider_fixture()
 
       {:ok, pool} =
         Providers.create_pool(provider, %{name: "primary-#{System.unique_integer([:positive])}"})
 
       model_id = Ecto.UUID.generate()
+      key = {:model_providers, model_id, :global}
 
       assert Routing.Cache.fetch_model_providers(model_id, nil, fn -> [:warm] end) == [:warm]
+      [{^key, [:warm], ttl_deadline}] = :ets.lookup(Routing.Cache.table(), key)
 
       assert {:ok, _} = Providers.delete_pool(pool)
 
-      assert Routing.Cache.fetch_model_providers(model_id, nil, fn -> [:db] end) == [:db]
+      # Staggered expiry (<=1s), not an immediate wipe — see delete_provider/1.
+      now = System.monotonic_time(:millisecond)
+      assert [{^key, [:warm], deadline}] = :ets.lookup(Routing.Cache.table(), key)
+      assert deadline <= now + 1_000
+      assert deadline < ttl_deadline
     end
   end
 
