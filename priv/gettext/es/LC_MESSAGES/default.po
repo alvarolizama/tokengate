@@ -588,6 +588,11 @@ msgstr "Nombre"
 msgid "Name to identify this credential."
 msgstr "Nombre para identificar esta credencial."
 
+#: lib/tokengate_web/live/providers_live.ex:774
+#, elixir-autogen, elixir-format
+msgid "Name and Base URL are required."
+msgstr "El nombre y la base URL son obligatorios."
+
 #: lib/tokengate_web/live/provider_keys_live.ex:430
 #, elixir-autogen, elixir-format
 msgid "New credential"
@@ -1104,6 +1109,11 @@ msgstr "Contraseña actualizada."
 #, elixir-autogen, elixir-format
 msgid "Pick a role"
 msgstr "Selecciona un rol"
+
+#: lib/tokengate_web/live/providers_live.ex:787
+#, elixir-autogen, elixir-format
+msgid "Pick at least one capability to continue."
+msgstr "Elige al menos una capability para continuar."
 
 #: lib/tokengate_web/components/admin_components.ex:235
 #, elixir-autogen, elixir-format
@@ -2781,6 +2791,12 @@ msgstr "Tope diario global alcanzado"
 #, elixir-autogen, elixir-format
 msgid "Impersonation started"
 msgstr "Suplantación iniciada"
+
+#: lib/tokengate_web/live/providers_live.ex:731
+#: lib/tokengate_web/live/providers_live.ex:737
+#, elixir-autogen, elixir-format
+msgid "Identity"
+msgstr "Identidad"
 
 #: lib/tokengate_web/live/notifications_live.ex:284
 #, elixir-autogen, elixir-format
@@ -4720,6 +4736,11 @@ msgstr "Decisiones"
 #, elixir-autogen, elixir-format
 msgid "Back"
 msgstr "Volver"
+
+#: lib/tokengate_web/live/providers_live.ex:780
+#, elixir-autogen, elixir-format
+msgid "Base URL must be a valid http(s) URL."
+msgstr "La base URL debe ser una URL http(s) válida."
 
 #: lib/tokengate_web/live/models_live.ex:1481
 #, elixir-autogen, elixir-format

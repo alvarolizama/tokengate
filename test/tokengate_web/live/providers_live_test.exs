@@ -62,6 +62,18 @@ defmodule TokengateWeb.ProvidersLiveTest do
     live(conn, ~p"/catalog/providers")
   end
 
+  # Wizard del alta/edición: los dos pasos del formulario viven siempre en el
+  # DOM (para que Save envíe todos los campos), así que el paso activo se
+  # afirma por la pill resaltada de `.steps` y por la clase `hidden` del bloque
+  # inactivo — lo que el operador ve, no lo que el HTML conserva.
+  defp active_step(view) do
+    Enum.filter(~w(pick identity limits), fn step ->
+      has_element?(view, "#wizard-crumb-#{step}.border-primary")
+    end)
+  end
+
+  defp hidden_step?(view, step), do: has_element?(view, "#provider-step-#{step}.hidden")
+
   defp create_provider(attrs \\ %{}) do
     u = unique()
 
@@ -204,12 +216,24 @@ defmodule TokengateWeb.ProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live_providers(conn)
 
-    # The entry point is the catalog modal; "Custom provider" lives inside it.
+    # The entry point is the wizard, and it opens on the catalog pick step: the
+    # searchable picker is step 1 of the same modal, not a modal of its own.
     view |> element("#add-provider-btn") |> render_click()
-    assert has_element?(view, "#catalog-modal")
+    assert has_element?(view, "#provider-wizard-modal")
+    assert has_element?(view, "#provider-wizard-modal-steps")
+    assert active_step(view) == ["pick"]
+    assert has_element?(view, "#catalog-results")
+    assert has_element?(view, "#new-custom-provider-btn")
+
+    # "Custom provider" advances to identity in the same modal (step 1 → 2).
     view |> element("#new-custom-provider-btn") |> render_click()
+    assert has_element?(view, "#provider-wizard-modal")
+    assert active_step(view) == ["identity"]
     assert has_element?(view, "#provider-form")
-    refute has_element?(view, "#catalog-modal")
+    refute has_element?(view, "#catalog-results")
+    # The limits step exists already but is not the one on screen.
+    assert hidden_step?(view, "limits")
+    refute has_element?(view, "#save-provider-btn")
 
     # The hidden sentinel is load-bearing: without it the browser never sends
     # an explicit empty list, and "uncheck everything" would silently no-op.
@@ -224,14 +248,31 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert has_element?(view, "#provider-capabilities input[value='llm'][checked]")
     refute has_element?(view, "#provider-capabilities input[value='decision'][checked]")
 
+    view
+    |> form("#provider-form",
+      provider: %{name: "anthropic", base_url: "https://api.anthropic.com/v1"}
+    )
+    |> render_change()
+
+    # Valid identity → the wizard moves on to the limits.
+    view |> element("#provider-next-btn") |> render_click()
+    assert active_step(view) == ["limits"]
+    refute hidden_step?(view, "limits")
+    assert hidden_step?(view, "identity")
+    assert has_element?(view, "#save-provider-btn")
+
+    # Back keeps what was typed: the steps share one changeset.
+    view |> element("#provider-back-btn") |> render_click()
+    assert active_step(view) == ["identity"]
+    assert has_element?(view, "#provider-form input[name='provider[name]'][value='anthropic']")
+
+    view |> element("#provider-next-btn") |> render_click()
+
+    # Save carries the whole form: the identity typed on step 2 still travels
+    # even though only the limits are on screen.
     html =
       view
-      |> form("#provider-form",
-        provider: %{
-          name: "anthropic",
-          base_url: "https://api.anthropic.com/v1"
-        }
-      )
+      |> form("#provider-form", provider: %{max_rpm: "120"})
       |> render_submit()
 
     assert html =~ "Proveedor creado."
@@ -240,9 +281,142 @@ defmodule TokengateWeb.ProvidersLiveTest do
     # stored is the schema default (chat).
     created = Tokengate.Repo.get_by!(Providers.Provider, name: "anthropic")
     assert created.capabilities == ["llm"]
+    assert created.max_rpm == 120
 
     # El custom aparece en la misma lista que los builtin (ya no hay tab).
     assert render(view) =~ "anthropic"
+  end
+
+  # Validación por paso: identity no avanza con name/base_url vacíos, con una
+  # URL que no es http(s) ni sin ninguna capability. El wizard se queda en el
+  # paso y dice por qué; nada se persiste hasta Save.
+  test "el paso identity valida antes de avanzar", %{conn: conn} do
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    view |> element("#add-provider-btn") |> render_click()
+    view |> element("#new-custom-provider-btn") |> render_click()
+
+    # Sin nombre ni base URL.
+    view |> form("#provider-form", provider: %{name: "", base_url: ""}) |> render_change()
+    view |> element("#provider-next-btn") |> render_click()
+
+    assert active_step(view) == ["identity"]
+    assert hidden_step?(view, "limits")
+    assert has_element?(view, "#provider-step-error", "El nombre y la base URL son obligatorios.")
+
+    # Base URL que no es http(s).
+    view
+    |> form("#provider-form", provider: %{name: "relay", base_url: "relay.example.com/v1"})
+    |> render_change()
+
+    view |> element("#provider-next-btn") |> render_click()
+
+    assert active_step(view) == ["identity"]
+
+    assert has_element?(
+             view,
+             "#provider-step-error",
+             "La base URL debe ser una URL http(s) válida."
+           )
+
+    # Identidad válida pero sin ninguna capability.
+    view
+    |> form("#provider-form",
+      provider: %{
+        name: "relay",
+        base_url: "https://relay.example.com/v1",
+        capabilities: [""]
+      }
+    )
+    |> render_change()
+
+    view |> element("#provider-next-btn") |> render_click()
+
+    assert active_step(view) == ["identity"]
+
+    assert has_element?(
+             view,
+             "#provider-step-error",
+             "Elige al menos una capability para continuar."
+           )
+
+    refute Tokengate.Repo.get_by(Providers.Provider, name: "relay")
+
+    # Con una capability sí avanza.
+    view |> form("#provider-form", provider: %{capabilities: ["", "llm"]}) |> render_change()
+    view |> element("#provider-next-btn") |> render_click()
+
+    assert active_step(view) == ["limits"]
+    refute has_element?(view, "#provider-step-error")
+  end
+
+  # En edición el wizard entra al paso relevante: un custom a identity (ahí
+  # viven su nombre y su URL) y un builtin a limits sin indicador de pasos — su
+  # identidad es del catálogo y lo único editable son los límites.
+  test "edición: el wizard entra al paso relevante", %{conn: conn} do
+    custom = create_provider(%{capabilities: ["llm", "embedding"]})
+
+    {:ok, builtin} =
+      %Providers.Provider{}
+      |> Ecto.Changeset.change(
+        key: "catalog-wizard-#{unique()}",
+        name: "Catalog Wizard #{unique()}",
+        base_url: "https://catalog-#{unique()}.example.com/v1",
+        source: "builtin",
+        dialect: "openai",
+        capabilities: ["llm"],
+        status: "active"
+      )
+      |> Tokengate.Repo.insert()
+
+    {:ok, _cred} =
+      Providers.create_credential(%{
+        provider_id: builtin.id,
+        name: "Producción",
+        api_key_encrypted: "«redacted:sk-…»",
+        status: "active"
+      })
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    # Custom: entra por identity, con los dos pasos a la vista.
+    view |> element("#edit-#{custom.id}") |> render_click()
+    assert has_element?(view, "#provider-wizard-modal")
+    assert has_element?(view, "#provider-wizard-modal-steps")
+    assert active_step(view) == ["identity"]
+    assert hidden_step?(view, "limits")
+    # Al editar no hay paso de catálogo: el proveedor ya está elegido.
+    refute has_element?(view, "#wizard-crumb-pick")
+    refute has_element?(view, "#provider-back-btn")
+
+    view |> element("#provider-next-btn") |> render_click()
+    assert active_step(view) == ["limits"]
+    assert has_element?(view, "#provider-back-btn")
+
+    view |> element("#provider-back-btn") |> render_click()
+    assert active_step(view) == ["identity"]
+
+    assert has_element?(
+             view,
+             "#provider-form input[name='provider[name]'][value='#{custom.name}']"
+           )
+
+    view |> element("#provider-cancel-btn") |> render_click()
+    refute has_element?(view, "#provider-wizard-modal")
+
+    # Builtin: solo límites, sin pasos ni Back (no hay otro paso que ver).
+    view |> element("#edit-#{builtin.id}") |> render_click()
+    assert has_element?(view, "#provider-wizard-modal")
+    refute has_element?(view, "#provider-wizard-modal-steps")
+    refute has_element?(view, "#wizard-crumb-limits")
+    refute has_element?(view, "#provider-back-btn")
+    assert has_element?(view, "#save-provider-btn")
+    assert has_element?(view, "#provider-form input[name='provider[name]'][disabled]")
   end
 
   test "editing a custom pre-checks its capabilities and can extend them", %{conn: conn} do
@@ -481,9 +655,9 @@ defmodule TokengateWeb.ProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/catalog/providers")
 
-    refute has_element?(view, "#catalog-modal")
+    refute has_element?(view, "#provider-wizard-modal")
     view |> element("#add-provider-btn") |> render_click()
-    assert has_element?(view, "#catalog-modal")
+    assert has_element?(view, "#provider-wizard-modal")
 
     # The whole mirror is listed, with the custom entry point and the doc link.
     assert has_element?(view, "#catalog-row-fireworks-ai")
@@ -744,6 +918,12 @@ defmodule TokengateWeb.ProvidersLiveTest do
     view |> element("#paths-#{provider.id}") |> render_click()
     assert has_element?(view, "#paths-modal")
 
+    # Un solo contenedor (.modal) en toda la página: ✕ propio + Escape, y sin
+    # pasos — es un formulario corto, partirlo sería sobre-ingeniería.
+    assert has_element?(view, "#paths-modal button[aria-label='Cerrar']")
+    assert has_element?(view, "#paths-modal[phx-window-keydown='cancel_paths']")
+    refute has_element?(view, "#paths-modal-steps")
+
     # One input per capability, empty by default: an empty input inherits, and
     # the placeholder shows exactly what it would inherit — the generic path of
     # the service (a custom has no catalog entry).
@@ -916,7 +1096,9 @@ defmodule TokengateWeb.ProvidersLiveTest do
     view |> element("#paths-#{provider.id}") |> render_click()
     assert has_element?(view, "#paths-modal")
 
-    view |> element("#close-paths-modal") |> render_click()
+    # El contenedor es el .modal compartido: su ✕ (con aria-label traducido) es
+    # el mismo cierre que Escape y el click-away.
+    view |> element("#paths-modal button[aria-label='Cerrar']") |> render_click()
     refute has_element?(view, "#paths-modal")
 
     html = render_click(view, "save_paths", %{"paths" => %{"image" => "/v1/images"}})

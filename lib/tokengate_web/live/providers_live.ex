@@ -64,6 +64,9 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:editing_provider_id, nil)
       |> assign(:catalog_modal_open, false)
       |> assign(:catalog_query, "")
+      |> assign(:provider_step, "pick")
+      |> assign(:provider_steps, provider_steps(:new))
+      |> assign(:provider_step_error, nil)
       |> assign(:editing_provider_builtin?, false)
       |> assign(:paths_form, nil)
       |> assign(:paths_provider_id, nil)
@@ -246,36 +249,55 @@ defmodule TokengateWeb.ProvidersLive do
   ## Events — provider CRUD ------------------------------------------------
 
   @impl true
-  # Adds a custom provider: no catalog entry exists for it, so the form asks
-  # for the base URL and its capabilities. Dialect and paths stay code:
-  # dialect defaults to openai, paths are the per-capability overrides (the
-  # "capacidades" modal on the card).
+  # Adds a custom provider: no catalog entry exists for it, so the wizard asks
+  # for the base URL, its capabilities and its limits. Dialect and paths stay
+  # code: dialect defaults to openai, paths are the per-capability overrides
+  # (the "capacidades" modal on the card).
+  #
+  # "Custom provider" is step 1 → 2 of the same modal: the wizard stays open and
+  # keeps what was typed if the operator walks back to the picker and returns.
   def handle_event("new_custom_provider", _params, socket) do
-    changeset =
-      Providers.change_provider(%Provider{
-        source: "custom",
-        dialect: "openai"
-      })
+    socket =
+      case socket.assigns do
+        %{editing_provider_id: :new, form: %Phoenix.HTML.Form{}} ->
+          socket
+
+        _ ->
+          changeset =
+            Providers.change_provider(%Provider{
+              source: "custom",
+              dialect: "openai"
+            })
+
+          socket
+          |> assign(:form, to_form(changeset, as: :provider))
+          |> assign(:editing_provider_id, :new)
+          |> assign(:editing_provider_builtin?, false)
+      end
 
     {:noreply,
      socket
-     |> assign(:catalog_modal_open, false)
-     |> assign(:form, to_form(changeset, as: :provider))
-     |> assign(:editing_provider_id, :new)
-     |> assign(:editing_provider_builtin?, false)}
+     |> assign(:catalog_modal_open, true)
+     |> assign(:provider_steps, provider_steps(:new))
+     |> assign(:provider_step, "identity")
+     |> assign(:provider_step_error, nil)}
   end
 
-  # Opens the models.dev catalog modal — the "Agregar proveedor" entry point
-  # (the old dropdown could not scale to a few hundred providers).
+  # Opens the add-provider wizard on its pick step — the "Agregar proveedor"
+  # entry point (the old dropdown could not scale to a few hundred providers).
+  # Abre en limpio: el wizard no arrastra el formulario de la vez anterior.
   def handle_event("open_catalog_modal", _params, socket) do
     {:noreply,
      socket
+     |> close_provider_wizard()
      |> assign(:catalog_modal_open, true)
      |> filter_catalog("")}
   end
 
+  # Escape / click-away / ✕ of the wizard's pick step and its own close button
+  # land here; they close the whole wizard, not just one step.
   def handle_event("close_catalog_modal", _params, socket) do
-    {:noreply, assign(socket, :catalog_modal_open, false)}
+    {:noreply, close_provider_wizard(socket)}
   end
 
   # Search over name and models.dev id. In memory: the mirror is a few hundred
@@ -312,10 +334,7 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   def handle_event("cancel_form", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:form, nil)
-     |> assign(:editing_provider_id, nil)}
+    {:noreply, close_provider_wizard(socket)}
   end
 
   ## Events — capability paths ----------------------------------------------
@@ -384,17 +403,24 @@ defmodule TokengateWeb.ProvidersLive do
   # Editing a builtin is allowed on purpose: its operational limits belong to
   # the operator while its identity (name, base_url) stays catalog-owned — the
   # form renders those read-only and the changeset discards any change to them
-  # anyway.
+  # anyway. So a builtin lands on the limits step (the only thing it can edit,
+  # with no step indicator); a custom lands on identity, where its name and
+  # base URL live, and walks forward to the limits.
   def handle_event("edit_provider", %{"id" => provider_id}, socket) do
     case fetch_provider(provider_id) do
       {:ok, provider} ->
         changeset = Providers.change_provider(provider)
+        builtin? = provider.source == "builtin"
+        mode = if builtin?, do: :limits_only, else: :edit
 
         {:noreply,
          socket
          |> assign(:form, to_form(changeset, as: :provider))
          |> assign(:editing_provider_id, provider.id)
-         |> assign(:editing_provider_builtin?, provider.source == "builtin")}
+         |> assign(:editing_provider_builtin?, builtin?)
+         |> assign(:provider_steps, provider_steps(mode))
+         |> assign(:provider_step, if(builtin?, do: "limits", else: "identity"))
+         |> assign(:provider_step_error, nil)}
 
       :error ->
         {:noreply, provider_gone(socket)}
@@ -408,6 +434,45 @@ defmodule TokengateWeb.ProvidersLive do
       normalize_capabilities(provider_params)
     )
   end
+
+  # Wizard navigation. The buttons live in the modal footer (outside the form),
+  # so "Next" carries no payload: the draft changeset kept by `provider_draft`
+  # is what gets validated. Nothing is persisted until Save on the last step.
+  def handle_event("provider_next", _params, socket) do
+    case socket.assigns.provider_step do
+      "identity" -> {:noreply, provider_next_identity(socket)}
+      _step -> {:noreply, socket}
+    end
+  end
+
+  # Back never resets the form: the steps share one changeset, so the values
+  # typed on a later step are still there when the operator returns.
+  def handle_event("provider_back", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:provider_step, previous_provider_step(socket.assigns))
+     |> assign(:provider_step_error, nil)}
+  end
+
+  # Keeps the typed values on the server between steps. Every step of the form
+  # is rendered (the inactive one hidden), so the payload carries the whole
+  # provider, not just the visible inputs.
+  def handle_event("provider_draft", %{"provider" => params}, socket) do
+    case socket.assigns.form do
+      %Phoenix.HTML.Form{source: %Ecto.Changeset{} = current} ->
+        changeset =
+          current.data
+          |> Providers.change_provider(normalize_capabilities(params))
+          |> keep_action(current.action)
+
+        {:noreply, assign(socket, :form, to_form(changeset, as: :provider))}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("provider_draft", _params, socket), do: {:noreply, socket}
 
   def handle_event("delete_provider", %{"id" => provider_id}, socket) do
     provider = Enum.find(socket.assigns.providers, &(&1.id == provider_id))
@@ -655,6 +720,122 @@ defmodule TokengateWeb.ProvidersLive do
     |> assign(:catalog_results, results)
   end
 
+  ## Private helpers — provider wizard -------------------------------------
+
+  # Steps of the provider modal. Alta starts at the catalog picker; a custom
+  # edit starts at identity (name + base URL are its editable identity) and a
+  # builtin edit has a single step — its catalog identity is read-only, so a
+  # step indicator would only show a step that leads nowhere.
+  defp provider_steps(:new) do
+    [
+      {"pick", gettext("Provider")},
+      {"identity", gettext("Identity")},
+      {"limits", gettext("Limits")}
+    ]
+  end
+
+  defp provider_steps(:edit) do
+    [{"identity", gettext("Identity")}, {"limits", gettext("Limits")}]
+  end
+
+  defp provider_steps(:limits_only), do: [{"limits", gettext("Limits")}]
+
+  defp provider_modal_title(:new), do: gettext("New provider")
+  defp provider_modal_title(nil), do: gettext("Add provider")
+  defp provider_modal_title(_provider_id), do: gettext("Edit provider")
+
+  defp first_step([{key, _label} | _rest]), do: key
+
+  # Closing the modal drops every piece of wizard state: a half-typed provider
+  # must not come back when the modal is reopened.
+  defp close_provider_wizard(socket) do
+    socket
+    |> assign(:catalog_modal_open, false)
+    |> assign(:form, nil)
+    |> assign(:editing_provider_id, nil)
+    |> assign(:editing_provider_builtin?, false)
+    |> assign(:provider_steps, provider_steps(:new))
+    |> assign(:provider_step, "pick")
+    |> assign(:provider_step_error, nil)
+  end
+
+  # Step validation for identity: the provider must be nameable (name + a real
+  # http(s) base URL) and serve at least one capability before the operator
+  # moves on to the limits. A rejected Next shows the reason and stays put.
+  defp provider_next_identity(%{assigns: %{form: nil}} = socket), do: socket
+
+  defp provider_next_identity(socket) do
+    changeset = socket.assigns.form.source
+    name = blank_to_nil(Ecto.Changeset.get_field(changeset, :name))
+    base_url = blank_to_nil(Ecto.Changeset.get_field(changeset, :base_url))
+    capabilities = Ecto.Changeset.get_field(changeset, :capabilities) || []
+
+    cond do
+      is_nil(name) or is_nil(base_url) ->
+        reject_identity_step(socket, changeset, gettext("Name and Base URL are required."))
+
+      not valid_base_url?(base_url) ->
+        reject_identity_step(
+          socket,
+          changeset,
+          gettext("Base URL must be a valid http(s) URL.")
+        )
+
+      capabilities == [] ->
+        reject_identity_step(
+          socket,
+          changeset,
+          gettext("Pick at least one capability to continue.")
+        )
+
+      true ->
+        socket
+        |> assign(:provider_step_error, nil)
+        |> assign(:provider_step, "limits")
+    end
+  end
+
+  # `action: :validate` is what makes the per-field messages render under the
+  # inputs; without it the changeset already has the errors but hides them.
+  defp reject_identity_step(socket, changeset, message) do
+    socket
+    |> assign(:form, to_form(%{changeset | action: :validate}, as: :provider))
+    |> assign(:provider_step_error, message)
+  end
+
+  defp previous_provider_step(%{provider_steps: steps, provider_step: current}) do
+    keys = Enum.map(steps, &elem(&1, 0))
+    index = Enum.find_index(keys, &(&1 == current)) || 0
+
+    Enum.at(keys, max(index - 1, 0))
+  end
+
+  defp keep_action(changeset, nil), do: changeset
+  defp keep_action(changeset, action), do: %{changeset | action: action}
+
+  defp blank_to_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp blank_to_nil(_value), do: nil
+
+  # Base URL is the only place a custom declares where it answers: a typo here
+  # fails every request later, so the wizard refuses it before the limits step.
+  defp valid_base_url?(url) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host} when scheme in ["http", "https"] ->
+        is_binary(host) and host != ""
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_base_url?(_url), do: false
+
   ## Private helpers — capability paths ------------------------------------
 
   # Modal state for one provider: the form (pre-filled with what the operator
@@ -836,45 +1017,39 @@ defmodule TokengateWeb.ProvidersLive do
           </:actions>
         </.header>
 
-        <%!-- Add-provider modal: searchable list of what the gateway can
-             serve. Rows without base URL, with a templated URL or without an
-             OpenAI-compatible dialect are filtered out; rows already
-             carrying a credential render as activated (more keys come from
-             their own card). --%>
-        <div
-          :if={@catalog_modal_open}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
-          id="catalog-modal"
+        <%!-- Add/edit provider: one modal, a 2–3 step wizard. Step 1 (pick) is
+             the searchable models.dev mirror — a row activates its provider on
+             its own keys page, "Custom provider" continues here. Step 2
+             (identity) is name + base URL + capabilities; step 3 (limits) the
+             caps every key inherits. Both form steps stay rendered (hidden when
+             inactive) so Back/Next never lose what was typed and Save submits
+             the whole form. Editing a custom enters at identity; a builtin only
+             has limits to edit, so it enters there with no step indicator.
+             Rows without base URL, with a templated URL or without an
+             OpenAI-compatible dialect are filtered out of the picker; rows
+             already carrying a credential render as activated. --%>
+        <.modal
+          :if={@catalog_modal_open || @form}
+          id="provider-wizard-modal"
+          title={provider_modal_title(@editing_provider_id)}
+          on_close="cancel_form"
+          max_w="max-w-3xl"
+          steps={if length(@provider_steps) > 1, do: @provider_steps, else: nil}
+          current_step={@provider_step}
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="close_catalog_modal" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-3xl">
-            <div class="card-body p-5 max-h-[85vh] flex flex-col">
-              <div class="flex items-start justify-between gap-4">
-                <div>
-                  <h2 class="text-lg font-semibold">{gettext("Add provider")}</h2>
-                  <p class="text-xs text-base-content/60 mt-1">
-                    {gettext(
-                      "models.dev catalog (%{count} providers). Picking one opens its credential.",
-                      count: @catalog_total
-                    )}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  phx-click="close_catalog_modal"
-                  class="btn btn-ghost btn-sm btn-circle"
-                  id="close-catalog-modal"
-                  aria-label={gettext("Close")}
-                >
-                  <.icon name="hero-x-mark" class="w-4 h-4" />
-                </button>
-              </div>
+          <div class="max-h-[65vh] overflow-y-auto pr-1">
+            <%= if @provider_step == "pick" do %>
+              <p class="text-xs text-base-content/60 mb-3" id="catalog-subtitle">
+                {gettext(
+                  "models.dev catalog (%{count} providers). Picking one opens its credential.",
+                  count: @catalog_total
+                )}
+              </p>
 
               <form
                 id="catalog-search-form"
                 phx-change="search_catalog"
                 phx-submit="search_catalog"
-                class="mt-2"
               >
                 <input
                   type="text"
@@ -890,7 +1065,7 @@ defmodule TokengateWeb.ProvidersLive do
               <button
                 type="button"
                 phx-click="new_custom_provider"
-                class="text-left px-3 py-2 mt-2 rounded-lg border border-dashed border-base-300 hover:bg-base-200 flex justify-between items-center"
+                class="text-left px-3 py-2 mt-2 w-full rounded-lg border border-dashed border-base-300 hover:bg-base-200 flex justify-between items-center"
                 id="new-custom-provider-btn"
               >
                 <span class="flex items-center gap-2">
@@ -903,7 +1078,7 @@ defmodule TokengateWeb.ProvidersLive do
               <div class="divider my-1"></div>
 
               <div
-                class="overflow-y-auto flex-1 min-h-0 -mx-1 px-1"
+                class="overflow-y-auto max-h-[45vh] -mx-1 px-1"
                 id="catalog-results"
                 phx-update="replace"
               >
@@ -1004,34 +1179,38 @@ defmodule TokengateWeb.ProvidersLive do
                 </div>
               </div>
 
-              <p class="text-[11px] text-base-content/40 mt-2 shrink-0" id="catalog-count">
+              <p class="text-[11px] text-base-content/40 mt-2" id="catalog-count">
                 {gettext("%{shown} of %{total}",
                   shown: length(@catalog_results),
                   total: @catalog_total
                 )}
               </p>
-            </div>
-          </div>
-        </div>
+            <% end %>
 
-        <%!-- Provider form (create / edit) — modal (customs only: catalog
-             builtins don't offer the Editar button at all) --%>
-        <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-3xl">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">
-                {if @editing_provider_id == :new,
-                  do: gettext("New provider"),
-                  else: gettext("Edit provider")}
-              </h2>
-              <.form for={@form} id="provider-form" phx-submit="save_provider">
+            <%!-- Identity + limits: one form, one submit. The inactive step is
+                 hidden, not dropped, so Save carries every field regardless of
+                 the step the operator is standing on. --%>
+            <.form
+              :if={@form}
+              for={@form}
+              id="provider-form"
+              phx-change="provider_draft"
+              phx-submit="save_provider"
+            >
+              <div
+                class={if(@provider_step == "identity", do: "space-y-3", else: "hidden")}
+                id="provider-step-identity"
+              >
+                <p :if={@provider_step_error} id="provider-step-error" class="text-sm text-error">
+                  {@provider_step_error}
+                </p>
                 <div class="space-y-3">
                   <.input
                     field={@form[:name]}
                     type="text"
                     label={gettext("Name")}
                     placeholder="mi-relay"
+                    phx-mounted={JS.focus()}
                     disabled={@editing_provider_builtin?}
                     hint={
                       if @editing_provider_builtin?,
@@ -1076,116 +1255,137 @@ defmodule TokengateWeb.ProvidersLive do
                     </label>
                   </div>
                 </div>
+              </div>
 
+              <div
+                class={if(@provider_step == "limits", do: "space-y-3", else: "hidden")}
+                id="provider-step-limits"
+              >
                 <%!-- Limits live on the provider: every API key of this provider
                      inherits them (a credential is just an alias + secret). --%>
-                <div class="pt-4 mt-4 border-t border-base-200">
-                  <h3 class="text-sm font-semibold mb-1">{gettext("Provider limits")}</h3>
-                  <p class="text-xs text-base-content/50 mb-3">
-                    {gettext(
-                      "They apply to every API key of this provider, which inherits them. Empty = no limit."
-                    )}
-                  </p>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
-                    <.input
-                      field={@form[:max_rpm]}
-                      type="number"
-                      label="Max RPM"
-                      hint={gettext("Requests per minute across the provider. Empty = no limit.")}
-                    />
-                    <.input
-                      field={@form[:max_concurrent]}
-                      type="number"
-                      label={gettext("Max concurrency")}
-                      hint={gettext("Concurrent requests across the provider. Empty = no limit.")}
-                    />
-                    <.input
-                      field={@form[:max_concurrent_per_user]}
-                      type="number"
-                      label={gettext("Max concurrency per user")}
-                      hint={gettext("Concurrent cap per user. Empty = no limit.")}
-                    />
-                    <.input
-                      field={@form[:receive_timeout_ms]}
-                      type="number"
-                      label="Timeout (ms)"
-                      hint={
-                        gettext("Max wait per response. Empty = global default (%{ms} ms).",
-                          ms: ProviderLimits.default_receive_timeout_ms()
-                        )
-                      }
-                    />
-                  </div>
+                <h3 class="text-sm font-semibold mb-1">{gettext("Provider limits")}</h3>
+                <p class="text-xs text-base-content/50 mb-3">
+                  {gettext(
+                    "They apply to every API key of this provider, which inherits them. Empty = no limit."
+                  )}
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
+                  <.input
+                    field={@form[:max_rpm]}
+                    type="number"
+                    label="Max RPM"
+                    hint={gettext("Requests per minute across the provider. Empty = no limit.")}
+                  />
+                  <.input
+                    field={@form[:max_concurrent]}
+                    type="number"
+                    label={gettext("Max concurrency")}
+                    hint={gettext("Concurrent requests across the provider. Empty = no limit.")}
+                  />
+                  <.input
+                    field={@form[:max_concurrent_per_user]}
+                    type="number"
+                    label={gettext("Max concurrency per user")}
+                    hint={gettext("Concurrent cap per user. Empty = no limit.")}
+                  />
+                  <.input
+                    field={@form[:receive_timeout_ms]}
+                    type="number"
+                    label="Timeout (ms)"
+                    hint={
+                      gettext("Max wait per response. Empty = global default (%{ms} ms).",
+                        ms: ProviderLimits.default_receive_timeout_ms()
+                      )
+                    }
+                  />
                 </div>
-                <div class="flex gap-2 mt-4 justify-end">
-                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
-                    {gettext("Cancel")}
-                  </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-provider-btn">
-                    {gettext("Save")}
-                  </button>
-                </div>
-              </.form>
-            </div>
+              </div>
+            </.form>
           </div>
-        </div>
+
+          <:footer>
+            <div class="mr-auto">
+              <button
+                type="button"
+                phx-click="cancel_form"
+                id="provider-cancel-btn"
+                class="btn btn-ghost btn-sm"
+              >
+                {gettext("Cancel")}
+              </button>
+            </div>
+            <button
+              :if={@provider_step != first_step(@provider_steps)}
+              type="button"
+              phx-click="provider_back"
+              id="provider-back-btn"
+              class="btn btn-ghost btn-sm"
+            >
+              {gettext("Back")}
+            </button>
+            <button
+              :if={@provider_step == "identity"}
+              type="button"
+              phx-click="provider_next"
+              id="provider-next-btn"
+              class="btn btn-primary btn-sm"
+            >
+              {gettext("Next")}
+            </button>
+            <button
+              :if={@provider_step == "limits" and @form}
+              type="submit"
+              form="provider-form"
+              id="save-provider-btn"
+              class="btn btn-primary btn-sm"
+            >
+              {gettext("Save")}
+            </button>
+          </:footer>
+        </.modal>
 
         <%!-- Capacidades modal: one path per service. Empty inherits — the
              catalog code path when the builtin declares one, else the generic
-             adapter default; anything typed overrides it. --%>
-        <div
+             adapter default; anything typed overrides it. Same .modal as the
+             rest, no steps: it is a single short form. --%>
+        <.modal
           :if={@paths_form}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
           id="paths-modal"
+          title={gettext("Capabilities")}
+          on_close="cancel_paths"
+          max_w="max-w-3xl"
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_paths" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-3xl">
-            <div class="card-body p-6 max-h-[85vh] overflow-y-auto">
-              <div class="flex items-start justify-between gap-4">
-                <div>
-                  <h2 class="text-lg font-semibold">{gettext("Capabilities")}</h2>
-                  <p class="text-xs text-base-content/60 mt-1">
-                    {gettext("Path of each service of")} <span class="font-medium">{@paths_provider_name}</span>. {gettext(
-                      "It resolves as"
-                    )}
-                    <code>base_url</code> {gettext("+ path; empty = adapter default.")}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  phx-click="cancel_paths"
-                  class="btn btn-ghost btn-sm btn-circle"
-                  id="close-paths-modal"
-                  aria-label={gettext("Close")}
-                >
-                  <.icon name="hero-x-mark" class="w-4 h-4" />
+          <div class="max-h-[65vh] overflow-y-auto pr-1">
+            <p class="text-xs text-base-content/60 mb-3">
+              {gettext("Path of each service of")} <span class="font-medium">{@paths_provider_name}</span>. {gettext(
+                "It resolves as"
+              )}
+              <code>base_url</code> {gettext("+ path; empty = adapter default.")}
+            </p>
+
+            <.form for={@paths_form} id="paths-form" phx-submit="save_paths">
+              <.input field={@paths_form[:provider_id]} type="hidden" />
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
+                <.input
+                  :for={service <- @path_service_rows}
+                  field={@paths_form[service.key]}
+                  type="text"
+                  label={service.label}
+                  placeholder={service.placeholder}
+                  hint={service.hint}
+                />
+              </div>
+              <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
+                <button type="button" phx-click="cancel_paths" class="btn btn-ghost btn-sm">
+                  {gettext("Cancel")}
+                </button>
+                <button type="submit" class="btn btn-primary btn-sm" id="save-paths-btn">
+                  {gettext("Save")}
                 </button>
               </div>
-
-              <.form for={@paths_form} id="paths-form" phx-submit="save_paths">
-                <.input field={@paths_form[:provider_id]} type="hidden" />
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5 mt-4">
-                  <.input
-                    :for={service <- @path_service_rows}
-                    field={@paths_form[service.key]}
-                    type="text"
-                    label={service.label}
-                    placeholder={service.placeholder}
-                    hint={service.hint}
-                  />
-                </div>
-                <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
-                  <button type="button" phx-click="cancel_paths" class="btn btn-ghost btn-sm">
-                    {gettext("Cancel")}
-                  </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-paths-btn">
-                    {gettext("Save")}
-                  </button>
-                </div>
-              </.form>
-            </div>
+            </.form>
           </div>
-        </div>
+        </.modal>
 
         <%!-- Una sola lista en TABLA, sin tabs: builtin primero y custom al
              final (lo fija el `order_by` de `load_providers/1`). Las API keys
