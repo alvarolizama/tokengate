@@ -60,7 +60,7 @@ defmodule TokengateWeb.TopupHelpers do
   def owner_type(_), do: gettext("Service")
 
   @doc "Etiqueta legible de la expiración."
-  def expires_label(nil), do: "Nunca"
+  def expires_label(nil), do: gettext("Never")
 
   def expires_label(%DateTime{} = dt) do
     dt |> DateTime.to_date() |> Date.to_string()
@@ -80,9 +80,9 @@ defmodule TokengateWeb.TopupHelpers do
   end
 
   def state_label(:active), do: gettext("Active")
-  def state_label(:revoked), do: "Revocado"
-  def state_label(:expired), do: "Vencido"
-  def state_label(:exhausted), do: "Agotado"
+  def state_label(:revoked), do: gettext("Revoked credit")
+  def state_label(:expired), do: gettext("Expired")
+  def state_label(:exhausted), do: gettext("Exhausted")
 
   def state_badge_class(:active), do: "badge-success"
   def state_badge_class(:revoked), do: "badge-error"

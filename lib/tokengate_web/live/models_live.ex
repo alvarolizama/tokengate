@@ -640,7 +640,7 @@ defmodule TokengateWeb.ModelsLive do
 
                 {:noreply,
                  socket
-                 |> put_flash(:info, "Guard rails actualizados.")
+                 |> put_flash(:info, gettext("Guard rails updated."))
                  |> assign(:guard_rails_form, nil)
                  |> assign(:guard_rails_model_id, nil)
                  |> load_models()}
@@ -1229,7 +1229,7 @@ defmodule TokengateWeb.ModelsLive do
   defp mark_origin(form, labs_by_key) do
     case linked_lab(form, labs_by_key) do
       %Lab{} = lab ->
-        "Marca del lab #{lab.name}."
+        gettext("Lab badge: %{lab}.", lab: lab.name)
 
       nil ->
         case form[:icon].value do
@@ -1239,7 +1239,7 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  def empty_state_message, do: "No hay models configurados."
+  def empty_state_message, do: gettext("No models configured.")
 
   ## Contadores de la tabla -------------------------------------------------
 
@@ -1331,7 +1331,7 @@ defmodule TokengateWeb.ModelsLive do
           <:subtitle>{gettext("Configure models and the API keys that serve them")}</:subtitle>
           <:actions :if={@is_admin}>
             <.button phx-click="new_model" id="new-model-btn">
-              <.icon name="hero-plus" class="w-4 h-4" /> Nuevo Modelo
+              <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New model")}
             </.button>
           </:actions>
         </.header>
@@ -2150,7 +2150,7 @@ defmodule TokengateWeb.ModelsLive do
                         <.input
                           field={@form[:icon]}
                           type="text"
-                          label="Icono"
+                          label={gettext("Icon")}
                           placeholder={Model.default_icon()}
                           hint={gettext("Hero icon name, e.g. hero-fire. Optional.")}
                         />

@@ -71,7 +71,7 @@ defmodule TokengateWeb.StatsLive.Groups do
             <%= if @group_budget do %>
               <div class="w-full max-w-xs" id="group-budget-bar">
                 <span class="text-xs text-base-content/50 block mb-1">
-                  Presupuesto · mes {if(@group_budget.has_unlimited?,
+                  {gettext("Budget · month")} {if(@group_budget.has_unlimited?,
                     do: gettext("· some member without a budget"),
                     else: ""
                   )}
@@ -88,7 +88,7 @@ defmodule TokengateWeb.StatsLive.Groups do
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <.kpi_card
               id="group-kpi-cost"
-              label="Costo"
+              label={gettext("Cost")}
               icon="hero-currency-dollar"
               accent="accent"
             >
@@ -374,7 +374,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                     </tbody>
                     <tfoot>
                       <tr class="font-bold bg-base-200">
-                        <td>Total · {length(@breakdown_model)} modelos</td>
+                        <td>{gettext("Total · %{count} models", count: length(@breakdown_model))}</td>
                         <td class="text-right font-mono">
                           {Stats.format_number(model_total.request_count)}
                         </td>
@@ -558,7 +558,11 @@ defmodule TokengateWeb.StatsLive.Groups do
                     </tbody>
                     <tfoot>
                       <tr class="font-bold bg-base-200">
-                        <td>Total · {Stats.distinct_users(@breakdown_member)} usuarios</td>
+                        <td>
+                          {gettext("Total · %{count} users",
+                            count: Stats.distinct_users(@breakdown_member)
+                          )}
+                        </td>
                         <td class="text-right font-mono">
                           {Stats.format_number(member_total.request_count)}
                         </td>
@@ -600,7 +604,7 @@ defmodule TokengateWeb.StatsLive.Groups do
             class="btn btn-sm btn-ghost"
             id="clear-group-filter"
           >
-            <.icon name="hero-x-mark" class="w-4 h-4" /> Quitar filtro de perfil de límites
+            <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Remove limit profile filter")}
           </button>
         </div>
       <% else %>
@@ -611,9 +615,10 @@ defmodule TokengateWeb.StatsLive.Groups do
               {gettext("Limit profiles")}
             </h2>
             <p class="text-xs text-base-content/60">
-              Una fila por perfil de límites con su información básica en el período
-              ({Stats.period_label(@period)}). El nombre abre el detalle: sus métricas,
-              sus miembros y los modelos que consume.
+              {gettext(
+                "One row per limit profile with its basic information in the period (%{period}). The name opens the detail: its metrics, its members and the models it consumes.",
+                period: Stats.period_label(@period)
+              )}
             </p>
             <%= if Stats.has_data?(@breakdown_group) do %>
               <% group_total = Stats.breakdown_total(@breakdown_group) %>
@@ -730,7 +735,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                         <th title={
                           gettext("Calendar-month spend vs the aggregate cap of its members")
                         }>
-                          Presupuesto · mes
+                          {gettext("Budget · month")}
                         </th>
                       </tr>
                     </thead>
@@ -780,7 +785,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                     </tbody>
                     <tfoot>
                       <tr class="font-bold bg-base-200">
-                        <td>Total · {length(rows)} perfiles de límites</td>
+                        <td>{gettext("Total · %{count} limit profiles", count: length(rows))}</td>
                         <td class="text-right font-mono">
                           {Stats.format_number(group_total.request_count)}
                         </td>

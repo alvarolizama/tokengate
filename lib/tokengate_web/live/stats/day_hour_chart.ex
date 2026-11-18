@@ -196,7 +196,7 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
             </span>
           </div>
           <span :if={length(@legend) > 6} class="text-[10px] text-base-content/40">
-            +{length(@legend) - 6} más
+            {gettext("+%{count} more", count: length(@legend) - 6)}
           </span>
         </div>
       </div>

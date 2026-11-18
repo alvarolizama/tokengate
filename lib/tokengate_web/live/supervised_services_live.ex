@@ -245,7 +245,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
                 )
               }
             >
-              <.icon name="hero-eye" class="w-4 h-4" /> Vista de solo lectura
+              <.icon name="hero-eye" class="w-4 h-4" /> {gettext("Read-only view")}
             </span>
           </:actions>
         </.header>
@@ -376,7 +376,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
                   id={"service-stats-link-#{service.id}"}
                   class="btn btn-sm btn-primary"
                 >
-                  <.icon name="hero-chart-bar" class="w-4 h-4" /> Ver stats completos
+                  <.icon name="hero-chart-bar" class="w-4 h-4" /> {gettext("View full stats")}
                 </.link>
               </header>
 
@@ -423,7 +423,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
                 />
                 <.metric_tile
                   id={"metric-latency-#{service.id}"}
-                  label="Latencia media"
+                  label={gettext("Average latency")}
                   value={Stats.format_ms(stats.avg_latency_ms)}
                   icon="hero-clock"
                   accent="neutral"

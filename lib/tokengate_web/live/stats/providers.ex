@@ -40,13 +40,13 @@ defmodule TokengateWeb.StatsLive.Providers do
       <div class="card bg-base-100 border border-base-300 shadow-sm" id="provider-ranking">
         <div class="card-body">
           <h2 class="card-title text-base">
-            <.icon name="hero-trophy" class="w-5 h-5 text-base-content/60" /> Proveedores
+            <.icon name="hero-trophy" class="w-5 h-5 text-base-content/60" /> {gettext("Providers")}
           </h2>
           <p class="text-xs text-base-content/60">
-            Una fila por proveedor con su información básica en el período
-            ({Stats.period_label(@period)}). El podio va marcado con medalla y el
-            nombre abre el detalle: sus métricas, sus modelos y los usuarios,
-            servicios y perfiles de límites que lo usan.
+            {gettext(
+              "One row per provider with its basic information in the period (%{period}). The podium is marked with a medal and the name opens the detail: its metrics, its models and the users, services and limit profiles that use it.",
+              period: Stats.period_label(@period)
+            )}
           </p>
           <%= if Stats.has_data?(@provider_ranking) do %>
             <%!-- El puesto se toma de la clasificación completa, no del listado
@@ -63,25 +63,25 @@ defmodule TokengateWeb.StatsLive.Providers do
               <Stats.list_search
                 id="provider-list-search"
                 value={@list_search}
-                placeholder="Filtrar por proveedor…"
+                placeholder={gettext("Filter by provider…")}
               />
             </div>
             <%= if rows == [] do %>
               <p class="text-sm text-base-content/40 py-6 text-center" id="provider-list-empty">
-                Sin coincidencias.
+                {gettext("No matches.")}
               </p>
             <% else %>
               <div class="overflow-x-auto mt-3">
                 <table class="table table-sm" id="provider-table">
                   <thead>
                     <tr>
-                      <th class="w-12">Puesto</th>
-                      <th>Proveedor</th>
+                      <th class="w-12">{gettext("Rank")}</th>
+                      <th>{gettext("Provider")}</th>
                       <th class="text-right">Tier</th>
                       <th class="text-right">Score</th>
                       <th class="text-right">Requests</th>
-                      <th class="text-right">Fallos</th>
-                      <th class="text-right">Latencia</th>
+                      <th class="text-right">{gettext("Failures")}</th>
+                      <th class="text-right">{gettext("Latency")}</th>
                       <th class="text-right">P95</th>
                       <th class="text-right">TTFT</th>
                     </tr>
@@ -140,7 +140,7 @@ defmodule TokengateWeb.StatsLive.Providers do
             <% end %>
           <% else %>
             <p class="text-sm text-base-content/40 py-6 text-center">
-              Sin datos en este período.
+              {gettext("No data in this period.")}
             </p>
           <% end %>
         </div>

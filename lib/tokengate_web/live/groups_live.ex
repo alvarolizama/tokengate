@@ -57,7 +57,7 @@ defmodule TokengateWeb.GroupsLive do
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "No autorizado.")}
+        {:halt, put_flash(socket, :error, gettext("Not authorized."))}
       end
     end)
   end
@@ -268,7 +268,7 @@ defmodule TokengateWeb.GroupsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Modelos actualizados.")
+         |> put_flash(:info, gettext("Models updated."))
          |> refresh_granted_models()}
 
       {:error, _} ->
@@ -386,7 +386,7 @@ defmodule TokengateWeb.GroupsLive do
                 />
               </form>
               <.button phx-click="new_group" id="new-group-btn">
-                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo perfil de límites
+                <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New limit profile")}
               </.button>
             </div>
           </:actions>
@@ -413,7 +413,7 @@ defmodule TokengateWeb.GroupsLive do
                   <.input
                     field={@form[:default_concurrency_limit]}
                     type="number"
-                    label="Concurrencia"
+                    label={gettext("Concurrency")}
                     hint={
                       gettext(
                         "Concurrency per member. Each member can have an extra on top of this value."
@@ -435,21 +435,27 @@ defmodule TokengateWeb.GroupsLive do
                     type="number"
                     step="0.01"
                     min="0"
-                    label="Límite mensual (USD)"
-                    hint="Techo mensual del perfil de límites. 0 = cero (no deja gastar). Vacío = sin presupuesto (solo top-ups)."
+                    label={gettext("Monthly limit (USD)")}
+                    hint={
+                      gettext(
+                        "Monthly cap of the limit profile. 0 = zero (cannot spend). Empty = no budget (top-ups only)."
+                      )
+                    }
                   />
                   <.input
                     field={@form[:unlimited_spend]}
                     type="checkbox"
-                    label="Ilimitado"
-                    hint="Único camino a ilimitado; gana sobre el límite."
+                    label={gettext("Unlimited")}
+                    hint={gettext("Only path to unlimited; wins over the limit.")}
                   />
                 </div>
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
-                    Cancelar
+                    {gettext("Cancel")}
                   </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-group-btn">Guardar</button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="save-group-btn">
+                    {gettext("Save")}
+                  </button>
                 </div>
               </.form>
             </div>
@@ -542,7 +548,7 @@ defmodule TokengateWeb.GroupsLive do
                     class="btn btn-sm btn-ghost"
                     id={"members-link-#{group.id}"}
                   >
-                    Miembros
+                    {gettext("Members")}
                   </.link>
                   <button
                     phx-click="edit_group"
@@ -550,7 +556,7 @@ defmodule TokengateWeb.GroupsLive do
                     class="btn btn-sm btn-ghost"
                     id={"edit-#{group.id}"}
                   >
-                    Editar
+                    {gettext("Edit")}
                   </button>
                   <button
                     phx-click="delete_group"
@@ -559,7 +565,7 @@ defmodule TokengateWeb.GroupsLive do
                     id={"delete-#{group.id}"}
                     data-confirm={gettext("Delete limit profile? This action cannot be undone.")}
                   >
-                    Eliminar
+                    {gettext("Delete")}
                   </button>
                 </div>
               </div>

@@ -87,7 +87,7 @@ defmodule TokengateWeb.StatsLive do
 
     socket =
       socket
-      |> assign(:page_title, "Estadísticas · Tokengate")
+      |> assign(:page_title, gettext("Statistics") <> " · Tokengate")
       |> assign(:period, "today")
       |> assign(:model_filter, nil)
       |> assign(:group_filter, nil)
@@ -1275,9 +1275,9 @@ defmodule TokengateWeb.StatsLive do
     }
   end
 
-  defp scope_label_for(%{global_role: "admin"}), do: "Organización completa"
+  defp scope_label_for(%{global_role: "admin"}), do: gettext("Whole organization")
 
-  defp scope_label_for(%{global_role: "user"}), do: "Tus consumos"
+  defp scope_label_for(%{global_role: "user"}), do: gettext("Your usage")
 
   defp scope_label_for(_), do: "—"
 end

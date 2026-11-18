@@ -6031,3 +6031,505 @@ msgstr "Crear clave"
 #, elixir-autogen, elixir-format
 msgid "New key"
 msgstr "Nueva clave"
+
+
+#: lib/tokengate_web/live/stats/live.ex:160
+#, elixir-autogen, elixir-format
+msgid "%{count} errors in 5 min"
+msgstr "%{count} errores en 5 min"
+
+#: lib/tokengate_web/live/stats/live.ex:150
+#, elixir-autogen, elixir-format
+msgid "%{count} requests · 5-min window"
+msgstr "ventana 5 min · %{count} requests"
+
+#: lib/tokengate_web/live/stats/day_hour_chart.ex:199
+#, elixir-autogen, elixir-format
+msgid "+%{count} more"
+msgstr "+%{count} más"
+
+#: lib/tokengate_web/live/model_providers_live.ex:409
+#, elixir-autogen, elixir-format
+msgid "API key created and selected."
+msgstr "API key creada y seleccionada."
+
+#: lib/tokengate_web/controllers/session_html/new.html.heex:13
+#, elixir-autogen, elixir-format
+msgid "Access the LLM proxy control panel."
+msgstr "Accede al panel de control del proxy LLM."
+
+#: lib/tokengate_web/live/monitoring_live.ex:1016
+#, elixir-autogen, elixir-format
+msgid "All keys"
+msgstr "Todas"
+
+#: lib/tokengate_web/live/topups_live.html.heex:204
+#, elixir-autogen, elixir-format
+msgid "Amount"
+msgstr "Monto"
+
+#: lib/tokengate_web/live/topups_live.html.heex:156
+#, elixir-autogen, elixir-format
+msgid "Amount (USD)"
+msgstr "Monto (USD)"
+
+#: lib/tokengate_web/live/supervised_services_live.ex:426
+#, elixir-autogen, elixir-format
+msgid "Average latency"
+msgstr "Latencia media"
+
+#: lib/tokengate_web/live/stats/groups.ex:74
+#: lib/tokengate_web/live/stats/groups.ex:733
+#: lib/tokengate_web/live/stats/services.ex:159
+#, elixir-autogen, elixir-format
+msgid "Budget · month"
+msgstr "Presupuesto · mes"
+
+#: lib/tokengate_web/live/stats/index.ex:155
+#, elixir-autogen, elixir-format
+msgid "By provider"
+msgstr "Por proveedor"
+
+#: lib/tokengate_web/live/monitoring_live.ex:1066
+#, elixir-autogen, elixir-format
+msgid "CSV Errors"
+msgstr "CSV Errores"
+
+#: lib/tokengate_web/live/monitoring_live.ex:1059
+#, elixir-autogen, elixir-format
+msgid "CSV Logs (yesterday)"
+msgstr "CSV Logs (ayer)"
+
+#: lib/tokengate_web/live/topups_live.html.heex:209
+#, elixir-autogen, elixir-format
+msgid "Consumption"
+msgstr "Consumo"
+
+#: lib/tokengate_web/controllers/onboarding_html/new.html.heex:55
+#, elixir-autogen, elixir-format
+msgid "Create administrator"
+msgstr "Crear administrador"
+
+#: lib/tokengate_web/live/stats/users.ex:160
+#, elixir-autogen, elixir-format
+msgid "Credit · cycle"
+msgstr "Crédito · ciclo"
+
+#: lib/tokengate_web/live/stats/index.ex:179
+#: lib/tokengate_web/live/stats/index.ex:231
+#, elixir-autogen, elixir-format
+msgid "Distribution"
+msgstr "Reparto"
+
+#: lib/tokengate_web/controllers/onboarding_html/new.html.heex:33
+#: lib/tokengate_web/controllers/session_html/new.html.heex:31
+#, elixir-autogen, elixir-format
+msgid "Email address"
+msgstr "Correo electrónico"
+
+#: lib/tokengate_web/live/model_providers_live.ex:3587
+#, elixir-autogen, elixir-format
+msgid "Enabled for this model"
+msgstr "Habilitado"
+
+#: lib/tokengate_web/controllers/session_html/new.html.heex:50
+#, elixir-autogen, elixir-format
+msgid "Enter"
+msgstr "Entrar"
+
+#: lib/tokengate_web/live/stats/live.ex:155
+#, elixir-autogen, elixir-format
+msgid "Error rate"
+msgstr "Tasa de error"
+
+#: lib/tokengate_web/topup_helpers.ex:84
+#, elixir-autogen, elixir-format
+msgid "Expired"
+msgstr "Vencido"
+
+#: lib/tokengate_web/live/topups_live.html.heex:213
+#, elixir-autogen, elixir-format
+msgid "Expires"
+msgstr "Vence"
+
+#: lib/tokengate_web/live/audit_live.ex:157
+#, elixir-autogen, elixir-format
+msgid "Export CSV"
+msgstr "Exportar CSV"
+
+#: lib/tokengate_web/live/stats/providers.ex:82
+#, elixir-autogen, elixir-format
+msgid "Failures"
+msgstr "Fallos"
+
+#: lib/tokengate_web/live/stats/providers.ex:65
+#, elixir-autogen, elixir-format
+msgid "Filter by provider…"
+msgstr "Filtrar por proveedor…"
+
+#: lib/tokengate_web/live/models_live.ex:643
+#, elixir-autogen, elixir-format
+msgid "Guard rails updated."
+msgstr "Guard rails actualizados."
+
+#: lib/tokengate_web/live/topups_live.html.heex:46
+#, elixir-autogen, elixir-format
+msgid "Hide archived"
+msgstr "Ocultar archivados"
+
+#: lib/tokengate_web/live/model_providers_live.ex:2827
+#, elixir-autogen, elixir-format
+msgid "It already has API keys registered"
+msgstr "Ya tiene API keys dadas de alta"
+
+#: lib/tokengate_web/live/topups_live.html.heex:158
+#, elixir-autogen, elixir-format
+msgid "Label (optional)"
+msgstr "Etiqueta (opcional)"
+
+#: lib/tokengate_web/live/stats/live.ex:247
+#, elixir-autogen, elixir-format
+msgid "Last requests"
+msgstr "Últimos requests"
+
+#: lib/tokengate_web/live/stats_live.html.heex:66
+#, elixir-autogen, elixir-format
+msgid "Live"
+msgstr "En vivo"
+
+#: lib/tokengate_web/live/stats_live.html.heex:45
+#, elixir-autogen, elixir-format
+msgid "Live · auto-refresh"
+msgstr "En vivo · actualización automática"
+
+#: lib/tokengate_web/live/model_providers_live.ex:3423
+#, elixir-autogen, elixir-format
+msgid "Lower = tried first."
+msgstr "Menor = se intenta primero."
+
+#: lib/tokengate_web/live/stats/model.ex:535
+#, elixir-autogen, elixir-format
+msgid "Members who use it"
+msgstr "Miembros que lo usan"
+
+#: lib/tokengate_web/controllers/onboarding_html/new.html.heex:47
+#, elixir-autogen, elixir-format
+msgid "Minimum 12 characters, with at least one letter and a digit."
+msgstr "Mínimo 12 caracteres, con al menos una letra y un dígito."
+
+#: lib/tokengate_web/live/groups_live.ex:440
+#, elixir-autogen, elixir-format
+msgid "Monthly cap of the limit profile. 0 = zero (cannot spend). Empty = no budget (top-ups only)."
+msgstr "Techo mensual del perfil de límites. 0 = cero (no deja gastar). Vacío = sin presupuesto (solo top-ups)."
+
+#: lib/tokengate_web/live/groups_live.ex:438
+#, elixir-autogen, elixir-format
+msgid "Monthly limit (USD)"
+msgstr "Límite mensual (USD)"
+
+#: lib/tokengate_web/topup_helpers.ex:63
+#, elixir-autogen, elixir-format
+msgid "Never"
+msgstr "Nunca"
+
+#: lib/tokengate_web/live/audit_live.ex:260
+#, elixir-autogen, elixir-format
+msgid "Next"
+msgstr "Siguiente"
+
+#: lib/tokengate_web/live/models_live.ex:1242
+#, elixir-autogen, elixir-format
+msgid "No models configured."
+msgstr "No hay models configurados."
+
+#: lib/tokengate_web/live/topups_live.html.heex:304
+#, elixir-autogen, elixir-format
+msgid "No top-ups — no subject has one-off credit."
+msgstr "No hay top-ups — ningún sujeto tiene crédito de un solo uso."
+
+#: lib/tokengate_web/live/topups_live.html.heex:172
+#, elixir-autogen, elixir-format
+msgid "Note (optional)"
+msgstr "Nota (opcional)"
+
+#: lib/tokengate_web/live/stats/groups.ex:614
+#, elixir-autogen, elixir-format
+msgid "One row per limit profile with its basic information in the period (%{period}). The name opens the detail: its metrics, its members and the models it consumes."
+msgstr "Una fila por perfil de límites con su información básica en el período (%{period}). El nombre abre el detalle: sus métricas, sus miembros y los modelos que consume."
+
+#: lib/tokengate_web/live/stats/models.ex:49
+#, elixir-autogen, elixir-format
+msgid "One row per model with its consumption in the period (%{period}). The podium is marked with a medal and the name opens the detail: its metrics, the providers that serve it and who uses it."
+msgstr "Una fila por modelo con su consumo en el período (%{period}). El podio va marcado con medalla y el nombre abre el detalle: sus métricas, los proveedores que lo sirven y quién lo usa."
+
+#: lib/tokengate_web/live/stats/providers.ex:46
+#, elixir-autogen, elixir-format
+msgid "One row per provider with its basic information in the period (%{period}). The podium is marked with a medal and the name opens the detail: its metrics, its models and the users, services and limit profiles that use it."
+msgstr "Una fila por proveedor con su información básica en el período (%{period}). El podio va marcado con medalla y el nombre abre el detalle: sus métricas, sus modelos y los usuarios, servicios y perfiles de límites que lo usan."
+
+#: lib/tokengate_web/live/stats/services.ex:41
+#, elixir-autogen, elixir-format
+msgid "One row per service with its basic information in the period (%{period}). The name opens the detail: its metrics and the models it serves."
+msgstr "Una fila por servicio con su información básica en el período (%{period}). El nombre abre el detalle: sus métricas y los modelos que sirve."
+
+#: lib/tokengate_web/live/stats/users.ex:43
+#, elixir-autogen, elixir-format
+msgid "One row per user with its basic information in the period (%{period}). It consolidates their limit profile and the name opens the detail: their metrics and their last requests."
+msgstr "Una fila por usuario con su información básica en el período (%{period}). Consolida su perfil de límites y el nombre abre el detalle: sus métricas y sus últimos requests."
+
+#: lib/tokengate_web/live/topups_live.html.heex:10
+#, elixir-autogen, elixir-format
+msgid "One-off credit, per user or service"
+msgstr "Crédito de un solo uso, por usuario o servicio"
+
+#: lib/tokengate_web/live/groups_live.ex:449
+#, elixir-autogen, elixir-format
+msgid "Only path to unlimited; wins over the limit."
+msgstr "Único camino a ilimitado; gana sobre el límite."
+
+#: lib/tokengate_web/live/stats_live.html.heex:76
+#, elixir-autogen, elixir-format
+msgid "Overview"
+msgstr "Resumen"
+
+#: lib/tokengate_web/live/stats/model.ex:47
+#: lib/tokengate_web/live/stats/provider.ex:45
+#, elixir-autogen, elixir-format
+msgid "Period: %{period}"
+msgstr "Período: %{period}"
+
+#: lib/tokengate_web/live/audit_live.ex:251
+#, elixir-autogen, elixir-format
+msgid "Previous"
+msgstr "Anterior"
+
+#: lib/tokengate_web/live/supervised_services_live.ex:248
+#, elixir-autogen, elixir-format
+msgid "Read-only view"
+msgstr "Vista de solo lectura"
+
+#: lib/tokengate_web/live/stats/groups.ex:603
+#, elixir-autogen, elixir-format
+msgid "Remove limit profile filter"
+msgstr "Quitar filtro de perfil de límites"
+
+#: lib/tokengate_web/topup_helpers.ex:83
+#, elixir-autogen, elixir-format
+msgid "Revoked credit"
+msgstr "Revocado"
+
+#: lib/tokengate_web/live/topups_live.html.heex:115
+#, elixir-autogen, elixir-format
+msgid "Search service…"
+msgstr "Buscar servicio…"
+
+#: lib/tokengate_web/live/topups_live.html.heex:114
+#, elixir-autogen, elixir-format
+msgid "Search user…"
+msgstr "Buscar usuario…"
+
+#: lib/tokengate_web/live/topups_live.html.heex:48
+#, elixir-autogen, elixir-format
+msgid "Show archived (%{count})"
+msgstr "Ver archivados (%{count})"
+
+#: lib/tokengate_web/controllers/session_html/new.html.heex:79
+#, elixir-autogen, elixir-format
+msgid "Sign in with Google"
+msgstr "Entrar con Google"
+
+#: lib/tokengate_web/live/stats_live.ex:90
+#: lib/tokengate_web/live/stats_live.html.heex:12
+#, elixir-autogen, elixir-format
+msgid "Statistics"
+msgstr "Estadísticas"
+
+#: lib/tokengate_web/live/model_providers_live.ex:3432
+#, elixir-autogen, elixir-format
+msgid "Sticky TTL (seconds)"
+msgstr "TTL sticky (segundos)"
+
+#: lib/tokengate_web/controllers/onboarding_html/new.html.heex:62
+#, elixir-autogen, elixir-format
+msgid "The first account on this screen is the instance administrator."
+msgstr "La primera cuenta de esta pantalla es el administrador de la instancia."
+
+#: lib/tokengate_web/controllers/onboarding_html/new.html.heex:13
+#, elixir-autogen, elixir-format
+msgid "This instance has no users yet. Create the admin account and sign in."
+msgstr "Esta instancia todavía no tiene usuarios. Crea la cuenta de administrador y entra."
+
+#: lib/tokengate_web/live/stats/live.ex:53
+#, elixir-autogen, elixir-format
+msgid "Today's spend (UTC)"
+msgstr "Gasto del día UTC"
+
+#: lib/tokengate_web/live/monitoring_live.ex:880
+#, elixir-autogen, elixir-format
+msgid "Top 3 models · last minute"
+msgstr "Top 3 modelos · último minuto"
+
+#: lib/tokengate_web/live/monitoring_live.ex:899
+#, elixir-autogen, elixir-format
+msgid "Top 3 users · last minute"
+msgstr "Top 3 usuarios · último minuto"
+
+#: lib/tokengate_web/live/stats/groups.ex:783
+#: lib/tokengate_web/live/stats/model.ex:507
+#: lib/tokengate_web/live/stats/provider.ex:474
+#, elixir-autogen, elixir-format
+msgid "Total · %{count} limit profiles"
+msgstr "Total · %{count} perfiles de límites"
+
+#: lib/tokengate_web/live/stats/groups.ex:377
+#: lib/tokengate_web/live/stats/models.ex:222
+#: lib/tokengate_web/live/stats/provider.ex:202
+#, elixir-autogen, elixir-format
+msgid "Total · %{count} models"
+msgstr "Total · %{count} modelos"
+
+#: lib/tokengate_web/live/stats/model.ex:371
+#, elixir-autogen, elixir-format
+msgid "Total · %{count} providers"
+msgstr "Total · %{count} proveedores"
+
+#: lib/tokengate_web/live/stats/provider.ex:389
+#: lib/tokengate_web/live/stats/services.ex:211
+#, elixir-autogen, elixir-format
+msgid "Total · %{count} services"
+msgstr "Total · %{count} servicios"
+
+#: lib/tokengate_web/live/stats/groups.ex:561
+#: lib/tokengate_web/live/stats/model.ex:650
+#: lib/tokengate_web/live/stats/provider.ex:298
+#: lib/tokengate_web/live/stats/users.ex:234
+#, elixir-autogen, elixir-format
+msgid "Total · %{count} users"
+msgstr "Total · %{count} usuarios"
+
+#: lib/tokengate_web/controllers/session_html/new.html.heex:87
+#, elixir-autogen, elixir-format
+msgid "Trouble signing in? Contact your administrator."
+msgstr "¿Problemas para acceder? Contacta a tu administrador."
+
+#: lib/tokengate_web/live/stats_live.html.heex:29
+#, elixir-autogen, elixir-format
+msgid "Updating statistics…"
+msgstr "Actualizando estadísticas…"
+
+#: lib/tokengate_web/live/stats/provider.ex:238
+#, elixir-autogen, elixir-format
+msgid "Users who use it"
+msgstr "Usuarios que lo usan"
+
+#: lib/tokengate_web/live/stats/live.ex:254
+#, elixir-autogen, elixir-format
+msgid "View all"
+msgstr "Ver todos"
+
+#: lib/tokengate_web/live/supervised_services_live.ex:379
+#, elixir-autogen, elixir-format
+msgid "View full stats"
+msgstr "Ver stats completos"
+
+#: lib/tokengate_web/controllers/session_html/new.html.heex:10
+#, elixir-autogen, elixir-format
+msgid "Welcome"
+msgstr "Bienvenido"
+
+#: lib/tokengate_web/live/audit_live.ex:149
+#, elixir-autogen, elixir-format
+msgid "Who did what, to what, and when — 90-day retention"
+msgstr "Quién hizo qué, sobre qué y cuándo — retención de 90 días"
+
+#: lib/tokengate_web/live/stats_live.ex:1278
+#, elixir-autogen, elixir-format
+msgid "Whole organization"
+msgstr "Organización completa"
+
+#: lib/tokengate_web/controllers/onboarding_html/new.html.heex:25
+#, elixir-autogen, elixir-format
+msgid "Your name"
+msgstr "Tu nombre"
+
+#: lib/tokengate_web/live/stats_live.ex:1280
+#, elixir-autogen, elixir-format
+msgid "Your usage"
+msgstr "Tus consumos"
+
+#: lib/tokengate_web/live/stats/live.ex:62
+#, elixir-autogen, elixir-format
+msgid "all subjects · 00:00–24:00 UTC window"
+msgstr "todos los sujetos · ventana 00:00–24:00 UTC"
+
+#: lib/tokengate_web/live/topups_live.html.heex:251
+#, elixir-autogen, elixir-format
+msgid "balance revoked"
+msgstr "saldo revocado"
+
+#: lib/tokengate_web/live/stats/live.ex:374
+#, elixir-autogen, elixir-format
+msgid "bars · 1 bar = 1 min · last 60 min"
+msgstr "barras · 1 barra = 1 min · últimos 60 min"
+
+#: lib/tokengate_web/live/stats/index.ex:60
+#, elixir-autogen, elixir-format
+msgid "concurrent requests · %{bucket}"
+msgstr "requests simultáneos · %{bucket}"
+
+#: lib/tokengate_web/live/stats/live.ex:130
+#, elixir-autogen, elixir-format
+msgid "latency %{avg} · p95: %{p95}"
+msgstr "latencia %{avg} · p95: %{p95}"
+
+#: lib/tokengate_web/live/stats/index.ex:284
+#, elixir-autogen, elixir-format
+msgid "local time"
+msgstr "hora local"
+
+#: lib/tokengate_web/controllers/session_html/new.html.heex:54
+#, elixir-autogen, elixir-format
+msgid "or"
+msgstr "o"
+
+#: lib/tokengate_web/live/stats/index.ex:158
+#, elixir-autogen, elixir-format
+msgid "share of %{period} by requests"
+msgstr "reparto de %{period} por requests"
+
+#: lib/tokengate_web/live/audit_live.ex:209
+#, elixir-autogen, elixir-format
+msgid "system"
+msgstr "sistema"
+
+#: lib/tokengate_web/live/stats/index.ex:213
+#, elixir-autogen, elixir-format
+msgid "top %{count} by requests"
+msgstr "top %{count} por requests"
+
+#: lib/tokengate_web/controllers/onboarding_html/new.html.heex:34
+#: lib/tokengate_web/controllers/session_html/new.html.heex:32
+#, elixir-autogen, elixir-format
+msgid "you@company.com"
+msgstr "tu@empresa.com"
+
+
+#: lib/tokengate_web/live/model_providers_live.ex:2322
+#, elixir-autogen, elixir-format
+msgid "Credential disabled — enable it in /catalog/providers"
+msgstr "Credential desactivada — activa en /catalog/providers"
+
+#: lib/tokengate_web/live/models_live.ex:1232
+#, elixir-autogen, elixir-format
+msgid "Lab badge: %{lab}."
+msgstr "Marca del lab %{lab}."
+
+#: lib/tokengate_web/live/stats/live.ex:303
+#, elixir-autogen, elixir-format
+msgid "Status returned to the client"
+msgstr "Status devuelto al cliente"
+
+#: lib/tokengate_web/live/model_providers_live.ex:2307
+#, elixir-autogen, elixir-format
+msgid "disabled credential"
+msgstr "credential desactivada"

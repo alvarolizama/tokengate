@@ -41,10 +41,10 @@ defmodule TokengateWeb.StatsLive.Model do
           class="btn btn-sm btn-ghost"
           id="model-back"
         >
-          <.icon name="hero-arrow-left" class="w-4 h-4" /> Modelos
+          <.icon name="hero-arrow-left" class="w-4 h-4" /> {gettext("Models")}
         </.link>
         <span class="text-xs text-base-content/60" id="model-metrics-period">
-          Período: {Stats.period_label(@period)}
+          {gettext("Period: %{period}", period: Stats.period_label(@period))}
         </span>
       </div>
 
@@ -90,7 +90,7 @@ defmodule TokengateWeb.StatsLive.Model do
 
           <.kpi_card
             id="model-kpi-cost"
-            label="Costo"
+            label={gettext("Cost")}
             icon="hero-currency-dollar"
             accent="accent"
           >
@@ -368,7 +368,9 @@ defmodule TokengateWeb.StatsLive.Model do
                   <tfoot>
                     <tr class="font-bold bg-base-200">
                       <td colspan="2">
-                        Total · {Stats.distinct_providers(@breakdown_provider)} proveedores
+                        {gettext("Total · %{count} providers",
+                          count: Stats.distinct_providers(@breakdown_provider)
+                        )}
                       </td>
                       <td class="text-right font-mono">
                         {Stats.format_number(provider_total.request_count)}
@@ -502,7 +504,9 @@ defmodule TokengateWeb.StatsLive.Model do
                   </tbody>
                   <tfoot>
                     <tr class="font-bold bg-base-200">
-                      <td>Total · {length(@breakdown_group)} perfiles de límites</td>
+                      <td>
+                        {gettext("Total · %{count} limit profiles", count: length(@breakdown_group))}
+                      </td>
                       <td class="text-right font-mono">
                         {Stats.format_number(group_total.request_count)}
                       </td>
@@ -530,7 +534,9 @@ defmodule TokengateWeb.StatsLive.Model do
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body">
             <h2 class="card-title text-base">
-              <.icon name="hero-user" class="w-5 h-5 text-base-content/60" /> Miembros que lo usan
+              <.icon name="hero-user" class="w-5 h-5 text-base-content/60" /> {gettext(
+                "Members who use it"
+              )}
             </h2>
             <%= if Stats.has_data?(@breakdown_member) do %>
               <% member_total = Stats.breakdown_total(@breakdown_member) %>
@@ -645,7 +651,9 @@ defmodule TokengateWeb.StatsLive.Model do
                   <tfoot>
                     <tr class="font-bold bg-base-200">
                       <td colspan="2">
-                        Total · {Stats.distinct_users(@breakdown_member)} usuarios
+                        {gettext("Total · %{count} users",
+                          count: Stats.distinct_users(@breakdown_member)
+                        )}
                       </td>
                       <td class="text-right font-mono">
                         {Stats.format_number(member_total.request_count)}

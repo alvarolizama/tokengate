@@ -39,10 +39,10 @@ defmodule TokengateWeb.StatsLive.Provider do
           class="btn btn-sm btn-ghost"
           id="provider-back"
         >
-          <.icon name="hero-arrow-left" class="w-4 h-4" /> Proveedores
+          <.icon name="hero-arrow-left" class="w-4 h-4" /> {gettext("Providers")}
         </.link>
         <span class="text-xs text-base-content/60" id="provider-metrics-period">
-          Período: {Stats.period_label(@period)}
+          {gettext("Period: %{period}", period: Stats.period_label(@period))}
         </span>
       </div>
 
@@ -199,7 +199,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </tbody>
                   <tfoot>
                     <tr class="font-bold bg-base-200">
-                      <td>Total · {length(@breakdown_model)} modelos</td>
+                      <td>{gettext("Total · %{count} models", count: length(@breakdown_model))}</td>
                       <td class="text-right font-mono tabular-nums">
                         {Stats.format_number(model_total.request_count)}
                       </td>
@@ -235,7 +235,9 @@ defmodule TokengateWeb.StatsLive.Provider do
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body">
             <h3 class="card-title text-base">
-              <.icon name="hero-users" class="w-5 h-5 text-base-content/60" /> Usuarios que lo usan
+              <.icon name="hero-users" class="w-5 h-5 text-base-content/60" /> {gettext(
+                "Users who use it"
+              )}
             </h3>
             <%= if Stats.has_data?(@breakdown_user) do %>
               <% user_total = Stats.breakdown_total(@breakdown_user) %>
@@ -295,7 +297,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </tbody>
                   <tfoot>
                     <tr class="font-bold bg-base-200">
-                      <td>Total · {length(@breakdown_user)} usuarios</td>
+                      <td>{gettext("Total · %{count} users", count: length(@breakdown_user))}</td>
                       <td></td>
                       <td class="text-right font-mono tabular-nums">
                         {Stats.format_number(user_total.request_count)}
@@ -386,7 +388,9 @@ defmodule TokengateWeb.StatsLive.Provider do
                     </tbody>
                     <tfoot>
                       <tr class="font-bold bg-base-200">
-                        <td>Total · {length(@breakdown_service)} servicios</td>
+                        <td>
+                          {gettext("Total · %{count} services", count: length(@breakdown_service))}
+                        </td>
                         <td class="text-right font-mono tabular-nums">
                           {Stats.format_number(service_total.request_count)}
                         </td>
@@ -471,7 +475,9 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </tbody>
                   <tfoot>
                     <tr class="font-bold bg-base-200">
-                      <td>Total · {length(@breakdown_group)} perfiles de límites</td>
+                      <td>
+                        {gettext("Total · %{count} limit profiles", count: length(@breakdown_group))}
+                      </td>
                       <td class="text-right font-mono tabular-nums">
                         {Stats.format_number(group_total.request_count)}
                       </td>

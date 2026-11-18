@@ -35,12 +35,15 @@ defmodule TokengateWeb.StatsLive.Services do
       <div class="card bg-base-100 border border-base-300 shadow-sm">
         <div class="card-body">
           <h2 class="card-title text-base">
-            <.icon name="hero-wrench-screwdriver" class="w-5 h-5 text-base-content/60" /> Servicios
+            <.icon name="hero-wrench-screwdriver" class="w-5 h-5 text-base-content/60" /> {gettext(
+              "Services"
+            )}
           </h2>
           <p class="text-xs text-base-content/60">
-            Una fila por servicio con su información básica en el período
-            ({Stats.period_label(@period)}). El nombre abre el detalle: sus métricas
-            y los modelos que sirve.
+            {gettext(
+              "One row per service with its basic information in the period (%{period}). The name opens the detail: its metrics and the models it serves.",
+              period: Stats.period_label(@period)
+            )}
           </p>
           <%= if Stats.has_data?(@breakdown_service) do %>
             <% service_total = Stats.breakdown_total(@breakdown_service) %>
@@ -156,7 +159,7 @@ defmodule TokengateWeb.StatsLive.Services do
                         </button>
                       </th>
                       <th title={gettext("Calendar-month spend vs the service monthly cap")}>
-                        Presupuesto · mes
+                        {gettext("Budget · month")}
                       </th>
                     </tr>
                   </thead>
@@ -208,7 +211,9 @@ defmodule TokengateWeb.StatsLive.Services do
                   </tbody>
                   <tfoot>
                     <tr class="font-bold bg-base-200">
-                      <td>Total · {length(@breakdown_service)} servicios</td>
+                      <td>
+                        {gettext("Total · %{count} services", count: length(@breakdown_service))}
+                      </td>
                       <td class="text-right font-mono">
                         {Stats.format_number(service_total.request_count)}
                       </td>

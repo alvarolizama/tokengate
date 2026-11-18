@@ -37,12 +37,13 @@ defmodule TokengateWeb.StatsLive.Users do
       <div class="card bg-base-100 border border-base-300 shadow-sm" id="user-ranking">
         <div class="card-body">
           <h2 class="card-title text-base">
-            <.icon name="hero-users" class="w-5 h-5 text-base-content/60" /> Usuarios
+            <.icon name="hero-users" class="w-5 h-5 text-base-content/60" /> {gettext("Users")}
           </h2>
           <p class="text-xs text-base-content/60">
-            Una fila por usuario con su información básica en el período
-            ({Stats.period_label(@period)}). Consolida su perfil de límites y
-            el nombre abre el detalle: sus métricas y sus últimos requests.
+            {gettext(
+              "One row per user with its basic information in the period (%{period}). It consolidates their limit profile and the name opens the detail: their metrics and their last requests.",
+              period: Stats.period_label(@period)
+            )}
           </p>
           <%= if Stats.has_data?(@breakdown_user) do %>
             <% user_total = Stats.breakdown_total(@breakdown_user) %>
@@ -157,7 +158,7 @@ defmodule TokengateWeb.StatsLive.Users do
                       </th>
                       <th class="text-right">{gettext("Cost / req")}</th>
                       <th>
-                        Crédito · ciclo
+                        {gettext("Credit · cycle")}
                         <div
                           class="tooltip tooltip-top"
                           data-tip={
@@ -231,7 +232,7 @@ defmodule TokengateWeb.StatsLive.Users do
                   </tbody>
                   <tfoot>
                     <tr class="font-bold bg-base-200">
-                      <td>Total · {length(rows)} usuarios</td>
+                      <td>{gettext("Total · %{count} users", count: length(rows))}</td>
                       <td></td>
                       <td class="text-right font-mono">
                         {Stats.format_number(user_total.request_count)}

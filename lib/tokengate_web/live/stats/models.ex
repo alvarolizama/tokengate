@@ -43,13 +43,15 @@ defmodule TokengateWeb.StatsLive.Models do
       <div class="card bg-base-100 border border-base-300 shadow-sm" id="model-ranking">
         <div class="card-body">
           <h2 class="card-title text-base">
-            <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" /> Modelos
+            <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" /> {gettext(
+              "Models"
+            )}
           </h2>
           <p class="text-xs text-base-content/60">
-            Una fila por modelo con su consumo en el período
-            ({Stats.period_label(@period)}). El podio va marcado con medalla y el
-            nombre abre el detalle: sus métricas, los proveedores que lo sirven y
-            quién lo usa.
+            {gettext(
+              "One row per model with its consumption in the period (%{period}). The podium is marked with a medal and the name opens the detail: its metrics, the providers that serve it and who uses it.",
+              period: Stats.period_label(@period)
+            )}
           </p>
           <%= if Stats.has_data?(@breakdown_model) do %>
             <% model_total = Stats.breakdown_total(@breakdown_model) %>
@@ -220,7 +222,7 @@ defmodule TokengateWeb.StatsLive.Models do
                   <tfoot>
                     <tr class="font-bold bg-base-200">
                       <td></td>
-                      <td>Total · {length(rows)} modelos</td>
+                      <td>{gettext("Total · %{count} models", count: length(rows))}</td>
                       <td class="text-right font-mono">
                         {Stats.format_number(model_total.request_count)}
                       </td>
