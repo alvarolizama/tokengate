@@ -125,7 +125,7 @@ defmodule TokengateWeb.ProviderKeysLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live_keys(conn, provider)
 
-    assert has_element?(view, "table#keys-table")
+    assert has_element?(view, "tbody#keys-table")
     assert has_element?(view, "#credential-#{credential.id}", "Producción")
     # La key se muestra enmascarada, nunca completa.
     assert has_element?(view, "#credential-#{credential.id}", "••••••abcd")
@@ -142,7 +142,7 @@ defmodule TokengateWeb.ProviderKeysLiveTest do
     {:ok, view, _html} = live_keys(conn, provider)
 
     assert has_element?(view, "#keys-empty")
-    refute has_element?(view, "table#keys-table")
+    refute has_element?(view, "tbody#keys-table")
   end
 
   # Los límites son del proveedor: aquí se muestran, no se editan. El botón de

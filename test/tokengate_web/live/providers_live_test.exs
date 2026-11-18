@@ -122,8 +122,8 @@ defmodule TokengateWeb.ProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live_providers(conn)
 
-    assert has_element?(view, "table#providers")
-    assert has_element?(view, "table#providers tbody tr#providers-#{provider.id}")
+    assert has_element?(view, "tbody#providers")
+    assert has_element?(view, "tbody#providers tr#providers-#{provider.id}")
 
     # Ya no hay grid de cards ni panel de credenciales dentro de la fila.
     refute has_element?(view, "#providers.grid")
