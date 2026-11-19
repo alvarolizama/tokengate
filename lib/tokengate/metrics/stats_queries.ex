@@ -1143,6 +1143,49 @@ defmodule Tokengate.Metrics.StatsQueries do
   defp maybe_to(query, %DateTime{} = to), do: where(query, [rl], rl.inserted_at <= ^to)
 
   # ---------------------------------------------------------------------
+  # Agent ranking
+  # ---------------------------------------------------------------------
+
+  @doc """
+  Ranking of coding agents over the period: one row per RAW identity bucket
+  `(agent_type, client_agent)`.
+
+  `request_logs` stores the client identity as it arrived (the `X-Agent-Type`
+  header plus `X-Title` → `User-Agent`), not a canonical agent, and the rollup
+  has no agent dimension — so this is a raw read bounded by the period. The
+  caller normalizes each bucket with `Tokengate.Agents.identify/2` and merges
+  by key: the same agent reaching the proxy through two headers (or through
+  the historical `agent_type: "api"`) must collapse into ONE row.
+
+  `avg_latency_ms` travels with `latency_count` (rows that actually carry a
+  latency): merging averages without that weight would let a 1-request bucket
+  weigh as much as a 10k-request one.
+  """
+  @spec agent_ranking(keyword()) :: [map()]
+  def agent_ranking(opts \\ []) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    RequestLog
+    |> where([rl], rl.inserted_at >= ^from)
+    |> maybe_to(to)
+    |> maybe_member_ids(opts[:member_ids])
+    |> group_by([rl], [rl.agent_type, rl.client_agent])
+    |> select([rl], %{
+      agent_type: rl.agent_type,
+      client_agent: rl.client_agent,
+      request_count: count(rl.id),
+      error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+      cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+      prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+      completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+      avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
+      latency_count: fragment("COUNT(?)", rl.latency_ms)
+    })
+    |> Repo.all(timeout: stats_query_timeout())
+  end
+
+  # ---------------------------------------------------------------------
   # Rollup-side reads for the overview's heavy cards
   # ---------------------------------------------------------------------
 
