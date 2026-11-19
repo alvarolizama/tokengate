@@ -351,8 +351,8 @@ msgstr ""
 #: lib/tokengate_web/live/maintenance_live.ex:405
 #: lib/tokengate_web/live/model_providers_live.ex:3967
 #: lib/tokengate_web/live/models_live.ex:1525
-#: lib/tokengate_web/live/models_live.ex:2139
-#: lib/tokengate_web/live/models_live.ex:2181
+#: lib/tokengate_web/live/models_live.ex:2166
+#: lib/tokengate_web/live/models_live.ex:2208
 #: lib/tokengate_web/live/observability_live.ex:357
 #: lib/tokengate_web/live/provider_keys_live.ex:558
 #: lib/tokengate_web/live/providers_live.ex:1314
@@ -727,8 +727,8 @@ msgstr ""
 #: lib/tokengate_web/components/keys_panel.ex:182
 #: lib/tokengate_web/live/groups_live.ex:458
 #: lib/tokengate_web/live/model_providers_live.ex:4007
-#: lib/tokengate_web/live/models_live.ex:2142
-#: lib/tokengate_web/live/models_live.ex:2184
+#: lib/tokengate_web/live/models_live.ex:2169
+#: lib/tokengate_web/live/models_live.ex:2211
 #: lib/tokengate_web/live/notifications_live.ex:518
 #: lib/tokengate_web/live/observability_live.ex:360
 #: lib/tokengate_web/live/provider_keys_live.ex:561
@@ -2172,7 +2172,7 @@ msgstr ""
 msgid "Assign provider"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2026
+#: lib/tokengate_web/live/models_live.ex:2025
 #, elixir-autogen, elixir-format
 msgid "Brand (lab / icon)"
 msgstr ""
@@ -2191,7 +2191,7 @@ msgstr ""
 msgid "Choose another provider"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2020
+#: lib/tokengate_web/live/models_live.ex:2017
 #, elixir-autogen, elixir-format
 msgid "Context window (tokens)"
 msgstr ""
@@ -2213,7 +2213,7 @@ msgstr ""
 msgid "Edit model"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2074
+#: lib/tokengate_web/live/models_live.ex:2088
 #, elixir-autogen, elixir-format
 msgid "Hero icon name, e.g. hero-fire. Optional."
 msgstr ""
@@ -2224,7 +2224,7 @@ msgstr ""
 msgid "LLM (chat)"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2037
+#: lib/tokengate_web/live/models_live.ex:2036
 #, elixir-autogen, elixir-format
 msgid "Lab (who built the model)"
 msgstr ""
@@ -2234,7 +2234,7 @@ msgstr ""
 msgid "Loading provider models…"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2022
+#: lib/tokengate_web/live/models_live.ex:2019
 #, elixir-autogen, elixir-format
 msgid "Maximum context size of the model in tokens."
 msgstr ""
@@ -2274,7 +2274,7 @@ msgid "Pick an API key from this provider"
 msgstr ""
 
 #: lib/tokengate_web/live/labs_live.ex:410
-#: lib/tokengate_web/live/models_live.ex:2078
+#: lib/tokengate_web/live/models_live.ex:2092
 #, elixir-autogen, elixir-format
 msgid "Pick from the palette"
 msgstr ""
@@ -2292,7 +2292,7 @@ msgid "Pin to top"
 msgstr ""
 
 #: lib/tokengate_web/live/labs_live.ex:436
-#: lib/tokengate_web/live/models_live.ex:2048
+#: lib/tokengate_web/live/models_live.ex:2047
 #, elixir-autogen, elixir-format
 msgid "Preview"
 msgstr ""
@@ -2340,7 +2340,7 @@ msgstr ""
 msgid "Suggestions from the provider catalog. You can type any value for dedicated or private tiers."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2066
+#: lib/tokengate_web/live/models_live.ex:2065
 #, elixir-autogen, elixir-format
 msgid "The model's own icon is queued: it is used if you unlink the lab."
 msgstr ""
@@ -2366,7 +2366,7 @@ msgstr ""
 msgid "Unpin"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2041
+#: lib/tokengate_web/live/models_live.ex:2040
 #, elixir-autogen, elixir-format
 msgid "With a linked lab its brand wins; without one the icon below is used."
 msgstr ""
@@ -2379,7 +2379,7 @@ msgstr ""
 msgid "no key"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2039
+#: lib/tokengate_web/live/models_live.ex:2038
 #, elixir-autogen, elixir-format
 msgid "— No lab —"
 msgstr ""
@@ -2389,7 +2389,7 @@ msgstr ""
 msgid "Create and use"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2170
+#: lib/tokengate_web/live/models_live.ex:2197
 #, elixir-autogen, elixir-format
 msgid "E.g. Always answer in English. Do not use markdown. Be concise…"
 msgstr ""
@@ -2464,12 +2464,12 @@ msgstr ""
 msgid "Sends service_tier: priority — more reliability at peak hours, billed at a premium depending on the model."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2167
+#: lib/tokengate_web/live/models_live.ex:2194
 #, elixir-autogen, elixir-format
 msgid "System instructions (guard rails)"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2159
+#: lib/tokengate_web/live/models_live.ex:2186
 #, elixir-autogen, elixir-format
 msgid "Text injected at the start of every system prompt sent to the provider."
 msgstr ""
@@ -2489,7 +2489,7 @@ msgstr ""
 msgid "The token the provider gives you."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2173
+#: lib/tokengate_web/live/models_live.ex:2200
 #, elixir-autogen, elixir-format
 msgid "This text is prepended to the user system prompt. Leave it empty to inject nothing."
 msgstr ""
@@ -2506,7 +2506,7 @@ msgstr ""
 msgid "Type to search a user…"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2160
+#: lib/tokengate_web/live/models_live.ex:2187
 #, elixir-autogen, elixir-format
 msgid "Use it for behaviour instructions, content limits, or formatting rules."
 msgstr ""
@@ -2598,7 +2598,7 @@ msgid "Hero icon name, e.g. hero-beaker. Used when there is no logo."
 msgstr ""
 
 #: lib/tokengate_web/live/labs_live.ex:404
-#: lib/tokengate_web/live/models_live.ex:2072
+#: lib/tokengate_web/live/models_live.ex:2086
 #, elixir-autogen, elixir-format
 msgid "Icon"
 msgstr ""
@@ -5334,12 +5334,12 @@ msgstr ""
 msgid "by API key"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2113
+#: lib/tokengate_web/live/models_live.ex:2139
 #, elixir-autogen, elixir-format
 msgid "Reasoning effort default"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2126
+#: lib/tokengate_web/live/models_live.ex:2152
 #, elixir-autogen, elixir-format
 msgid "Reasoning effort override"
 msgstr ""
@@ -5349,22 +5349,22 @@ msgstr ""
 msgid "Reasoning effort the gateway sent upstream after the operator's effort policy"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2117
+#: lib/tokengate_web/live/models_live.ex:2143
 #, elixir-autogen, elixir-format
 msgid "Replaces a client reasoning_effort of none/minimal with this value (upstreams that reject those values)."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2130
+#: lib/tokengate_web/live/models_live.ex:2156
 #, elixir-autogen, elixir-format
 msgid "Replaces the client reasoning_effort with this value, whatever the client sends."
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2115
+#: lib/tokengate_web/live/models_live.ex:2141
 #, elixir-autogen, elixir-format
 msgid "— No default —"
 msgstr ""
 
-#: lib/tokengate_web/live/models_live.ex:2128
+#: lib/tokengate_web/live/models_live.ex:2154
 #, elixir-autogen, elixir-format
 msgid "— No override —"
 msgstr ""
@@ -6793,4 +6793,14 @@ msgstr ""
 #: lib/tokengate_web/live/model_providers_live.ex:1200
 #, elixir-autogen, elixir-format
 msgid "Routing"
+msgstr ""
+
+#: lib/tokengate_web/live/models_live.ex:2075
+#, elixir-autogen, elixir-format
+msgid "Icon palette"
+msgstr ""
+
+#: lib/tokengate_web/live/models_live.ex:2128
+#, elixir-autogen, elixir-format
+msgid "Reasoning effort (advanced)"
 msgstr ""

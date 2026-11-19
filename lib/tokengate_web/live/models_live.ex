@@ -2011,9 +2011,6 @@ defmodule TokengateWeb.ModelsLive do
                         gettext("Defines which endpoint serves it (chat, embeddings, audio, image).")
                       }
                     />
-                  </div>
-
-                  <div class="space-y-1">
                     <.input
                       field={@form[:context_window]}
                       type="number"
@@ -2021,7 +2018,9 @@ defmodule TokengateWeb.ModelsLive do
                       required
                       hint={gettext("Maximum context size of the model in tokens.")}
                     />
+                  </div>
 
+                  <div class="space-y-1">
                     <div class="divider my-2 text-xs text-base-content/50">
                       {gettext("Brand (lab / icon)")}
                     </div>
@@ -2066,73 +2065,101 @@ defmodule TokengateWeb.ModelsLive do
                         {gettext("The model's own icon is queued: it is used if you unlink the lab.")}
                       </p>
                     <% else %>
-                      <.input
-                        field={@form[:icon]}
-                        type="text"
-                        label={gettext("Icon")}
-                        placeholder={Model.default_icon()}
-                        hint={gettext("Hero icon name, e.g. hero-fire. Optional.")}
-                      />
+                      <details
+                        class="group rounded-lg border border-base-300 mt-2"
+                        id="model-icon-section"
+                      >
+                        <summary class="flex items-center justify-between cursor-pointer select-none px-3 py-2 text-sm font-medium text-base-content/70 hover:text-base-content list-none [&::-webkit-details-marker]:hidden">
+                          <span class="flex items-center gap-2">
+                            <.icon name="hero-swatch" class="w-4 h-4" />
+                            {gettext("Icon palette")}
+                          </span>
+                          <.icon
+                            name="hero-chevron-down"
+                            class="w-4 h-4 transition-transform group-open:rotate-180"
+                          />
+                        </summary>
+                        <div class="px-3 pb-3 pt-1 space-y-2">
+                          <.input
+                            field={@form[:icon]}
+                            type="text"
+                            label={gettext("Icon")}
+                            placeholder={Model.default_icon()}
+                            hint={gettext("Hero icon name, e.g. hero-fire. Optional.")}
+                          />
 
-                      <div class="fieldset">
-                        <span class="label">{gettext("Pick from the palette")}</span>
-                        <div class="grid grid-cols-8 gap-1" id="model-icon-picker">
-                          <button
-                            :for={icon <- @icon_choices}
-                            type="button"
-                            phx-click="pick_model_icon"
-                            phx-value-icon={icon}
-                            class={[
-                              "flex items-center justify-center rounded-lg border p-1.5 transition-colors",
-                              if(@form[:icon].value == icon,
-                                do: "border-primary bg-primary/10 text-primary",
-                                else: "border-base-300 hover:bg-base-200"
-                              )
-                            ]}
-                            id={"model-icon-choice-#{icon}"}
-                            title={icon}
-                          >
-                            <.icon name={icon} class="w-4 h-4" />
-                          </button>
+                          <div class="fieldset">
+                            <span class="label">{gettext("Pick from the palette")}</span>
+                            <div class="grid grid-cols-8 gap-1" id="model-icon-picker">
+                              <button
+                                :for={icon <- @icon_choices}
+                                type="button"
+                                phx-click="pick_model_icon"
+                                phx-value-icon={icon}
+                                class={[
+                                  "flex items-center justify-center rounded-lg border p-1.5 transition-colors",
+                                  if(@form[:icon].value == icon,
+                                    do: "border-primary bg-primary/10 text-primary",
+                                    else: "border-base-300 hover:bg-base-200"
+                                  )
+                                ]}
+                                id={"model-icon-choice-#{icon}"}
+                                title={icon}
+                              >
+                                <.icon name={icon} class="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                      </div>
+                      </details>
                     <% end %>
                   </div>
                 </div>
 
-                <%!-- Comportamiento: cómo responde el modelo (política de
-                     effort). Va en su propia banda, separado de la identidad
-                     por un divisor: es lo que se afina después del alta, no lo
-                     que define al modelo. --%>
-                <div class="divider my-3"></div>
+                <%!-- Behavior: effort policy, tuned after creation. Collapsed
+                     by default so the identity fields stay above the fold. --%>
+                <details
+                  class="group rounded-lg border border-base-300 mt-4"
+                  id="model-reasoning-section"
+                >
+                  <summary class="flex items-center justify-between cursor-pointer select-none px-3 py-2 text-sm font-medium text-base-content/70 hover:text-base-content list-none [&::-webkit-details-marker]:hidden">
+                    <span class="flex items-center gap-2">
+                      <.icon name="hero-adjustments-horizontal" class="w-4 h-4" />
+                      {gettext("Reasoning effort (advanced)")}
+                    </span>
+                    <.icon
+                      name="hero-chevron-down"
+                      class="w-4 h-4 transition-transform group-open:rotate-180"
+                    />
+                  </summary>
+                  <div class="px-3 pb-3 pt-1 grid md:grid-cols-2 gap-x-8 gap-y-1">
+                    <.input
+                      field={@form[:effort_default]}
+                      type="select"
+                      label={gettext("Reasoning effort default")}
+                      options={effort_policy_options()}
+                      prompt={gettext("— No default —")}
+                      hint={
+                        gettext(
+                          "Replaces a client reasoning_effort of none/minimal with this value (upstreams that reject those values)."
+                        )
+                      }
+                    />
 
-                <div class="grid md:grid-cols-2 gap-x-8 gap-y-1">
-                  <.input
-                    field={@form[:effort_default]}
-                    type="select"
-                    label={gettext("Reasoning effort default")}
-                    options={effort_policy_options()}
-                    prompt={gettext("— No default —")}
-                    hint={
-                      gettext(
-                        "Replaces a client reasoning_effort of none/minimal with this value (upstreams that reject those values)."
-                      )
-                    }
-                  />
-
-                  <.input
-                    field={@form[:effort_override]}
-                    type="select"
-                    label={gettext("Reasoning effort override")}
-                    options={effort_policy_options()}
-                    prompt={gettext("— No override —")}
-                    hint={
-                      gettext(
-                        "Replaces the client reasoning_effort with this value, whatever the client sends."
-                      )
-                    }
-                  />
-                </div>
+                    <.input
+                      field={@form[:effort_override]}
+                      type="select"
+                      label={gettext("Reasoning effort override")}
+                      options={effort_policy_options()}
+                      prompt={gettext("— No override —")}
+                      hint={
+                        gettext(
+                          "Replaces the client reasoning_effort with this value, whatever the client sends."
+                        )
+                      }
+                    />
+                  </div>
+                </details>
 
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
