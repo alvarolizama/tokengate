@@ -96,6 +96,16 @@
         <.icon name="hero-rectangle-stack" class="w-4 h-4" /> {gettext("Models")}
       </.link>
       <.link
+        patch={~p"/stats/agents?period=#{@period}"}
+        class={[
+          "join-item btn btn-sm",
+          if(@live_action == :agents, do: "btn-primary", else: "btn-ghost")
+        ]}
+        id="nav-agents"
+      >
+        <.icon name="hero-command-line" class="w-4 h-4" /> {gettext("Agents")}
+      </.link>
+      <.link
         patch={~p"/stats/profiles?period=#{@period}"}
         class={[
           "join-item btn btn-sm",
@@ -182,6 +192,145 @@
             shown_counts={@shown_counts}
             list_search={@list_search}
           />
+        <% @live_action == :agents -> %>
+          <div class="space-y-6">
+            <div class="card bg-base-100 border border-base-300 shadow-sm" id="agent-ranking">
+              <div class="card-body">
+                <h2 class="card-title text-base">
+                  <.icon name="hero-command-line" class="w-5 h-5 text-base-content/60" /> {gettext(
+                    "Agents"
+                  )}
+                </h2>
+                <p class="text-xs text-base-content/60">
+                  {gettext(
+                    "One row per coding agent identified from its client identity (X-Agent-Type / User-Agent), with its consumption for the period (%{period}).",
+                    period: Stats.period_label(@period)
+                  )}
+                </p>
+                <div class="mt-3 overflow-x-auto">
+                  <.table
+                    id="agents-table"
+                    rows={@agent_ranking}
+                    row_id={fn row -> "agent-row-#{row.key}" end}
+                    sort_field={@sort_field}
+                    sort_direction={@sort_direction}
+                    sort_event="sort"
+                  >
+                    <:col :let={row} label={gettext("Agent")} field={:label}>
+                      <div class="min-w-0">
+                        <div class="font-medium truncate" title={row.key}>{row.label}</div>
+                        <div class="text-[10px] uppercase tracking-wide text-base-content/40">
+                          {row.family}
+                        </div>
+                      </div>
+                    </:col>
+                    <:col
+                      :let={row}
+                      label={gettext("Requests")}
+                      field={:request_count}
+                      align="right"
+                    >
+                      <span class="font-mono tabular-nums">
+                        {Stats.format_number(row.request_count)}
+                      </span>
+                    </:col>
+                    <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
+                      <span class="font-mono tabular-nums">
+                        ${Stats.format_decimal(row.cost_usd)}
+                      </span>
+                    </:col>
+                    <:col
+                      :let={row}
+                      label={gettext("Share")}
+                      field={:share}
+                      align="right"
+                      tooltip={gettext("Share of the period's cost")}
+                    >
+                      <span class="font-mono tabular-nums">{Stats.format_percent(row.share)}</span>
+                    </:col>
+                    <:col
+                      :let={row}
+                      label={gettext("Tokens in")}
+                      field={:prompt_tokens}
+                      align="right"
+                    >
+                      <span class="font-mono tabular-nums">
+                        {Stats.format_number(row.prompt_tokens)}
+                      </span>
+                    </:col>
+                    <:col
+                      :let={row}
+                      label={gettext("Tokens out")}
+                      field={:completion_tokens}
+                      align="right"
+                    >
+                      <span class="font-mono tabular-nums">
+                        {Stats.format_number(row.completion_tokens)}
+                      </span>
+                    </:col>
+                    <:col
+                      :let={row}
+                      label={gettext("Latency")}
+                      field={:avg_latency_ms}
+                      align="right"
+                    >
+                      <span class="font-mono tabular-nums">
+                        {Stats.format_ms(row.avg_latency_ms)}
+                      </span>
+                    </:col>
+                    <:col :let={row} label={gettext("Errors")} field={:error_rate} align="right">
+                      <span class={[
+                        "font-mono tabular-nums",
+                        row.error_count > 0 && "text-error"
+                      ]}>
+                        {Stats.format_number(row.error_count)}
+                      </span>
+                      <span class="ml-1 text-[10px] text-base-content/40">
+                        {Stats.format_percent(row.error_rate)}
+                      </span>
+                    </:col>
+                    <:empty>
+                      <div id="agent-empty">
+                        <.icon
+                          name="hero-command-line"
+                          class="w-10 h-10 mx-auto mb-2 opacity-40"
+                        />
+                        <p>{gettext("No agent traffic in this period.")}</p>
+                      </div>
+                    </:empty>
+                  </.table>
+                </div>
+                <div
+                  id="agents-table-totals"
+                  class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
+                >
+                  <span class="font-semibold text-base-content/70">
+                    {gettext("Total · %{count} agents", count: length(@agent_ranking))}
+                  </span>
+                  <%= if totals = Stats.breakdown_total(@agent_ranking) do %>
+                    <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
+                      <span>
+                        <span class="text-base-content/40">{gettext("Requests")}</span>
+                        {Stats.format_number(totals.request_count)}
+                      </span>
+                      <span>
+                        <span class="text-base-content/40">{gettext("Cost")}</span>
+                        ${Stats.format_decimal(totals.cost_usd)}
+                      </span>
+                      <span>
+                        <span class="text-base-content/40">{gettext("Tokens in")}</span>
+                        {Stats.format_number(totals.prompt_tokens)}
+                      </span>
+                      <span>
+                        <span class="text-base-content/40">{gettext("Tokens out")}</span>
+                        {Stats.format_number(totals.completion_tokens)}
+                      </span>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+            </div>
+          </div>
         <% @live_action == :provider -> %>
           <.provider
             provider={@provider}

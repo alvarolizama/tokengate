@@ -250,6 +250,32 @@ defmodule TokengateWeb.StatsLiveTest do
     :ok
   end
 
+  # Log de un agente con su identidad CRUDA (client_agent/agent_type): la
+  # identidad canónica (key/label) sale de `Tokengate.Agents.identify/2` al
+  # leer, no se guarda en la fila.
+  defp log_agent(%{member: member, provider: provider, model: model}, client_agent, opts) do
+    opts = Map.new(opts)
+
+    {:ok, _log} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        provider_id: provider.id,
+        model_id: model.id,
+        model_requested: model.name,
+        agent_type: Map.get(opts, :agent_type, "unknown"),
+        client_agent: client_agent,
+        status_code: Map.get(opts, :status_code, 200),
+        prompt_tokens: Map.get(opts, :prompt_tokens, 10),
+        completion_tokens: Map.get(opts, :completion_tokens, 5),
+        provider_cost_usd: Map.get(opts, :cost, "0.005"),
+        latency_ms: Map.get(opts, :latency_ms, 42),
+        streaming: false,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    :ok
+  end
+
   # Igual que `log_serving/4` pero por servicio (`subject_type: "service"`):
   # sirve el detalle de servicio, que agrupa por modelo igual que el de modelo.
   defp log_for_service(service, provider, model) do
@@ -2000,6 +2026,99 @@ defmodule TokengateWeb.StatsLiveTest do
                "#bd-model-group-link-#{fixture.group.id}[href*='/stats/profiles/#{fixture.group.id}']",
                fixture.group.name
              )
+    end
+  end
+
+  # La pestaña Agents agrupa por identidad NORMALIZADA en lectura: los buckets
+  # crudos (agent_type, client_agent) se identifican con Tokengate.Agents y se
+  # mergean por key. Dos versiones patch de opencode colapsan en "opencode v2"
+  # y claude-cli se lee como "Claude Code", nunca el User-Agent crudo.
+  describe "pestaña agents (identidad normalizada en lectura)" do
+    test "una fila por agente identificado, con sus totales y su reparto", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      fixture = group_with_log(%{})
+
+      log_agent(fixture, "opencode/2.1.4",
+        cost: "0.010",
+        latency_ms: 100,
+        prompt_tokens: 100,
+        completion_tokens: 20
+      )
+
+      log_agent(fixture, "opencode/2.0.9",
+        cost: "0.010",
+        latency_ms: 200,
+        prompt_tokens: 50,
+        completion_tokens: 10
+      )
+
+      log_agent(fixture, "claude-cli/2.0.1 (external, cli)",
+        cost: "0.005",
+        latency_ms: 400,
+        prompt_tokens: 30,
+        completion_tokens: 5,
+        status_code: 429
+      )
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/agents?period=today")
+      view = wait_stats_loaded(view)
+
+      # El nav lleva a la pestaña y la marca activa.
+      assert has_element?(view, "#nav-agents[href*='/stats/agents']")
+      assert has_element?(view, "#nav-agents.btn-primary")
+      assert has_element?(view, "#agent-ranking table thead th", "Agente")
+
+      # UNA fila por agente canónico: los dos buckets de opencode se mergean.
+      assert count_rows(view, "#agents-table tr") == 2
+
+      assert has_element?(view, ~s([id="agent-row-opencode|2"]), "opencode v2")
+      assert has_element?(view, ~s([id="agent-row-Claude Code"]), "Claude Code")
+
+      # Merge por key: requests/costo/tokens sumados, latencia ponderada.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert [opencode_row, claude_row] = assigns.agent_ranking
+      assert opencode_row.key == "opencode|2"
+      assert opencode_row.label == "opencode v2"
+      assert opencode_row.request_count == 2
+      assert Decimal.equal?(opencode_row.cost_usd, Decimal.new("0.02"))
+      assert opencode_row.prompt_tokens == 150
+      assert opencode_row.completion_tokens == 30
+      assert opencode_row.avg_latency_ms == 150
+      assert opencode_row.error_count == 0
+      assert opencode_row.share == 0.8
+
+      assert claude_row.key == "Claude Code"
+      assert claude_row.request_count == 1
+      assert claude_row.error_count == 1
+      assert claude_row.error_rate == 1.0
+      assert claude_row.share == 0.2
+
+      # Orden por gasto desc (el ranking entra así, no por volumen).
+      assert Decimal.compare(opencode_row.cost_usd, claude_row.cost_usd) == :gt
+
+      # Costo y errores pintados en la fila del agente.
+      assert has_element?(view, ~s([id="agent-row-opencode|2"]), "$0.02")
+      assert has_element?(view, ~s([id="agent-row-Claude Code"]), "100.0%")
+
+      # Totales del período (todas las filas, no sólo las visibles).
+      assert has_element?(view, "#agents-table-totals", "Total · 2 agentes")
+      assert has_element?(view, "#agents-table-totals", "$0.025")
+      assert has_element?(view, "#agents-table-totals", "180")
+    end
+
+    test "sin tráfico de agentes muestra el estado vacío", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      group_with_log(%{})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/agents?period=today")
+      view = wait_stats_loaded(view)
+
+      assert has_element?(view, "#agents-table-empty")
+      assert has_element?(view, "#agent-empty")
+      refute has_element?(view, "#agents-table tr")
+      assert has_element?(view, "#agents-table-totals", "Total · 0 agentes")
     end
   end
 end

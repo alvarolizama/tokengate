@@ -3497,6 +3497,37 @@ msgstr "por hora"
 msgid "Agent"
 msgstr "Agente"
 
+#: lib/tokengate_web/live/stats_live.html.heex:106
+#: lib/tokengate_web/live/stats_live.html.heex:200
+#, elixir-autogen, elixir-format
+msgid "Agents"
+msgstr "Agentes"
+
+#: lib/tokengate_web/live/stats_live.html.heex:205
+#, elixir-autogen, elixir-format
+msgid "One row per coding agent identified from its client identity (X-Agent-Type / User-Agent), with its consumption for the period (%{period})."
+msgstr "Una fila por agente de código identificado a partir de su identidad de cliente (X-Agent-Type / User-Agent), con su consumo en el período (%{period})."
+
+#: lib/tokengate_web/live/stats_live.html.heex:298
+#, elixir-autogen, elixir-format
+msgid "No agent traffic in this period."
+msgstr "Sin tráfico de agentes en este período."
+
+#: lib/tokengate_web/live/stats_live.html.heex:244
+#, elixir-autogen, elixir-format
+msgid "Share"
+msgstr "Reparto"
+
+#: lib/tokengate_web/live/stats_live.html.heex:247
+#, elixir-autogen, elixir-format
+msgid "Share of the period's cost"
+msgstr "Reparto del gasto del período"
+
+#: lib/tokengate_web/live/stats_live.html.heex:308
+#, elixir-autogen, elixir-format
+msgid "Total · %{count} agents"
+msgstr "Total · %{count} agentes"
+
 #: lib/tokengate_web/live/monitoring_live.ex:930
 #, elixir-autogen, elixir-format
 msgid "Avg latency"
