@@ -169,12 +169,14 @@ defmodule TokengateWeb.Plugs.ApiAuth do
 
   @doc """
   Resolves the best human-readable client identity from request headers.
-
-  Priority: `X-Title` → `User-Agent` → `X-Agent-Type` → `"unknown"`.
+  Priority: `X-Title` → `HTTP-Referer` → `User-Agent` → `X-Agent-Type` → `"unknown"`.
+  `X-Title`/`HTTP-Referer` are the OpenRouter-style app-attribution signals, so a
+  proxy identifies the calling app the same way OpenRouter's dashboard does.
   The result is truncated to 255 chars for storage.
   """
   def client_agent(conn) do
     with :error <- first_header(conn, "x-title"),
+         :error <- first_header(conn, "http-referer"),
          :error <- first_header(conn, "user-agent"),
          :error <- first_header(conn, "x-agent-type") do
       "unknown"

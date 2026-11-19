@@ -49,6 +49,11 @@ defmodule Tokengate.AgentsTest do
     assert Agents.identify("curl/8.1", "unknown").logo == nil
   end
 
+  test "OpenRouter-style attribution referer identifies Hermes" do
+    assert Agents.identify("https://hermes-agent.nousresearch.com", "unknown").family == "Hermes"
+    assert Agents.identify("Hermes Agent", "unknown").family == "Hermes"
+  end
+
   test "grouping key carries family + major version" do
     a = Agents.identify("opencode/2.1", "unknown")
     b = Agents.identify("opencode/2.9", "unknown")

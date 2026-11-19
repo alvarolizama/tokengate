@@ -28,7 +28,8 @@ defmodule Tokengate.Agents do
   @rules [
     {"opencode", ~r/(?:^|[ \/;(])opencode(?:[\/ ]|$)/},
     {"Claude Code", ~r/claude[-_ ]?(?:code|cli)|claude-code|(?:^|[ \/;(])claude(?:[\/ ]|$)/},
-    {"Hermes", ~r/(?:^|[ \/;(])hermes(?:[\/ ]|$)/},
+    # Attribution URL (OpenRouter-style HTTP-Referer) as well as the product name.
+    {"Hermes", ~r/hermes-agent\.nousresearch\.com|(?:^|[ \/;(])hermes(?:[\/ ]|$)/},
     {"Pi", ~r/(?:^|[ \/;(])pi(?:[\/ ]|$)/},
     {"Cursor", ~r/(?:^|[ \/;(])cursor(?:[\/ ]|$)/},
     {"Cline", ~r/(?:^|[ \/;(])cline(?:[\/ ]|$)/},
