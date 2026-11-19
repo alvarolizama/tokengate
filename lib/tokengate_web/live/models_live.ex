@@ -468,6 +468,14 @@ defmodule TokengateWeb.ModelsLive do
 
   def handle_event("wizard_back", _params, socket), do: {:noreply, socket}
 
+  # Clicking a step crumb jumps to that step (tab-style navigation).
+  def handle_event("goto_wizard_step", %{"step" => step}, socket)
+      when step in ~w(provider credential model details) do
+    {:noreply, assign(socket, :wizard_step, step)}
+  end
+
+  def handle_event("goto_wizard_step", _params, socket), do: {:noreply, socket}
+
   def handle_event("wizard_search_providers", params, socket) do
     {:noreply, assign(socket, :wizard_provider_search, query_param(params))}
   end
@@ -1544,6 +1552,7 @@ defmodule TokengateWeb.ModelsLive do
           max_w="max-w-4xl"
           steps={if @editing_model_id == :new, do: wizard_steps(), else: nil}
           current_step={@wizard_step}
+          step_click="goto_wizard_step"
         >
           <div class="min-h-0">
             <%= if @wizard_step == "provider" do %>

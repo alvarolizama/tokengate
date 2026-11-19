@@ -454,6 +454,19 @@ defmodule TokengateWeb.ProvidersLive do
      |> assign(:provider_step_error, nil)}
   end
 
+  # Clicking a step crumb jumps to that step (tab-style). Save validates the whole
+  # changeset, so navigating freely between steps is safe.
+  def handle_event("goto_provider_step", %{"step" => step}, socket) do
+    if step in Enum.map(socket.assigns.provider_steps, fn {key, _} -> key end) do
+      {:noreply,
+       socket
+       |> assign(:provider_step, step)
+       |> assign(:provider_step_error, nil)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # Keeps the typed values on the server between steps. Every step of the form
   # is rendered (the inactive one hidden), so the payload carries the whole
   # provider, not just the visible inputs.
@@ -1036,6 +1049,7 @@ defmodule TokengateWeb.ProvidersLive do
           max_w="max-w-3xl"
           steps={if length(@provider_steps) > 1, do: @provider_steps, else: nil}
           current_step={@provider_step}
+          step_click="goto_provider_step"
         >
           <div class="pr-1">
             <%= if @provider_step == "pick" do %>

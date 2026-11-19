@@ -1050,6 +1050,16 @@ defmodule TokengateWeb.ModelProvidersLive do
 
   def handle_event("add_pool_member", _params, socket), do: {:noreply, socket}
 
+  # Clicking a step crumb jumps straight to that step (tab-style navigation).
+  # The final Save still validates the whole changeset, so free navigation is safe.
+  def handle_event("goto_lane_step", %{"step" => step}, socket) do
+    if step in Enum.map(lane_steps(), fn {key, _} -> key end) do
+      {:noreply, assign(socket, :lane_step, step)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # Abre el modal de un lane existente. `?edit=<id>` — el "Change" del modal del
   # modelo, que vive en el índice — entra por aquí también. Un id que no es de
   # este modelo no abre nada: la página se queda como está en vez de reventar.
@@ -1191,9 +1201,9 @@ defmodule TokengateWeb.ModelProvidersLive do
 
   ## Wizard del lane — pasos, validación y resumen --------------------------
 
-  # Los tres pasos del modal. Los labels son msgid inglés (gettext); los crumbs
-  # NO son clicables: avanzar y volver los gobiernan `lane_next_step` /
-  # `lane_prev_step`, que validan el paso activo.
+  # Los tres pasos del modal. Los labels son msgid inglés (gettext); las crumbs
+  # son clicables (goto_lane_step) para navegar estilo tabs; avanzar/retroceder
+  # con Next/Back valida el paso activo.
   defp lane_steps do
     [
       {"credential", gettext("Credential")},
@@ -2931,6 +2941,7 @@ defmodule TokengateWeb.ModelProvidersLive do
           max_w="max-w-5xl"
           steps={lane_steps()}
           current_step={@lane_step}
+          step_click="goto_lane_step"
         >
           <.form
             for={@provider_form}

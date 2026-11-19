@@ -214,6 +214,25 @@ defmodule TokengateWeb.ModelProvidersLiveTest do
            )
   end
 
+  test "step crumbs are clickable and jump between steps (tab-style)", %{conn: conn} do
+    model = create_model()
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    view |> element("#new-ap-#{model.id}") |> render_click()
+    assert has_element?(view, ~s([data-step="credential"][data-active="true"]))
+
+    # Click the Pricing crumb -> jumps straight to pricing.
+    view |> element("#wizard-crumb-pricing") |> render_click()
+    assert has_element?(view, ~s([data-step="pricing"][data-active="true"]))
+    assert has_element?(view, ~s([data-step="credential"][data-active="false"]))
+
+    # Click back to Credential.
+    view |> element("#wizard-crumb-credential") |> render_click()
+    assert has_element?(view, ~s([data-step="credential"][data-active="true"]))
+  end
+
   test "?edit=<lane> opens that lane's form", %{conn: conn} do
     model = create_model()
     lane = create_lane(model, create_provider(), %{provider_model: "upstream/preset"})

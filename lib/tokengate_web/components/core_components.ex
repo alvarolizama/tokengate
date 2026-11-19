@@ -841,6 +841,11 @@ defmodule TokengateWeb.CoreComponents do
     doc: "wizard steps [{key, label}] — renderiza el indicador de pasos"
 
   attr :current_step, :string, default: nil, doc: "key del paso activo del wizard"
+
+  attr :step_click, :string,
+    default: nil,
+    doc: "evento phx-click para cambiar de paso al clicar una crumb"
+
   slot :inner_block, required: true
   slot :footer, doc: "footer opcional (Back/Next/Save) bajo el cuerpo, separado por borde"
 
@@ -866,7 +871,13 @@ defmodule TokengateWeb.CoreComponents do
               <.icon name="hero-x-mark" class="size-4" />
             </button>
           </div>
-          <.steps :if={@steps} steps={@steps} current={@current_step} id={@id <> "-steps"} />
+          <.steps
+            :if={@steps}
+            steps={@steps}
+            current={@current_step}
+            id={@id <> "-steps"}
+            on_click={@step_click}
+          />
           <div class="overflow-y-auto flex-1 min-h-0">
             {render_slot(@inner_block)}
           </div>
@@ -896,23 +907,48 @@ defmodule TokengateWeb.CoreComponents do
   attr :current, :string, required: true, doc: "key del paso activo"
   attr :id, :string, default: "wizard-steps"
 
+  attr :on_click, :string,
+    default: nil,
+    doc: "evento phx-click para navegar al paso (phx-value-step)"
+
   def steps(assigns) do
     ~H"""
     <div class="flex items-center gap-2 mb-4 text-xs flex-wrap" id={@id}>
-      <span
-        :for={{key, label} <- @steps}
-        id={"wizard-crumb-#{key}"}
-        aria-current={if @current == key, do: "step"}
-        class={[
-          "px-2 py-0.5 rounded-full border",
-          if(@current == key,
-            do: "border-primary bg-primary/10 text-primary font-medium",
-            else: "border-base-300 text-base-content/50"
-          )
-        ]}
-      >
-        {label}
-      </span>
+      <%= if @on_click do %>
+        <button
+          :for={{key, label} <- @steps}
+          type="button"
+          id={"wizard-crumb-#{key}"}
+          phx-click={@on_click}
+          phx-value-step={key}
+          aria-current={if @current == key, do: "step"}
+          class={[
+            "px-2 py-0.5 rounded-full border cursor-pointer transition-colors",
+            if(@current == key,
+              do: "border-primary bg-primary/10 text-primary font-medium",
+              else:
+                "border-base-300 text-base-content/50 hover:text-base-content hover:border-base-content/40"
+            )
+          ]}
+        >
+          {label}
+        </button>
+      <% else %>
+        <span
+          :for={{key, label} <- @steps}
+          id={"wizard-crumb-#{key}"}
+          aria-current={if @current == key, do: "step"}
+          class={[
+            "px-2 py-0.5 rounded-full border",
+            if(@current == key,
+              do: "border-primary bg-primary/10 text-primary font-medium",
+              else: "border-base-300 text-base-content/50"
+            )
+          ]}
+        >
+          {label}
+        </span>
+      <% end %>
     </div>
     """
   end
