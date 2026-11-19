@@ -164,7 +164,9 @@ defmodule Tokengate.Agents do
     "Copilot" => "/images/agents/copilot.svg",
     "Gemini CLI" => "/images/agents/gemini.svg",
     "Codex" => "/images/agents/codex.svg",
-    "Pi" => "/images/agents/pi.svg"
+    "Pi" => "/images/agents/pi.svg",
+    "Hermes" => "/images/agents/hermes.svg",
+    "Aider" => "/images/agents/aider.svg"
   }
 
   defp logo_for(family), do: Map.get(@logos, family)

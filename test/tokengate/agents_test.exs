@@ -43,8 +43,9 @@ defmodule Tokengate.AgentsTest do
     assert Agents.identify("opencode/2.1", "unknown").logo == "/images/agents/opencode.svg"
     assert Agents.identify("claude-cli/2.0", "unknown").logo == "/images/agents/claude.svg"
     assert Agents.logo("cursor/1.0", "unknown") == "/images/agents/cursor.svg"
-    # Hermes has no trustworthy brand asset -> nil (hero fallback)
-    assert Agents.identify("hermes/1.0", "unknown").logo == nil
+    # Hermes uses the official Nous Research wing mark; Aider its repo logo.
+    assert Agents.identify("hermes/1.0", "unknown").logo == "/images/agents/hermes.svg"
+    assert Agents.identify("aider/0.8", "unknown").logo == "/images/agents/aider.svg"
     assert Agents.identify("curl/8.1", "unknown").logo == nil
   end
 
