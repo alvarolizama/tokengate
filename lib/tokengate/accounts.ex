@@ -1479,8 +1479,151 @@ defmodule Tokengate.Accounts do
 
   def get_service(id), do: Repo.get(Service, id)
 
+  @doc """
+  Lists services ordered by name, capped at `limit` (default 500).
+
+  Used by the surfaces that need the whole list at once. The admin services
+  table pages in the database — see `list_services_page/1`.
+  """
   def list_services(limit \\ 500) do
     Repo.all(from s in Service, order_by: [asc: s.name], limit: ^limit)
+  end
+
+  # Columns the admin services table reads. Explicit so a page load never drags
+  # associations or columns the table does not render into the socket.
+  @service_page_fields ~w(id name concurrency_limit rpm_limit monthly_spend_limit_usd
+    unlimited_spend inserted_at updated_at)a
+
+  @service_page_default_per_page 30
+  @service_page_max_per_page 100
+
+  # Sort keys that resolve to real SQL expressions — they are ordered in the
+  # DB, so the order is global across pages. Every other key (`limit`,
+  # `requests`, `monthly_spend`, `total_spend`) is rendered text or an
+  # aggregate computed outside Postgres: the caller orders the returned page
+  # in memory (same documented limitation as the users table).
+  @service_page_sql_sorts ~w(name inserted_at)a
+
+  def service_page_sql_sorts, do: @service_page_sql_sorts
+
+  @doc """
+  Paginated service listing, resolved in the database.
+
+  Returns `%{entries: [Service.t()], total: integer, page: integer,
+  total_pages: integer, per_page: integer}`. Mirrors `list_users_page/1`: the
+  search, the count, the page slice and the SQL sorts never leave Postgres, so
+  the caller only pays for the rows it renders.
+
+  ## Options
+
+    * `:search` — free text matched case-insensitively as a substring of
+      `name` or of the text the limit column renders (unlimited → "ilimitado",
+      otherwise the cap as a decimal string, otherwise "No budget" — both
+      locales of that label match, so the search does not depend on the UI
+      language). `%` and `_` match literally, as in `list_users_page/1`.
+    * `:page` / `:per_page` — 1-based page and page size (default
+      #{@service_page_default_per_page}, capped at
+      #{@service_page_max_per_page}).
+    * `:sort_field` — one of `#{inspect(@service_page_sql_sorts)}` is ordered in
+      SQL. Any other value falls back to the name order; the caller re-sorts
+      the page in memory for those keys.
+    * `:sort_direction` — `:asc` (default) or `:desc`.
+  """
+  def list_services_page(opts \\ []) do
+    opts = Map.new(opts)
+
+    per_page =
+      opts
+      |> Map.get(:per_page, @service_page_default_per_page)
+      |> clamp_service_per_page()
+
+    sort_field = Map.get(opts, :sort_field)
+    sort_direction = Map.get(opts, :sort_direction, :asc)
+
+    base =
+      from s in Service,
+        select: map(s, ^@service_page_fields)
+
+    base = maybe_service_search(base, Map.get(opts, :search))
+
+    total = Repo.aggregate(base, :count, :id, timeout: :timer.seconds(15))
+    total_pages = max(1, div(total + per_page - 1, per_page))
+    page = opts |> Map.get(:page, 1) |> parse_page() |> min(total_pages)
+
+    entries =
+      base
+      |> order_services_page(sort_field, sort_direction)
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all(timeout: :timer.seconds(15))
+      |> Enum.map(&struct(Service, &1))
+
+    %{entries: entries, total: total, page: page, total_pages: total_pages, per_page: per_page}
+  end
+
+  defp clamp_service_per_page(n) when is_integer(n) and n > 0,
+    do: min(n, @service_page_max_per_page)
+
+  defp clamp_service_per_page(_), do: @service_page_default_per_page
+
+  defp maybe_service_search(query, search) when is_binary(search) do
+    search = search |> String.trim() |> String.downcase()
+
+    if search == "" do
+      query
+    else
+      pattern = "%" <> escape_like(search) <> "%"
+
+      # `position` is a literal substring match (no LIKE wildcards), so the
+      # limit text needs no escaping. The CASE mirrors the limit column's
+      # rendering: unlimited wins over the cap, and a cap-less service reads as
+      # the no-budget label.
+      where(
+        query,
+        [s],
+        ilike(s.name, ^pattern) or
+          fragment(
+            """
+            position(? in CASE
+              WHEN ? THEN 'ilimitado unlimited'
+              WHEN ? IS NULL THEN 'no budget sin presupuesto'
+              ELSE CAST(? AS text)
+            END) > 0
+            """,
+            ^search,
+            s.unlimited_spend,
+            s.monthly_spend_limit_usd,
+            s.monthly_spend_limit_usd
+          )
+      )
+    end
+  end
+
+  defp maybe_service_search(query, _), do: query
+
+  # Nils sort last in both directions; ties fall back to the lowercased name and
+  # then the id, so the order is stable across pages.
+  defp order_services_page(query, field, direction) when field in @service_page_sql_sorts do
+    case field do
+      :inserted_at ->
+        case direction do
+          :desc -> order_by(query, [s], desc: s.inserted_at, desc: s.id)
+          _ -> order_by(query, [s], asc: s.inserted_at, asc: s.id)
+        end
+
+      :name ->
+        dir = if direction == :desc, do: :desc_nulls_last, else: :asc_nulls_last
+
+        query
+        |> order_by([s], [{^dir, fragment("lower(coalesce(?, ''))", s.name)}])
+        |> order_by([s], asc: s.id)
+    end
+  end
+
+  # Rendered-text / aggregate-backed columns: the page is fetched in name order
+  # and the caller re-sorts it.
+  defp order_services_page(query, _field, _direction) do
+    order_by(query, [s], asc: fragment("lower(coalesce(?, ''))", s.name), asc: s.id)
   end
 
   def create_service(attrs) do
