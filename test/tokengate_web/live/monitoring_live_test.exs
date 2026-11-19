@@ -62,7 +62,8 @@ defmodule TokengateWeb.MonitoringLiveTest do
         provider_id: provider.id,
         model_requested: "model-#{u}",
         model_responded: "model-#{u}",
-        agent_type: "api",
+        agent_type: Keyword.get(opts, :agent_type, "api"),
+        client_agent: Keyword.get(opts, :client_agent, "unknown"),
         status_code: 200,
         prompt_tokens: 100,
         completion_tokens: 50,
@@ -156,6 +157,22 @@ defmodule TokengateWeb.MonitoringLiveTest do
     {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
 
     refute render(view) =~ "high →"
+  end
+
+  ## Agent column ---------------------------------------------------------------
+
+  test "agent column shows the identified agent, not the raw user agent", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    _ = member_with_log(client_agent: "opencode/2.1", agent_type: "unknown")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    # La columna identifica en lectura: nombre normalizado, no el UA crudo.
+    assert has_element?(view, "#logs", "opencode v2")
+    refute has_element?(view, "#logs", "opencode/2.1")
+    # El UA crudo queda como tooltip de la celda.
+    assert render(view) =~ ~s(title="opencode/2.1")
   end
 
   ## Pending (in-flight) rows ---------------------------------------------------
