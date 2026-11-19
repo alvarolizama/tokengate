@@ -261,6 +261,116 @@ defmodule TokengateWeb.ServicesLiveTest do
     refute has_element?(view, "tbody#services")
   end
 
+  ## Paginado (espejo de la tabla de Usuarios) ------------------------------
+
+  # N servicios con nombres ordenables ("Paged Svc <pid> 001".."031"), para que
+  # la página sea determinista con el orden por nombre.
+  defp paged_services(count) do
+    prefix = "Paged Svc #{unique()}"
+
+    for i <- 1..count do
+      {:ok, service} =
+        Accounts.create_service(%{
+          name: "#{prefix} #{i |> Integer.to_string() |> String.pad_leading(3, "0")}"
+        })
+
+      service
+    end
+  end
+
+  test "pagina en la base: page 2 y el pie reportan total y total_pages", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    services = paged_services(31)
+
+    first = hd(services)
+    last = List.last(services)
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    # 31 servicios → 30 en la página 1 y 1 en la página 2 (la página la corta
+    # Postgres; antes venían los 500 en una sola lista).
+    assert has_element?(view, "#services-pagination")
+    assert has_element?(view, "#services-pagination-range", "1–30 de 31")
+    assert has_element?(view, "#service-#{first.id}")
+    refute has_element?(view, "#service-#{last.id}")
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert assigns.total_count == 31
+    assert assigns.total_pages == 2
+
+    view |> element("#services-pagination-page-2") |> render_click()
+
+    assert has_element?(view, "#services-pagination-range", "31–31 de 31")
+    assert has_element?(view, "#service-#{last.id}")
+    refute has_element?(view, "#service-#{first.id}")
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert assigns.page == 2
+    assert assigns.total_count == 31
+    assert assigns.total_pages == 2
+  end
+
+  # Los agregados por fila (stats 30d, crédito, supervisores y claves) se pagan
+  # SOLO para los service_ids de la página: antes se calculaban para los 500
+  # cargados en cada carga.
+  test "stats, crédito, supervisores y claves se calculan solo para la página", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    services = paged_services(31)
+
+    first = hd(services)
+    last = List.last(services)
+    page1_ids = services |> Enum.take(30) |> Enum.map(& &1.id) |> Enum.sort()
+
+    refute last.id in page1_ids
+
+    # Un servicio de cada página con consumo, supervisor y clave: si el
+    # LiveView agregara sobre TODOS los servicios, el de la página 2 saldría en
+    # los maps de la página 1.
+    for service <- [first, last] do
+      {:ok, _} =
+        Tokengate.Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          model_requested: "gpt-4o",
+          provider_cost_usd: Decimal.new("2.00"),
+          latency_ms: 100
+        })
+
+      {:ok, _} = Accounts.add_service_supervisor(service.id, admin.id)
+
+      {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      {:ok, _} =
+        Accounts.create_api_key(%{
+          "subject_type" => "service",
+          "service_id" => service.id,
+          "key_hash" => key_hash,
+          "key_prefix" => key_prefix,
+          "label" => "k-#{key_prefix}"
+        })
+    end
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+
+    assert Map.keys(assigns.service_stats) == [first.id]
+    assert Enum.sort(Map.keys(assigns.service_credit)) == page1_ids
+    assert Map.keys(assigns.supervisors_map) == [first.id]
+    assert Map.keys(assigns.keys_by_service) == [first.id]
+
+    view |> element("#services-pagination-page-2") |> render_click()
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+
+    assert Map.keys(assigns.service_stats) == [last.id]
+    assert Map.keys(assigns.service_credit) == [last.id]
+    assert Map.keys(assigns.supervisors_map) == [last.id]
+    assert Map.keys(assigns.keys_by_service) == [last.id]
+  end
+
   test "eliminar servicio via modal de confirmación", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     service = service_fixture()

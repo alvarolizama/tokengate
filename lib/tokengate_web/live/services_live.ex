@@ -25,12 +25,15 @@ defmodule TokengateWeb.ServicesLive do
 
   @sort_columns ~w(name limit requests monthly_spend total_spend inserted_at)a
 
-  # The table renders and sorts in memory (search/sort are pure assign work),
-  # so the dataset has to be bounded: services are far fewer than users, but an
-  # unlimited `Repo.all/1` here would still grow with the org. 500 covers every
-  # realistic install; beyond that the list is truncated (no pagination UI on
-  # this surface yet).
-  @list_limit 500
+  # Page size for the table: the slice asked from Postgres and the ONLY set the
+  # per-row aggregates (stats/credit/supervisors/keys) are computed for. Same
+  # size as the Users table. Before this, the listing pulled up to 500 rows and
+  # aggregated over every one of them on each load.
+  @per_page 30
+
+  # Per-service credit TTL: a warm page (search keystroke, sort, page change) is
+  # pure hits; a cold one pays a single batched load.
+  @credit_ttl_ms 5_000
 
   # The subset of `Service.changeset/2`'s `@permitted` fields worth recording
   # in `service.update`; auditing anything else logs keys the row never stores.
@@ -71,6 +74,10 @@ defmodule TokengateWeb.ServicesLive do
         |> assign(:search_query, "")
         |> assign(:sort_field, :name)
         |> assign(:sort_direction, :asc)
+        |> assign(:page, 1)
+        |> assign(:per_page, @per_page)
+        |> assign(:total_count, 0)
+        |> assign(:total_pages, 1)
         |> load_services()
 
       {:ok, socket}
@@ -92,16 +99,22 @@ defmodule TokengateWeb.ServicesLive do
 
   ## Data loading ---------------------------------------------------------
 
-  # Loads the dataset ONCE per mount (and after mutations). Search/sort
-  # filter in-memory over the loaded assigns — zero extra queries.
+  # Loads ONE page of services (and the per-row data ONLY for that page) and
+  # re-streams it. Search, count, ordering and the page slice are resolved in
+  # Postgres: before, the whole table (up to 500 rows) came into the BEAM and
+  # stats/credit/supervisors/keys were computed for every service, not just the
+  # ones on screen.
   defp load_services(socket) do
-    services =
-      from(s in Service,
-        order_by: [asc: s.name],
-        limit: ^@list_limit
+    page =
+      Accounts.list_services_page(
+        search: socket.assigns[:search_query] || "",
+        page: socket.assigns.page,
+        per_page: socket.assigns.per_page,
+        sort_field: socket.assigns.sort_field,
+        sort_direction: socket.assigns.sort_direction
       )
-      |> Repo.all()
 
+    services = page.entries
     service_ids = Enum.map(services, & &1.id)
 
     granted_models =
@@ -116,7 +129,7 @@ defmodule TokengateWeb.ServicesLive do
       from(ma in Model, order_by: [asc: ma.name])
       |> Repo.all()
 
-    stats = service_stats(Enum.map(services, & &1.id), socket)
+    stats = service_stats(service_ids, socket)
     timezone = socket.assigns[:timezone] || "Etc/UTC"
 
     # Gasto mensual / total por servicio — mismas columnas que la tabla de
@@ -125,14 +138,6 @@ defmodule TokengateWeb.ServicesLive do
     monthly_spend =
       DashboardCache.fetch_or_compute({:services_monthly_spend, timezone}, fn ->
         Budgets.spend_by_service()
-      end)
-
-    # Techo de cada servicio + consumo debitado (el mismo par
-    # consumido/techo que la columna de Usuarios). Agregado whole-table
-    # cacheado (5s TTL) igual que el resto de la tabla.
-    service_credit =
-      DashboardCache.fetch_or_compute({:services_credit}, fn ->
-        Credits.service_summaries(services)
       end)
 
     total_spend =
@@ -146,11 +151,53 @@ defmodule TokengateWeb.ServicesLive do
     |> assign(:models, models)
     |> assign(:service_stats, stats)
     |> assign(:monthly_spend_by_service, monthly_spend)
-    |> assign(:service_credit, service_credit)
+    |> assign(:service_credit, service_credit(services))
     |> assign(:total_spend_by_service, total_spend)
-    |> assign(:supervisors_map, build_supervisors_map(Enum.map(services, & &1.id)))
+    |> assign(:supervisors_map, build_supervisors_map(service_ids))
     |> assign(:keys_by_service, Accounts.list_api_keys_for_services(service_ids))
+    |> assign(:page, page.page)
+    |> assign(:total_count, page.total)
+    |> assign(:total_pages, page.total_pages)
     |> stream_services()
+  end
+
+  # Each service's cap + debited consumption (the same consumed/cap pair the
+  # Users column renders), computed ONLY for the services on the page.
+  #
+  # One cache entry per service (5s TTL) instead of one whole-table entry: a
+  # warm page is pure hits, a cold page pays a single batched
+  # `Credits.service_summaries/1`. The entry's key embeds the row's own cap, so
+  # editing the cap is never served stale from the cache.
+  defp service_credit([]), do: %{}
+
+  defp service_credit(services) do
+    {hits, missed} =
+      Enum.reduce(services, {%{}, []}, fn service, {hits, missed} ->
+        case DashboardCache.fetch(service_credit_key(service)) do
+          {:ok, credit} -> {Map.put(hits, service.id, credit), missed}
+          :miss -> {hits, [service | missed]}
+        end
+      end)
+
+    case missed do
+      [] ->
+        hits
+
+      missed ->
+        missed = Enum.reverse(missed)
+        computed = Credits.service_summaries(missed)
+        keys = Map.new(missed, fn service -> {service.id, service_credit_key(service)} end)
+
+        Enum.each(computed, fn {service_id, credit} ->
+          DashboardCache.put(Map.fetch!(keys, service_id), credit, @credit_ttl_ms)
+        end)
+
+        Map.merge(hits, computed)
+    end
+  end
+
+  defp service_credit_key(service) do
+    {:service_credit, service.id, service.monthly_spend_limit_usd, service.unlimited_spend}
   end
 
   # Per-service 30d aggregate. Stays RAW on purpose: `request_metrics_hourly`
@@ -180,25 +227,30 @@ defmodule TokengateWeb.ServicesLive do
     |> Map.new(fn s -> {s.service_id, s} end)
   end
 
-  # Re-streams the (already loaded) services filtered + sorted. Pure assign
-  # work: zero queries.
+  # Re-streams the page `load_services/1` already fetched. Pure assign work:
+  # zero queries — the search and the page slice were resolved in Postgres, so
+  # the only ordering left here is the one SQL cannot express.
+  #
+  # LIMITATION: `limit` (rendered text), `requests`, `monthly_spend` and
+  # `total_spend` (aggregates computed outside Postgres) are sorted WITHIN the
+  # current page only — the page slice itself comes from the DB in name order.
+  # Making those global again would need the aggregate as a SQL join, which is
+  # a much larger change than this table justifies (the Users table carries the
+  # same documented limitation). `name` and `inserted_at` are ordered in SQL, so
+  # those two are global across pages.
   defp stream_services(socket) do
-    search = socket.assigns[:search_query] || ""
-    search_down = String.downcase(search)
-
-    filtered =
-      Enum.filter(socket.assigns.all_services, fn s ->
-        search == "" or
-          String.contains?(String.downcase(s.name), search_down) or
-          String.contains?(String.downcase(limit_search_text(s)), search_down)
-      end)
+    services = socket.assigns.all_services
 
     sorted =
-      sort_services(filtered, socket.assigns.sort_field, socket.assigns.sort_direction, socket)
+      if socket.assigns.sort_field in Accounts.service_page_sql_sorts() do
+        services
+      else
+        sort_services(services, socket.assigns.sort_field, socket.assigns.sort_direction, socket)
+      end
 
     socket
     |> stream(:services, sorted, reset: true)
-    |> assign(:services_empty?, filtered == [])
+    |> assign(:services_empty?, socket.assigns.total_count == 0)
   end
 
   defp build_supervisors_map(service_ids) do
@@ -306,7 +358,19 @@ defmodule TokengateWeb.ServicesLive do
     {:noreply,
      socket
      |> assign(:search_query, query)
-     |> stream_services()}
+     |> assign(:page, 1)
+     |> load_services()}
+  end
+
+  ## Events — paginado ------------------------------------------------------
+
+  # Read-only navigation: the DB clamps an out-of-range page and reports the
+  # effective one back (mirror of the Users table).
+  def handle_event("go_to_page", %{"page" => page}, socket) do
+    {:noreply,
+     socket
+     |> assign(:page, parse_page(page))
+     |> load_services()}
   end
 
   def handle_event("sort_services", %{"field" => field}, socket) do
@@ -323,7 +387,8 @@ defmodule TokengateWeb.ServicesLive do
        socket
        |> assign(:sort_field, sort_field)
        |> assign(:sort_direction, sort_direction)
-       |> stream_services()}
+       |> assign(:page, 1)
+       |> load_services()}
     else
       _ -> {:noreply, socket}
     end
@@ -882,6 +947,17 @@ defmodule TokengateWeb.ServicesLive do
     ArgumentError -> :error
   end
 
+  # `go_to_page` carries the page as a string from the client: garbage is page 1
+  # (the DB clamps the upper bound and reports the effective page back).
+  defp parse_page(page) when is_binary(page) do
+    case Integer.parse(page) do
+      {i, ""} when i > 0 -> i
+      _ -> 1
+    end
+  end
+
+  defp parse_page(_page), do: 1
+
   defp toggle_sort_direction(:asc), do: :desc
   defp toggle_sort_direction(:desc), do: :asc
 
@@ -1384,6 +1460,13 @@ defmodule TokengateWeb.ServicesLive do
               <p class="text-sm font-medium text-base-content/60">{gettext("No services yet.")}</p>
             </:empty>
           </.table>
+          <.admin_pagination
+            id="services-pagination"
+            page={@page}
+            per_page={@per_page}
+            total={@total_count}
+            total_pages={@total_pages}
+          />
         </div>
       </div>
     </Layouts.dashboard>
