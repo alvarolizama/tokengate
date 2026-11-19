@@ -844,6 +844,28 @@ defmodule TokengateWeb.MonitoringLive do
 
   defp prov_key_display(_), do: "—"
 
+  # "Agent": the stored row keeps the raw HTTP identity (`client_agent`: X-Title
+  # → User-Agent → X-Agent-Type) and `agent_type` (X-Agent-Type). The cell
+  # normalizes it at read time to the identified agent ("opencode v2") and
+  # leaves the raw value in the tooltip, so historical rows read as agents
+  # without a backfill. In-flight rows are plain maps and may lack
+  # `agent_type`, hence Map.get/2 everywhere.
+  defp agent_display(log) do
+    client_agent = Map.get(log, :client_agent)
+    agent_type = Map.get(log, :agent_type)
+
+    if blank_identity?(client_agent) and blank_identity?(agent_type) do
+      "—"
+    else
+      Tokengate.Agents.label(client_agent, agent_type)
+    end
+  end
+
+  defp blank_identity?(nil), do: true
+  defp blank_identity?(""), do: true
+  defp blank_identity?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank_identity?(_), do: true
+
   attr :value, :boolean, default: false
 
   defp think_badge(assigns) do
@@ -1119,7 +1141,12 @@ defmodule TokengateWeb.MonitoringLive do
               <span class="text-sm">{member_group(log)}</span>
             </:col>
             <:col :let={log} label={gettext("Agent")}>
-              <span class="text-sm" title={Map.get(log, :agent_type)}>{log.client_agent || "—"}</span>
+              <span
+                class="text-sm"
+                title={Map.get(log, :client_agent) || Map.get(log, :agent_type)}
+              >
+                {agent_display(log)}
+              </span>
             </:col>
             <:col :let={log} label={gettext("API key")}>
               <span class="text-sm">{api_key_display(log, @api_key_options)}</span>
