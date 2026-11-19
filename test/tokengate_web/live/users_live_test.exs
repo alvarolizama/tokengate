@@ -74,6 +74,31 @@ defmodule TokengateWeb.UsersLiveTest do
       })
   end
 
+  # Counts the Ecto queries that touch `request_logs` while `fun` runs.
+  # Telemetry handlers are node-global, so queries issued by the LiveView
+  # process (not just this one) are counted.
+  defp count_request_log_queries(fun) do
+    counter = :counters.new(1, [:atomics])
+    handler_id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      handler_id,
+      [:tokengate, :repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        if metadata[:source] == "request_logs", do: :counters.add(counter, 1, 1)
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
+
+    :counters.get(counter, 1)
+  end
+
   ## Auth -------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
@@ -298,6 +323,42 @@ defmodule TokengateWeb.UsersLiveTest do
       end
 
       assert rich_first?.(html) == [to_string(poor.id), to_string(rich.id)]
+    end
+
+    test "an interactive event reuses the cached credit aggregates (no request_logs scan)",
+         %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: member_user} = register("user")
+
+      {:ok, group} =
+        Accounts.create_group(%{
+          name: "Cached Credit #{unique()}",
+          monthly_spend_limit_usd: "100.00"
+        })
+
+      {:ok, member} =
+        Accounts.create_group_member(%{"user_id" => member_user.id, "group_id" => group.id})
+
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          model_requested: "gpt-4",
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          provider_cost_usd: Decimal.new("30.00")
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      # Mount warms the whole-table credit aggregates. A search keystroke
+      # reloads the table through the same path as sort and page changes, and
+      # it must answer from those maps: no aggregate over request_logs.
+      assert count_request_log_queries(fn ->
+               view |> element("#search-form") |> render_change(%{"q" => ""})
+             end) == 0
+
+      # The cached reload renders the same money as the warm mount.
+      assert has_element?(view, "#credit-#{member_user.id}", "30.0000 / 100.0000")
     end
   end
 

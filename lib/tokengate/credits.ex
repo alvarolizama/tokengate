@@ -31,9 +31,17 @@ defmodule Tokengate.Credits do
   import Ecto.Query
 
   alias Tokengate.Accounts.{Group, GroupMember, Service, User}
-  alias Tokengate.Credits.Topups
+  alias Tokengate.Credits.{Topup, Topups}
+  alias Tokengate.Metrics.DashboardCache
 
   @stats_timeout 120_000
+
+  # Whole-table credit aggregates (spend / limit spend / top-ups, all users)
+  # are shared by every page of the admin listings, so one computation per
+  # window answers any search, sort or page change. Same TTL as the spend maps
+  # already cached for those pages.
+  @credit_aggregates_ttl_ms 5_000
+  @credit_aggregates_key {:credit_user_aggregates}
 
   # Same convention as Logs/Metrics.StatsQueries: aggregates that span every
   # partition of request_logs get the analytics timeout, not the default 15s.
@@ -220,6 +228,19 @@ defmodule Tokengate.Credits do
     # siga existiendo para poder agregarse.
     RequestLog
     |> where([rl], rl.user_id in ^user_ids)
+    |> grouped_user_spend(only_limit)
+  end
+
+  # Whole-table twin of `spend_grouped_users/2`: no id filter, so one aggregate
+  # answers every user in the table (see `user_credit_aggregates/0`).
+  defp spend_grouped_all_users(only_limit) do
+    RequestLog
+    |> where([rl], not is_nil(rl.user_id))
+    |> grouped_user_spend(only_limit)
+  end
+
+  defp grouped_user_spend(query, only_limit) do
+    query
     |> since(nil)
     |> only_limit_filter(only_limit)
     |> group_by([rl], rl.user_id)
@@ -270,6 +291,71 @@ defmodule Tokengate.Credits do
   # ---------------------------------------------------------------------------
 
   @doc """
+  Whole-table credit aggregates for every user with a subject, shared through
+  `DashboardCache` (single-flight, 5s TTL):
+
+      %{
+        spend: %{user_id => Decimal.t()},        # month-to-date, every log
+        limit_spend: %{user_id => Decimal.t()},  # month-to-date, logs without a top-up
+        topups: %{user_id => %{topups: [...], remaining_topup_usd: Decimal.t()}}
+      }
+
+  `spend`/`limit_spend` carry exactly the per-user sums `spend_by_subjects/2`
+  returns for `{:user, id}` (same month window, same `only_limit` filter) and
+  `topups` is `Topups.summaries/1` for every user with a live top-up. Absent
+  users spent nothing, so callers default them to `Decimal.new(0)`.
+
+  Listings use this so search, sort and paging never re-scan `request_logs`:
+  they select the page's rows from these maps in memory. The key carries no
+  timezone because the spending window is the UTC calendar month for everyone.
+  """
+  @spec user_credit_aggregates() :: %{
+          spend: %{term() => Decimal.t()},
+          limit_spend: %{term() => Decimal.t()},
+          topups: %{term() => map()}
+        }
+  def user_credit_aggregates do
+    if DashboardCache.available?() do
+      DashboardCache.fetch_or_compute(
+        @credit_aggregates_key,
+        &compute_user_credit_aggregates/0,
+        ttl: @credit_aggregates_ttl_ms
+      )
+    else
+      # Release tasks and `with_repo` scripts run without the cache table.
+      compute_user_credit_aggregates()
+    end
+  end
+
+  defp compute_user_credit_aggregates do
+    %{
+      spend: spend_grouped_all_users(false),
+      limit_spend: spend_grouped_all_users(true),
+      topups: user_topup_summaries()
+    }
+  end
+
+  # Every user with a live top-up, resolved through `Topups` (the single
+  # authority on draining order and remaining credit) in a fixed number of
+  # queries: the subject list plus `Topups.summaries/1`'s two.
+  defp user_topup_summaries do
+    now = DateTime.utc_now()
+
+    subjects =
+      Topup
+      |> where([t], t.status == "active")
+      |> where([t], is_nil(t.expires_at) or t.expires_at > ^now)
+      |> where([t], not is_nil(t.user_id))
+      |> select([t], t.user_id)
+      |> distinct(true)
+      |> Repo.all()
+      |> Enum.map(&{:user, &1})
+
+    Topups.summaries(subjects)
+    |> Map.new(fn {{:user, id}, summary} -> {id, summary} end)
+  end
+
+  @doc """
   Resumen del sujeto: límite, gasto del mes, remanente de límite y top-ups
   vigentes con su remanente.
   """
@@ -318,20 +404,23 @@ defmodule Tokengate.Credits do
   de queries — el preload de `user`/`group` para toda la lista, el gasto, el
   gasto contra límite y los top-ups — nunca una por miembro.
   `%{member_id => summary}` con las mismas llaves que `summary/2`, más `:member`.
+
+  `opts[:cached]` (default `false`) resolves the spend, limit-spend and top-up
+  maps from `user_credit_aggregates/0` — one whole-table read per 5s window,
+  shared by every page — instead of aggregating `request_logs` for the given
+  members. The values are identical; only their freshness is bounded by that
+  cache.
   """
-  def summaries(members) when is_list(members) do
+  def summaries(members, opts \\ []) when is_list(members) do
     members = Repo.preload(members, [:user, :group])
-    subjects = Enum.map(members, &{:user, &1.user_id})
-    spend = spend_by_subjects(subjects)
-    limit_spend = spend_by_subjects(subjects, only_limit: true)
-    topups = Topups.summaries(subjects)
+    credit = member_credit_maps(members, opts)
 
     Map.new(members, fn member ->
       subject = {:user, member.user_id}
       limit = user_limit(member.user, member.group)
       {limit_usd, unlimited?} = {limit.limit_usd, limit.unlimited?}
-      spent = Map.get(spend, subject, Decimal.new(0))
-      against_limit = Map.get(limit_spend, subject, Decimal.new(0))
+      spent = Map.get(credit.spend, member.user_id, Decimal.new(0))
+      against_limit = Map.get(credit.limit_spend, member.user_id, Decimal.new(0))
 
       remaining_limit =
         case limit_usd do
@@ -339,7 +428,8 @@ defmodule Tokengate.Credits do
           limit_usd -> max_decimal(Decimal.sub(limit_usd, against_limit), Decimal.new(0))
         end
 
-      topup = Map.get(topups, subject, %{topups: [], remaining_topup_usd: Decimal.new(0)})
+      topup =
+        Map.get(credit.topups, member.user_id, %{topups: [], remaining_topup_usd: Decimal.new(0)})
 
       {member.id,
        %{
@@ -355,6 +445,25 @@ defmodule Tokengate.Credits do
          has_path?: has_path?(unlimited?, remaining_limit, topup.remaining_topup_usd)
        }}
     end)
+  end
+
+  # The three aggregates `summaries/2` reads, keyed by user id.
+  defp member_credit_maps(members, opts) do
+    if Keyword.get(opts, :cached, false) do
+      user_credit_aggregates()
+    else
+      subjects = members |> Enum.map(&{:user, &1.user_id}) |> Enum.uniq()
+
+      %{
+        spend: key_by_user_id(spend_by_subjects(subjects)),
+        limit_spend: key_by_user_id(spend_by_subjects(subjects, only_limit: true)),
+        topups: key_by_user_id(Topups.summaries(subjects))
+      }
+    end
+  end
+
+  defp key_by_user_id(by_subject) do
+    Map.new(by_subject, fn {{:user, id}, value} -> {id, value} end)
   end
 
   @doc """

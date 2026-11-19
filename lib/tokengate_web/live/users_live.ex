@@ -258,68 +258,33 @@ defmodule TokengateWeb.UsersLive do
   # define el suyo; sin presupuesto mensual el sujeto es él mismo y su único
   # camino de gasto son sus top-ups.
   #
-  # Cache PER SUBJECT: the old key embedded the whole id list, so any search
-  # keystroke, sort or page change minted a new key and always missed. With one
-  # entry per user a warm page is pure hits, and a cold page pays a single
-  # batched load (never one query per row).
-  @credit_ttl_ms 5_000
-
+  # The spend, limit-spend and top-up maps are WHOLE-TABLE aggregates shared
+  # through `Credits.user_credit_aggregates/0` (one compute per 5s window,
+  # single-flight): the old path recomputed them for the page's subjects on
+  # every interactive event, and a search/sort/page change keyed them by a
+  # different id list, so it always missed. Selecting the page's rows from
+  # those maps is pure in-memory work — no request_logs scan per event.
   defp users_credit(users, memberships) do
-    {hits, missed} =
-      Enum.reduce(users, {%{}, []}, fn user, {hits, missed} ->
-        case DashboardCache.fetch({:user_credit, user.id}) do
-          {:ok, credit} -> {Map.put(hits, user.id, credit), missed}
-          :miss -> {hits, [user | missed]}
-        end
-      end)
-
-    case missed do
-      [] ->
-        hits
-
-      missed ->
-        computed = load_users_credit(Enum.reverse(missed), memberships)
-
-        Enum.each(computed, fn {id, credit} ->
-          DashboardCache.put({:user_credit, id}, credit, @credit_ttl_ms)
-        end)
-
-        Map.merge(hits, computed)
-    end
-  end
-
-  defp load_users_credit(users, memberships) do
-    memberships = Map.take(memberships, Enum.map(users, & &1.id))
+    aggregates = Credits.user_credit_aggregates()
 
     summaries =
-      memberships
-      |> Enum.flat_map(fn {_user_id, ms} -> ms end)
-      |> Credits.summaries()
-
-    # Sin membresía no hay resumen del motor: el sujeto es el propio usuario y
-    # hay que leer su gasto y sus top-ups igual que en el resto de superficies
-    # (en lote, no por usuario). Sin esto la columna diría «sin presupuesto» a
-    # quien sí tiene crédito, y ceros a quien tiene techo propio con gasto.
-    own_subjects =
-      for user <- users,
-          Map.get(memberships, user.id, []) == [],
-          do: {:user, user.id}
-
-    own_spend = Credits.spend_by_subjects(own_subjects)
-    own_limit_spend = Credits.spend_by_subjects(own_subjects, only_limit: true)
-    own_topups = Credits.Topups.summaries(own_subjects)
+      users
+      |> Enum.flat_map(&Map.get(memberships, &1.id, []))
+      |> Credits.summaries(cached: true)
 
     Map.new(users, fn user ->
-      subject = {:user, user.id}
-
       case Map.get(memberships, user.id, []) do
         [] ->
+          # Sin membresía no hay resumen del motor: el sujeto es el propio
+          # usuario y hay que leer su gasto y sus top-ups igual que en el resto
+          # de superficies. Sin esto la columna diría «sin presupuesto» a quien
+          # sí tiene crédito, y ceros a quien tiene techo propio con gasto.
           {user.id,
            own_credit(
              user,
-             Map.get(own_spend, subject, Decimal.new(0)),
-             Map.get(own_limit_spend, subject, Decimal.new(0)),
-             Map.get(own_topups, subject)
+             Map.get(aggregates.spend, user.id, Decimal.new(0)),
+             Map.get(aggregates.limit_spend, user.id, Decimal.new(0)),
+             Map.get(aggregates.topups, user.id)
            )}
 
         memberships ->
