@@ -31,6 +31,14 @@ defmodule Tokengate.AgentsTest do
     assert Agents.identify("", "").label == "unknown"
   end
 
+  test "each known family exposes a hero icon" do
+    assert Agents.identify("opencode/2.1", "unknown").icon == "hero-code-bracket-square"
+    assert Agents.identify("claude-cli/2.0", "unknown").icon == "hero-sparkles"
+    assert Agents.identify("hermes/1.0", "unknown").icon == "hero-paper-airplane"
+    assert Agents.identify("curl/8.1", "unknown").icon == "hero-cpu-chip"
+    assert Agents.icon("pi/3.2", "unknown") == "hero-cpu-chip"
+  end
+
   test "grouping key carries family + major version" do
     a = Agents.identify("opencode/2.1", "unknown")
     b = Agents.identify("opencode/2.9", "unknown")

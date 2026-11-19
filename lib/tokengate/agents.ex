@@ -83,7 +83,8 @@ defmodule Tokengate.Agents do
           key: String.t(),
           label: String.t(),
           family: String.t(),
-          version: String.t() | nil
+          version: String.t() | nil,
+          icon: String.t()
         }
   def identify(client_agent, agent_type) do
     identity = pick_identity(client_agent, agent_type)
@@ -97,18 +98,48 @@ defmodule Tokengate.Agents do
           family: family,
           version: version,
           key: key(family, version),
-          label: family_label(family, version)
+          label: family_label(family, version),
+          icon: icon_for(family)
         }
 
       nil ->
         family = product_token(identity)
-        %{family: family, version: nil, key: family, label: family}
+        %{family: family, version: nil, key: family, label: family, icon: icon_for(family)}
     end
   end
 
   @doc "Convenience: the human label for a stored row's identity."
   @spec label(String.t() | nil, String.t() | nil) :: String.t()
   def label(client_agent, agent_type), do: identify(client_agent, agent_type).label
+
+  @doc "Convenience: the hero icon name for a stored row's agent family."
+  @spec icon(String.t() | nil, String.t() | nil) :: String.t()
+  def icon(client_agent, agent_type), do: identify(client_agent, agent_type).icon
+
+  # Hero icon per known family (the project renders icons via `<.icon name=...>`).
+  # Generic glyphs, not brand logos; unknown families get a neutral chip.
+  @icons %{
+    "opencode" => "hero-code-bracket-square",
+    "Claude Code" => "hero-sparkles",
+    "Hermes" => "hero-paper-airplane",
+    "Pi" => "hero-cpu-chip",
+    "Cursor" => "hero-cursor-arrow-rays",
+    "Cline" => "hero-command-line",
+    "Aider" => "hero-wrench-screwdriver",
+    "Windsurf" => "hero-flag",
+    "Continue" => "hero-arrow-path",
+    "Zed" => "hero-bolt",
+    "Copilot" => "hero-user-circle",
+    "Gemini CLI" => "hero-sparkles",
+    "Codex" => "hero-book-open",
+    "Roo Code" => "hero-code-bracket",
+    "Kilo Code" => "hero-code-bracket",
+    "Crush" => "hero-fire",
+    "Goose" => "hero-paper-airplane"
+  }
+  @default_icon "hero-cpu-chip"
+
+  defp icon_for(family), do: Map.get(@icons, family, @default_icon)
 
   # Prefer the explicit X-Agent-Type when it carries a real value; otherwise the
   # human identity (X-Title/User-Agent). "unknown" placeholders never win.
