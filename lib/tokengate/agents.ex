@@ -84,7 +84,8 @@ defmodule Tokengate.Agents do
           label: String.t(),
           family: String.t(),
           version: String.t() | nil,
-          icon: String.t()
+          icon: String.t(),
+          logo: String.t() | nil
         }
   def identify(client_agent, agent_type) do
     identity = pick_identity(client_agent, agent_type)
@@ -99,12 +100,21 @@ defmodule Tokengate.Agents do
           version: version,
           key: key(family, version),
           label: family_label(family, version),
-          icon: icon_for(family)
+          icon: icon_for(family),
+          logo: logo_for(family)
         }
 
       nil ->
         family = product_token(identity)
-        %{family: family, version: nil, key: family, label: family, icon: icon_for(family)}
+
+        %{
+          family: family,
+          version: nil,
+          key: family,
+          label: family,
+          icon: icon_for(family),
+          logo: logo_for(family)
+        }
     end
   end
 
@@ -140,6 +150,28 @@ defmodule Tokengate.Agents do
   @default_icon "hero-cpu-chip"
 
   defp icon_for(family), do: Map.get(@icons, family, @default_icon)
+
+  # Real brand logos downloaded to priv/static/images/agents (served by
+  # Plug.Static, "images" is in static_paths). Families without a trustworthy
+  # brand asset return nil and the UI falls back to the hero `icon`.
+  @logos %{
+    "opencode" => "/images/agents/opencode.svg",
+    "Claude Code" => "/images/agents/claude.svg",
+    "Cursor" => "/images/agents/cursor.svg",
+    "Cline" => "/images/agents/cline.svg",
+    "Windsurf" => "/images/agents/windsurf.svg",
+    "Zed" => "/images/agents/zed.svg",
+    "Copilot" => "/images/agents/copilot.svg",
+    "Gemini CLI" => "/images/agents/gemini.svg",
+    "Codex" => "/images/agents/codex.svg",
+    "Pi" => "/images/agents/pi.svg"
+  }
+
+  defp logo_for(family), do: Map.get(@logos, family)
+
+  @doc "Convenience: the brand logo path for a row's agent, or nil (use hero icon)."
+  @spec logo(String.t() | nil, String.t() | nil) :: String.t() | nil
+  def logo(client_agent, agent_type), do: identify(client_agent, agent_type).logo
 
   # Prefer the explicit X-Agent-Type when it carries a real value; otherwise the
   # human identity (X-Title/User-Agent). "unknown" placeholders never win.

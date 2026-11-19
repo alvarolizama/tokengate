@@ -39,6 +39,15 @@ defmodule Tokengate.AgentsTest do
     assert Agents.icon("pi/3.2", "unknown") == "hero-cpu-chip"
   end
 
+  test "brand logo path for families with a downloaded asset, nil otherwise" do
+    assert Agents.identify("opencode/2.1", "unknown").logo == "/images/agents/opencode.svg"
+    assert Agents.identify("claude-cli/2.0", "unknown").logo == "/images/agents/claude.svg"
+    assert Agents.logo("cursor/1.0", "unknown") == "/images/agents/cursor.svg"
+    # Hermes has no trustworthy brand asset -> nil (hero fallback)
+    assert Agents.identify("hermes/1.0", "unknown").logo == nil
+    assert Agents.identify("curl/8.1", "unknown").logo == nil
+  end
+
   test "grouping key carries family + major version" do
     a = Agents.identify("opencode/2.1", "unknown")
     b = Agents.identify("opencode/2.9", "unknown")
