@@ -370,6 +370,19 @@ parse_log() {
   line="$(grep -E '^Result: ' "$log" | tail -1)"
 
   if [ -n "$line" ]; then
+    # Newer ExUnit prints "Result: 392/393 passed" plus a separate
+    # "Failed: 1 test" line; the older "N passed (M tests)" form has no
+    # fraction. Handle the fraction first so failures are never undercounted.
+    local frac failed_line
+    frac="$(printf '%s' "$line" | grep -oE '[0-9]+/[0-9]+ passed' | head -1)"
+    if [ -n "$frac" ]; then
+      total="${frac#*/}"; total="${total%% *}"
+      failures=0
+      failed_line="$(grep -E '^Failed: [0-9]+ test' "$log" | tail -1)"
+      [ -n "$failed_line" ] && failures="$(printf '%s' "$failed_line" | grep -oE '[0-9]+' | head -1)"
+      echo "$total $failures"
+      return
+    fi
     passed=$(count_of "$line" passed); passed=${passed:-0}
     failed=$(count_of "$line" failed); failed=${failed:-0}
     invalid=$(count_of "$line" invalid); invalid=${invalid:-0}
