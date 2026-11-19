@@ -523,6 +523,45 @@ defmodule TokengateWeb.StatsLiveTest do
     refute render(long) =~ "Sin costo"
   end
 
+  test "overview: volver a un periodo cacheado no deja el spinner colgado (HIT)", %{conn: conn} do
+    # El cache estructural está off en test; se habilita SOLO aquí para ejercitar
+    # el camino HIT (bundle ya calculado). Con el bug, start_data_load ponía
+    # stats_loading=true en el HIT sin lanzar :stats_data que lo apagara, y el
+    # Resumen se quedaba "pensando" para siempre al volver a un periodo cacheado.
+    prev = Application.get_env(:tokengate, :stats_structural_cache)
+    Application.put_env(:tokengate, :stats_structural_cache, enabled: true)
+    cache = Tokengate.Metrics.DashboardCache
+    cache.invalidate_all()
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:tokengate, :stats_structural_cache, prev),
+        else: Application.delete_env(:tokengate, :stats_structural_cache)
+
+      cache.invalidate_all()
+    end)
+
+    %{user: admin, password: password} = register("admin")
+    group_with_log(%{cost: "0.005"})
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats/overview?period=today")
+    wait_stats_loaded(view)
+    refute has_element?(view, "#stats-loading")
+
+    # week (MISS la primera vez) y de vuelta a today (HIT: el bundle de today
+    # sigue en el cache). El HIT aplica los datos síncronos: el spinner debe
+    # apagarse en el propio HIT, no quedar colgado.
+    view |> element("#period-week") |> render_click()
+    wait_stats_loaded(view)
+
+    view |> element("#period-today") |> render_click()
+    _ = :sys.get_state(view.pid)
+
+    refute has_element?(view, "#stats-loading"),
+           "el spinner quedó colgado al volver a un periodo cacheado (HIT)"
+  end
+
   test "regular user is redirected from stats (usage patterns)", %{conn: conn} do
     %{owner: owner} = group_with_log(%{cost: "0.005"})
 

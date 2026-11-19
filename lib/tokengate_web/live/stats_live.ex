@@ -341,17 +341,24 @@ defmodule TokengateWeb.StatsLive do
         socket =
           case cached_structural_bundle(key) do
             {:ok, bundle} ->
-              assign(socket, bundle)
+              # HIT: the structural data lands synchronously and no :stats_data
+              # task runs, so nothing else would clear the spinner (the counters
+              # task never touches stats_loading). Clear it here, otherwise the
+              # overview wedges "loading" on every cached period switch.
+              socket
+              |> assign(bundle)
+              |> assign(:stats_loading, false)
+              |> assign(:load_error, false)
 
             :miss ->
-              start_async(socket, :stats_data, fn ->
+              socket
+              |> start_async(:stats_data, fn ->
                 cached_structural_bundle(key, fn -> compute_structural_assigns(params) end)
               end)
+              |> assign(:stats_loading, true)
           end
 
-        socket
-        |> start_async(:stats_counters, fn -> compute_counter_assigns(params) end)
-        |> assign(:stats_loading, true)
+        start_async(socket, :stats_counters, fn -> compute_counter_assigns(params) end)
 
       # El resto de las pestañas: el mismo bundle único de siempre, ahora
       # bajo la clave estructural (rankings con percentile_cont, picos,
