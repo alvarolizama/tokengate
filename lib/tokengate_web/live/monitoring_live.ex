@@ -861,6 +861,19 @@ defmodule TokengateWeb.MonitoringLive do
     end
   end
 
+  # Brand logo (or hero fallback) for the cell; nil when the identity is blank.
+  defp agent_mark(log) do
+    client_agent = Map.get(log, :client_agent)
+    agent_type = Map.get(log, :agent_type)
+
+    if blank_identity?(client_agent) and blank_identity?(agent_type) do
+      nil
+    else
+      identity = Tokengate.Agents.identify(client_agent, agent_type)
+      %{logo: identity.logo, icon: identity.icon}
+    end
+  end
+
   defp blank_identity?(nil), do: true
   defp blank_identity?(""), do: true
   defp blank_identity?(value) when is_binary(value), do: String.trim(value) == ""
@@ -1142,9 +1155,18 @@ defmodule TokengateWeb.MonitoringLive do
             </:col>
             <:col :let={log} label={gettext("Agent")}>
               <span
-                class="text-sm"
+                class="flex items-center gap-1.5 text-sm"
                 title={Map.get(log, :client_agent) || Map.get(log, :agent_type)}
               >
+                <%= if mark = agent_mark(log) do %>
+                  <img
+                    :if={mark.logo}
+                    src={mark.logo}
+                    alt=""
+                    class="w-4 h-4 object-contain shrink-0"
+                  />
+                  <.icon :if={!mark.logo} name={mark.icon} class="w-4 h-4 opacity-70 shrink-0" />
+                <% end %>
                 {agent_display(log)}
               </span>
             </:col>

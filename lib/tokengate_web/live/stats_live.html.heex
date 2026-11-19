@@ -217,10 +217,23 @@
                     sort_event="sort"
                   >
                     <:col :let={row} label={gettext("Agent")} field={:label}>
-                      <div class="min-w-0">
-                        <div class="font-medium truncate" title={row.key}>{row.label}</div>
-                        <div class="text-[10px] uppercase tracking-wide text-base-content/40">
-                          {row.family}
+                      <div class="flex items-center gap-2 min-w-0">
+                        <img
+                          :if={row.logo}
+                          src={row.logo}
+                          alt=""
+                          class="w-5 h-5 object-contain shrink-0"
+                        />
+                        <.icon
+                          :if={!row.logo}
+                          name={row.icon}
+                          class="w-5 h-5 opacity-70 shrink-0"
+                        />
+                        <div class="min-w-0">
+                          <div class="font-medium truncate" title={row.key}>{row.label}</div>
+                          <div class="text-[10px] uppercase tracking-wide text-base-content/40">
+                            {row.family}
+                          </div>
                         </div>
                       </div>
                     </:col>

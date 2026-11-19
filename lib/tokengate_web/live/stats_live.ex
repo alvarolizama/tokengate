@@ -1155,6 +1155,8 @@ defmodule TokengateWeb.StatsLive do
       label: identity.label,
       family: identity.family,
       version: identity.version,
+      logo: identity.logo,
+      icon: identity.icon,
       request_count: request_count,
       error_count: error_count,
       error_rate: if(request_count > 0, do: error_count / request_count, else: 0.0),
