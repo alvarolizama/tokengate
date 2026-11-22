@@ -176,6 +176,15 @@ defmodule Tokengate.Providers.ModelProvider do
       less_than_or_equal_to: 24 * 60 * 60
     )
     |> validate_inclusion(:pricing_unit, Pricing.units())
+    # Ninguna tarifa puede ser negativa: una tarifa negativa produce un costo
+    # negativo, que RESTA del presupuesto del sujeto y del contador durable
+    # (crédito regalado). `min="0"` en el formulario es sólo display: un submit
+    # forjado o una escritura programática lo saltan.
+    |> validate_number(:input_cost_per_million, greater_than_or_equal_to: 0)
+    |> validate_number(:output_cost_per_million, greater_than_or_equal_to: 0)
+    |> validate_number(:cache_cost_per_million, greater_than_or_equal_to: 0)
+    |> validate_number(:cache_write_cost_per_million, greater_than_or_equal_to: 0)
+    |> validate_number(:unit_cost, greater_than_or_equal_to: 0)
     |> sync_sticky_ttl_fields()
     |> sync_override_fields()
     |> validate_exclusive_scope()

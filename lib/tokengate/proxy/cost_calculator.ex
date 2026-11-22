@@ -87,9 +87,36 @@ defmodule Tokengate.Proxy.CostCalculator do
   cost degrades to $0 (never trust unreviewed input).
   """
   @spec provider_cost(term(), keyword()) :: Decimal.t()
-  def provider_cost(reported, opts \\ [])
+  def provider_cost(reported, opts \\ []) do
+    # Un costo negativo (upstream que reporta un "refund", bug del proveedor, o
+    # una tarifa forjada) RESTARÍA del presupuesto y del contador durable,
+    # regalando crédito por encima del monto otorgado. No inventamos costos:
+    # tampoco inventamos crédito.
+    reported
+    |> do_provider_cost(opts)
+    |> non_negative()
+  end
 
-  def provider_cost(nil, opts) do
+  # Ambos extremos importan y por razones distintas:
+  #
+  #   * por abajo, un costo negativo RESTARÍA del presupuesto y del contador
+  #     durable (crédito regalado, top-up con remanente mayor al otorgado);
+  #   * por arriba, `request_logs.provider_cost_usd` es `numeric(12,6)`
+  #     (máx $999,999.999999): un costo reportado mayor cobra el settle y luego
+  #     el INSERT revienta por overflow, así que la fila se pierde y lo cobrado
+  #     no queda registrado en ninguna parte. Se satura al máximo de la columna
+  #     para que lo cobrado y lo persistido sean SIEMPRE el mismo número.
+  @max_cost Decimal.new("999999.999999")
+
+  defp non_negative(%Decimal{} = value) do
+    cond do
+      Decimal.compare(value, @zero) == :lt -> @zero
+      Decimal.compare(value, @max_cost) == :gt -> @max_cost
+      true -> value
+    end
+  end
+
+  defp do_provider_cost(nil, opts) do
     unit = Keyword.get(opts, :pricing_unit) || Pricing.default_unit()
 
     if Pricing.token_unit?(unit) do
@@ -99,18 +126,18 @@ defmodule Tokengate.Proxy.CostCalculator do
     end
   end
 
-  def provider_cost(%Decimal{} = reported, _opts) do
+  defp do_provider_cost(%Decimal{} = reported, _opts) do
     Decimal.round(reported, 6)
   end
 
-  def provider_cost(reported, _opts) when is_number(reported) do
+  defp do_provider_cost(reported, _opts) when is_number(reported) do
     reported
     |> to_string()
     |> Decimal.new()
     |> Decimal.round(6)
   end
 
-  def provider_cost(reported, _opts) when is_binary(reported) do
+  defp do_provider_cost(reported, _opts) when is_binary(reported) do
     case Decimal.parse(reported) do
       {decimal, ""} -> Decimal.round(decimal, 6)
       _ -> @zero
@@ -118,7 +145,7 @@ defmodule Tokengate.Proxy.CostCalculator do
   end
 
   # Anything else (a map, a list, a bad atom) → $0.
-  def provider_cost(_reported, _opts), do: @zero
+  defp do_provider_cost(_reported, _opts), do: @zero
 
   # Token pricing: the `*_cost_per_million` columns are the PARAMETERS of the
   # token unit, so the rates are read verbatim and scaled by the unit's own

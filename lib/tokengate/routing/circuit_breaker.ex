@@ -39,6 +39,8 @@ defmodule Tokengate.Routing.CircuitBreaker do
   # not a temporary breaker cooldown.
   @counting_reasons [:server_error, :timeout, :rate_limited]
 
+  require Logger
+
   @pubsub Tokengate.PubSub
   @alerts_topic "alerts"
 
@@ -361,11 +363,14 @@ defmodule Tokengate.Routing.CircuitBreaker do
         # el gen_statem no deje procesos sueltos escribiendo en la base: un
         # breaker que abre es raro y el emit está throttleado, así que el coste
         # es despreciable.
-        Tokengate.Notifications.emit(:breaker_opened, %{
-          entity_type: "credential",
-          entity_id: data.credential_id,
-          reason: to_string(reason)
-        })
+        #
+        # Y va blindado: el emit escribe en `notifications`, y si ese insert
+        # falla (hiccup de DB, timeout del pool, o el sandbox de tests, donde
+        # este proceso de larga vida no tiene dueño de conexión) el gen_statem
+        # se caía y con él TODO el estado de los breakers — incluidas las
+        # aperturas en curso —, así que las llamadas siguientes morían con
+        # "no process". Una notificación jamás debe tumbar al breaker.
+        notify_breaker_opened(data.credential_id, reason)
 
         {:next_state, :open,
          %{
@@ -384,6 +389,22 @@ defmodule Tokengate.Routing.CircuitBreaker do
       # :client_error or any non-counting reason: ignore entirely.
       {:keep_state, data}
     end
+  end
+
+  defp notify_breaker_opened(credential_id, reason) do
+    Tokengate.Notifications.emit(:breaker_opened, %{
+      entity_type: "credential",
+      entity_id: credential_id,
+      reason: to_string(reason)
+    })
+  rescue
+    error ->
+      Logger.warning("circuit breaker: breaker_opened notification failed: #{inspect(error)}")
+  catch
+    :exit, exit_reason ->
+      Logger.warning(
+        "circuit breaker: breaker_opened notification exited: #{inspect(exit_reason)}"
+      )
   end
 
   defp cooldown_for(reason, data) do

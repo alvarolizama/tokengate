@@ -336,13 +336,18 @@ defmodule Tokengate.Budgets do
     member_budgets
     |> Enum.group_by(fn mb -> mb.member.user_id end)
     |> Map.new(fn {user_id, budgets} ->
+      # El límite es del USUARIO (propio, o heredado del perfil) y todas sus
+      # membresías reportan el MISMO valor: sumar duplicaría el techo. Hoy cada
+      # usuario tiene exactamente una membresía (`group_members_user_id_unique_index`),
+      # así que esto es una sola fila; se toma el más estricto para que el
+      # agregado siga siendo un techo —y no una suma— si eso cambia.
       monthly_limit =
         budgets
         |> Enum.map(& &1.monthly_limit_usd)
         |> Enum.reject(&is_nil/1)
         |> case do
           [] -> nil
-          limits -> Enum.reduce(limits, &Decimal.add/2)
+          limits -> Enum.min_by(limits, &Decimal.to_float/1)
         end
 
       # Cada membresía reporta el gasto del MISMO sujeto (el usuario), así que
@@ -604,9 +609,10 @@ defmodule Tokengate.Budgets do
       [m],
       m.group_member_id in ^member_ids and m.hour_utc >= ^from and m.hour_utc < ^to
     )
-    # The rollup is partitioned by `day`; without the day bound the planner
-    # has to probe every live day partition of the month even though the
-    # hour_utc range already excludes them.
+    # Every rollup index is prefixed by `day` (request_metrics_hourly is a
+    # plain table, not a partitioned one), so without the day bound the
+    # planner cannot use the member/day prefix even though the hour_utc range
+    # already excludes those days.
     |> where([m], m.day >= ^DateTime.to_date(from) and m.day <= ^DateTime.to_date(to))
     |> group_by([m], m.group_member_id)
     |> select([m], {m.group_member_id, fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)})

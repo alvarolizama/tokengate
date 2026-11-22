@@ -196,6 +196,14 @@ defmodule Tokengate.Budgets.Manager do
     # evento se encarga de que un tope reventado no mande cientos de mensajes).
     notify_rejection(plan, result)
 
+    # Un rechazo por contador también pide reconciliación: si el contador está
+    # inflado por un hold FANTASMA (el proceso del request murió con `:kill`
+    # entre el hold y el settle, así que nunca hubo settle que encolara el sync),
+    # el sujeto queda con 402 permanente aunque la DB muestre remanente —
+    # `ensure_limit_loaded` no re-siembra dentro del mismo ciclo. Debounced, así
+    # que un sujeto martillando el tope encola a lo sumo un job por ventana.
+    if match?({:error, _}, result), do: maybe_enqueue_credit_sync(plan.subject)
+
     result
   end
 
@@ -258,19 +266,33 @@ defmodule Tokengate.Budgets.Manager do
   # el sujeto TIPADO para que el SyncWorker además re-siembre
   # `{:limit, {:user, id}}` / `{:limit, {:service, id}}` desde la verdad
   # durable. El marcador dedup es el mismo `subject_id` binario.
+  # Un plan sin id (`{:user, nil}`) no tiene contador que reconciliar y haría
+  # que el worker consultara `IS NULL` (todos los sujetos de servicio).
+  defp maybe_enqueue_credit_sync({_type, nil}), do: :ok
+
   defp maybe_enqueue_credit_sync(subject) do
     id = subject_key_id(subject)
     key = {:sync_pending, id}
 
     if :ets.insert_new(@table, {key, true}) do
-      _ =
-        %{subject_id: id, credit_subject: [to_string(elem(subject, 0)), id]}
-        |> Tokengate.Budgets.SyncWorker.new()
-        |> Oban.insert()
+      %{subject_id: id, credit_subject: [to_string(elem(subject, 0)), id]}
+      |> Tokengate.Budgets.SyncWorker.new()
+      |> Oban.insert()
+      |> release_marker_on_failed_enqueue(key)
     end
 
     :ok
   end
+
+  # Oban deduplica por `unique` (ventana de 60 s): si el job ya existe —o está
+  # EJECUTÁNDOSE, que es el caso malo, porque el worker ya limpió el marcador al
+  # arrancar— `insert` devuelve el existente sin agendar nada nuevo. Dejar el
+  # marcador puesto ahí mataba la reconciliación de ese sujeto para siempre:
+  # ningún settle futuro volvía a encolar. Se suelta el marcador para que el
+  # próximo settle reintente cuando expire la ventana.
+  defp release_marker_on_failed_enqueue({:ok, %Oban.Job{conflict?: false}}, _key), do: :ok
+  defp release_marker_on_failed_enqueue({:ok, _job}, key), do: :ets.delete(@table, key)
+  defp release_marker_on_failed_enqueue({:error, _reason}, key), do: :ets.delete(@table, key)
 
   @doc """
   Re-siembra el contador mensual del límite de un sujeto (tabla de créditos,
@@ -1014,10 +1036,10 @@ defmodule Tokengate.Budgets.Manager do
     key = {:sync_pending, subject_id}
 
     if :ets.insert_new(@table, {key, true}) do
-      _ =
-        %{subject_id: subject_id}
-        |> Tokengate.Budgets.SyncWorker.new()
-        |> Oban.insert()
+      %{subject_id: subject_id}
+      |> Tokengate.Budgets.SyncWorker.new()
+      |> Oban.insert()
+      |> release_marker_on_failed_enqueue(key)
     end
 
     :ok

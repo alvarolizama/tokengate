@@ -498,4 +498,45 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
       assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.0003"))
     end
   end
+
+  # Un costo negativo no es un reembolso: si se persistiera, RESTARÍA del
+  # presupuesto del sujeto y del contador durable, regalando crédito por encima
+  # del monto otorgado. La cadena entera clampa a 0.
+  describe "costo reportado negativo" do
+    test "un costo reportado negativo vale 0" do
+      assert Decimal.equal?(CostCalculator.provider_cost(Decimal.new("-2.5")), Decimal.new(0))
+      assert Decimal.equal?(CostCalculator.provider_cost(-2.5), Decimal.new(0))
+      assert Decimal.equal?(CostCalculator.provider_cost("-2.5"), Decimal.new(0))
+    end
+
+    test "una tarifa manual negativa no produce costo negativo" do
+      opts = [
+        pricing_unit: "per_1m_tokens",
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("-1.00"),
+          output_cost_per_million: Decimal.new("-1.00")
+        },
+        usage: %{prompt_tokens: 1000, completion_tokens: 1000}
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new(0))
+    end
+
+    test "un costo positivo sigue pasando intacto" do
+      assert Decimal.equal?(
+               CostCalculator.provider_cost(Decimal.new("0.1234567")),
+               Decimal.new("0.123457")
+             )
+    end
+
+    test "un costo reportado absurdo se satura al máximo de numeric(12,6)" do
+      # Más que esto no cabe en `request_logs.provider_cost_usd`: el settle
+      # cobraría y el INSERT del log reventaría por overflow, dejando dinero
+      # cobrado sin fila durable. Se satura, así cobrado == persistido.
+      assert Decimal.equal?(
+               CostCalculator.provider_cost(Decimal.new("1000000")),
+               Decimal.new("999999.999999")
+             )
+    end
+  end
 end

@@ -10,8 +10,9 @@ defmodule Tokengate.Credits.Topup do
   `request_logs.provider_cost_usd`.
 
     * `expires_in_days` nil ⇒ sin expiración (nunca vence).
-    * `expires_in_days` presente ⇒ `expires_at` se calcula en el changeset
-      al crear (si `expires_at` viene explícito, se respeta).
+    * `expires_in_days` presente ⇒ `expires_at` = creación + N días, calculado
+      en el changeset al crear Y al editar (un `expires_at` explícito en el
+      mismo submit gana).
   """
 
   use Ecto.Schema
@@ -80,12 +81,19 @@ defmodule Tokengate.Credits.Topup do
     end
   end
 
+  # La base es la CREACIÓN, no el submit: el hint de la UI dice "counted from
+  # its creation", y así editar los días de un top-up existente es idempotente.
+  # Antes esto miraba `get_field`, que refleja los DATOS: un top-up que ya tenía
+  # `expires_at` ignoraba en silencio cualquier cambio de `expires_in_days` (el
+  # flash decía éxito y la fecha seguía siendo la vieja).
   defp put_expires_at(changeset, days) do
-    if get_field(changeset, :expires_at) do
+    if get_change(changeset, :expires_at) do
       changeset
     else
+      base = get_field(changeset, :inserted_at) || DateTime.utc_now()
+
       expires_at =
-        DateTime.utc_now()
+        base
         |> DateTime.add(days * 86_400, :second)
         |> DateTime.truncate(:second)
 
