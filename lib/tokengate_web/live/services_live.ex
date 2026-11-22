@@ -125,12 +125,18 @@ defmodule TokengateWeb.ServicesLive do
       |> Repo.all()
       |> Enum.group_by(fn {service_id, _} -> service_id end, fn {_, model_id} -> model_id end)
 
-    models =
-      from(ma in Model, order_by: [asc: ma.name])
-      |> Repo.all()
-
-    stats = service_stats(service_ids, socket)
     timezone = socket.assigns[:timezone] || "Etc/UTC"
+
+    # The 30d aggregate is the only heavy query of the listing without a cache
+    # of its own: without this it re-ran on every keystroke, sort and page
+    # change. Keyed by the page's ids (sorted) + timezone, 5s TTL — the same
+    # contract as the spend/credit maps below.
+    stats =
+      DashboardCache.fetch_or_compute(
+        {:services_stats_30d, Enum.sort(service_ids), timezone},
+        fn -> service_stats(service_ids, timezone) end,
+        ttl: @credit_ttl_ms
+      )
 
     # Gasto mensual / total por servicio — mismas columnas que la tabla de
     # Usuarios. Agregados whole-table cacheados (5s TTL) para no re-escanear
@@ -140,21 +146,26 @@ defmodule TokengateWeb.ServicesLive do
         Budgets.spend_by_service()
       end)
 
+    # Lifetime total: it walks every retained partition (Merge Append over ~90
+    # of them), so it gets the 60s TTL its Users twin already uses — lifetime
+    # spend barely moves in 5 seconds and this is the page's most expensive
+    # scan.
     total_spend =
-      DashboardCache.fetch_or_compute({:services_total_spend}, fn ->
-        Logs.total_spend_by_service()
-      end)
+      DashboardCache.fetch_or_compute(
+        {:services_total_spend},
+        fn -> Logs.total_spend_by_service() end,
+        ttl: 60_000
+      )
 
     socket
     |> assign(:all_services, services)
     |> assign(:granted_models, granted_models)
-    |> assign(:models, models)
     |> assign(:service_stats, stats)
     |> assign(:monthly_spend_by_service, monthly_spend)
     |> assign(:service_credit, service_credit(services))
     |> assign(:total_spend_by_service, total_spend)
     |> assign(:supervisors_map, build_supervisors_map(service_ids))
-    |> assign(:keys_by_service, Accounts.list_api_keys_for_services(service_ids))
+    |> assign(:keys_by_service, Accounts.count_active_api_keys_by_service(service_ids))
     |> assign(:page, page.page)
     |> assign(:total_count, page.total)
     |> assign(:total_pages, page.total_pages)
@@ -204,10 +215,11 @@ defmodule TokengateWeb.ServicesLive do
   # has no `service_id` dimension (only user/member/model/provider), so the
   # rollup cannot answer it — the covering index on
   # `request_logs (service_id, inserted_at)` is what makes this cheap.
-  defp service_stats([], _socket), do: %{}
+  # `avg_latency_ms` is gone: no surface renders it, and the repo rule is to
+  # select only the columns that are used.
+  defp service_stats([], _timezone), do: %{}
 
-  defp service_stats(service_ids, socket) do
-    timezone = socket.assigns[:timezone] || "Etc/UTC"
+  defp service_stats(service_ids, timezone) do
     thirty_days_ago = Tokengate.Periods.period_bounds("30d", timezone).from
 
     from(l in Tokengate.Logs.RequestLog,
@@ -219,8 +231,7 @@ defmodule TokengateWeb.ServicesLive do
         total_cost: sum(l.provider_cost_usd),
         total_requests: count(l.id),
         total_input_tokens: sum(l.prompt_tokens),
-        total_output_tokens: sum(l.completion_tokens),
-        avg_latency_ms: avg(l.latency_ms)
+        total_output_tokens: sum(l.completion_tokens)
       }
     )
     |> Repo.all(timeout: 120_000)
@@ -478,7 +489,14 @@ defmodule TokengateWeb.ServicesLive do
 
   def handle_event("edit_models", %{"id" => service_id}, socket) do
     with {:ok, service_id} <- cast_id(service_id) do
-      {:noreply, assign(socket, :models_service_id, service_id)}
+      # The model catalog is loaded HERE, not in `load_services/1`: the listing
+      # only needs it when this modal opens, and it used to be a whole-table
+      # read on every keystroke, sort and page change.
+      models =
+        from(ma in Model, order_by: [asc: ma.name])
+        |> Repo.all()
+
+      {:noreply, socket |> assign(:models, models) |> assign(:models_service_id, service_id)}
     else
       _ -> {:noreply, socket}
     end
@@ -1362,7 +1380,7 @@ defmodule TokengateWeb.ServicesLive do
             <:col :let={service} label={gettext("Keys")}>
               <.keys_badge
                 subject_id={service.id}
-                count={length(Map.get(@keys_by_service, service.id, []))}
+                count={Map.get(@keys_by_service, service.id, 0)}
                 open_event="manage_keys"
               />
             </:col>

@@ -1389,6 +1389,28 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
+  Cuenta de keys activas por servicio, en lote (una sola query).
+
+  Alimenta la columna «Claves» de la tabla de servicios. El listado sólo
+  renderiza el número, así que traer las filas completas (con `key_hash`)
+  era coste y superficie de secreto de más. Las ocultas (soft-hide) no
+  cuentan, igual que en usuarios.
+  """
+  def count_active_api_keys_by_service(service_ids) when is_list(service_ids) do
+    if service_ids == [] do
+      %{}
+    else
+      from(ak in ApiKey,
+        where: ak.service_id in ^service_ids and ak.status == "active" and is_nil(ak.hidden_at),
+        group_by: ak.service_id,
+        select: {ak.service_id, count(ak.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+    end
+  end
+
+  @doc """
   Consumo por key desde los logs: `%{api_key_id => %{requests: n, cost_usd: Decimal}}`.
 
   Solo cuenta el histórico con `api_key_id` (las filas viejas se agrupan por

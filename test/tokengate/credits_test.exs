@@ -162,10 +162,12 @@ defmodule Tokengate.CreditsTest do
       cold = count_request_log_queries(fn -> Credits.user_credit_aggregates() end)
       warm = count_request_log_queries(fn -> Credits.user_credit_aggregates() end)
 
-      # Cold: the two spend aggregates over request_logs (the top-up
-      # consumption read only runs when live top-ups exist). Warm: nothing
-      # against request_logs at all.
-      assert cold == 2
+      # Cold: ONE fused spend aggregate over request_logs — the total and the
+      # limit-debited amount come from the same GROUP BY (`SUM(... FILTER ...)`);
+      # running them as two queries doubled the scan. The top-up consumption
+      # read only runs when live top-ups exist. Warm: nothing against
+      # request_logs at all.
+      assert cold == 1
       assert warm == 0
     end
   end

@@ -231,14 +231,9 @@ defmodule Tokengate.Credits do
     |> grouped_user_spend(only_limit)
   end
 
-  # Whole-table twin of `spend_grouped_users/2`: no id filter, so one aggregate
-  # answers every user in the table (see `user_credit_aggregates/0`).
-  defp spend_grouped_all_users(only_limit) do
-    RequestLog
-    |> where([rl], not is_nil(rl.user_id))
-    |> grouped_user_spend(only_limit)
-  end
-
+  # Per-subject spend for an explicit id list (the page-scoped reader). The
+  # whole-table twin that also returns the limit-debited amount is
+  # `spend_grouped_all_users_with_limit/0`, below.
   defp grouped_user_spend(query, only_limit) do
     query
     |> since(nil)
@@ -328,11 +323,41 @@ defmodule Tokengate.Credits do
   end
 
   defp compute_user_credit_aggregates do
+    # ONE scan for both maps: `spend` and `limit_spend` are the same UTC-month
+    # window over the same rows, differing only by the top-up filter. Running
+    # them as two queries doubled the scan, and the covering index already
+    # carries both `provider_cost_usd` and `credit_topup_id`.
+    {spend, limit_spend} = spend_grouped_all_users_with_limit()
+
     %{
-      spend: spend_grouped_all_users(false),
-      limit_spend: spend_grouped_all_users(true),
+      spend: spend,
+      limit_spend: limit_spend,
       topups: user_topup_summaries()
     }
+  end
+
+  # Whole-table twin of `spend_grouped_users/2` returning BOTH amounts at once:
+  # the total and the part debited to the subject's limit (rows without a
+  # top-up). Same grouping, same window, one pass.
+  defp spend_grouped_all_users_with_limit do
+    RequestLog
+    |> where([rl], not is_nil(rl.user_id))
+    |> since(nil)
+    |> group_by([rl], rl.user_id)
+    |> select([rl], {
+      rl.user_id,
+      fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+      fragment(
+        "COALESCE(SUM(?) FILTER (WHERE ? IS NULL), 0)",
+        rl.provider_cost_usd,
+        rl.credit_topup_id
+      )
+    })
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.reduce({%{}, %{}}, fn {id, spent, against_limit}, {spend, limit_spend} ->
+      {Map.put(spend, id, Decimal.new(to_string(spent))),
+       Map.put(limit_spend, id, Decimal.new(to_string(against_limit)))}
+    end)
   end
 
   # Every user with a live top-up, resolved through `Topups` (the single

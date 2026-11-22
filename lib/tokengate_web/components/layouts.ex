@@ -249,7 +249,17 @@ defmodule TokengateWeb.Layouts do
   defp dashboard_sidebar(assigns) do
     assigns =
       if admin?(assigns.current_scope) do
-        creds = Tokengate.Providers.count_error_credentials()
+        # Both counters run on EVERY admin patch, not once per page: the
+        # credentials count is a query and the layout re-renders on every
+        # event. A 5s cache turns a keystroke storm into one query per window;
+        # a badge that lags 5s is a navigation hint, not enforcement.
+        creds =
+          Tokengate.Metrics.DashboardCache.fetch_or_compute(
+            {:sidebar_error_credentials},
+            fn -> Tokengate.Providers.count_error_credentials() end,
+            ttl: 5_000
+          )
+
         breakers = Tokengate.Routing.CircuitBreakerManager.count_open()
 
         assigns
@@ -258,6 +268,10 @@ defmodule TokengateWeb.Layouts do
         # already reaches every service from /access/services.
         |> assign(:supervised_count, 0)
       else
+        # NOT cached on purpose: this count decides whether the sidebar ENTRY
+        # exists (not just a badge number), so a revoked supervisor must lose
+        # the link on the next mount. The admin badge above is a number only,
+        # which is why caching it is safe and caching this one is not.
         assign(assigns, :supervised_count, supervised_services_count(assigns.current_scope))
       end
 

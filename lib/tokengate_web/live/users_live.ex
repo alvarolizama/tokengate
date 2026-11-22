@@ -92,20 +92,20 @@ defmodule TokengateWeb.UsersLive do
   @sort_columns ~w(name role status groups credit monthly_spend total_spend inserted_at)a
 
   defp load_users(socket) do
-    timezone = socket.assigns[:timezone] || "Etc/UTC"
     sort_field = socket.assigns.sort_field
     sort_direction = socket.assigns.sort_direction
 
-    # Both spend maps are whole-table aggregates over request_logs (the
-    # lifetime one groups every partition). Cache them in DashboardCache so
-    # interactive events reuse one shared entry per timezone instead of
-    # re-scanning the log table per event — same pattern as DashboardLive.
-    # The lifetime total gets its own 60s TTL: it is the most expensive scan of
-    # the page and lifetime spend barely moves in 5 seconds.
-    spend_by_user =
-      DashboardCache.fetch_or_compute({:users_spend_by_user, timezone}, fn ->
-        Tokengate.Budgets.spend_by_user(timezone)
-      end)
+    # Monthly per-user spend + limit_spend + live top-ups come from ONE cached
+    # whole-table aggregate (5s, single-flight). The old path paid
+    # `Budgets.spend_by_user/1` for the monthly column: every group member,
+    # user and group row plus six hybrid scans per window, only to read
+    # `real_monthly_usd` — a number this same map already carries (same UTC
+    # month, same `SUM(provider_cost_usd)`, same `GROUP BY user_id`).
+    #
+    # The lifetime total keeps its own 60s TTL: it is the most expensive scan
+    # of the page and lifetime spend barely moves in 5 seconds.
+    aggregates = Credits.user_credit_aggregates()
+    monthly_spend_by_user = aggregates.spend
 
     total_spend_by_user =
       DashboardCache.fetch_or_compute(
@@ -141,7 +141,7 @@ defmodule TokengateWeb.UsersLive do
 
     # Límite de gasto efectivo por usuario (propio o heredado del perfil de límites) más el
     # gasto del mes. En lote: una query por sujeto, nunca una por membresía.
-    users_credit = users_credit(users, memberships)
+    users_credit = users_credit(users, memberships, aggregates)
 
     # SQL sorts (name/role/status/inserted_at) are already global; the
     # aggregate-backed columns are ordered in memory over the page.
@@ -161,7 +161,7 @@ defmodule TokengateWeb.UsersLive do
           sort_field,
           sort_direction,
           %{
-            spend_by_user: spend_by_user,
+            monthly_spend_by_user: monthly_spend_by_user,
             total_spend_by_user: total_spend_by_user,
             user_groups: user_groups,
             users_credit: users_credit
@@ -170,7 +170,7 @@ defmodule TokengateWeb.UsersLive do
       end
 
     socket
-    |> assign(:spend_by_user, spend_by_user)
+    |> assign(:monthly_spend_by_user, monthly_spend_by_user)
     |> assign(:total_spend_by_user, total_spend_by_user)
     |> assign(:user_groups, user_groups)
     |> assign(:keys_counts, keys_counts)
@@ -241,10 +241,7 @@ defmodule TokengateWeb.UsersLive do
   end
 
   defp sort_value(user, :monthly_spend, ctx) do
-    case Map.get(ctx.spend_by_user, user.id) do
-      nil -> nil
-      spend -> spend.real_monthly_usd
-    end
+    Map.get(ctx.monthly_spend_by_user, user.id)
   end
 
   defp sort_value(user, :total_spend, ctx) do
@@ -264,9 +261,7 @@ defmodule TokengateWeb.UsersLive do
   # every interactive event, and a search/sort/page change keyed them by a
   # different id list, so it always missed. Selecting the page's rows from
   # those maps is pure in-memory work — no request_logs scan per event.
-  defp users_credit(users, memberships) do
-    aggregates = Credits.user_credit_aggregates()
-
+  defp users_credit(users, memberships, aggregates) do
     summaries =
       users
       |> Enum.flat_map(&Map.get(memberships, &1.id, []))
@@ -921,11 +916,8 @@ defmodule TokengateWeb.UsersLive do
   # Gasto del mes de un usuario: ausente en el agregado = no gastó (los usuarios
   # sin membresía no aparecen), no un dato desconocido. Un sujeto sin requests
   # tiene que leerse «$0.00», no «—».
-  defp user_monthly_spend(spend_by_user, user_id) do
-    case Map.get(spend_by_user, user_id) do
-      %{real_monthly_usd: %Decimal{} = spend} -> spend
-      _ -> Decimal.new(0)
-    end
+  defp user_monthly_spend(monthly_spend_by_user, user_id) do
+    Map.get(monthly_spend_by_user, user_id, Decimal.new(0))
   end
 
   defp save_new_user(socket, user_params) do
@@ -1340,7 +1332,7 @@ defmodule TokengateWeb.UsersLive do
             </:col>
             <:col :let={user} label={gettext("Monthly spend")} field={:monthly_spend} align="right">
               <div id={"spend-#{user.id}"} class="text-xs font-mono">
-                ${format_usd(user_monthly_spend(@spend_by_user, user.id))}
+                ${format_usd(user_monthly_spend(@monthly_spend_by_user, user.id))}
               </div>
             </:col>
             <:col :let={user} label={gettext("Total spend")} field={:total_spend} align="right">

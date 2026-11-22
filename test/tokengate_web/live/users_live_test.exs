@@ -2,9 +2,10 @@ defmodule TokengateWeb.UsersLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-  alias Tokengate.{Accounts, Credits, Logs}
+  alias Tokengate.{Accounts, Logs}
   alias Tokengate.Accounts.User
   alias Tokengate.Repo
+  alias TokengateWeb.StatsHelpers
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -267,6 +268,82 @@ defmodule TokengateWeb.UsersLiveTest do
 
       assert Accounts.list_group_members_for_user(orphan.id) == []
       assert has_element?(view, "#credit-#{orphan.id}", "30.0000 / 100.0000")
+    end
+
+    # La columna «Monthly spend» y el gasto del motor de crédito son el MISMO
+    # agregado (mes UTC, `SUM(provider_cost_usd)` por `user_id`). Este test fija
+    # la paridad: la celda se lee del mapa de crédito cacheado, así que un
+    # usuario con membresía, uno sin membresía y un gasto financiado por top-up
+    # tienen que renderizar exactamente lo que dice el agregado.
+    test "monthly spend column is the same aggregate the credit engine uses", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      {:ok, group} = Accounts.create_group(%{name: "Parity #{unique()}"})
+
+      %{user: with_member} = register("user")
+
+      {:ok, member} =
+        Accounts.create_group_member(%{"user_id" => with_member.id, "group_id" => group.id})
+
+      %{user: no_member} = register("user")
+
+      {:ok, topup_owner} =
+        %Tokengate.Credits.Topup{}
+        |> Tokengate.Credits.Topup.changeset(%{
+          user_id: no_member.id,
+          amount_usd: Decimal.new("10.000000")
+        })
+        |> Repo.insert()
+
+      spent_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          model_requested: "gpt-4",
+          inserted_at: spent_at,
+          provider_cost_usd: Decimal.new("30.00")
+        })
+
+      # Usuario sin membresía: el sujeto es el propio `user_id`.
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          user_id: no_member.id,
+          model_requested: "gpt-4",
+          inserted_at: spent_at,
+          provider_cost_usd: Decimal.new("12.50")
+        })
+
+      # Gasto debitado a un top-up: `spend` lo cuenta (todo coste), `limit_spend`
+      # no. La columna mensual es `spend`, así que aquí se ve.
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          user_id: no_member.id,
+          credit_topup_id: topup_owner.id,
+          model_requested: "gpt-4",
+          inserted_at: spent_at,
+          provider_cost_usd: Decimal.new("7.25")
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      aggregates = Tokengate.Credits.user_credit_aggregates()
+
+      for {user, expected} <- [
+            {with_member, Decimal.new("30.00")},
+            {no_member, Decimal.new("19.75")}
+          ] do
+        assert Decimal.equal?(Map.get(aggregates.spend, user.id), expected)
+
+        assert has_element?(
+                 view,
+                 "#spend-#{user.id}",
+                 "$" <> StatsHelpers.format_usd(expected)
+               )
+      end
     end
 
     test "credit column is sortable (desc default: most consumed first)", %{conn: conn} do
