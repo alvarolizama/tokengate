@@ -33,6 +33,9 @@ defmodule TokengateWeb.MaintenanceLive do
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:confirm_full_reset, false)
       |> assign(:confirm_sticky_reset, false)
+      |> assign(:confirm_purge, false)
+      |> assign(:purge_preview, nil)
+      |> assign(:purge_retention_days, Tokengate.Logs.PartitionWorker.retention_days())
       |> assign(:sticky_count, sticky_count())
       |> assign_catalog()
       |> require_admin_hook()
@@ -81,7 +84,7 @@ defmodule TokengateWeb.MaintenanceLive do
       socket.assigns.current_user,
       "settings.reset_all_usage",
       "usage",
-      nil,
+      "all",
       %{"models_purged" => purged.models, "providers_purged" => purged.providers}
     )
 
@@ -93,6 +96,62 @@ defmodule TokengateWeb.MaintenanceLive do
        :info,
        "Uso reseteado: logs y métricas a cero, #{purged.models} modelo(s) y " <>
          "#{purged.providers} proveedor(es) sin uso eliminados, rutas sticky liberadas."
+     )}
+  end
+
+  # Purga manual de historia: el preview se calcula AL ABRIR el modal (no en
+  # mount) para no pagar sus conteos en cada carga de la página, y el operador
+  # confirma viendo números: fecha de corte, particiones, filas estimadas.
+  @impl true
+  def handle_event("show_purge_confirm", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:purge_preview, Tokengate.Logs.Retention.preview())
+     |> assign(:confirm_purge, true)}
+  end
+
+  def handle_event("cancel_purge", _params, socket) do
+    {:noreply, socket |> assign(:confirm_purge, false) |> assign(:purge_preview, nil)}
+  end
+
+  # Borra la historia que ya pasó la retención (la MISMA ventana que el cron
+  # diario) y audita con los conteos reales. No toca contadores de consumo,
+  # presupuestos del mes, usuarios, keys, catálogo ni audit_logs: sólo los logs
+  # crudos vencidos, sus filas varadas en la partición default y el rollup de
+  # esos mismos días (simétrico, o las lecturas híbridas leerían ceros).
+  def handle_event("purge_expired", _params, socket) do
+    {:ok, result} = Tokengate.Logs.Retention.purge()
+
+    # `entity_id` is required by the audit changeset: passing nil here (as the
+    # reset below used to) made `Auditing.log` return an invalid changeset and
+    # the audit row was silently LOST. "history" is the stable label for this
+    # whole-table action.
+    Tokengate.Auditing.log(
+      socket.assigns.current_user,
+      "settings.purge_expired_logs",
+      "usage",
+      "history",
+      %{
+        "cutoff_day" => Date.to_iso8601(result.cutoff_day),
+        "retention_days" => result.retention_days,
+        "partitions_dropped" => result.partitions_dropped,
+        "default_deleted" => result.default[:deleted] || 0,
+        "rollup_deleted" => result.rollup[:deleted] || 0
+      }
+    )
+
+    {:noreply,
+     socket
+     |> assign(:confirm_purge, false)
+     |> assign(:purge_preview, nil)
+     |> put_flash(
+       :info,
+       gettext(
+         "Purged %{partitions} partition(s) and %{rows} rollup row(s) older than %{date}.",
+         partitions: length(result.partitions_dropped),
+         rows: result.rollup[:deleted] || 0,
+         date: Date.to_iso8601(result.cutoff_day)
+       )
      )}
   end
 
@@ -334,9 +393,113 @@ defmodule TokengateWeb.MaintenanceLive do
                 {gettext("Full reset")}
               </button>
             </div>
+
+            <div class="divider my-2"></div>
+
+            <%!-- Purga de historia vencida: la MISMA ventana que el cron diario
+                 (90 días por default), a demanda. No es un reset: no toca
+                 usuarios, keys, catálogo, presupuestos del mes ni contadores de
+                 consumo — sólo los logs viejos, sus filas varadas en la
+                 partición default y el rollup de esos días. --%>
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <h3 class="font-semibold text-base-content">
+                  {gettext("Purge history past the retention window")}
+                </h3>
+                <p class="text-sm text-base-content/60">
+                  {gettext(
+                    "Deletes the raw request logs older than the retention window (%{days} days, set by the nightly job's policy), the expired rows ever stranded in the default partition, and the hourly rollup of those same days.",
+                    days: @purge_retention_days
+                  )}
+                  {gettext(
+                    "Keeps users, services, API keys, the month's budgets, the durable consumption counters and audit logs."
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                phx-click="show_purge_confirm"
+                class="btn btn-error btn-outline btn-sm"
+                id="purge-expired-btn"
+              >
+                {gettext("Purge history")}
+              </button>
+            </div>
           </div>
         </div>
       </div>
+
+      <%!-- Confirmación de purga: muestra el corte y los números ANTES de borrar --%>
+      <.modal
+        :if={@confirm_purge and @purge_preview}
+        id="confirm-purge-modal"
+        title={gettext("Purge history past the retention window?")}
+        on_close="cancel_purge"
+        max_w="max-w-lg"
+      >
+        <div class="flex items-start gap-2 text-sm text-base-content/70">
+          <.icon name="hero-exclamation-triangle" class="w-5 h-5 text-error shrink-0" />
+          <div class="space-y-3">
+            <p>
+              {gettext("Deletes")} <strong>{gettext("permanently")}</strong>
+              {gettext("everything older than")}
+              <span class="font-mono" id="purge-cutoff">
+                {@purge_preview.cutoff_day |> Date.to_iso8601()}
+              </span>
+              {gettext("(the retention window, %{days} days):",
+                days: @purge_preview.retention_days
+              )}
+            </p>
+
+            <ul class="list-disc pl-5 space-y-1" id="purge-preview">
+              <li>
+                <span class="font-mono">{@purge_preview.partition_count}</span>
+                {gettext("expired daily partition(s)")}
+                <%= if @purge_preview.partition_count > 0 do %>
+                  <span class="text-base-content/50">
+                    ({@purge_preview.partitions |> Enum.map(& &1.name) |> Enum.join(", ")})
+                  </span>
+                <% end %>
+              </li>
+              <li>
+                <span class="font-mono">~{@purge_preview.rows_estimate}</span>
+                {gettext("rows (partition estimate)")}
+              </li>
+              <li>
+                <span class="font-mono">{@purge_preview.default_expired_rows}</span>
+                {gettext("expired rows stranded in the default partition")}
+              </li>
+              <li>
+                <span class="font-mono">{@purge_preview.rollup_rows}</span>
+                {gettext("hourly rollup rows of those days (purged together on purpose)")}
+              </li>
+            </ul>
+
+            <p>
+              {gettext(
+                "It cannot be recovered. Budget enforcement, the durable consumption counters and audit logs are NOT touched."
+              )}
+            </p>
+          </div>
+        </div>
+        <:footer>
+          <button type="button" phx-click="cancel_purge" class="btn btn-ghost btn-sm">
+            {gettext("Cancel")}
+          </button>
+          <button
+            type="button"
+            phx-click="purge_expired"
+            class="btn btn-error btn-sm"
+            id="confirm-purge-btn"
+            disabled={
+              @purge_preview.partition_count == 0 and
+                @purge_preview.default_expired_rows == 0 and @purge_preview.rollup_rows == 0
+            }
+          >
+            {gettext("Yes, purge expired history")}
+          </button>
+        </:footer>
+      </.modal>
 
       <%!-- Confirmation modal: full reset (usage + unused catalog) --%>
       <.modal

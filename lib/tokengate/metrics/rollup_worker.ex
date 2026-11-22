@@ -383,8 +383,14 @@ defmodule Tokengate.Metrics.RollupWorker do
         state
 
       _ ->
-        prune(state)
-        %{state | last_prune_day: today}
+        # Solo se avanza el día cuando el prune REALMENTE corrió: marcarlo tras
+        # un crash dejaba la asimetría raw/rollup (el cron de particiones sí
+        # dropea el raw) sin reintento hasta el próximo día calendario, y el
+        # guard de paridad caía a raw para toda ventana que cruzara el corte.
+        case prune(state) do
+          :ok -> %{state | last_prune_day: today}
+          :error -> state
+        end
     end
   end
 
@@ -397,9 +403,12 @@ defmodule Tokengate.Metrics.RollupWorker do
 
       {:ok, %{deleted: deleted, cutoff_day: cutoff}} ->
         Logger.info("RollupWorker: pruned #{deleted} rollup rows before #{cutoff}")
+        :ok
     end
   rescue
-    e -> Logger.error("RollupWorker: prune crashed: #{inspect(e)}")
+    e ->
+      Logger.error("RollupWorker: prune crashed: #{inspect(e)}")
+      :error
   end
 
   defp floor_hour(%DateTime{} = dt), do: %{dt | minute: 0, second: 0, microsecond: {0, 0}}

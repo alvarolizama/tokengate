@@ -645,7 +645,7 @@ defmodule TokengateWeb.ServiceStatsBody do
     logs =
       case mode do
         :reset ->
-          Logs.list_logs(Map.put(base_filters, "limit", params.page_size))
+          Logs.list_logs_compact(Map.put(base_filters, "limit", params.page_size))
 
         :more ->
           cursor_filters =
@@ -655,7 +655,7 @@ defmodule TokengateWeb.ServiceStatsBody do
               base_filters
             end
 
-          Logs.list_logs(Map.put(cursor_filters, "limit", params.page_size))
+          Logs.list_logs_compact(Map.put(cursor_filters, "limit", params.page_size))
       end
 
     %{logs: logs, has_more: length(logs) == params.page_size, cursor: next_cursor(logs)}

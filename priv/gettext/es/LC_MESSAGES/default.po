@@ -6841,3 +6841,73 @@ msgstr "Paleta de iconos"
 #, elixir-autogen, elixir-format
 msgid "Reasoning effort (advanced)"
 msgstr "Esfuerzo de razonamiento (avanzado)"
+
+#: lib/tokengate_web/live/maintenance_live.ex:395
+#, elixir-autogen, elixir-format
+msgid "Purge history past the retention window"
+msgstr "Purgar historia fuera de la ventana de retención"
+
+#: lib/tokengate_web/live/maintenance_live.ex:399
+#, elixir-autogen, elixir-format
+msgid "Deletes the raw request logs older than the retention window (%{days} days, set by the nightly job's policy), the expired rows ever stranded in the default partition, and the hourly rollup of those same days."
+msgstr "Borra los logs crudos más viejos que la ventana de retención (%{days} días, la política del job nocturno), las filas vencidas que quedaron varadas en la partición default y el rollup horario de esos mismos días."
+
+#: lib/tokengate_web/live/maintenance_live.ex:404
+#, elixir-autogen, elixir-format
+msgid "Keeps users, services, API keys, the month's budgets, the durable consumption counters and audit logs."
+msgstr "Conserva usuarios, servicios, API keys, los presupuestos del mes, los contadores durables de consumo y los logs de auditoría."
+
+#: lib/tokengate_web/live/maintenance_live.ex:414
+#, elixir-autogen, elixir-format
+msgid "Purge history"
+msgstr "Purgar historia"
+
+#: lib/tokengate_web/live/maintenance_live.ex:427
+#, elixir-autogen, elixir-format
+msgid "Purge history past the retention window?"
+msgstr "¿Purgar la historia fuera de la ventana de retención?"
+
+#: lib/tokengate_web/live/maintenance_live.ex:436
+#, elixir-autogen, elixir-format
+msgid "everything older than"
+msgstr "todo lo anterior a"
+
+#: lib/tokengate_web/live/maintenance_live.ex:440
+#, elixir-autogen, elixir-format
+msgid "(the retention window, %{days} days):"
+msgstr "(la ventana de retención, %{days} días):"
+
+#: lib/tokengate_web/live/maintenance_live.ex:448
+#, elixir-autogen, elixir-format
+msgid "expired daily partition(s)"
+msgstr "partición(es) diaria(s) vencida(s)"
+
+#: lib/tokengate_web/live/maintenance_live.ex:456
+#, elixir-autogen, elixir-format
+msgid "rows (partition estimate)"
+msgstr "filas (estimación de la partición)"
+
+#: lib/tokengate_web/live/maintenance_live.ex:460
+#, elixir-autogen, elixir-format
+msgid "expired rows stranded in the default partition"
+msgstr "filas vencidas varadas en la partición default"
+
+#: lib/tokengate_web/live/maintenance_live.ex:464
+#, elixir-autogen, elixir-format
+msgid "hourly rollup rows of those days (purged together on purpose)"
+msgstr "filas del rollup horario de esos días (se purgan juntas a propósito)"
+
+#: lib/tokengate_web/live/maintenance_live.ex:470
+#, elixir-autogen, elixir-format
+msgid "It cannot be recovered. Budget enforcement, the durable consumption counters and audit logs are NOT touched."
+msgstr "No se puede recuperar. El enforcement de presupuesto, los contadores durables de consumo y los logs de auditoría NO se tocan."
+
+#: lib/tokengate_web/live/maintenance_live.ex:484
+#, elixir-autogen, elixir-format
+msgid "Yes, purge expired history"
+msgstr "Sí, purgar la historia vencida"
+
+#: lib/tokengate_web/live/maintenance_live.ex:120
+#, elixir-autogen, elixir-format
+msgid "Purged %{partitions} partition(s) and %{rows} rollup row(s) older than %{date}."
+msgstr "Purgadas %{partitions} partición(es) y %{rows} fila(s) de rollup anteriores a %{date}."

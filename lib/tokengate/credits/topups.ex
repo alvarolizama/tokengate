@@ -4,9 +4,11 @@ defmodule Tokengate.Credits.Topups do
 
   Un top-up es crédito extra de un solo uso, por usuario o servicio, con
   expiración opcional contada desde su creación (`expires_in_days` nil ⇒ nunca
-  vence). A diferencia del modelo viejo, el monto vive en USD y el **consumo se
-  mide contra los logs** (`request_logs.credit_topup_id`), no contra una
-  suscripción.
+  vence).  A diferencia del modelo viejo, el monto vive en USD y el **consumo se
+  mide contra un contador durable** (`topup_consumption_counters`, que el
+  trigger de `request_logs` mantiene exacto), no contra una suscripción ni
+  contra los logs crudos — esos se podan a los 90 días y un top-up longevo
+  resucitaba crédito ya gastado.
 
   ## Orden de drenado
 
@@ -20,6 +22,7 @@ defmodule Tokengate.Credits.Topups do
 
   alias Tokengate.Credits.Topup
   alias Tokengate.Logs.RequestLog
+  alias Tokengate.Metrics.TopupConsumptionCounter
   alias Tokengate.Repo
 
   # ---------------------------------------------------------------------------
@@ -101,15 +104,42 @@ defmodule Tokengate.Credits.Topups do
   @consumption_grace_hours 24
 
   @doc """
-  Consumo de un top-up: la suma de lo asentado en los logs con su id.
+  Consumo de un top-up: el total durable del contador
+  (`topup_consumption_counters`), que el trigger de `request_logs` mantiene
+  exacto en la misma transacción del log.
 
-  La lectura va acotada por `inserted_at >= creación del top-up - gracia`
-  (ver `consumption_floor/1`): sin la cota, cada `consumed_usd/1` es un
-  seq scan de todas las particiones de `request_logs`.
+  **Por qué NO se suma sobre los logs**: `request_logs` conserva 90 días
+  (`PartitionWorker`). Un top-up sin expiración más viejo que la retención
+  perdía sus débitos con las particiones, su remanente volvía a subir y el
+  sujeto recuperaba crédito ya gastado (`remaining_usd/1` → `grants_credit?/2`),
+  y encima el re-seed del `Budgets.Manager` consolidaba el valor inflado.
+
+  Fallback: si el top-up no tiene fila de contador se suma sobre los logs
+  acotados por `consumption_floor/1` (ver el doc). Sólo aplica a filas sin
+  consumo registrado — con la migración que crea el contador ya backfilleado,
+  todo débito vivo tiene fila.
   """
   def consumed_usd(%Topup{id: id} = topup) do
+    case counted_consumed_micro(id) do
+      nil -> consumed_usd_from_logs(topup)
+      micro -> micro_to_usd(micro)
+    end
+  end
+
+  defp counted_consumed_micro(nil), do: nil
+
+  defp counted_consumed_micro(topup_id) do
+    TopupConsumptionCounter
+    |> where([t], t.topup_id == ^topup_id)
+    |> select([t], t.consumed_micro)
+    |> Repo.one()
+  end
+
+  #  Suma sobre los logs con cota inferior (creación del top-up − gracia): sin
+  #  la cota, cada lectura es un seq scan de todas las particiones vivas.
+  defp consumed_usd_from_logs(topup) do
     RequestLog
-    |> where([rl], rl.credit_topup_id == ^id)
+    |> where([rl], rl.credit_topup_id == ^topup.id)
     |> consume_since(consumption_floor(topup))
     |> select([rl], fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
     |> Repo.one()
@@ -233,12 +263,41 @@ defmodule Tokengate.Credits.Topups do
 
   defp consumed_by_topup_ids([]), do: %{}
 
-  # Same date bound as `consumed_usd/1`, applied once for the whole batch: all
-  # the given top-ups are live rows, so the OLDEST creation (minus grace) is
-  # the earliest instant any of them can have been debited at. Bounding the
-  # batch by that minimum keeps this ONE query instead of one per top-up, while
-  # still skipping the partitions older than the oldest top-up.
+  # Counters first (one query for the whole batch). Only the top-ups WITHOUT a
+  # counter row fall back to the log sum — that is the pre-backfill case: the
+  # migration backfills every top-up the retention still holds, so in practice
+  # the fallback only covers a top-up created between the backfill and its first
+  # debit, where the log sum and the counter agree anyway.
   defp consumed_by_topup_ids(topups) do
+    ids = Enum.map(topups, & &1.id)
+    counted = counted_micro_by_ids(ids)
+
+    from_logs =
+      case Enum.reject(topups, &Map.has_key?(counted, &1.id)) do
+        [] -> %{}
+        missing -> consumed_by_topup_ids_from_logs(missing)
+      end
+
+    Map.new(topups, fn topup ->
+      micro =
+        case Map.fetch(counted, topup.id) do
+          {:ok, micro} -> micro
+          :error -> Map.get(from_logs, topup.id, 0)
+        end
+
+      {topup.id, micro_to_usd(micro)}
+    end)
+  end
+
+  defp counted_micro_by_ids(ids) do
+    TopupConsumptionCounter
+    |> where([t], t.topup_id in ^ids)
+    |> select([t], {t.topup_id, t.consumed_micro})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp consumed_by_topup_ids_from_logs(topups) do
     ids = Enum.map(topups, & &1.id)
 
     RequestLog
@@ -247,7 +306,23 @@ defmodule Tokengate.Credits.Topups do
     |> group_by([rl], rl.credit_topup_id)
     |> select([rl], {rl.credit_topup_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
     |> Repo.all()
-    |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+    |> Map.new(fn {id, cost} ->
+      # Log sums are USD; normalize to micro so the caller has one unit.
+      {id,
+       cost
+       |> Decimal.mult(Decimal.new(1_000_000))
+       |> Decimal.round(0, :half_up)
+       |> Decimal.to_integer()}
+    end)
+  end
+
+  # micro-USD -> USD with the same 6 decimals `numeric(12,6)` stores, so the
+  # value is byte-identical to what the old log sum returned.
+  defp micro_to_usd(micro) do
+    micro
+    |> Decimal.new()
+    |> Decimal.div(Decimal.new(1_000_000))
+    |> Decimal.round(6, :half_up)
   end
 
   defp earliest_consumption_floor(topups) do

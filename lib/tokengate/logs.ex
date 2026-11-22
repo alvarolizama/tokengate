@@ -19,6 +19,7 @@ defmodule Tokengate.Logs do
   alias Tokengate.Repo
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Accounts.GroupMember
+  alias Tokengate.Metrics.ConsumptionCounters
   alias Tokengate.Metrics.RequestMetricsHourly
 
   @default_limit 50
@@ -220,6 +221,39 @@ defmodule Tokengate.Logs do
     |> preload(group_member: [:user, :group])
     |> preload(:service)
     |> preload(:provider)
+    |> Repo.all()
+  end
+
+  @doc """
+  The log listing the per-subject stats pages render: same filters, order and
+  keyset cursor as `list_logs/1`, but a partial struct with ONLY the columns
+  those tables paint (date, model, agent, streaming, status, tokens, cost,
+  latency) and no preloads.
+
+  `list_logs/1` stays as it is for the `/logs` feed and Monitoring, which do
+  render the associated member/group/service/provider: sharing the full loader
+  made every stats page pay 5 preload queries and a `SELECT *` for nothing.
+  """
+  def list_logs_compact(filters \\ %{}) do
+    limit = clamp_limit(Map.get(filters, :limit) || Map.get(filters, "limit"))
+
+    RequestLog
+    |> apply_log_filters(filters)
+    |> order_by([rl], desc: rl.inserted_at, desc: rl.id)
+    |> limit(^limit)
+    |> select([rl], %RequestLog{
+      id: rl.id,
+      inserted_at: rl.inserted_at,
+      model_requested: rl.model_requested,
+      model_responded: rl.model_responded,
+      client_agent: rl.client_agent,
+      streaming: rl.streaming,
+      status_code: rl.status_code,
+      prompt_tokens: rl.prompt_tokens,
+      completion_tokens: rl.completion_tokens,
+      provider_cost_usd: rl.provider_cost_usd,
+      latency_ms: rl.latency_ms
+    })
     |> Repo.all()
   end
 
@@ -1240,6 +1274,19 @@ defmodule Tokengate.Logs do
   """
   @spec total_spend_by_user() :: %{term() => Decimal.t()}
   def total_spend_by_user do
+    # Durable counters first: one row per user per UTC day, so the lifetime
+    # total is an index range instead of a GROUP BY over every retained
+    # partition — and it keeps meaning "lifetime" after the retention drops old
+    # days (a raw sum silently degrades to "last 90 days").
+    if ConsumptionCounters.populated?() do
+      ConsumptionCounters.spend_by_subject(:user)
+    else
+      raw_total_spend_by_user()
+    end
+  end
+
+  # Raw/hybrid fallback, used only until the counters are backfilled.
+  defp raw_total_spend_by_user do
     if rollup_hybrid?() do
       cutoff = rollup_cutoff()
       rollup = rollup_spend_by_user(cutoff)
@@ -1288,8 +1335,12 @@ defmodule Tokengate.Logs do
   # re-aggregates the tail every minute), so `hour_utc < cutoff` never reads a
   # partially-written bucket.
   defp rollup_spend_by_user(%DateTime{} = cutoff) do
+    # `day` is the leading column of every rollup index: without the upper
+    # bound the planner cannot use it and the lifetime read seq-scans the
+    # rollup table.
     RequestMetricsHourly
     |> where([m], not is_nil(m.user_id) and m.hour_utc < ^cutoff)
+    |> where([m], m.day <= ^DateTime.to_date(cutoff))
     |> group_by([m], m.user_id)
     |> select([m], {m.user_id, fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)})
     |> Repo.all(timeout: stats_timeout())
@@ -1343,16 +1394,27 @@ defmodule Tokengate.Logs do
   def total_spend_by_service(opts \\ []) do
     {from, to} = spend_window(opts)
 
-    RequestLog
-    |> where([rl], not is_nil(rl.service_id))
-    |> maybe_spend_from(from)
-    |> maybe_spend_to(to)
-    |> group_by([rl], rl.service_id)
-    |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-    # Full-partition-spanning aggregate over a growing table: needs the
-    # analytics budget, not the default 15s.
-    |> Repo.all(timeout: stats_timeout())
-    |> Map.new(fn {service_id, cost} -> {service_id, Decimal.new(to_string(cost))} end)
+    # Lifetime (the "Total spend" column) comes from the durable counters: the
+    # service axis has no rollup dimension, so this used to be a grouped scan of
+    # every retained partition. An explicit window stays raw — the counters are
+    # day-granular and a mid-day bound would over-include.
+    if is_nil(from) and is_nil(to) and ConsumptionCounters.populated?() do
+      ConsumptionCounters.spend_by_subject(:service)
+    else
+      RequestLog
+      |> where([rl], not is_nil(rl.service_id))
+      |> maybe_spend_from(from)
+      |> maybe_spend_to(to)
+      |> group_by([rl], rl.service_id)
+      |> select(
+        [rl],
+        {rl.service_id, fragment("COALESCE(SUM(?::numeric), 0)", rl.provider_cost_usd)}
+      )
+      # Full-partition-spanning aggregate over a growing table: needs the
+      # analytics budget, not the default 15s.
+      |> Repo.all(timeout: stats_timeout())
+      |> Map.new(fn {service_id, cost} -> {service_id, Decimal.new(to_string(cost))} end)
+    end
   end
 
   defp spend_window(opts) when is_list(opts), do: spend_window(Map.new(opts))
@@ -1401,6 +1463,13 @@ defmodule Tokengate.Logs do
       # Truncate en la MISMA transacción: si algo falla, no queda el rollup
       # limpio con logs crudos (o al revés).
       Repo.query!("TRUNCATE TABLE request_metrics_hourly")
+
+      # Los contadores durables son DERIVADOS de los logs que se acaban de
+      # borrar: dejarlos vivos reportaría gasto de filas que ya no existen
+      # (gasto fantasma en todos los totales) y un top-up que figura drenado
+      # para siempre. Van en la misma transacción por la misma razón.
+      Repo.query!("TRUNCATE TABLE consumption_counters")
+      Repo.query!("TRUNCATE TABLE topup_consumption_counters")
     end)
 
     # Jobs pendientes de la cola :logs cancelados (ejecutarlos re-insertaría

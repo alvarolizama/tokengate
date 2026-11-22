@@ -70,7 +70,23 @@ defmodule TokengateWeb.SettingsLiveTest do
 
     attrs = if cost, do: Map.put(attrs, :provider_cost_usd, cost), else: attrs
 
+    attrs =
+      if at = Keyword.get(opts, :inserted_at), do: Map.put(attrs, :inserted_at, at), else: attrs
+
     {:ok, _log} = Logs.log_request(attrs)
+  end
+
+  # Una partición VENCIDA (120 días) con un log dentro: el escenario que la
+  # purga manual existe para resolver. DDL + sandbox: se revierte al terminar.
+  defp old_partition_with_log! do
+    day = Date.add(Date.utc_today(), -120)
+    {:ok, _} = Tokengate.Logs.PartitionWorker.ensure_partition(day)
+    insert_log(inserted_at: DateTime.new!(day, ~T[12:00:00], "Etc/UTC"))
+    day
+  end
+
+  defp partition_exists?(name) do
+    Tokengate.Repo.query!("SELECT to_regclass($1)", ["public." <> name]).rows != [[nil]]
   end
 
   describe "admin access" do
@@ -193,7 +209,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       assert render(view) =~ "Sticky sessions reiniciadas"
     end
 
-    test "la purga de logs vive solo en el reset total", %{conn: conn} do
+    test "no hay purga de logs sin alcance; el reset total sigue borrando todo", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
       insert_log()
       assert Logs.list_logs(%{limit: 1000}) |> length() > 0
@@ -201,11 +217,11 @@ defmodule TokengateWeb.SettingsLiveTest do
       conn = login(conn, admin, pass)
       {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
-      # La acción "Delete log history" ya no existe, ni su botón ni su modal.
+      # La acción vieja "Delete log history" (sin alcance) no existe.
       refute has_element?(view, "#reset-logs-btn")
       refute has_element?(view, "#confirm-reset-logs-btn")
 
-      # El borrado sigue ocurriendo dentro del reset total, que es lo que queda.
+      # El borrado de TODO sigue ocurriendo dentro del reset total.
       view |> element("#reset-all-usage-btn") |> render_click()
       # El contenedor es el .modal único: su id va en el div raíz.
       assert has_element?(view, "#confirm-full-reset-modal")
@@ -215,6 +231,128 @@ defmodule TokengateWeb.SettingsLiveTest do
 
       assert render(view) =~ "Uso reseteado"
       assert Logs.list_logs(%{limit: 1000}) == []
+    end
+
+    # La purga por retención es otra cosa: NO borra todo, borra lo que ya pasó
+    # la ventana de retención (la misma del cron nocturno), y lo dice con
+    # números antes de tocar nada.
+    test "purga por retención: preview al abrir y cancelar no borra", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      old_day = old_partition_with_log!()
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
+
+      view |> element("#purge-expired-btn") |> render_click()
+
+      assert has_element?(view, "#confirm-purge-modal")
+      assert has_element?(view, "#purge-cutoff", Date.to_iso8601(Date.add(Date.utc_today(), -90)))
+      # El preview lista la partición vencida por su nombre.
+      assert has_element?(
+               view,
+               "#purge-preview",
+               Tokengate.Logs.PartitionWorker.partition_name(old_day)
+             )
+
+      view |> element("#confirm-purge-modal button", "Cancelar") |> render_click()
+      refute has_element?(view, "#confirm-purge-modal")
+      assert partition_exists?(Tokengate.Logs.PartitionWorker.partition_name(old_day))
+    end
+
+    test "purga por retención: confirma, dropea lo vencido y audita", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      old_day = old_partition_with_log!()
+      name = Tokengate.Logs.PartitionWorker.partition_name(old_day)
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
+
+      view |> element("#purge-expired-btn") |> render_click()
+      view |> element("#confirm-purge-btn") |> render_click()
+
+      refute partition_exists?(name)
+      refute has_element?(view, "#confirm-purge-modal")
+      assert render(view) =~ "Purgadas"
+
+      audit =
+        Tokengate.Repo.one(
+          from(a in "audit_logs",
+            where: a.action == "settings.purge_expired_logs",
+            select: a.changes
+          )
+        )
+
+      # El audit guarda los conteos reales: la partición del fixture está entre
+      # las dropeadas (junto a la partición inicial hardcodeada de la migración,
+      # también vencida en este entorno).
+      assert %{"retention_days" => 90, "partitions_dropped" => dropped} = audit
+      assert name in dropped
+      assert Date.from_iso8601!(audit["cutoff_day"]) == Date.add(Date.utc_today(), -90)
+    end
+
+    test "la purga no toca los contadores de consumo ni el mes en curso", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      # Un log de HOY (mes y día en curso) además del vencido.
+      insert_log(cost: Decimal.new("2.00"))
+      _old_day = old_partition_with_log!()
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
+
+      today_spend =
+        Tokengate.Repo.one(
+          from(c in "consumption_counters",
+            where: not is_nil(c.user_id) and c.day == ^Date.utc_today(),
+            select: sum(c.spend_micro)
+          )
+        )
+
+      assert today_spend > 0
+
+      view |> element("#purge-expired-btn") |> render_click()
+      view |> element("#confirm-purge-btn") |> render_click()
+
+      assert Tokengate.Repo.one(
+               from(c in "consumption_counters",
+                 where: not is_nil(c.user_id) and c.day == ^Date.utc_today(),
+                 select: sum(c.spend_micro)
+               )
+             ) == today_spend
+    end
+
+    # Si el prune del rollup falló (o el cron dropeó el raw antes), lo único
+    # vencido son filas de rollup. Con el botón mirando sólo particiones y
+    # strays, la UI quedaba bloqueada justo cuando hacía falta reparar la
+    # asimetría raw/rollup — y el guard de paridad caía a raw hasta el día
+    # siguiente.
+    test "el botón se habilita cuando sólo quedan filas de rollup vencidas", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      old_day = Date.add(Date.utc_today(), -120)
+
+      Tokengate.Repo.query!(
+        """
+        INSERT INTO request_metrics_hourly (day, hour_utc, request_count, cost_micro)
+        VALUES ($1, $2, 3, 1234)
+        """,
+        [old_day, DateTime.new!(old_day, ~T[10:00:00], "Etc/UTC")]
+      )
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
+
+      view |> element("#purge-expired-btn") |> render_click()
+
+      assert has_element?(view, "#confirm-purge-btn:not([disabled])")
+
+      view |> element("#confirm-purge-btn") |> render_click()
+
+      assert Tokengate.Repo.one(
+               from(m in "request_metrics_hourly",
+                 where: m.day == ^old_day,
+                 select: count(m.id)
+               )
+             ) == 0
     end
   end
 

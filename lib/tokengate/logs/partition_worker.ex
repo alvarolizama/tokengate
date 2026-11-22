@@ -278,23 +278,45 @@ defmodule Tokengate.Logs.PartitionWorker do
   """
   @spec cleanup_old_partitions(non_neg_integer() | nil) :: {:ok, [String.t()]}
   def cleanup_old_partitions(days \\ nil) do
-    cutoff = Date.add(Date.utc_today(), -(days || retention_days()))
-
     dropped =
-      list_partition_names()
-      |> Enum.filter(fn name ->
-        case partition_date(name) do
-          nil -> false
-          date -> Date.compare(date, cutoff) == :lt
-        end
-      end)
-      |> Enum.map(fn name ->
-        Repo.query!("DROP TABLE #{name}")
+      expired_partitions(days)
+      |> Enum.map(fn %{name: name} ->
+        # IF EXISTS: the nightly cron and an operator's manual purge can run
+        # at the same time, and the loser of that race must be a no-op — a
+        # bare DROP TABLE raises `undefined_table` and kills the Oban job
+        # (three attempts, then the run is gone).
+        Repo.query!("DROP TABLE IF EXISTS #{name}")
         name
       end)
 
     {:ok, dropped}
   end
+
+  @doc """
+  The named daily partitions that fall before the retention cutoff
+  (`today - days`, `retention_days/0` when omitted), as `%{name:, day:}`.
+
+  The default partition is never included (`partition_date/1` refuses any name
+  that is not `request_logs_YYYY_MM_DD`), and the cutoff arithmetic lives here
+  only — the nightly cleanup and the manual purge in Maintenance must never
+  disagree about which day is the boundary.
+  """
+  @spec expired_partitions(non_neg_integer() | nil) :: [%{name: String.t(), day: Date.t()}]
+  def expired_partitions(days \\ nil) do
+    cutoff = cutoff_day(days)
+
+    list_partition_names()
+    |> Enum.flat_map(fn name ->
+      case partition_date(name) do
+        nil -> []
+        date -> if Date.compare(date, cutoff) == :lt, do: [%{name: name, day: date}], else: []
+      end
+    end)
+  end
+
+  @doc "The retention cutoff day: `today - days` (`retention_days/0` when nil)."
+  @spec cutoff_day(non_neg_integer() | nil) :: Date.t()
+  def cutoff_day(days \\ nil), do: Date.add(Date.utc_today(), -(days || retention_days()))
 
   # ---------------------------------------------------------------------------
   # Prune of the default partition (F42)

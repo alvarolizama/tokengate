@@ -252,6 +252,24 @@ defmodule Tokengate.Logs.PartitionWorkerTest do
       refute PartitionWorker.partition_name(@future_a) in dropped
       assert partition_exists?(PartitionWorker.partition_name(@future_a))
     end
+
+    # The nightly cron and an operator's manual purge can overlap. The loser
+    # used to raise `undefined_table` (bare DROP TABLE) and burn the Oban job's
+    # attempts; the statement must be a no-op instead.
+    test "dropping an already-dropped partition is a no-op, not a crash" do
+      {:ok, :created} = PartitionWorker.ensure_partition(@old)
+      name = PartitionWorker.partition_name(@old)
+
+      {:ok, first} = PartitionWorker.cleanup_old_partitions(0)
+      assert name in first
+      refute partition_exists?(name)
+
+      # A second run no longer lists it (the catalog row is gone), and the
+      # statement itself survives the race window where two callers both
+      # listed the name before either dropped it.
+      assert {:ok, []} = PartitionWorker.cleanup_old_partitions(0)
+      assert %{command: :drop_table} = Tokengate.Repo.query!("DROP TABLE IF EXISTS #{name}")
+    end
   end
 
   describe "perform/1" do

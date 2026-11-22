@@ -49,6 +49,104 @@ $$;
 
 
 --
+-- Name: request_logs_bump_consumption_counters(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.request_logs_bump_consumption_counters() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  -- Per-user bucket (subscription subjects). `request_logs.user_id` is the
+  -- durable identity; rows with no user are pure service traffic.
+  IF NEW.user_id IS NOT NULL THEN
+    INSERT INTO consumption_counters AS c
+      (user_id, day, request_count, error_count, spend_micro, limit_spend_micro,
+       prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens)
+    VALUES (
+      NEW.user_id,
+      -- `inserted_at` is a timestamp WITHOUT time zone that already holds
+      -- UTC, so the day is its own date: converting through `AT TIME ZONE`
+      -- would re-apply the session's zone and shift the bucket.
+      (NEW.inserted_at)::date,
+      1,
+      CASE WHEN NEW.status_code >= 400 THEN 1 ELSE 0 END,
+      COALESCE(ROUND(NEW.provider_cost_usd * 1000000), 0)::bigint,
+      CASE WHEN NEW.credit_topup_id IS NULL
+           THEN COALESCE(ROUND(NEW.provider_cost_usd * 1000000), 0)::bigint
+           ELSE 0 END,
+      COALESCE(NEW.prompt_tokens, 0),
+      COALESCE(NEW.completion_tokens, 0),
+      COALESCE(NEW.cache_read_tokens, 0),
+      COALESCE(NEW.cache_creation_tokens, 0)
+    )
+    ON CONFLICT (user_id, day) WHERE user_id IS NOT NULL DO UPDATE SET
+      request_count         = c.request_count         + EXCLUDED.request_count,
+      error_count           = c.error_count           + EXCLUDED.error_count,
+      spend_micro           = c.spend_micro           + EXCLUDED.spend_micro,
+      limit_spend_micro     = c.limit_spend_micro     + EXCLUDED.limit_spend_micro,
+      prompt_tokens         = c.prompt_tokens         + EXCLUDED.prompt_tokens,
+      completion_tokens     = c.completion_tokens     + EXCLUDED.completion_tokens,
+      cache_read_tokens     = c.cache_read_tokens     + EXCLUDED.cache_read_tokens,
+      cache_creation_tokens = c.cache_creation_tokens + EXCLUDED.cache_creation_tokens,
+      updated_at            = (now() AT TIME ZONE 'utc');
+  END IF;
+
+  IF NEW.service_id IS NOT NULL THEN
+    INSERT INTO consumption_counters AS c
+      (service_id, day, request_count, error_count, spend_micro, limit_spend_micro,
+       prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens)
+    VALUES (
+      NEW.service_id,
+      (NEW.inserted_at)::date,
+      1,
+      CASE WHEN NEW.status_code >= 400 THEN 1 ELSE 0 END,
+      COALESCE(ROUND(NEW.provider_cost_usd * 1000000), 0)::bigint,
+      CASE WHEN NEW.credit_topup_id IS NULL
+           THEN COALESCE(ROUND(NEW.provider_cost_usd * 1000000), 0)::bigint
+           ELSE 0 END,
+      COALESCE(NEW.prompt_tokens, 0),
+      COALESCE(NEW.completion_tokens, 0),
+      COALESCE(NEW.cache_read_tokens, 0),
+      COALESCE(NEW.cache_creation_tokens, 0)
+    )
+    ON CONFLICT (service_id, day) WHERE service_id IS NOT NULL DO UPDATE SET
+      request_count         = c.request_count         + EXCLUDED.request_count,
+      error_count           = c.error_count           + EXCLUDED.error_count,
+      spend_micro           = c.spend_micro           + EXCLUDED.spend_micro,
+      limit_spend_micro     = c.limit_spend_micro     + EXCLUDED.limit_spend_micro,
+      prompt_tokens         = c.prompt_tokens         + EXCLUDED.prompt_tokens,
+      completion_tokens     = c.completion_tokens     + EXCLUDED.completion_tokens,
+      cache_read_tokens     = c.cache_read_tokens     + EXCLUDED.cache_read_tokens,
+      cache_creation_tokens = c.cache_creation_tokens + EXCLUDED.cache_creation_tokens,
+      updated_at            = (now() AT TIME ZONE 'utc');
+  END IF;
+
+  -- `request_logs.credit_topup_id` deliberately has no FK: the historical
+  -- attribution must survive the deletion of a top-up. This counter does
+  -- have one, so a late log for a deleted top-up would raise a
+  -- foreign-key violation and take down the whole log insert. Guard the
+  -- branch instead: no top-up, no counter to drain.
+  IF NEW.credit_topup_id IS NOT NULL
+     AND EXISTS (SELECT 1 FROM credit_topups cp WHERE cp.id = NEW.credit_topup_id) THEN
+    INSERT INTO topup_consumption_counters AS t
+      (topup_id, consumed_micro, request_count)
+    VALUES (
+      NEW.credit_topup_id,
+      COALESCE(ROUND(NEW.provider_cost_usd * 1000000), 0)::bigint,
+      1
+    )
+    ON CONFLICT (topup_id) DO UPDATE SET
+      consumed_micro = t.consumed_micro + EXCLUDED.consumed_micro,
+      request_count  = t.request_count  + EXCLUDED.request_count,
+      updated_at     = (now() AT TIME ZONE 'utc');
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+
+--
 -- Name: request_logs_set_user_id(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -290,6 +388,29 @@ CREATE TABLE public.catalog_sync_state (
     labs_inserted integer DEFAULT 0 NOT NULL,
     labs_updated integer DEFAULT 0 NOT NULL,
     labs_stale integer DEFAULT 0 NOT NULL
+);
+
+
+--
+-- Name: consumption_counters; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.consumption_counters (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid,
+    service_id uuid,
+    day date NOT NULL,
+    request_count bigint DEFAULT 0 NOT NULL,
+    error_count bigint DEFAULT 0 NOT NULL,
+    spend_micro bigint DEFAULT 0 NOT NULL,
+    limit_spend_micro bigint DEFAULT 0 NOT NULL,
+    prompt_tokens bigint DEFAULT 0 NOT NULL,
+    completion_tokens bigint DEFAULT 0 NOT NULL,
+    cache_read_tokens bigint DEFAULT 0 NOT NULL,
+    cache_creation_tokens bigint DEFAULT 0 NOT NULL,
+    inserted_at timestamp(0) without time zone DEFAULT (now() AT TIME ZONE 'utc'::text) NOT NULL,
+    updated_at timestamp(0) without time zone DEFAULT (now() AT TIME ZONE 'utc'::text) NOT NULL,
+    CONSTRAINT consumption_counters_subject_xor CHECK ((num_nonnulls(user_id, service_id) = 1))
 );
 
 
@@ -2882,6 +3003,19 @@ CREATE TABLE public.telegram_links (
 
 
 --
+-- Name: topup_consumption_counters; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.topup_consumption_counters (
+    topup_id uuid NOT NULL,
+    consumed_micro bigint DEFAULT 0 NOT NULL,
+    request_count bigint DEFAULT 0 NOT NULL,
+    inserted_at timestamp(0) without time zone DEFAULT (now() AT TIME ZONE 'utc'::text) NOT NULL,
+    updated_at timestamp(0) without time zone DEFAULT (now() AT TIME ZONE 'utc'::text) NOT NULL
+);
+
+
+--
 -- Name: users; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3341,6 +3475,14 @@ ALTER TABLE ONLY public.catalog_providers
 
 ALTER TABLE ONLY public.catalog_sync_state
     ADD CONSTRAINT catalog_sync_state_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: consumption_counters consumption_counters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.consumption_counters
+    ADD CONSTRAINT consumption_counters_pkey PRIMARY KEY (id);
 
 
 --
@@ -3920,6 +4062,14 @@ ALTER TABLE ONLY public.telegram_links
 
 
 --
+-- Name: topup_consumption_counters topup_consumption_counters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topup_consumption_counters
+    ADD CONSTRAINT topup_consumption_counters_pkey PRIMARY KEY (topup_id);
+
+
+--
 -- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4212,6 +4362,20 @@ CREATE INDEX audit_logs_default_user_id_idx ON public.audit_logs_default USING b
 --
 
 CREATE INDEX catalog_providers_status_index ON public.catalog_providers USING btree (status);
+
+
+--
+-- Name: consumption_counters_user_day_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX consumption_counters_user_day_idx ON public.consumption_counters USING btree (user_id, day) WHERE (user_id IS NOT NULL);
+
+
+--
+-- Name: consumption_counters_service_day_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX consumption_counters_service_day_idx ON public.consumption_counters USING btree (service_id, day) WHERE (service_id IS NOT NULL);
 
 
 --
@@ -13210,6 +13374,13 @@ CREATE TRIGGER audit_logs_append_only_trigger BEFORE DELETE OR UPDATE ON public.
 
 
 --
+-- Name: request_logs request_logs_consumption_counters; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER request_logs_consumption_counters AFTER INSERT ON public.request_logs FOR EACH ROW EXECUTE FUNCTION public.request_logs_bump_consumption_counters();
+
+
+--
 -- Name: request_logs request_logs_set_user_id_trg; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -13246,6 +13417,14 @@ ALTER TABLE ONLY public.api_keys
 
 ALTER TABLE public.audit_logs
     ADD CONSTRAINT audit_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: consumption_counters consumption_counters_service_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.consumption_counters
+    ADD CONSTRAINT consumption_counters_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id) ON DELETE CASCADE;
 
 
 --
@@ -13481,6 +13660,14 @@ ALTER TABLE ONLY public.services
 
 
 --
+-- Name: topup_consumption_counters topup_consumption_counters_topup_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.topup_consumption_counters
+    ADD CONSTRAINT topup_consumption_counters_topup_id_fkey FOREIGN KEY (topup_id) REFERENCES public.credit_topups(id) ON DELETE CASCADE;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -13653,3 +13840,4 @@ INSERT INTO public."schema_migrations" (version) VALUES (20261118053814);
 INSERT INTO public."schema_migrations" (version) VALUES (20261118054233);
 INSERT INTO public."schema_migrations" (version) VALUES (20261118054234);
 INSERT INTO public."schema_migrations" (version) VALUES (20261118072055);
+INSERT INTO public."schema_migrations" (version) VALUES (20261122064158);

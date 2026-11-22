@@ -191,7 +191,9 @@ defmodule Tokengate.Auditing.PartitionWorker do
         end
       end)
       |> Enum.map(fn name ->
-        Repo.query!("DROP TABLE #{name}")
+        # IF EXISTS: the cron and a manual purge can overlap; the loser must
+        # be a no-op instead of an `undefined_table` that kills the job.
+        Repo.query!("DROP TABLE IF EXISTS #{name}")
         name
       end)
 
