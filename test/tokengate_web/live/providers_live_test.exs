@@ -353,6 +353,73 @@ defmodule TokengateWeb.ProvidersLiveTest do
     refute has_element?(view, "#provider-step-error")
   end
 
+  # Las crumbs son tabs: se puede saltar a cualquier paso desde el picker. Un
+  # salto a un paso de formulario sin changeset (el picker no creó ninguno) no
+  # puede quedar en un modal vacío con un Next muerto: arranca el borrador del
+  # custom provider, que es el único que se teclea.
+  test "saltar desde el picker a un paso del formulario arranca el borrador", %{conn: conn} do
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    view |> element("#add-provider-btn") |> render_click()
+    assert active_step(view) == ["pick"]
+
+    # Identity: el paso se pinta con su formulario, no vacío.
+    view |> element("#wizard-crumb-identity") |> render_click()
+    assert active_step(view) == ["identity"]
+    assert has_element?(view, "#provider-form #provider_name")
+    assert has_element?(view, "#provider-next-btn")
+
+    # Limits: el paso final también, con su Save.
+    view |> element("#wizard-crumb-limits") |> render_click()
+    assert active_step(view) == ["limits"]
+    refute hidden_step?(view, "limits")
+    assert has_element?(view, "#save-provider-btn")
+
+    # Y el borrador es el custom provider: guardar sin identidad rebota a
+    # identity con el motivo a la vista, no a un paso con nada que corregir.
+    view |> form("#provider-form") |> render_submit()
+    assert active_step(view) == ["identity"]
+    assert has_element?(view, "#provider-step-identity:not(.hidden) .text-error")
+  end
+
+  # Un Save rechazado aterriza en el paso dueño del campo que falló: los límites
+  # en el último paso, la identidad en el segundo.
+  test "un Save inválido se queda en el wizard, en el paso del campo que falla", %{conn: conn} do
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    view |> element("#add-provider-btn") |> render_click()
+    view |> element("#new-custom-provider-btn") |> render_click()
+
+    view
+    |> form("#provider-form",
+      provider: %{name: "relay-#{unique()}", base_url: "https://relay.example.com/v1"}
+    )
+    |> render_change()
+
+    view |> element("#provider-next-btn") |> render_click()
+    assert active_step(view) == ["limits"]
+
+    # max_rpm = 0 no es "sin límite" (eso es vacío): el changeset lo rechaza y
+    # el modal se queda en limits, con el mensaje bajo el campo.
+    html = view |> form("#provider-form", provider: %{max_rpm: "0"}) |> render_submit()
+
+    assert active_step(view) == ["limits"]
+
+    assert has_element?(
+             view,
+             "#provider-step-limits:not(.hidden) .text-error",
+             "debe ser mayor a 0"
+           )
+
+    refute html =~ "Proveedor creado"
+  end
+
   # En edición el wizard entra al paso relevante: un custom a identity (ahí
   # viven su nombre y su URL) y un builtin a limits sin indicador de pasos — su
   # identidad es del catálogo y lo único editable son los límites.

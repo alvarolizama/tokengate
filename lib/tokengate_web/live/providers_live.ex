@@ -49,6 +49,10 @@ defmodule TokengateWeb.ProvidersLive do
   # aggregation starts from this shape, so the template never sees a missing key.
   @no_credentials %{ids: [], keys: 0, active: 0, errored: 0}
 
+  # The fields the wizard's last step owns — what `save_error_step/2` uses to
+  # decide whether a rejected Save sends the operator back to identity.
+  @provider_limit_fields ~w(max_rpm max_concurrent max_concurrent_per_user receive_timeout_ms)
+
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
@@ -257,26 +261,9 @@ defmodule TokengateWeb.ProvidersLive do
   # "Custom provider" is step 1 → 2 of the same modal: the wizard stays open and
   # keeps what was typed if the operator walks back to the picker and returns.
   def handle_event("new_custom_provider", _params, socket) do
-    socket =
-      case socket.assigns do
-        %{editing_provider_id: :new, form: %Phoenix.HTML.Form{}} ->
-          socket
-
-        _ ->
-          changeset =
-            Providers.change_provider(%Provider{
-              source: "custom",
-              dialect: "openai"
-            })
-
-          socket
-          |> assign(:form, to_form(changeset, as: :provider))
-          |> assign(:editing_provider_id, :new)
-          |> assign(:editing_provider_builtin?, false)
-      end
-
     {:noreply,
      socket
+     |> ensure_provider_draft()
      |> assign(:catalog_modal_open, true)
      |> assign(:provider_steps, provider_steps(:new))
      |> assign(:provider_step, "identity")
@@ -455,11 +442,14 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   # Clicking a step crumb jumps to that step (tab-style). Save validates the whole
-  # changeset, so navigating freely between steps is safe.
+  # changeset, so navigating freely between steps is safe. A crumb that lands on a
+  # form step before any changeset exists (the pick step) starts the custom draft:
+  # without it the step renders an empty modal with a dead Next.
   def handle_event("goto_provider_step", %{"step" => step}, socket) do
     if step in Enum.map(socket.assigns.provider_steps, fn {key, _} -> key end) do
       {:noreply,
        socket
+       |> ensure_provider_draft()
        |> assign(:provider_step, step)
        |> assign(:provider_step_error, nil)}
     else
@@ -666,7 +656,7 @@ defmodule TokengateWeb.ProvidersLive do
          |> load_providers()}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :provider))}
+        {:noreply, reject_save(socket, changeset)}
     end
   end
 
@@ -709,7 +699,7 @@ defmodule TokengateWeb.ProvidersLive do
              |> load_providers()}
 
           {:error, changeset} ->
-            {:noreply, assign(socket, :form, to_form(changeset, as: :provider))}
+            {:noreply, reject_save(socket, changeset)}
         end
     end
   end
@@ -772,6 +762,21 @@ defmodule TokengateWeb.ProvidersLive do
     |> assign(:provider_step_error, nil)
   end
 
+  # A form step without a changeset has nothing to render: jumping to Identity or
+  # Limits from the pick step (or pressing "Custom provider") starts the custom
+  # draft, which is the only provider that is typed by hand. An open draft is
+  # never replaced — walking back to the picker and returning keeps what was typed.
+  defp ensure_provider_draft(%{assigns: %{form: %Phoenix.HTML.Form{}}} = socket), do: socket
+
+  defp ensure_provider_draft(socket) do
+    changeset = Providers.change_provider(%Provider{source: "custom", dialect: "openai"})
+
+    socket
+    |> assign(:form, to_form(changeset, as: :provider))
+    |> assign(:editing_provider_id, :new)
+    |> assign(:editing_provider_builtin?, false)
+  end
+
   # Step validation for identity: the provider must be nameable (name + a real
   # http(s) base URL) and serve at least one capability before the operator
   # moves on to the limits. A rejected Next shows the reason and stays put.
@@ -814,6 +819,32 @@ defmodule TokengateWeb.ProvidersLive do
     socket
     |> assign(:form, to_form(%{changeset | action: :validate}, as: :provider))
     |> assign(:provider_step_error, message)
+  end
+
+  # A rejected Save never leaves the operator on a step with nothing to fix: the
+  # limits fields live on the last step and the rest (name, base URL,
+  # capabilities) on identity, so the modal moves to the step that owns the first
+  # failing field and shows the messages there.
+  defp reject_save(socket, changeset) do
+    socket
+    |> assign(:form, to_form(%{changeset | action: :validate}, as: :provider))
+    |> assign(:provider_step, save_error_step(socket.assigns.provider_steps, changeset))
+    |> assign(:provider_step_error, nil)
+  end
+
+  defp save_error_step(steps, changeset) do
+    keys = Enum.map(steps, &elem(&1, 0))
+
+    identity? =
+      Enum.any?(changeset.errors, fn {field, _opts} ->
+        Atom.to_string(field) not in @provider_limit_fields
+      end)
+
+    cond do
+      identity? and "identity" in keys -> "identity"
+      "limits" in keys -> "limits"
+      true -> List.first(keys)
+    end
   end
 
   defp previous_provider_step(%{provider_steps: steps, provider_step: current}) do

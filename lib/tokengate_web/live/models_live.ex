@@ -338,39 +338,22 @@ defmodule TokengateWeb.ModelsLive do
   # Elegido el tipo: se abre el form de creación con ese tipo prellenado. Los
   # tres servicios de media rutean por su endpoint propio (capability =
   # model_type), así que el tipo elegido ES el valor de la columna.
-  @service_types ~w(decision stt tts image)
+  #
+  # El vocabulario que este handler acepta es EXACTAMENTE el que el picker
+  # ofrece — los tipos con ruta pública (`type_endpoint/1`, el mismo filtro de
+  # `model_type_choices/0`). Una lista copiada a mano se desincroniza: `rerank`
+  # pintaba su tile y el click moría en un no-op.
+  def handle_event("pick_model_type", %{"type" => type}, socket) when is_binary(type) do
+    cond do
+      not socket.assigns.is_admin ->
+        {:noreply,
+         put_flash(socket, :error, gettext("You do not have permission for this action."))}
 
-  def handle_event("pick_model_type", %{"type" => type}, socket)
-      when type in ["llm", "embedding" | @service_types] do
-    if socket.assigns.is_admin do
-      changeset =
-        Providers.change_model(%Model{}, %{"model_type" => type})
+      type_endpoint(type) == nil ->
+        {:noreply, socket}
 
-      socket =
-        socket
-        |> assign(:model_form_picked_type, type)
-        |> assign(:type_picker_open, false)
-        |> assign(:form, to_form(changeset, as: :model))
-        |> assign(:editing_model_id, :new)
-        # Paso 1 del wizard: el proveedor. Se elige DESPUÉS del tipo y ANTES del
-        # modelo, porque es el tipo el que decide qué proveedores pueden servir
-        # el modelo y el proveedor el que decide qué modelos se ofrecen.
-        |> assign(:wizard_step, "provider")
-        |> assign(:wizard_provider_key, nil)
-        |> assign(:wizard_provider_model, nil)
-        |> assign(:wizard_credential_id, nil)
-        |> assign(:wizard_credential_label, nil)
-        |> assign(:wizard_models, [])
-        # A fresh alta starts with no listing state: the error and the spinner
-        # of the previous one must not survive the type picker.
-        |> assign(:wizard_models_error, nil)
-        |> assign(:wizard_models_loading, false)
-        |> load_wizard_providers(type)
-
-      {:noreply, socket}
-    else
-      {:noreply,
-       put_flash(socket, :error, gettext("You do not have permission for this action."))}
+      true ->
+        {:noreply, start_new_model(socket, type)}
     end
   end
 
@@ -790,6 +773,33 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   ## Private helpers — wizard ----------------------------------------------
+
+  # Abre el form de alta con el tipo ya elegido: el paso 0 sólo decide el tipo,
+  # el wizard arranca en el paso del proveedor. Las asignaciones de un alta
+  # anterior se reinician aquí para que ninguna sobreviva al selector de tipo.
+  defp start_new_model(socket, type) do
+    changeset = Providers.change_model(%Model{}, %{"model_type" => type})
+
+    socket
+    |> assign(:model_form_picked_type, type)
+    |> assign(:type_picker_open, false)
+    |> assign(:form, to_form(changeset, as: :model))
+    |> assign(:editing_model_id, :new)
+    # Paso 1 del wizard: el proveedor. Se elige DESPUÉS del tipo y ANTES del
+    # modelo, porque es el tipo el que decide qué proveedores pueden servir
+    # el modelo y el proveedor el que decide qué modelos se ofrecen.
+    |> assign(:wizard_step, "provider")
+    |> assign(:wizard_provider_key, nil)
+    |> assign(:wizard_provider_model, nil)
+    |> assign(:wizard_credential_id, nil)
+    |> assign(:wizard_credential_label, nil)
+    |> assign(:wizard_models, [])
+    # A fresh alta starts with no listing state: the error and the spinner
+    # of the previous one must not survive the type picker.
+    |> assign(:wizard_models_error, nil)
+    |> assign(:wizard_models_loading, false)
+    |> load_wizard_providers(type)
+  end
 
   # El changeset del form guarda el TIPO elegido en `changes` (el `data` del
   # struct está vacío). Rearmarlo con él garantiza que el tipo no se pierda al

@@ -321,6 +321,36 @@ defmodule TokengateWeb.ModelsLiveTest do
     refute has_element?(view, "#wizard-provider-cerebras")
   end
 
+  # `rerank` es un tipo más del vocabulario y su tile tiene que abrir el wizard:
+  # el handler filtraba por una lista copiada a mano (llm, embedding, decision,
+  # stt, tts, image) y el click en Rerank caía en el no-op del catch-all.
+  test "rerank type is offered and its tile opens the wizard", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    assert has_element?(view, "#pick-type-rerank")
+
+    view |> element("#pick-type-rerank") |> render_click()
+
+    # The tile starts the alta: the picker closes and the wizard opens on the
+    # provider step, with the type already chosen.
+    refute has_element?(view, "#model-type-picker")
+    assert has_element?(view, "#model-wizard")
+    assert has_element?(view, "#wizard-crumb-provider[aria-current='step']")
+
+    view |> element("#wizard-custom") |> render_click()
+
+    view
+    |> form("#model-form", %{model: %{name: "bge-reranker-test", context_window: 8192}})
+    |> render_submit()
+
+    model_record = Tokengate.Providers.get_model_by_name("bge-reranker-test")
+    assert model_record.model_type == "rerank"
+  end
+
   # El render del logo era `img si logo_url / icono si nil`, así que una URL que
   # responde 404 NO caía al icono: dejaba el chip VACÍO, y desde fuera se leía
   # como «a este proveedor le falta el logo». Es justo lo que pasaba con el PNG
