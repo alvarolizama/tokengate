@@ -351,5 +351,18 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       {:ok, _view, html} = live(conn, ~p"/access/services")
       assert html =~ ~s(id="stats-#{service.id}")
     end
+
+    test "unknown or malformed service_id redirects to /stats/services instead of crashing", %{
+      conn: conn
+    } do
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      assert {:error, {:live_redirect, %{to: "/stats/services"}}} =
+               live(conn, ~p"/stats/services/not-a-uuid")
+
+      assert {:error, {:live_redirect, %{to: "/stats/services"}}} =
+               live(conn, ~p"/stats/services/#{Ecto.UUID.generate()}")
+    end
   end
 end

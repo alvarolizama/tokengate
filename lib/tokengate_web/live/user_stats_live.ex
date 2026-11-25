@@ -350,27 +350,8 @@ defmodule TokengateWeb.UserStatsLive do
     after_from and before_to
   end
 
-  defp parse_date_string(date_str, timezone, mode \\ :start_of_day)
-
-  defp parse_date_string("", _tz, _mode), do: nil
-  defp parse_date_string(nil, _tz, _mode), do: nil
-
-  defp parse_date_string(date_str, timezone, mode) do
-    case Date.from_iso8601(date_str) do
-      {:ok, date} ->
-        time =
-          case mode do
-            :start_of_day -> ~T[00:00:00]
-            :end_of_day -> ~T[23:59:59]
-          end
-
-        date
-        |> DateTime.new!(time, timezone)
-        |> DateTime.shift_zone!("Etc/UTC")
-
-      _ ->
-        nil
-    end
+  defp parse_date_string(date_str, timezone, mode \\ :start_of_day) do
+    TokengateWeb.TimezoneHelper.parse_local_date(date_str, timezone, mode)
   end
 
   defp days_ago(n) do

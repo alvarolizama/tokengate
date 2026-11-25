@@ -2121,4 +2121,24 @@ defmodule TokengateWeb.StatsLiveTest do
       assert has_element?(view, "#agents-table-totals", "Total · 0 agentes")
     end
   end
+
+  test "invalid sort field and malformed UUID params never crash StatsLive", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats/models?period=today&model_id=not-a-uuid")
+    view = wait_stats_loaded(view)
+
+    # Forged sort field must be ignored cleanly (no String.to_existing_atom crash).
+    render_hook(view, "sort", %{"field" => "never_existed_atom_xyz_999"})
+    assert has_element?(view, "#stats-content")
+
+    {:ok, group_view, _html} = live(conn, ~p"/stats/profiles/not-a-uuid")
+    _ = wait_stats_loaded(group_view)
+    assert has_element?(group_view, "#stats-content")
+
+    {:ok, prov_view, _html} = live(conn, ~p"/stats/providers/not-a-uuid")
+    _ = wait_stats_loaded(prov_view)
+    assert has_element?(prov_view, "#stats-content")
+  end
 end

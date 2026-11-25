@@ -380,36 +380,41 @@ defmodule TokengateWeb.GroupMembersLive do
   defp toggle_extra_model(socket, member, model_id) do
     member_id = member.id
 
-    if member.group_id != socket.assigns.group.id do
-      {:noreply,
-       put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
-    else
+    with :ok <- if(member.group_id == socket.assigns.group.id, do: :ok, else: :wrong_group),
+         {:ok, model_uuid} <- Ecto.UUID.cast(model_id) do
       existing = Map.get(socket.assigns.extra_models, member_id, [])
       denied = Map.get(socket.assigns.denied_models, member_id, [])
+      inherited? = MapSet.member?(socket.assigns.group_alias_ids, model_uuid)
 
       result =
         cond do
           # Estado "quitado" → permitir de nuevo (borra el deny).
-          model_id in denied ->
-            Providers.allow_model(member_id, model_id)
+          model_uuid in denied ->
+            Providers.allow_model(member_id, model_uuid)
 
-          # Estado "heredado" o "agregado" → quitar. Un extra concedido aquí se
-          # revoca además de denegarse: dejar el extra vivo lo resucitaría al
-          # quitar el deny desde la UI (el union volvería a incluirlo).
-          model_id in existing ->
-            with {:ok, _} <- Providers.deny_model(member_id, model_id) do
-              Providers.revoke_extra_model(member_id, model_id)
+          # Estado "heredado" del perfil → denegar en 1 click (y limpiar extra
+          # residual si existía, para que al quitar el deny no resucite).
+          inherited? ->
+            with {:ok, _} = ok <- Providers.deny_model(member_id, model_uuid) do
+              if model_uuid in existing,
+                do: Providers.revoke_extra_model(member_id, model_uuid),
+                else: ok
             end
+
+          # Estado "agregado" (extra propio, no heredado) → revocar el extra
+          # sin crear fila en denied.
+          model_uuid in existing ->
+            Providers.revoke_extra_model(member_id, model_uuid)
 
           # Estado "sin acceso" → agregar como extra.
           true ->
-            Providers.grant_extra_model(member_id, model_id)
+            Providers.grant_extra_model(member_id, model_uuid)
         end
 
       case result do
         {:ok, _} ->
           audit(socket, "group_member.model_access_change", "group_member", member_id, %{
-            "model_id" => model_id
+            "model_id" => model_uuid
           })
 
           {:noreply,
@@ -420,6 +425,13 @@ defmodule TokengateWeb.GroupMembersLive do
         {:error, _} ->
           {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
       end
+    else
+      :wrong_group ->
+        {:noreply,
+         put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
+
+      :error ->
+        {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
     end
   end
 

@@ -1,4 +1,9 @@
-<Layouts.dashboard flash={@flash} current_scope={@current_user} current_path={@current_path}>
+<Layouts.dashboard
+  flash={@flash}
+  current_scope={@current_user}
+  impersonator={@impersonator}
+  current_path={@current_path}
+>
   <div class="space-y-6">
     <%!-- Header ──────────────────────────────────────────────────────────── --%>
     <div class="w-full">

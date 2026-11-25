@@ -30,10 +30,11 @@ defmodule TokengateWeb.AuditLive do
   @impl true
   def handle_event("filter", params, socket) do
     raw = params["f"] || %{}
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
 
     {:noreply,
      socket
-     |> assign(:filters, normalize_filters(raw))
+     |> assign(:filters, normalize_filters(raw, timezone))
      |> assign(:form, to_form(raw, as: :f))
      |> assign(:page, 1)
      |> load_logs()}
@@ -49,13 +50,19 @@ defmodule TokengateWeb.AuditLive do
   end
 
   def handle_event("go_to_page", %{"page" => page}, socket) do
-    page = page |> to_string() |> String.to_integer()
+    parsed =
+      case Integer.parse(to_string(page)) do
+        {n, ""} -> max(n, 1)
+        _ -> socket.assigns.page
+      end
 
     {:noreply,
      socket
-     |> assign(:page, max(page, 1))
+     |> assign(:page, parsed)
      |> load_logs()}
   end
+
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   # ---------------------------------------------------------------------------
   # Data loading
@@ -74,23 +81,25 @@ defmodule TokengateWeb.AuditLive do
         Map.merge(filters, %{limit: per_page, offset: (page - 1) * per_page})
       )
 
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+
     socket
     |> assign(:logs, logs)
     |> assign(:total, total)
     |> assign(:page, page)
     |> assign(:total_pages, total_pages)
-    |> assign(:export_query, export_query(filters))
+    |> assign(:export_query, export_query(filters, timezone))
   end
 
-  defp normalize_filters(raw) do
+  defp normalize_filters(raw, timezone) do
     %{}
     |> put_filter(raw, "actor_email", :actor_email)
     |> put_filter(raw, "entity_type", :entity_type)
     |> put_filter(raw, "action", :action)
     |> put_filter(raw, "target_label", :target_label)
     |> put_filter(raw, "ip", :ip)
-    |> put_from(raw)
-    |> put_to(raw)
+    |> put_from(raw, timezone)
+    |> put_to(raw, timezone)
   end
 
   defp put_filter(map, raw, key, atom) do
@@ -100,33 +109,52 @@ defmodule TokengateWeb.AuditLive do
     end
   end
 
-  defp put_from(map, raw) do
+  defp put_from(map, raw, timezone) do
     with value when value not in [nil, ""] <- Map.get(raw, "from"),
-         {:ok, date} <- Date.from_iso8601(value) do
-      Map.put(map, :from, DateTime.new!(date, ~T[00:00:00], "Etc/UTC"))
+         %DateTime{} = dt <-
+           TokengateWeb.TimezoneHelper.parse_local_date(value, timezone, :start_of_day) do
+      Map.put(map, :from, dt)
     else
       _ -> map
     end
   end
 
-  # `to` is inclusive in the UI: push it to the start of the next day.
-  defp put_to(map, raw) do
+  # `to` is inclusive in the UI: push it to the start of the next local day.
+  defp put_to(map, raw, timezone) do
     with value when value not in [nil, ""] <- Map.get(raw, "to"),
-         {:ok, date} <- Date.from_iso8601(value) do
-      Map.put(map, :to, DateTime.new!(Date.add(date, 1), ~T[00:00:00], "Etc/UTC"))
+         {:ok, date} <- Date.from_iso8601(value),
+         %DateTime{} = dt <-
+           TokengateWeb.TimezoneHelper.local_time_to_utc(
+             Date.add(date, 1),
+             ~T[00:00:00],
+             timezone
+           ) do
+      Map.put(map, :to, dt)
     else
       _ -> map
     end
   end
 
-  defp export_query(filters) do
+  defp export_query(filters, timezone) do
     filters
     |> Enum.map(fn
-      {:from, dt} -> {"from", DateTime.to_date(dt) |> Date.to_iso8601()}
-      {:to, dt} -> {"to", dt |> Date.add(-1) |> Date.to_iso8601()}
-      {key, value} -> {to_string(key), to_string(value)}
+      {:from, dt} ->
+        {"from", dt |> shift_to_local_date(timezone) |> Date.to_iso8601()}
+
+      {:to, dt} ->
+        {"to", dt |> shift_to_local_date(timezone) |> Date.add(-1) |> Date.to_iso8601()}
+
+      {key, value} ->
+        {to_string(key), to_string(value)}
     end)
     |> URI.encode_query()
+  end
+
+  defp shift_to_local_date(%DateTime{} = dt, timezone) do
+    case DateTime.shift_zone(dt, timezone) do
+      {:ok, shifted} -> DateTime.to_date(shifted)
+      {:error, _} -> DateTime.to_date(dt)
+    end
   end
 
   # ---------------------------------------------------------------------------

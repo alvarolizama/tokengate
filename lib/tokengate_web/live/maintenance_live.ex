@@ -183,7 +183,7 @@ defmodule TokengateWeb.MaintenanceLive do
       socket.assigns.current_user,
       "settings.reset_sticky_sessions",
       "sticky_sessions",
-      nil
+      "all"
     )
 
     {:noreply,
@@ -205,7 +205,7 @@ defmodule TokengateWeb.MaintenanceLive do
           socket.assigns.current_user,
           "settings.catalog_refresh",
           "catalog_providers",
-          nil
+          "global"
         )
 
         {:noreply,

@@ -950,4 +950,17 @@ defmodule TokengateWeb.CalculatorLiveTest do
     assert html =~ "Pick a model"
     assert has_element?(view, "#calc-empty")
   end
+
+  test "calculator preserves impersonation banner when admin impersonates another admin", %{
+    conn: conn
+  } do
+    %{user: admin1, password: password} = register("admin")
+    %{user: admin2} = register("admin")
+
+    conn = login(conn, admin1, password)
+    conn = conn |> recycle() |> post(~p"/impersonate/#{admin2.id}")
+    {:ok, view, _html} = live(recycle(conn), ~p"/calculator")
+
+    assert has_element?(view, "#impersonation-banner", admin1.email)
+  end
 end

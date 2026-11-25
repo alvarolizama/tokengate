@@ -148,9 +148,8 @@ defmodule TokengateWeb.TopupsLiveTest do
       assert html =~ "$20.00"
     end
 
-    # N+1: el consumo de cada fila se mide contra `request_logs`. Con una query
-    # por fila —y otra por cada `state/archived?`— pintar N filas costaba del
-    # orden de 3N lecturas. Ahora es UNA query agrupada por carga.
+    # N+1: el consumo de cada fila se lee desde `topup_consumption_counters`
+    # en una sola consulta para todo el lote, sin escanear `request_logs`.
     test "el consumo de la lista se resuelve en una sola query", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
       user = user_fixture()
@@ -172,6 +171,10 @@ defmodule TokengateWeb.TopupsLiveTest do
         {__MODULE__, ref},
         [:tokengate, :repo, :query],
         fn _event, _measurements, meta, _config ->
+          if meta.source == "topup_consumption_counters" do
+            send(parent, {:counters_query, ref})
+          end
+
           if meta.source == "request_logs" and
                String.contains?(to_string(meta.query), "credit_topup_id") do
             send(parent, {:request_logs_query, ref})
@@ -184,8 +187,9 @@ defmodule TokengateWeb.TopupsLiveTest do
 
       view |> element("#topup-search-form") |> render_change(%{"q" => ""})
 
-      # Exactamente una lectura de consumo para las 4 filas.
-      assert_received {:request_logs_query, ^ref}
+      # Exactamente una lectura sobre counters para las 4 filas y cero scans a request_logs.
+      assert_received {:counters_query, ^ref}
+      refute_received {:counters_query, ^ref}
       refute_received {:request_logs_query, ^ref}
 
       assert render(view) =~ "$1.00"
@@ -485,6 +489,49 @@ defmodule TokengateWeb.TopupsLiveTest do
 
       assert has_element?(view, "#edit-topup-#{topup.id}")
       refute has_element?(view, "#toggle-archived-btn")
+    end
+
+    test "select_owner limpia el buscador y edit_topup muestra el dueño bloqueado", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      user = user_fixture()
+      topup = topup_fixture(%{"user_id" => user.id, "amount_usd" => "25.00"})
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
+
+      view |> element("#new-topup-btn") |> render_click()
+      view |> element("#topup-owner-search") |> render_change(%{"value" => user.email})
+      html = view |> element("#select-owner-#{user.id}") |> render_click()
+
+      assert has_element?(view, "#selected-owner", user.email)
+      refute html =~ "Sin coincidencias"
+
+      view |> element("#edit-topup-#{topup.id}") |> render_click()
+      assert has_element?(view, "#selected-owner", user.email)
+      refute has_element?(view, "#owner-kind-service")
+      refute has_element?(view, "#topup-owner-search")
+
+      # Forged owner_kind event during edit cannot drop selected_owner.
+      render_click(view, "owner_kind", %{"kind" => "service"})
+      assert has_element?(view, "#selected-owner", user.email)
+    end
+
+    test "lee consumo durable desde topup_consumption_counters sin depender de logs", %{
+      conn: conn
+    } do
+      %{user: admin, password: pass} = register("admin")
+      user = user_fixture()
+      topup = topup_fixture(%{"user_id" => user.id, "amount_usd" => "10.00"})
+
+      Tokengate.Repo.insert!(%Tokengate.Metrics.TopupConsumptionCounter{
+        topup_id: topup.id,
+        consumed_micro: 4_250_000
+      })
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
+
+      assert has_element?(view, "#topup-usage-#{topup.id}", "$4.25")
     end
   end
 end

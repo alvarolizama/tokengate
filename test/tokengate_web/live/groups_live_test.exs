@@ -368,4 +368,18 @@ defmodule TokengateWeb.GroupsLiveTest do
     assert has_element?(view, "#edit-#{group.id}")
     refute has_element?(view, "#group-form")
   end
+
+  test "toggle_model refreshes the model count badge inside the groups stream", %{conn: conn} do
+    %{group: group, model: model_} = group_fixture()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/budget/profiles")
+
+    assert has_element?(view, "#groups-#{group.id}", "0 modelos")
+
+    render_hook(view, "toggle_model", %{"target-id" => group.id, "model-id" => model_.id})
+
+    assert has_element?(view, "#groups-#{group.id}", "1 modelos")
+  end
 end

@@ -201,34 +201,41 @@ defmodule TokengateWeb.NotificationsLive do
   end
 
   def handle_event("remove_link", %{"id" => id}, socket) do
-    Notifications.delete_link(id)
-    audit(socket, "notification.link_remove", "telegram_link", id, %{})
+    with {:ok, uuid} <- Ecto.UUID.cast(id) do
+      Notifications.delete_link(uuid)
+      audit(socket, "notification.link_remove", "telegram_link", uuid, %{})
 
-    {:noreply,
-     socket
-     |> put_flash(:info, gettext("Chat removed."))
-     |> load_data()}
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Chat removed."))
+       |> load_data()}
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Link not found."))}
+    end
   end
 
   def handle_event("resend", %{"id" => id}, socket) do
-    notification = Notifications.get_notification!(id)
+    with {:ok, uuid} <- Ecto.UUID.cast(id),
+         %{} = notification <- Notifications.get_notification(uuid) do
+      notification
+      |> Ecto.Changeset.change(%{status: "pending", error: nil})
+      |> Tokengate.Repo.update()
 
-    notification
-    |> Ecto.Changeset.change(%{status: "pending", error: nil})
-    |> Tokengate.Repo.update()
+      %{notification_id: notification.id}
+      |> TelegramWorker.new()
+      |> Oban.insert()
 
-    %{notification_id: notification.id}
-    |> TelegramWorker.new()
-    |> Oban.insert()
+      audit(socket, "notification.resend", "notification", notification.id, %{
+        "event" => notification.event
+      })
 
-    audit(socket, "notification.resend", "notification", notification.id, %{
-      "event" => notification.event
-    })
-
-    {:noreply,
-     socket
-     |> put_flash(:info, gettext("Resend queued."))
-     |> load_notifications()}
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Resend queued."))
+       |> load_notifications()}
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Notification not found."))}
+    end
   end
 
   def handle_event("refresh_log", _params, socket) do

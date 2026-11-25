@@ -450,4 +450,45 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     assert has_element?(view, "#members-rows[phx-update='stream']")
     assert has_element?(view, "tr#members-#{member.id}")
   end
+
+  test "3-state model picker denies inherited models in 1 click and revokes own extras cleanly",
+       %{conn: conn} do
+    %{group: group, member: member, model: extra_model} = group_with_member()
+    u = unique()
+
+    {:ok, inherited_model} =
+      Providers.create_model(%{name: "inherited-#{u}", context_window: 128_000})
+
+    {:ok, _} = Providers.grant_model_to_group(group.id, inherited_model.id)
+    {:ok, _} = Providers.grant_extra_model(member.id, extra_model.id)
+
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    view |> element("#details-#{member.id}") |> render_click()
+
+    # Inherited profile model: 1 click denies it without creating an extra row.
+    view
+    |> element("#model-picker-member-#{member.id}-#{inherited_model.id}")
+    |> render_click()
+
+    assert inherited_model.id in Providers.list_denied_model_ids_for_member(member.id)
+    refute inherited_model.id in Providers.list_extra_model_ids_for_member(member.id)
+
+    # Clicking again allows it back.
+    view
+    |> element("#model-picker-member-#{member.id}-#{inherited_model.id}")
+    |> render_click()
+
+    refute inherited_model.id in Providers.list_denied_model_ids_for_member(member.id)
+
+    # Own extra model (not inherited): 1 click revokes it without marking denied.
+    view
+    |> element("#model-picker-member-#{member.id}-#{extra_model.id}")
+    |> render_click()
+
+    refute extra_model.id in Providers.list_extra_model_ids_for_member(member.id)
+    refute extra_model.id in Providers.list_denied_model_ids_for_member(member.id)
+  end
 end

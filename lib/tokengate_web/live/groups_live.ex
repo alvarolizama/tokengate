@@ -212,13 +212,18 @@ defmodule TokengateWeb.GroupsLive do
   # Surgical refresh: only the table that actually changed, instead of the
   # full load_groups() (groups + members + models + destinations + 2 spend
   # aggregates).
-  defp refresh_granted_models(socket) do
+  defp refresh_granted_models(socket, group_id) do
     granted_models =
       from(tma in GroupModel, select: {tma.group_id, tma.model_id})
       |> Repo.all()
       |> Enum.group_by(fn {group_id, _} -> group_id end, fn {_, model_id} -> model_id end)
 
-    assign(socket, :granted_models, granted_models)
+    socket = assign(socket, :granted_models, granted_models)
+
+    case Enum.find(socket.assigns.all_groups, &(&1.id == group_id)) do
+      nil -> socket
+      group -> stream_insert(socket, :groups, group)
+    end
   end
 
   # Body of `delete_group`: only a row that actually exists reaches the
@@ -269,7 +274,7 @@ defmodule TokengateWeb.GroupsLive do
         {:noreply,
          socket
          |> put_flash(:info, gettext("Models updated."))
-         |> refresh_granted_models()}
+         |> refresh_granted_models(group_id)}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}

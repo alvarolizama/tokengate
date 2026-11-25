@@ -719,22 +719,30 @@ defmodule TokengateWeb.UsersLive do
   end
 
   def handle_event("save_password", %{"user" => user_params}, socket) do
-    user_id = socket.assigns.reset_user_id
-    user = Accounts.get_user!(user_id)
-
-    case Accounts.reset_user_password(user, user_params) do
-      {:ok, _user} ->
-        audit(socket, "user.reset_password", "user", user.id, %{"email" => user.email})
-
+    case fetch_user(socket.assigns.reset_user_id) do
+      nil ->
         {:noreply,
          socket
-         |> put_flash(:info, gettext("Password updated."))
+         |> put_flash(:error, gettext("User not found."))
          |> assign(:form, nil)
          |> assign(:reset_user_id, nil)
          |> assign(:form_mode, nil)}
 
-      {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :user))}
+      user ->
+        case Accounts.reset_user_password(user, user_params) do
+          {:ok, _user} ->
+            audit(socket, "user.reset_password", "user", user.id, %{"email" => user.email})
+
+            {:noreply,
+             socket
+             |> put_flash(:info, gettext("Password updated."))
+             |> assign(:form, nil)
+             |> assign(:reset_user_id, nil)
+             |> assign(:form_mode, nil)}
+
+          {:error, changeset} ->
+            {:noreply, assign(socket, :form, to_form(changeset, as: :user))}
+        end
     end
   end
 
@@ -986,8 +994,23 @@ defmodule TokengateWeb.UsersLive do
   end
 
   defp save_edit_user(socket, user_params) do
-    user_id = socket.assigns.editing_user_id
-    user = Accounts.get_user!(user_id)
+    case fetch_user(socket.assigns.editing_user_id) do
+      nil ->
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("User not found."))
+         |> assign(:form, nil)
+         |> assign(:editing_user_id, nil)
+         |> assign(:editing_user_sub_id, nil)
+         |> assign(:form_mode, nil)}
+
+      user ->
+        do_save_edit_user(socket, user, user_params)
+    end
+  end
+
+  defp do_save_edit_user(socket, user, user_params) do
+    user_id = user.id
     {sub_id, user_params} = Map.pop(user_params, "sub_id", nil)
     sub_id = if sub_id in ["", nil], do: nil, else: sub_id
 

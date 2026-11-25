@@ -120,4 +120,17 @@ defmodule TokengateWeb.NotificationsLiveTest do
     assert is_nil(Notifications.get_settings().bot_token)
     refute has_element?(view, "#clear-token-btn")
   end
+
+  test "malformed or missing ids in resend and remove_link do not crash", %{conn: conn} do
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/operations/notifications")
+
+    render_click(view, "resend", %{"id" => "not-a-uuid"})
+    assert has_element?(view, "#flash-error")
+
+    render_click(view, "resend", %{"id" => Ecto.UUID.generate()})
+    assert has_element?(view, "#flash-error")
+
+    render_click(view, "remove_link", %{"id" => "not-a-uuid"})
+    assert has_element?(view, "#flash-error")
+  end
 end

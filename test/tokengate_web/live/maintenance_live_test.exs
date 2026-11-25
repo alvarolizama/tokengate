@@ -377,5 +377,22 @@ defmodule TokengateWeb.SettingsLiveTest do
       assert has_element?(view, "#caution-zone-card", "Zona de precaución")
       assert String.contains?(html, "Mantenimiento")
     end
+
+    test "reset_sticky_sessions records a non-nil entity_id in audit_logs", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
+
+      view |> element("#reset-sticky-btn") |> render_click()
+      view |> element("#confirm-reset-sticky-btn") |> render_click()
+
+      log =
+        Tokengate.Repo.get_by!(
+          Tokengate.Auditing.AuditLog,
+          action: "settings.reset_sticky_sessions"
+        )
+
+      assert log.entity_id == "all"
+    end
   end
 end

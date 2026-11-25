@@ -145,11 +145,19 @@ defmodule TokengateWeb.MonitoringLive do
 
   def handle_info({:inflight_done, id}, socket) do
     pending_before = socket.assigns[:pending]
+    removed? = Enum.any?(pending_before, &(&1.id == id))
 
     socket =
       socket
       |> assign(:pending, Enum.reject(pending_before, &(&1.id == id)))
       |> stream_delete(:logs, %{id: "pending-#{id}"})
+
+    socket =
+      if removed? do
+        assign(socket, :stream_rows, max((socket.assigns[:stream_rows] || 0) - 1, 0))
+      else
+        socket
+      end
 
     {:noreply, socket}
   end
@@ -420,27 +428,8 @@ defmodule TokengateWeb.MonitoringLive do
     after_from? and before_to?
   end
 
-  defp parse_date_string(date_str, timezone, mode \\ :start_of_day)
-
-  defp parse_date_string("", _tz, _mode), do: nil
-  defp parse_date_string(nil, _tz, _mode), do: nil
-
-  defp parse_date_string(date_str, timezone, mode) do
-    case Date.from_iso8601(date_str) do
-      {:ok, date} ->
-        time =
-          case mode do
-            :start_of_day -> ~T[00:00:00]
-            :end_of_day -> ~T[23:59:59]
-          end
-
-        date
-        |> DateTime.new!(time, timezone)
-        |> DateTime.shift_zone!("Etc/UTC")
-
-      _ ->
-        nil
-    end
+  defp parse_date_string(date_str, timezone, mode \\ :start_of_day) do
+    TokengateWeb.TimezoneHelper.parse_local_date(date_str, timezone, mode)
   end
 
   defp max_datetime(dt1, dt2) do
@@ -618,35 +607,12 @@ defmodule TokengateWeb.MonitoringLive do
   defp parse_bool("false"), do: false
   defp parse_bool(_), do: nil
 
-  defp parse_from_date("", _timezone), do: nil
-  defp parse_from_date(nil, _timezone), do: nil
-
   defp parse_from_date(date_str, timezone) do
-    case Date.from_iso8601(date_str) do
-      {:ok, date} ->
-        date
-        |> DateTime.new!(~T[00:00:00], timezone)
-        |> DateTime.shift_zone!("Etc/UTC")
-
-      _ ->
-        nil
-    end
+    TokengateWeb.TimezoneHelper.parse_local_date(date_str, timezone, :start_of_day)
   end
 
-  defp parse_to_date("", _timezone), do: nil
-  defp parse_to_date(nil, _timezone), do: nil
-
   defp parse_to_date(date_str, timezone) do
-    case Date.from_iso8601(date_str) do
-      {:ok, date} ->
-        # End of the LOCAL day (23:59:59 local) converted to UTC
-        date
-        |> DateTime.new!(~T[23:59:59], timezone)
-        |> DateTime.shift_zone!("Etc/UTC")
-
-      _ ->
-        nil
-    end
+    TokengateWeb.TimezoneHelper.parse_local_date(date_str, timezone, :end_of_day)
   end
 
   defp empty_summary do
@@ -677,7 +643,8 @@ defmodule TokengateWeb.MonitoringLive do
         :pending,
         visible_pending(%{
           filters: filter_params,
-          scope_member_ids: socket.assigns[:scope_member_ids]
+          scope_member_ids: socket.assigns[:scope_member_ids],
+          timezone: socket.assigns[:timezone] || "Etc/UTC"
         })
       )
       |> assign(
@@ -808,10 +775,10 @@ defmodule TokengateWeb.MonitoringLive do
   # histórico (`api_key_prefix`), que es lo único que tienen las filas viejas.
   # Las opciones del selector ya traen {display, id} de las keys con logs, así
   # que el label sale de ahí sin una query por fila.
-  defp api_key_display(%{api_key_id: id}, options) when is_binary(id) do
+  defp api_key_display(%{api_key_id: id} = log, options) when is_binary(id) do
     case api_key_option_display(options, id) do
       label when is_binary(label) and label != "" -> label
-      _ -> api_key_display_from_prefix(id)
+      _ -> api_key_display_from_prefix(log)
     end
   end
 

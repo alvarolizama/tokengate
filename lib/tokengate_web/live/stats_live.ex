@@ -73,6 +73,23 @@ defmodule TokengateWeb.StatsLive do
   # "En vivo" feed: how many recent requests to show.
   @live_feed_size 20
 
+  @allowed_sort_fields %{
+    "request_count" => :request_count,
+    "cost_usd" => :cost_usd,
+    "prompt_tokens" => :prompt_tokens,
+    "completion_tokens" => :completion_tokens,
+    "avg_tps" => :avg_tps,
+    "avg_latency_ms" => :avg_latency_ms,
+    "error_rate" => :error_rate,
+    "share" => :share,
+    "label" => :label,
+    "model_name" => :model_name,
+    "provider_name" => :provider_name,
+    "group_name" => :group_name,
+    "user_email" => :user_email,
+    "service_name" => :service_name
+  }
+
   @sortable_breakdowns [
     :breakdown_model,
     :breakdown_member,
@@ -132,20 +149,20 @@ defmodule TokengateWeb.StatsLive do
   @impl true
   def handle_params(params, _uri, socket) do
     period = parse_period(params["period"])
-    model_filter = params["model_id"]
-    group_filter = params["group_id"]
+    model_filter = cast_uuid(params["model_id"])
+    group_filter = cast_uuid(params["group_id"])
     # :group action carries the group in the URL path; the other actions
     # clear it (drill-downs keep using ?group_id=).
     group_id =
       case socket.assigns.live_action do
-        :group -> params["group_id"] || socket.assigns[:group_id]
-        _ -> params["group_id"]
+        :group -> cast_uuid(params["group_id"]) || socket.assigns[:group_id]
+        _ -> cast_uuid(params["group_id"])
       end
 
     # :provider carries the provider in the URL path (/stats/providers/:id).
     provider_id =
       case socket.assigns.live_action do
-        :provider -> params["provider_id"]
+        :provider -> cast_uuid(params["provider_id"])
         _ -> nil
       end
 
@@ -230,21 +247,27 @@ defmodule TokengateWeb.StatsLive do
   end
 
   def handle_event("sort", %{"field" => field}, socket) do
-    field = String.to_existing_atom(field)
+    case Map.fetch(@allowed_sort_fields, field) do
+      {:ok, field} ->
+        {sort_field, sort_direction} =
+          if socket.assigns.sort_field == field do
+            {field, toggle_direction(socket.assigns.sort_direction)}
+          else
+            {field, :desc}
+          end
 
-    {sort_field, sort_direction} =
-      if socket.assigns.sort_field == field do
-        {field, toggle_direction(socket.assigns.sort_direction)}
-      else
-        {field, :desc}
-      end
+        {:noreply,
+         socket
+         |> assign(:sort_field, sort_field)
+         |> assign(:sort_direction, sort_direction)
+         |> resort_breakdowns(sort_field, sort_direction)}
 
-    {:noreply,
-     socket
-     |> assign(:sort_field, sort_field)
-     |> assign(:sort_direction, sort_direction)
-     |> resort_breakdowns(sort_field, sort_direction)}
+      :error ->
+        {:noreply, socket}
+    end
   end
+
+  def handle_event("sort", _params, socket), do: {:noreply, socket}
 
   def handle_event("refresh", _params, socket) do
     {:noreply, start_data_load(socket)}
@@ -862,32 +885,36 @@ defmodule TokengateWeb.StatsLive do
         provider_id = params.provider_id
         admin? = params.user.global_role == "admin"
 
-        [
-          fn -> {:provider, Tokengate.Providers.get_provider(provider_id)} end,
-          # El ranking completo entra para tomar de ahí tier/score/p95/fallos:
-          # la fila de la tabla y el detalle no pueden decir cosas distintas.
-          fn -> {:provider_ranking, Rollup.provider_ranking(nil, opts)} end,
-          fn -> {:provider_metrics, provider_metrics(provider_id, opts)} end,
-          fn ->
-            {:breakdown_model,
-             Rollup.breakdown_by_model(nil, Keyword.put(opts, :provider_id, provider_id))}
-          end,
-          fn ->
-            {:breakdown_user,
-             Rollup.breakdown_by_user(Keyword.put(opts, :provider_id, provider_id))}
-          end,
-          fn ->
-            {:breakdown_service,
-             if admin? do
-               Rollup.breakdown_by_service(Keyword.put(opts, :provider_id, provider_id))
-             else
-               []
-             end}
-          end,
-          fn ->
-            {:breakdown_group, breakdown_by_group_for_provider(params.user, provider_id, opts)}
-          end
-        ]
+        if is_nil(provider_id) do
+          [fn -> {:provider, nil} end]
+        else
+          [
+            fn -> {:provider, Tokengate.Providers.get_provider(provider_id)} end,
+            # El ranking completo entra para tomar de ahí tier/score/p95/fallos:
+            # la fila de la tabla y el detalle no pueden decir cosas distintas.
+            fn -> {:provider_ranking, Rollup.provider_ranking(nil, opts)} end,
+            fn -> {:provider_metrics, provider_metrics(provider_id, opts)} end,
+            fn ->
+              {:breakdown_model,
+               Rollup.breakdown_by_model(nil, Keyword.put(opts, :provider_id, provider_id))}
+            end,
+            fn ->
+              {:breakdown_user,
+               Rollup.breakdown_by_user(Keyword.put(opts, :provider_id, provider_id))}
+            end,
+            fn ->
+              {:breakdown_service,
+               if admin? do
+                 Rollup.breakdown_by_service(Keyword.put(opts, :provider_id, provider_id))
+               else
+                 []
+               end}
+            end,
+            fn ->
+              {:breakdown_group, breakdown_by_group_for_provider(params.user, provider_id, opts)}
+            end
+          ]
+        end
 
       :groups ->
         admin? = params.user.global_role == "admin"
@@ -910,7 +937,7 @@ defmodule TokengateWeb.StatsLive do
 
           group_id ->
             if group_drilldown_allowed?(params.user, group_id) do
-              [fn -> {:group, Accounts.get_group!(group_id)} end | base]
+              [fn -> {:group, Accounts.get_group(group_id)} end | base]
             else
               base
             end
@@ -918,11 +945,11 @@ defmodule TokengateWeb.StatsLive do
 
       :group ->
         group_id = params.group_id
-        allowed? = group_drilldown_allowed?(params.user, group_id)
+        allowed? = not is_nil(group_id) and group_drilldown_allowed?(params.user, group_id)
 
         if allowed? do
           [
-            fn -> {:group, Accounts.get_group!(group_id)} end,
+            fn -> {:group, Accounts.get_group(group_id)} end,
             fn ->
               {:group_budget,
                Budgets.list_group_budgets(params.timezone) |> find_group_budget(group_id)}
@@ -963,6 +990,8 @@ defmodule TokengateWeb.StatsLive do
   # `?model_id=` de la pestaña Modelos. Los proveedores que lo sirven y los
   # perfiles de límites/miembros que lo usan son los MISMOS tres desgloses que ya tenía el
   # drill-down: acá sólo cambia de dónde entran.
+  defp model_detail_tasks(nil, _user, _opts), do: [fn -> {:model, nil} end]
+
   defp model_detail_tasks(model_id, user, opts) do
     [
       fn -> {:model, Tokengate.Providers.get_model(model_id)} end,
@@ -1086,8 +1115,6 @@ defmodule TokengateWeb.StatsLive do
   # Costo y tokens del proveedor en el período. La confiabilidad (tier, score,
   # p95, fallos) NO se recalcula acá: sale de la fila del ranking, que es la
   # misma que pinta la tabla de proveedores.
-  defp provider_metrics(nil, _opts), do: empty_provider_metrics()
-
   defp provider_metrics(provider_id, opts) do
     Logs.cost_summary(%{provider_id: provider_id, from: opts[:from], to: opts[:to]})
   end
@@ -1383,6 +1410,15 @@ defmodule TokengateWeb.StatsLive do
   # (`?period=month`, `last_month`, `7d`, a forged value) degrades to the
   # canonical default (week) instead of being reinterpreted as another window.
   # A missing param keeps the page's own default (today).
+  defp cast_uuid(id) when is_binary(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} -> uuid
+      :error -> nil
+    end
+  end
+
+  defp cast_uuid(_), do: nil
+
   defp parse_period(nil), do: "today"
   defp parse_period(period), do: Periods.normalize_period(period)
 

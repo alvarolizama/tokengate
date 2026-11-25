@@ -1451,5 +1451,22 @@ defmodule TokengateWeb.UsersLiveTest do
       # La de otro usuario sobrevive.
       assert Tokengate.Routing.StickyTracker.get(other_hash, "model-1") == "ap-1"
     end
+
+    test "saving edit or password after target user deletion flashes error instead of crashing",
+         %{
+           conn: conn
+         } do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#edit-#{target.id}") |> render_click()
+      {:ok, _} = Accounts.delete_user(target)
+
+      render_submit(view, "save_user", %{"user" => %{"name" => "Gone", "email" => target.email}})
+      assert has_element?(view, "#flash-error")
+    end
   end
 end

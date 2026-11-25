@@ -260,5 +260,22 @@ defmodule TokengateWeb.UserStatsLiveTest do
       assert html =~ user.email
       assert has_element?(view, "#user-stats-filter-form")
     end
+
+    test "DST transition dates in local timezone do not crash", %{conn: conn} do
+      {_group, user} = fixture_user_with_memberships()
+      %{user: admin, password: password} = register("admin")
+      {:ok, admin} = Accounts.update_user_timezone(admin, "America/New_York")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+
+      view
+      |> form("#user-stats-filter-form", %{
+        "filter" => %{"from" => "2026-03-08", "to" => "2026-03-08"}
+      })
+      |> render_change()
+
+      assert has_element?(view, "#user-stats-filter-form")
+    end
   end
 end

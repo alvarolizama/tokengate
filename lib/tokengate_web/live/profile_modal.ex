@@ -72,7 +72,7 @@ defmodule TokengateWeb.ProfileModal do
         {:noreply,
          socket
          |> assign(:saved?, false)
-         |> assign(:form, to_form(changeset))}
+         |> assign(:form, to_form(changeset, as: :profile))}
     end
   end
 

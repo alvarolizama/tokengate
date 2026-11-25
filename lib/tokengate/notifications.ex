@@ -361,6 +361,9 @@ defmodule Tokengate.Notifications do
     |> Repo.aggregate(:count, :id)
   end
 
+  @doc "Gets a single notification, or nil when missing."
+  def get_notification(id), do: Repo.get(Notification, id)
+
   @doc "Gets a single notification. Raises when missing."
   def get_notification!(id), do: Repo.get!(Notification, id)
 
@@ -408,14 +411,16 @@ defmodule Tokengate.Notifications do
 
   @doc "Deletes a link by id."
   @spec delete_link(term()) :: :ok
-  def delete_link(id) do
-    case Repo.get(Link, id) do
-      nil -> :ok
-      link -> Repo.delete(link)
+  def delete_link(id) when is_binary(id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(id),
+         %Link{} = link <- Repo.get(Link, uuid) do
+      Repo.delete(link)
     end
 
     :ok
   end
+
+  def delete_link(_id), do: :ok
 
   @doc "Chat ids of every linked admin — the delivery fan-out list."
   @spec linked_chat_ids() :: [String.t()]

@@ -127,6 +127,41 @@ defmodule TokengateWeb.TimezoneHelper do
   def format_datetime_iso(%DateTime{} = dt, tz),
     do: format(dt, tz, "%Y-%m-%d %H:%M")
 
+  @doc "DST-safe conversion of a local date + time in `timezone` to UTC DateTime (or nil)."
+  def local_time_to_utc(%Date{} = date, %Time{} = time, timezone) when is_binary(timezone) do
+    case DateTime.new(date, time, timezone) do
+      {:ok, dt} -> DateTime.shift_zone!(dt, "Etc/UTC")
+      {:ambiguous, dt, _later} -> DateTime.shift_zone!(dt, "Etc/UTC")
+      {:gap, _just_before, just_after} -> DateTime.shift_zone!(just_after, "Etc/UTC")
+      {:error, _reason} -> nil
+    end
+  end
+
+  def local_time_to_utc(_date, _time, _timezone), do: nil
+
+  @doc "Parses an ISO-8601 date string in `timezone` (`:start_of_day` or `:end_of_day`) to UTC."
+  def parse_local_date(date_str, timezone, mode \\ :start_of_day)
+  def parse_local_date("", _tz, _mode), do: nil
+  def parse_local_date(nil, _tz, _mode), do: nil
+
+  def parse_local_date(date_str, timezone, mode) when is_binary(date_str) do
+    case Date.from_iso8601(date_str) do
+      {:ok, date} ->
+        time =
+          case mode do
+            :start_of_day -> ~T[00:00:00]
+            :end_of_day -> ~T[23:59:59]
+          end
+
+        local_time_to_utc(date, time, timezone || @default_timezone)
+
+      _ ->
+        nil
+    end
+  end
+
+  def parse_local_date(_date_str, _tz, _mode), do: nil
+
   defp format(dt, tz, fmt) do
     case DateTime.shift_zone(dt, tz) do
       {:ok, shifted} -> Calendar.strftime(shifted, fmt)

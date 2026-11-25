@@ -71,7 +71,7 @@
         <div id="topup-owner">
           <label class="text-xs text-base-content/60 block mb-1">{gettext("Owner")}</label>
 
-          <div class="flex gap-1 mb-2">
+          <div :if={is_nil(@editing_topup_id)} class="flex gap-1 mb-2">
             <button
               type="button"
               phx-click="owner_kind"
@@ -104,45 +104,47 @@
             </span>
           </div>
 
-          <.input
-            type="text"
-            name="owner_query"
-            value={@owner_query}
-            placeholder={
-              if @owner_kind == "user",
-                do: gettext("Search user…"),
-                else: gettext("Search service…")
-            }
-            phx-change="search_owner"
-            phx-debounce="200"
-            id="topup-owner-search"
-            autocomplete="off"
-          />
+          <div :if={is_nil(@editing_topup_id)}>
+            <.input
+              type="text"
+              name="owner_query"
+              value={@owner_query}
+              placeholder={
+                if @owner_kind == "user",
+                  do: gettext("Search user…"),
+                  else: gettext("Search service…")
+              }
+              phx-change="search_owner"
+              phx-debounce="200"
+              id="topup-owner-search"
+              autocomplete="off"
+            />
 
-          <div
-            :if={@owner_query != "" and @owner_results == []}
-            class="text-xs text-base-content/40 mt-2"
-          >
-            {gettext("No matches.")}
-          </div>
-
-          <div
-            :if={@owner_results != []}
-            class="mt-2 max-h-40 overflow-y-auto border border-base-300 rounded-md"
-          >
-            <button
-              :for={o <- @owner_results}
-              type="button"
-              id={"select-owner-#{o.id}"}
-              phx-click="select_owner"
-              phx-value-id={o.id}
-              class="w-full text-left px-3 py-2 text-sm hover:bg-base-100 border-b border-base-300 last:border-b-0"
+            <div
+              :if={@owner_query != "" and @owner_results == []}
+              class="text-xs text-base-content/40 mt-2"
             >
-              <div class="font-medium">{subject_primary(o)}</div>
-              <div :if={subject_secondary(o)} class="text-xs text-base-content/60">
-                {subject_secondary(o)}
-              </div>
-            </button>
+              {gettext("No matches.")}
+            </div>
+
+            <div
+              :if={@owner_results != []}
+              class="mt-2 max-h-40 overflow-y-auto border border-base-300 rounded-md"
+            >
+              <button
+                :for={o <- @owner_results}
+                type="button"
+                id={"select-owner-#{o.id}"}
+                phx-click="select_owner"
+                phx-value-id={o.id}
+                class="w-full text-left px-3 py-2 text-sm hover:bg-base-100 border-b border-base-300 last:border-b-0"
+              >
+                <div class="font-medium">{subject_primary(o)}</div>
+                <div :if={subject_secondary(o)} class="text-xs text-base-content/60">
+                  {subject_secondary(o)}
+                </div>
+              </button>
+            </div>
           </div>
         </div>
 

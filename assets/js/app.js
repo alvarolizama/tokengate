@@ -84,15 +84,23 @@ const SortableProviders = {
 // Usage: <button phx-hook="CopyToClipboard" data-target="element-id">Copiar</button>
 const CopyToClipboard = {
   mounted() {
+    this.originalText = this.el.textContent
+    this.resetTimer = null
+
     this.el.addEventListener("click", () => {
       const target = document.getElementById(this.el.dataset.target)
-      if (!target) return
+      if (!target || !navigator.clipboard?.writeText) return
       const text = target.textContent.trim()
-      navigator.clipboard.writeText(text).then(() => {
-        const original = this.el.textContent
-        this.el.textContent = "¡Copiado!"
-        setTimeout(() => { this.el.textContent = original }, 1500)
-      })
+      navigator.clipboard
+        .writeText(text)
+        .then(() => {
+          clearTimeout(this.resetTimer)
+          this.el.textContent = "¡Copiado!"
+          this.resetTimer = setTimeout(() => {
+            this.el.textContent = this.originalText
+          }, 1500)
+        })
+        .catch(() => {})
     })
   }
 }

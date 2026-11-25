@@ -128,11 +128,14 @@ defmodule TokengateWeb.LabsLive do
   # El picker es un formulario aparte: cada icono es un botón con el mismo
   # nombre de param, de modo que elegir uno reemplaza al anterior sin JS propio.
   def handle_event("pick_icon", %{"icon" => icon}, socket) when is_binary(icon) do
-    form = socket.assigns.form
+    case socket.assigns.form do
+      nil ->
+        {:noreply, socket}
 
-    changeset = Ecto.Changeset.put_change(form.source, :icon, icon)
-
-    {:noreply, assign(socket, :form, to_form(changeset, as: :lab))}
+      form ->
+        changeset = Ecto.Changeset.put_change(form.source, :icon, icon)
+        {:noreply, assign(socket, :form, to_form(changeset, as: :lab))}
+    end
   end
 
   def handle_event("save_lab", %{"lab" => params}, socket) do

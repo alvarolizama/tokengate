@@ -917,6 +917,44 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert {:error, :unauthorized} = Accounts.authenticate_user(user.email, password)
   end
 
+  test "resubmitting password form after validation error preserves profile namespace", %{
+    conn: conn
+  } do
+    %{user: user, password: password} = register("user")
+    new_password = "password-nueva-#{unique()}2"
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    view |> element("#profile-avatar-button") |> render_click()
+
+    html =
+      view
+      |> element("#profile-password-form")
+      |> render_submit(%{
+        "profile" => %{
+          "current_password" => "wrong-#{unique()}",
+          "password" => new_password
+        }
+      })
+
+    assert html =~ "no es correcta"
+    assert has_element?(view, "#profile-password-form input[name='profile[current_password]']")
+
+    html =
+      view
+      |> element("#profile-password-form")
+      |> render_submit(%{
+        "profile" => %{
+          "current_password" => password,
+          "password" => new_password
+        }
+      })
+
+    assert html =~ "Contraseña actualizada."
+    assert {:ok, _} = Accounts.authenticate_user(user.email, new_password)
+  end
+
   test "the modal rejects a wrong current password", %{conn: conn} do
     %{user: user, password: password} = register("user")
 

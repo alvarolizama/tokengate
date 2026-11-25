@@ -573,6 +573,63 @@ defmodule TokengateWeb.MonitoringLiveTest do
     assert has_element?(view, "#logs td", "sk-logs-")
   end
 
+  test "revoked api key still shows its historical prefix instead of dash", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{owner: owner, member: member} = member_with_log()
+    key = api_key_for(owner, member, "revoked")
+    {:ok, _revoked} = Accounts.revoke_api_key(key)
+    _log = log_for_key(member, key, "revoked-key-model-#{unique()}")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    assert has_element?(view, "#logs td", key.key_prefix)
+  end
+
+  test "inflight_done decrements stream_rows only when entry existed and DST dates do not crash",
+       %{
+         conn: conn
+       } do
+    %{user: admin, password: password} = register("admin")
+    {:ok, admin} = Accounts.update_user_timezone(admin, "America/New_York")
+    %{member: member} = member_with_log()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    initial_rows = :sys.get_state(view.pid).socket.assigns.stream_rows
+
+    # Unrelated inflight_done must not decrement stream_rows.
+    send(view.pid, {:inflight_done, "missing-id"})
+    _ = :sys.get_state(view.pid)
+    assert :sys.get_state(view.pid).socket.assigns.stream_rows == initial_rows
+
+    entry =
+      Inflight.start_request(%{
+        group_member_id: member.id,
+        user_email: "dst@example.com",
+        group_name: "DST Group",
+        model_requested: "glm-5.2",
+        agent_type: "api",
+        streaming: false,
+        think: false
+      })
+
+    _ = render(view)
+    assert :sys.get_state(view.pid).socket.assigns.stream_rows == initial_rows + 1
+
+    Inflight.finish_request(entry.id)
+    _ = render(view)
+    assert :sys.get_state(view.pid).socket.assigns.stream_rows == initial_rows
+
+    # DST spring-forward date in America/New_York must not raise.
+    view
+    |> form("#logs-filter-form", filter: %{from: "2026-03-08", to: "2026-03-08"})
+    |> render_change()
+
+    assert has_element?(view, "#logs-filter-form")
+  end
+
   ## System monitor section -------------------------------------------------
 
   test "non-admin is redirected away from the logs dashboard", %{conn: conn} do

@@ -318,5 +318,12 @@ defmodule TokengateWeb.LabsLiveTest do
       assert Lab.mark(%Lab{icon: "hero-fire"}) == {:icon, "hero-fire"}
       assert Lab.mark(%Lab{}) == {:icon, LabCatalog.default_icon()}
     end
+
+    test "pick_icon with nil form is a safe no-op", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
+
+      render_click(view, "pick_icon", %{"icon" => "hero-fire"})
+      assert has_element?(view, "#lab-name-openai")
+    end
   end
 end

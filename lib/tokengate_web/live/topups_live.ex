@@ -26,10 +26,6 @@ defmodule TokengateWeb.TopupsLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Credits.{Topup, Topups}
-  alias Tokengate.Logs.RequestLog
-  alias Tokengate.Repo
-
-  import Ecto.Query
 
   import TokengateWeb.TopupHelpers
 
@@ -85,7 +81,7 @@ defmodule TokengateWeb.TopupsLive do
 
   defp load_topups(socket) do
     topups = Topups.list_all()
-    consumed = consumed_by_topup_id(topups)
+    consumed = Topups.consumed_by_topup_ids(topups)
     archived = Enum.filter(topups, &archived?(&1, consumed))
     visible = visible_topups(topups, consumed, socket)
 
@@ -133,40 +129,6 @@ defmodule TokengateWeb.TopupsLive do
   end
 
   ## Consumo / estado de una fila -------------------------------------------
-
-  # La tabla pinta el consumo de CADA fila y el estado (agotado/archivado)
-  # depende de él. Resolverlo con `Topups.consumed_usd/1` —o con `state/1` y
-  # `archived?/1` de `TopupHelpers`, que lo llaman por dentro— costaba una
-  # query por fila, repetida en cada celda y en cada pasada del filtro: un
-  # N+1 sobre `request_logs`. Aquí el consumo se resuelve UNA vez por carga
-  # (una query agrupada) y viaja en el assign `:consumed`.
-  @consumption_grace_hours 24
-
-  defp consumed_by_topup_id([]), do: %{}
-
-  defp consumed_by_topup_id(topups) do
-    ids = Enum.map(topups, & &1.id)
-    floor = consumption_floor(topups)
-
-    RequestLog
-    |> where([rl], rl.credit_topup_id in ^ids)
-    |> where([rl], rl.inserted_at >= ^floor)
-    |> group_by([rl], rl.credit_topup_id)
-    |> select([rl], {rl.credit_topup_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-    |> Repo.all()
-    |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
-  end
-
-  # Misma cota que `Topups.consumed_usd/1` (creación menos la hora de gracia),
-  # aplicada una vez al lote: el top-up más antiguo es el instante más temprano
-  # en que cualquiera pudo ser debitado.
-  defp consumption_floor(topups) do
-    topups
-    |> Enum.map(& &1.inserted_at)
-    |> Enum.min_by(&DateTime.to_unix(&1, :microsecond))
-    |> DateTime.add(-@consumption_grace_hours * 3600, :second)
-    |> DateTime.truncate(:second)
-  end
 
   defp row_consumed(topup, consumed), do: Map.get(consumed, topup.id, Decimal.new(0))
 
@@ -255,12 +217,20 @@ defmodule TokengateWeb.TopupsLive do
 
   def handle_event("edit_topup", %{"id" => id}, socket) do
     with {:ok, id} <- cast_id(id),
-         %Topup{} = topup <- Topups.get_topup(id) do
+         %Topup{} = topup <- Topups.get_topup_with_owner(id) do
+      {owner_kind, selected_owner} =
+        cond do
+          topup.user -> {"user", {"user", topup.user}}
+          topup.service -> {"service", {"service", topup.service}}
+          true -> {"user", nil}
+        end
+
       {:noreply,
        socket
        |> assign(:editing_topup_id, topup.id)
        |> assign(:form_token, Ecto.UUID.generate())
-       |> assign(:selected_owner, nil)
+       |> assign(:owner_kind, owner_kind)
+       |> assign(:selected_owner, selected_owner)
        |> assign(:owner_query, "")
        |> assign(:owner_results, [])
        |> assign(:form, to_form(Topups.change_topup(topup), as: :topup))}
@@ -280,16 +250,20 @@ defmodule TokengateWeb.TopupsLive do
      |> assign(:form_token, nil)}
   end
 
-  # El formulario ofrece un solo dueño: usuario o servicio.
+  # El formulario ofrece un solo dueño: usuario o servicio (bloqueado al editar).
   def handle_event("owner_kind", %{"kind" => kind}, socket) when kind in ["user", "service"] do
-    results = if kind == "user", do: search_users(""), else: search_services("")
+    if socket.assigns.editing_topup_id do
+      {:noreply, socket}
+    else
+      results = if kind == "user", do: search_users(""), else: search_services("")
 
-    {:noreply,
-     socket
-     |> assign(:owner_kind, kind)
-     |> assign(:owner_query, "")
-     |> assign(:owner_results, results)
-     |> assign(:selected_owner, nil)}
+      {:noreply,
+       socket
+       |> assign(:owner_kind, kind)
+       |> assign(:owner_query, "")
+       |> assign(:owner_results, results)
+       |> assign(:selected_owner, nil)}
+    end
   end
 
   # The owner search input carries its own `phx-change`, so LiveView ships the
@@ -298,29 +272,37 @@ defmodule TokengateWeb.TopupsLive do
   # matched a real payload, so the LiveView died on the first keystroke. The
   # catch-all closes the family: an unexpected payload is ignored.
   def handle_event("search_owner", %{"value" => query}, socket) when is_binary(query) do
-    results =
-      case socket.assigns.owner_kind do
-        "user" -> search_users(query)
-        "service" -> search_services(query)
-        _ -> []
-      end
+    if socket.assigns.editing_topup_id do
+      {:noreply, socket}
+    else
+      results =
+        case socket.assigns.owner_kind do
+          "user" -> search_users(query)
+          "service" -> search_services(query)
+          _ -> []
+        end
 
-    {:noreply, socket |> assign(:owner_query, query) |> assign(:owner_results, results)}
+      {:noreply, socket |> assign(:owner_query, query) |> assign(:owner_results, results)}
+    end
   end
 
   def handle_event("search_owner", _params, socket), do: {:noreply, socket}
 
   def handle_event("select_owner", %{"id" => id}, socket) do
-    case owner_for(socket.assigns.owner_kind, id) do
-      nil ->
-        {:noreply, socket}
+    if socket.assigns.editing_topup_id do
+      {:noreply, socket}
+    else
+      case owner_for(socket.assigns.owner_kind, id) do
+        nil ->
+          {:noreply, socket}
 
-      owner ->
-        {:noreply,
-         socket
-         |> assign(:selected_owner, {socket.assigns.owner_kind, owner})
-         |> assign(:owner_results, [])
-         |> assign(:owner_query, owner_name(owner))}
+        owner ->
+          {:noreply,
+           socket
+           |> assign(:selected_owner, {socket.assigns.owner_kind, owner})
+           |> assign(:owner_results, [])
+           |> assign(:owner_query, "")}
+      end
     end
   end
 
@@ -537,8 +519,4 @@ defmodule TokengateWeb.TopupsLive do
   defp owner_badge({"user", %{email: email}}), do: gettext("User:") <> " " <> email
   defp owner_badge({"service", %{name: name}}), do: gettext("Service:") <> " " <> name
   defp owner_badge(_), do: "—"
-
-  defp owner_name(%{email: email}), do: email
-  defp owner_name(%{name: name}), do: name
-  defp owner_name(_), do: ""
 end

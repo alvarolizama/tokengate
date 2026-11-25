@@ -36,8 +36,19 @@ defmodule TokengateWeb.ServiceStatsLive do
 
   @impl true
   def mount(%{"service_id" => service_id} = params, _session, socket) do
-    service = Accounts.get_service!(service_id)
+    case fetch_service(service_id) do
+      nil ->
+        {:ok,
+         socket
+         |> put_flash(:error, gettext("That service does not exist."))
+         |> push_navigate(to: ~p"/stats/services")}
 
+      service ->
+        mount_service(socket, service, params)
+    end
+  end
+
+  defp mount_service(socket, service, params) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
     end
@@ -48,7 +59,7 @@ defmodule TokengateWeb.ServiceStatsLive do
       |> assign(:service, service)
       # Todas las keys del servicio (activas y revocadas, más recientes
       # primero) — la fuente de las filas de la tabla de API keys.
-      |> assign(:service_api_keys, Accounts.list_api_keys_for_service_all(service_id))
+      |> assign(:service_api_keys, Accounts.list_api_keys_for_service_all(service.id))
       |> assign(:key_filter, "all")
       |> assign(:key_filter_form, to_form(%{"key_id" => "all"}, as: :key_filter))
       # El ?period= del deep-link llega a mount: respetarlo aquí evita el
@@ -74,6 +85,15 @@ defmodule TokengateWeb.ServiceStatsLive do
 
     {:ok, socket}
   end
+
+  defp fetch_service(service_id) when is_binary(service_id) do
+    case Ecto.UUID.cast(service_id) do
+      {:ok, uuid} -> Accounts.get_service(uuid)
+      :error -> nil
+    end
+  end
+
+  defp fetch_service(_service_id), do: nil
 
   defp require_admin_hook(socket) do
     attach_hook(socket, :require_admin, :handle_event, fn _event, _params, socket ->

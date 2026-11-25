@@ -157,8 +157,8 @@ defmodule TokengateWeb.AdminComponents do
           <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
           <div>
             <p class="font-semibold">{TokengateWeb.Gettext.translate(@warning_title)}</p>
-            <p :if={TokengateWeb.Gettext.translate(@warning_intro)} class="mt-1">
-              {@warning_intro}
+            <p :if={@warning_intro} class="mt-1">
+              {TokengateWeb.Gettext.translate(@warning_intro)}
             </p>
             <ul
               :if={@warning_items != []}

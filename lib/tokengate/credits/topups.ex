@@ -59,6 +59,13 @@ defmodule Tokengate.Credits.Topups do
 
   def get_topup!(id), do: Repo.get!(Topup, id)
 
+  @doc "Fetches a top-up with `:user` and `:service` preloaded."
+  def get_topup_with_owner(id) do
+    Topup
+    |> preload([:user, :service])
+    |> Repo.get(id)
+  end
+
   @doc """
   Top-ups **vigentes** de un sujeto, en el orden de drenado (expira antes
   primero; los sin expiración al final).
@@ -261,14 +268,18 @@ defmodule Tokengate.Credits.Topups do
     |> Repo.all()
   end
 
-  defp consumed_by_topup_ids([]), do: %{}
+  @doc """
+  Batch consumption in USD for a list of top-ups, reading `topup_consumption_counters`
+  first and falling back to bounded `request_logs` only when no counter row exists.
+  """
+  def consumed_by_topup_ids([]), do: %{}
 
   # Counters first (one query for the whole batch). Only the top-ups WITHOUT a
   # counter row fall back to the log sum — that is the pre-backfill case: the
   # migration backfills every top-up the retention still holds, so in practice
   # the fallback only covers a top-up created between the backfill and its first
   # debit, where the log sum and the counter agree anyway.
-  defp consumed_by_topup_ids(topups) do
+  def consumed_by_topup_ids(topups) do
     ids = Enum.map(topups, & &1.id)
     counted = counted_micro_by_ids(ids)
 
