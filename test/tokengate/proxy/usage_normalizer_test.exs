@@ -172,6 +172,60 @@ defmodule Tokengate.Proxy.UsageNormalizerTest do
 
       assert cost == Decimal.new("0.5")
     end
+
+    test "usage.buyer_cost_micro converts micro-USD to Decimal (SurplusIntelligence non-streaming)" do
+      cost =
+        UsageNormalizer.extract_reported_cost(:openai, %{
+          "usage" => %{"prompt_tokens" => 36, "completion_tokens" => 0, "buyer_cost_micro" => 17}
+        })
+
+      assert Decimal.equal?(cost, Decimal.new("0.000017"))
+    end
+
+    test "x-si-buyer-cost-micro header converts micro-USD when body lacks cost" do
+      cost =
+        UsageNormalizer.extract_reported_cost(
+          :openai,
+          %{"usage" => %{"prompt_tokens" => 36, "completion_tokens" => 0}},
+          [{"x-si-buyer-cost-micro", "17"}]
+        )
+
+      assert Decimal.equal?(cost, Decimal.new("0.000017"))
+    end
+
+    test "buyer_cost_micro and x-si-buyer-cost-micro win over raw upstream usage.cost" do
+      cost =
+        UsageNormalizer.extract_reported_cost(
+          :openai,
+          %{"usage" => %{"cost" => 0.0000389865, "buyer_cost_micro" => 82}},
+          [{"x-si-buyer-cost-micro", "82"}]
+        )
+
+      assert Decimal.equal?(cost, Decimal.new("0.000082"))
+
+      header_only =
+        UsageNormalizer.extract_reported_cost(
+          :openai,
+          %{"usage" => %{"cost" => 0.0000389865}},
+          [{"x-si-buyer-cost-micro", "82"}]
+        )
+
+      assert Decimal.equal?(header_only, Decimal.new("0.000082"))
+    end
+
+    test "zero buyer_cost_micro yields $0 Decimal and whitespace-padded strings parse" do
+      assert Decimal.equal?(
+               UsageNormalizer.extract_reported_cost(:openai, %{
+                 "usage" => %{"buyer_cost_micro" => 0}
+               }),
+               Decimal.new(0)
+             )
+
+      assert Decimal.equal?(
+               UsageNormalizer.extract_reported_cost(:openai, %{"cost_usd" => " 0.0025 "}),
+               Decimal.new("0.0025")
+             )
+    end
   end
 
   describe "Fireworks cached-prompt headers" do

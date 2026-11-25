@@ -955,6 +955,46 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert {:ok, _} = Accounts.authenticate_user(user.email, new_password)
   end
 
+  test "parent re-render after password update does not revert ProfileModal to stale user", %{
+    conn: conn
+  } do
+    %{user: user, password: password} = register("user")
+    next_a = "clave-nueva-#{unique()}3"
+    next_b = "clave-nueva-#{unique()}4"
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    view |> element("#profile-avatar-button") |> render_click()
+
+    form_a = %{"current_password" => password, "password" => next_a}
+
+    html =
+      view
+      |> element("#profile-password-form")
+      |> render_submit(%{"profile" => form_a})
+
+    assert html =~ "Contraseña actualizada."
+    assert has_element?(view, "#profile-password-relogin a[href='/login']")
+    assert has_element?(view, "#profile-modal-dialog[data-reset-key='2']")
+
+    # Trigger a parent LiveView re-render with the stale @current_user assign.
+    view |> render_patch(~p"/dashboard?period=7d")
+
+    # Re-opening and submitting with the NEW password must succeed (component kept fresh user).
+    view |> element("#profile-avatar-button") |> render_click()
+
+    form_b = %{"current_password" => next_a, "password" => next_b}
+
+    html =
+      view
+      |> element("#profile-password-form")
+      |> render_submit(%{"profile" => form_b})
+
+    assert html =~ "Contraseña actualizada."
+    assert {:ok, _} = Accounts.authenticate_user(user.email, next_b)
+  end
+
   test "the modal rejects a wrong current password", %{conn: conn} do
     %{user: user, password: password} = register("user")
 

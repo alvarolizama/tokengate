@@ -192,7 +192,6 @@ defmodule Tokengate.Providers.ServiceModels do
     # el suelo del paso 3 sin key. Los ids son EXACTAMENTE los que publica
     # (no hay variantes con fecha en este proveedor) y `qwen3-embedding` entra
     # porque el id no lleva prefijo de lab y el hint lo clasifica solo.
-    # `rerank` NO está aquí: el gateway no tiene esa superficie.
     "nan" => %{
       "stt" => ~w(whisper),
       "tts" => ~w(kokoro),
@@ -200,8 +199,7 @@ defmodule Tokengate.Providers.ServiceModels do
       "embedding" => ~w(qwen3-embedding)
     },
     # Helmcode: los ids que publica su documentación (2026-11-17), sin
-    # variantes con fecha. `rerank` NO está aquí: el gateway no tiene esa
-    # superficie.
+    # variantes con fecha.
     "helmcode" => %{
       "stt" => ~w(whisper),
       "tts" => ~w(kokoro),

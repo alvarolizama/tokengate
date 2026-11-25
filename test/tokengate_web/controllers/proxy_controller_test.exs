@@ -288,14 +288,6 @@ defmodule TokengateWeb.ProxyControllerTest do
             "usage" => %{"input_tokens" => 100, "output_tokens" => 200, "total_tokens" => 300}
           })
 
-        # Rerank: one segment per upstream wire, ALL answering the same
-        # ranking — the contract test compares the canonical output of the
-        # five without inventing an order. `rerank-fireworks` answers
-        # `data[]`+`usage`, `rerank-helmcode` adds `meta.billed_units`, the
-        # rest answer the plain `results[]` envelope.
-        path_prefixed?(conn, "rerank-") ->
-          rerank_answer(conn, hd(conn.path_info), payload)
-
         # Un upstream que IGNORA `stream_options.include_usage`: manda su
         # contenido y cierra, sin ningún frame de usage. El costo tiene que
         # llegar igual al cliente (lo emite TokenGate antes del [DONE]).
@@ -307,6 +299,48 @@ defmodule TokengateWeb.ProxyControllerTest do
         # llevar ese costo, no un $0.
         "headercoststream" in conn.path_info ->
           usage_less_stream(conn, [{"x-litellm-response-cost", "0.000420"}])
+
+        # SurplusIntelligence-shape non-streaming: cost in `usage.buyer_cost_micro`
+        # and `x-si-buyer-cost-micro` header, with NO `usage.cost`.
+        "simicro" in conn.path_info ->
+          conn
+          |> put_resp_header("x-si-buyer-cost-micro", "17")
+          |> json(200, %{
+            "id" => "chatcmpl-si-1",
+            "object" => "chat.completion",
+            "choices" => [
+              %{"index" => 0, "message" => %{"role" => "assistant", "content" => "ok"}}
+            ],
+            "usage" => %{
+              "prompt_tokens" => 36,
+              "completion_tokens" => 0,
+              "total_tokens" => 36,
+              "buyer_cost_micro" => 17
+            }
+          })
+
+        # SurplusIntelligence-shape streaming: `x-si-buyer-cost-micro` header +
+        # usage chunk carrying `buyer_cost_micro` (no `cost`).
+        "simicrostream" in conn.path_info ->
+          conn =
+            conn
+            |> put_resp_content_type("text/event-stream")
+            |> put_resp_header("x-si-buyer-cost-micro", "82")
+            |> send_chunked(200)
+
+          chunks = [
+            ~s({"id":"chatcmpl-si-s","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}),
+            ~s({"id":"chatcmpl-si-s","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":33,"completion_tokens":104,"total_tokens":137,"buyer_cost_micro":82,"cost":0.0000389865}})
+          ]
+
+          Enum.reduce(chunks, conn, fn chunk, c ->
+            {:ok, c} = Plug.Conn.chunk(c, "data: #{chunk}\n\n")
+            c
+          end)
+          |> then(fn c ->
+            {:ok, c} = Plug.Conn.chunk(c, "data: [DONE]\n\n")
+            c
+          end)
 
         "slowstream" in conn.path_info ->
           Process.sleep(300)
@@ -384,47 +418,6 @@ defmodule TokengateWeb.ProxyControllerTest do
           "cost" => 0.00015
         }
       })
-    end
-
-    # The same ranking for every rerank wire, in the upstream's own shape.
-    # `data[]`+`usage` is Fireworks (F59); `results[]` is OpenRouter/NaN/oMLX
-    # (F60); Helmcode adds its `meta.billed_units` billing block on top of
-    # `results[]`.
-    defp rerank_answer(conn, segment, payload) do
-      results = [
-        %{"index" => 1, "relevance_score" => 0.9812},
-        %{"index" => 0, "relevance_score" => 0.0123}
-      ]
-
-      case segment do
-        "rerank-fireworks" ->
-          json(conn, 200, %{
-            "object" => "list",
-            "model" => payload["model"],
-            "data" =>
-              Enum.map(results, fn result ->
-                Map.put(result, "document", "doc-#{result["index"]}")
-              end),
-            "usage" => %{"prompt_tokens" => 42, "total_tokens" => 42}
-          })
-
-        "rerank-helmcode" ->
-          json(conn, 200, %{
-            "results" => Enum.map(results, &Map.put(&1, "document", nil)),
-            "meta" => %{"billed_units" => %{"input_tokens" => 7}}
-          })
-
-        # A reported cost (as OpenRouter/LiteLLM-style upstreams do): it must
-        # win over any manual price.
-        "rerank-costly" ->
-          json(conn, 200, %{
-            "results" => Enum.map(results, &Map.put(&1, "document", nil)),
-            "usage" => %{"prompt_tokens" => 10, "cost" => 0.00042}
-          })
-
-        _other ->
-          json(conn, 200, %{"results" => Enum.map(results, &Map.put(&1, "document", nil))})
-      end
     end
 
     # El primer segmento del path empieza con `prefix`. Los tests que necesitan
@@ -3647,305 +3640,6 @@ defmodule TokengateWeb.ProxyControllerTest do
     refute_received {:provider_request_path, _}
   end
 
-  ## Rerank #####################################################################
-  #
-  # `POST /v1/rerank` is the one service whose contract is canonical on BOTH
-  # sides. These tests pin: the same input yields the same `results[]` shape
-  # for the five documented wires, the first served request does not fall into
-  # a missing `simple_usage/4` clause (F68), a lane with no upstream model id
-  # answers the gateway's own code (never the upstream's `model: null` 400),
-  # and the price follows the lane's unit (per token, or `per_request` for the
-  # flat-rate cluster).
-
-  defp rerank_body(model, overrides \\ %{}) do
-    Map.merge(
-      %{
-        "model" => model,
-        "query" => "what is the capital of France?",
-        "documents" => ["Paris is the capital of France.", "Berlin is in Germany."]
-      },
-      overrides
-    )
-  end
-
-  @rerank_results [
-    %{"index" => 1, "relevance_score" => 0.9812},
-    %{"index" => 0, "relevance_score" => 0.0123}
-  ]
-
-  test "POST /v1/rerank sirve el contrato canónico (y el primer request no revienta)", %{
-    conn: conn
-  } do
-    %{
-      token: token,
-      model: model,
-      member: member,
-      model_provider: model_provider
-    } = proxy_fixture(%{model_type: "rerank", provider_path: "rerank-openrouter"})
-
-    {:ok, _} =
-      Providers.update_model_provider(model_provider, %{
-        pricing_unit: "per_request",
-        unit_cost: "0.5"
-      })
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", rerank_body(model.name))
-
-    body = json_response(conn, 200)
-
-    # F68: the FIRST served request reaches `simple_usage/4` with kind
-    # :rerank. Without its clause this 500s with FunctionClauseError.
-    assert body["results"] == @rerank_results
-    refute Map.has_key?(body, "data")
-
-    # One request × $0.5: the lane's unit decides, not the tokens.
-    assert get_resp_header(conn, "x-tokengate-cost") == ["0.500000"]
-
-    assert_receive {:provider_request_path, "/rerank-openrouter/rerank"}
-
-    assert_receive {:provider_request, upstream}
-    assert upstream["model"] == model_provider.provider_model
-    assert upstream["query"] == "what is the capital of France?"
-    assert upstream["documents"] == ["Paris is the capital of France.", "Berlin is in Germany."]
-    # The Cohere-envelope resellers get exactly the canonical body.
-    refute Map.has_key?(upstream, "return_documents")
-
-    assert %{success: 1} = Oban.drain_queue(queue: :logs)
-    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
-    assert log.request_type == "rerank"
-    assert log.status_code == 200
-  end
-
-  test "la misma entrada produce la misma forma canónica en los cinco upstreams", %{
-    conn: _conn
-  } do
-    segments = [
-      "rerank-fireworks",
-      "rerank-openrouter",
-      "rerank-nan",
-      "rerank-helmcode",
-      "rerank-omlx"
-    ]
-
-    outputs =
-      for segment <- segments do
-        %{token: token, model: model} =
-          proxy_fixture(%{model_type: "rerank", provider_path: segment})
-
-        response =
-          build_conn()
-          |> authed_conn(token)
-          |> post(~p"/v1/rerank", rerank_body(model.name))
-
-        body = json_response(response, 200)
-
-        # The category of the wire (data[] vs results[]) never reaches the
-        # client: every upstream lands on the same list of the same shape.
-        assert body["results"] == @rerank_results
-        refute Map.has_key?(body, "data")
-        refute Map.has_key?(body, "meta")
-
-        assert_receive {:provider_request_path, path}
-        assert path == "/" <> segment <> "/rerank"
-
-        body["results"]
-      end
-
-    assert outputs |> Enum.uniq() |> length() == 1
-  end
-
-  test "Fireworks recibe return_documents: false; ningún otro lo recibe", %{conn: conn} do
-    %{token: token, model: model, provider: provider} =
-      proxy_fixture(%{model_type: "rerank", provider_path: "rerank-fireworks"})
-
-    # The wire comes from the provider's IDENTITY (Catalog.rerank_shape/1), not
-    # from the URL. The sandbox already materialized the builtin `fireworks-ai`
-    # row (CatalogSync), and `key` is unique, so it is removed inside this test
-    # (rolled back with the transaction) and the fixture takes its key.
-    Repo.delete_all(from p in Tokengate.Providers.Provider, where: p.key == "fireworks-ai")
-
-    provider
-    |> Ecto.Changeset.change(key: "fireworks-ai")
-    |> Repo.update!()
-
-    Tokengate.Routing.Cache.invalidate_all()
-
-    response =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", rerank_body(model.name))
-
-    assert json_response(response, 200)["results"] == @rerank_results
-
-    assert_receive {:provider_request, fireworks}
-    assert fireworks["return_documents"] == false
-
-    %{token: token, model: model} =
-      proxy_fixture(%{model_type: "rerank", provider_path: "rerank-nan"})
-
-    response =
-      build_conn()
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", rerank_body(model.name))
-
-    assert json_response(response, 200)
-
-    assert_receive {:provider_request, nan}
-    refute Map.has_key?(nan, "return_documents")
-  end
-
-  test "documents como objetos viajan como texto y el index apunta al array del cliente", %{
-    conn: conn
-  } do
-    %{token: token, model: model} =
-      proxy_fixture(%{model_type: "rerank", provider_path: "rerank-omlx"})
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(
-        ~p"/v1/rerank",
-        rerank_body(model.name, %{
-          "documents" => [
-            "a plain string",
-            %{"text" => "an object document", "metadata" => %{"id" => 7}}
-          ],
-          "top_n" => 2.0
-        })
-      )
-
-    assert json_response(conn, 200)["results"] == @rerank_results
-
-    assert_receive {:provider_request, upstream}
-
-    # A24: metadata is the caller's, not part of the ranking wire — the text
-    # is what travels, and the index answers the ORIGINAL array position.
-    assert upstream["documents"] == ["a plain string", "an object document"]
-    # A whole float is a count; the upstream receives an integer.
-    assert upstream["top_n"] == 2
-  end
-
-  test "el usage de Fireworks cobra por token en un lane per_1m_tokens", %{conn: conn} do
-    %{token: token, model: model, model_provider: model_provider} =
-      proxy_fixture(%{model_type: "rerank", provider_path: "rerank-fireworks"})
-
-    {:ok, _} =
-      Providers.update_model_provider(model_provider, %{
-        input_cost_per_million: "2.0",
-        output_cost_per_million: "0"
-      })
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", rerank_body(model.name))
-
-    assert json_response(conn, 200)
-
-    # 42 prompt tokens (the upstream's own counter) × $2/M = $0.000084 — the
-    # reported usage wins over the request estimate.
-    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000084"]
-  end
-
-  test "un lane de tarifa plana cobra por request aunque Helmcode reporte billed_units", %{
-    conn: conn
-  } do
-    %{token: token, model: model, model_provider: model_provider} =
-      proxy_fixture(%{model_type: "rerank", provider_path: "rerank-helmcode"})
-
-    {:ok, _} =
-      Providers.update_model_provider(model_provider, %{
-        input_cost_per_million: "2.0",
-        output_cost_per_million: "0",
-        pricing_unit: "per_request",
-        unit_cost: "0.002"
-      })
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", rerank_body(model.name))
-
-    assert json_response(conn, 200)
-    assert get_resp_header(conn, "x-tokengate-cost") == ["0.002000"]
-  end
-
-  test "el costo reportado por el upstream gana sobre el precio manual del lane", %{conn: conn} do
-    %{token: token, model: model, model_provider: model_provider} =
-      proxy_fixture(%{model_type: "rerank", provider_path: "rerank-costly"})
-
-    {:ok, _} =
-      Providers.update_model_provider(model_provider, %{
-        pricing_unit: "per_request",
-        unit_cost: "0.9"
-      })
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", rerank_body(model.name))
-
-    assert json_response(conn, 200)
-    # $0.00042 reported, not the $0.9 manual price of the lane.
-    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000420"]
-  end
-
-  test "un lane sin modelo upstream da el error propio del gateway, no el 400 del upstream", %{
-    conn: conn
-  } do
-    %{token: token, model: model, model_provider: model_provider} =
-      proxy_fixture(%{model_type: "rerank", provider_path: "rerank-nan"})
-
-    # A blank upstream id is storable (the changeset rejects "" but not "  ")
-    # and would travel as `model: "  "`, earning the upstream's own 400 —
-    # blaming the caller for a row the gateway owns.
-    model_provider
-    |> Ecto.Changeset.change(provider_model: "   ")
-    |> Repo.update!()
-
-    Tokengate.Routing.Cache.invalidate_all()
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", rerank_body(model.name))
-
-    assert %{"error" => %{"code" => "lane_not_servable"}} = json_response(conn, 503)
-    refute_received {:provider_request_path, _}
-  end
-
-  test "un body de rerank malformado se rechaza antes de las gates, sin tocar upstream", %{
-    conn: conn
-  } do
-    %{token: token, model: model} =
-      proxy_fixture(%{model_type: "rerank", provider_path: "rerank-nan"})
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", %{"model" => model.name, "query" => "q", "documents" => []})
-
-    assert %{"error" => %{"code" => "invalid_request", "message" => message}} =
-             json_response(conn, 400)
-
-    assert message =~ "documents"
-    refute_received {:provider_request_path, _}
-  end
-
-  test "POST /v1/rerank 400 model_type_mismatch contra un llm", %{conn: conn} do
-    %{token: token, model: model} = proxy_fixture()
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", rerank_body(model.name))
-
-    assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
-  end
-
   # The image API reports its tokens as `input_tokens`/`output_tokens`: they
   # must drive the cost exactly like a chat usage object would.
   test "images: the image API's token names drive the cost", %{conn: conn} do
@@ -5212,6 +4906,47 @@ defmodule TokengateWeb.ProxyControllerTest do
       assert %{success: 1} = Oban.drain_queue(queue: :logs)
       log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
       assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000420"))
+    end
+
+    test "non-streaming: SurplusIntelligence buyer_cost_micro / x-si-buyer-cost-micro records real cost",
+         %{conn: conn} do
+      %{token: token, model: model, member: member} =
+        proxy_fixture(%{credit_units: 100, path_overrides: %{"chat" => "/simicro"}})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+      body = json_response(conn, 200)
+      assert [cost_header] = get_resp_header(conn, "x-tokengate-cost")
+      assert cost_header == "0.000017"
+      assert_in_delta body["usage"]["cost_usd"], 0.000017, 1.0e-9
+
+      assert %{success: 1} = Oban.drain_queue(queue: :logs)
+      log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+      assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000017"))
+    end
+
+    test "streaming: SurplusIntelligence buyer_cost_micro wins over raw usage.cost and records real cost",
+         %{conn: conn} do
+      %{token: token, model: model, member: member} =
+        proxy_fixture(%{credit_units: 100, path_overrides: %{"chat" => "/simicrostream"}})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
+
+      frames = conn |> response(200) |> String.split("\n\n", trim: true)
+      assert [usage_frame] = Enum.filter(frames, &(&1 =~ "\"usage\""))
+      closing = usage_frame |> String.trim_leading("data: ") |> Jason.decode!()
+
+      assert_in_delta closing["usage"]["cost_usd"], 0.000082, 1.0e-9
+
+      assert %{success: 1} = Oban.drain_queue(queue: :logs)
+      log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+      assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000082"))
     end
   end
 end

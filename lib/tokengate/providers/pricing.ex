@@ -12,7 +12,6 @@ defmodule Tokengate.Providers.Pricing do
       image     por imagen, o por megapíxel           per_image
       tts       por mil caracteres de entrada, o seg  per_1k_characters
       stt       por minuto de audio transcrito        per_minute
-      rerank    por token de entrada, o tarifa plana  per_1m_tokens
 
   Este módulo es el VOCABULARIO (cerrado) y el puente tipo → unidad: qué
   unidades TIENEN sentido para cada tipo, cuál es la de por defecto, y el
@@ -82,12 +81,6 @@ defmodule Tokengate.Providers.Pricing do
       # — ofrecerlo daría una unidad que siempre cobra $0.
       "tts" -> ~w(per_1k_characters per_request)
       "stt" -> ~w(per_minute per_second per_request)
-      # Rerank: Fireworks y Jina cotizan por token (el `usage` del upstream es
-      # input-only), pero el clúster NaN/Helmcode es TARIFA PLATA en la
-      # práctica (F64: $0 marginal por request) y un host oMLX local cobra $0.
-      # `per_request` es el override honesto para esos lanes; no hay unidad
-      # por documento porque ningún lane inicial cobra por documento.
-      "rerank" -> ~w(per_1m_tokens per_1k_tokens per_request)
       _ -> ~w(per_1m_tokens per_1k_tokens per_request)
     end
   end
@@ -97,7 +90,7 @@ defmodule Tokengate.Providers.Pricing do
 
   Es sólo el DEFAULT que el formulario propone: el operador puede cambiarlo,
   porque dos proveedores del mismo tipo pueden cobrar distinto (una imagen fija
-  vs. por megapíxel; un rerank por token vs. tarifa plana).
+  vs. por megapíxel).
   """
   @spec default_unit_for_type(String.t() | nil) :: String.t()
   def default_unit_for_type(type) do
@@ -105,9 +98,6 @@ defmodule Tokengate.Providers.Pricing do
       "image" -> "per_image"
       "tts" -> "per_1k_characters"
       "stt" -> "per_minute"
-      # Rerank cotiza por token en los lanes que publican precio (Fireworks,
-      # Jina); la tarifa plana se declara a mano con `per_request`.
-      "rerank" -> "per_1m_tokens"
       _ -> @default_unit
     end
   end

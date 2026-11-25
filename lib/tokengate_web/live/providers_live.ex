@@ -43,7 +43,7 @@ defmodule TokengateWeb.ProvidersLive do
   # Providers pinned to the TOP of the add-provider picker, in this order.
   # Pure UI curation — routing, pricing and capabilities don't read this.
   # Everything else stays alphabetical by name.
-  @recommended_provider_keys ~w(openrouter runinfra fireworks-ai)
+  @recommended_provider_keys ~w(openrouter runinfra fireworks-ai nan)
 
   # Baseline counters for a provider with no credentials yet: the batched
   # aggregation starts from this shape, so the template never sees a missing key.
@@ -1023,7 +1023,6 @@ defmodule TokengateWeb.ProvidersLive do
         "llm" -> [{gettext("LLM (chat)"), value, "hero-chat-bubble-left-right"}]
         "embedding" -> [{gettext("Embedding"), value, "hero-squares-2x2"}]
         "decision" -> [{gettext("Decisions"), value, "hero-scale"}]
-        "rerank" -> [{gettext("Rerank"), value, "hero-arrows-up-down"}]
         "stt" -> [{gettext("Transcription"), value, "hero-microphone"}]
         "tts" -> [{gettext("Speech"), value, "hero-speaker-wave"}]
         "image" -> [{gettext("Images"), value, "hero-photo"}]

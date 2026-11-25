@@ -108,8 +108,12 @@ defmodule Tokengate.Proxy.UsageNormalizer do
   Extracts the cost reported by the provider, if any.
 
   Checks, in order of preference:
-    1. Body: `body["usage"]["cost"]` (OpenRouter) or `body["cost"]` (some providers)
-    2. Headers: `x-litellm-response-cost` (LiteLLM proxy)
+    1. Body: `buyer_cost_micro` (`usage.buyer_cost_micro` or top-level) — micro-USD
+       charged to the buyer (e.g. SurplusIntelligence), which supersedes raw
+       upstream `usage.cost` when both are present.
+    2. Headers: `x-si-buyer-cost-micro` (SurplusIntelligence, micro-USD)
+    3. Body: `usage.cost`, `cost`, `usage.cost_usd`, or `cost_usd` (OpenRouter / OpenAI-compatible)
+    4. Headers: `x-litellm-response-cost` (LiteLLM proxy, USD)
 
   Returns a `Decimal.t()` or `nil` when the provider doesn't report a cost.
 
@@ -117,26 +121,51 @@ defmodule Tokengate.Proxy.UsageNormalizer do
 
   Pass the upstream's HTTP response headers (as a list of `{binary, binary}`
   tuples, lowercase keys). When `nil`, only the body is searched — matching
-  the original behaviour before the LiteLLM header support was added.
+  the original behaviour before header support was added.
   """
   @spec extract_reported_cost(:openai, map(), [{String.t(), String.t()}] | nil) ::
           Decimal.t() | nil
   def extract_reported_cost(provider, body, resp_headers \\ nil)
 
-  def extract_reported_cost(:openai, body, resp_headers) do
-    body_cost =
-      get_in(body, ["usage", "cost"]) ||
-        Map.get(body, "cost")
+  def extract_reported_cost(:openai, body, resp_headers) when is_map(body) do
+    buyer_micro =
+      map_get_in(body, ["usage", "buyer_cost_micro"]) ||
+        Map.get(body, "buyer_cost_micro")
 
-    to_decimal(body_cost) || extract_header_cost(resp_headers)
+    body_cost =
+      map_get_in(body, ["usage", "cost"]) ||
+        Map.get(body, "cost") ||
+        map_get_in(body, ["usage", "cost_usd"]) ||
+        Map.get(body, "cost_usd")
+
+    micro_to_decimal(buyer_micro) ||
+      extract_micro_header_cost(resp_headers) ||
+      to_decimal(body_cost) ||
+      extract_header_cost(resp_headers)
+  end
+
+  def extract_reported_cost(:openai, _body, resp_headers) do
+    extract_micro_header_cost(resp_headers) || extract_header_cost(resp_headers)
   end
 
   def extract_reported_cost(_provider, _body, _resp_headers), do: nil
 
-  # Extracts cost from LiteLLM proxy response headers.
-  # LiteLLM injects `x-litellm-response-cost` (USD as a float string, e.g.
-  # "4.608e-05"). Returns nil when the header is absent or unparseable.
+  # Extracts cost from LiteLLM / SurplusIntelligence proxy response headers.
+  # - `x-si-buyer-cost-micro`: integer micro-USD charged to the buyer (e.g. "17" -> $0.000017)
+  # - `x-litellm-response-cost`: USD float string (e.g. "4.608e-05")
+  # Returns nil when the header is absent or unparseable.
   @litellm_cost_header "x-litellm-response-cost"
+  @si_buyer_cost_micro_header "x-si-buyer-cost-micro"
+  @micro_divisor Decimal.new(1_000_000)
+
+  defp extract_micro_header_cost(nil), do: nil
+
+  defp extract_micro_header_cost(headers) when is_list(headers) do
+    case List.keyfind(headers, @si_buyer_cost_micro_header, 0) do
+      {@si_buyer_cost_micro_header, value} -> micro_to_decimal(value)
+      _ -> nil
+    end
+  end
 
   defp extract_header_cost(nil), do: nil
 
@@ -150,16 +179,39 @@ defmodule Tokengate.Proxy.UsageNormalizer do
     end
   end
 
+  defp map_get_in(map, [k1, k2]) when is_map(map) do
+    case Map.get(map, k1) do
+      inner when is_map(inner) -> Map.get(inner, k2)
+      _ -> nil
+    end
+  end
+
+  defp micro_to_decimal(nil), do: nil
+
+  defp micro_to_decimal(value) do
+    case to_decimal(value) do
+      %Decimal{} = d ->
+        d
+        |> Decimal.div(@micro_divisor)
+        |> Decimal.round(6)
+
+      nil ->
+        nil
+    end
+  end
+
   defp to_decimal(nil), do: nil
   defp to_decimal(%Decimal{} = d), do: d
   defp to_decimal(n) when is_number(n), do: Decimal.new("#{n}")
 
   defp to_decimal(s) when is_binary(s) do
-    case Decimal.parse(s) do
+    case s |> String.trim() |> Decimal.parse() do
       {decimal, ""} -> decimal
       _ -> nil
     end
   end
+
+  defp to_decimal(_), do: nil
 
   @doc """
   Normalizes the usage payload of an OpenAI streaming final chunk.

@@ -797,11 +797,11 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
     # OpenRouter, RunInfra y Fireworks encabezan en el orden fijado; después
     # sigue el espejo alfabético (302.AI es el primero por nombre).
-    assert Enum.take(keys, 3) == ["openrouter", "runinfra", "fireworks-ai"]
-    assert Enum.at(keys, 3) == "302ai"
+    assert Enum.take(keys, 4) == ["openrouter", "runinfra", "fireworks-ai", "nan"]
+    assert Enum.at(keys, 4) == "302ai"
 
-    # Marcador de recomendado en los tres, y en ningún otro.
-    for key <- ["openrouter", "runinfra", "fireworks-ai"] do
+    # Marcador de recomendado en los cuatro, y en ningún otro.
+    for key <- ["openrouter", "runinfra", "fireworks-ai", "nan"] do
       assert has_element?(view, "#catalog-row-#{key}", "recomendado")
     end
 

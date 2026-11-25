@@ -23,11 +23,6 @@ defmodule TokengateWeb.ProxyController do
       embeddings. Each URL is `base_url` + the path `ProviderPaths` resolves
       for that service (operator override → catalog hardcode → generic
       default), so one provider serves all of them off one `base_url`.
-    * `POST /v1/rerank` — the ONE endpoint whose contract is canonical on both
-      sides: `{model, query, documents, top_n}` in,
-      `results[] {index, relevance_score}` out, with the per-provider
-      translation in `Tokengate.Proxy.Rerank` (Fireworks' `data[]`+`usage`,
-      the `results[]` of OpenRouter/NaN/Helmcode, an oMLX host).
 
   ## Two-gate throttling
 
@@ -82,7 +77,6 @@ defmodule TokengateWeb.ProxyController do
     ProviderAdapter,
     PromptOptimizer,
     RawResponse,
-    Rerank,
     ResponseCache,
     ServiceUsage,
     SessionId,
@@ -466,35 +460,6 @@ defmodule TokengateWeb.ProxyController do
         "decision",
         &Tokengate.Proxy.Decisions.post(&1, &2, &3, &4),
         :decision
-      )
-    else
-      {:error, message} -> render_proxy_error(conn, {:invalid_request, message})
-    end
-  end
-
-  # POST /v1/rerank — the public rerank surface, canonical in and out:
-  # `{model, query, documents, top_n}` → `results[] {index, relevance_score}`.
-  #
-  # The shape is validated BEFORE the gates for the same reason decisions is:
-  # a malformed body is the caller's fault and must not pick credentials,
-  # retry the fallback matrix or pollute the error logs with a per-attempt 400.
-  #
-  # Routing capability is the model's type — only a `rerank` model is
-  # reachable here, and a model of another type answers `model_type_mismatch`.
-  # `kind` is :rerank so `simple_usage/4` bills the call, and the adapter_fun
-  # is the surface module: it builds the upstream wire, POSTs to the path
-  # `ProviderPaths` resolves for `:rerank` and normalizes the answer (F67: the
-  # translation lives above the transport, not in a ProviderAdapter dialect).
-  def rerank(conn, _params) do
-    payload = conn.body_params
-
-    with :ok <- Rerank.validate(payload) do
-      simple_proxy(
-        conn,
-        payload,
-        "rerank",
-        &Rerank.post(&1, &2, &3, &4),
-        :rerank
       )
     else
       {:error, message} -> render_proxy_error(conn, {:invalid_request, message})
@@ -1012,43 +977,6 @@ defmodule TokengateWeb.ProxyController do
   defp simple_usage(payload, body, kind, resp_headers)
        when kind in [:stt, :tts, :image, :decision] do
     {reported_or_estimated_usage(payload, body, resp_headers), body}
-  end
-
-  # Rerank (F68: without this clause the FIRST served request raises a
-  # FunctionClauseError). The canonical body carries a `usage` block when the
-  # upstream reported billable counters (Fireworks' `usage`, Helmcode's
-  # `meta.billed_units` — both absorbed by `Rerank.normalize/1`). When it
-  # reported none, the request's own text (query + documents) is estimated, so
-  # a `per_1m_tokens` lane still books something proportional; no text at all
-  # estimates to 0, which is the explicit $0 (a `per_request` lane does not
-  # even look at the tokens: `ServiceUsage` always yields `per_request => 1`).
-  defp simple_usage(payload, body, :rerank, resp_headers) do
-    reported = UsageNormalizer.normalize(:openai, body, resp_headers)
-
-    usage =
-      if reported != nil and not zero_usage?(reported) do
-        reported
-      else
-        %{
-          prompt_tokens: rerank_prompt_tokens(payload),
-          completion_tokens: 0,
-          cache_read_tokens: 0,
-          cache_creation_tokens: 0
-        }
-      end
-
-    {usage, body}
-  end
-
-  # The input text of a rerank call: the query plus every document's text, in
-  # the same token estimator the embeddings estimate uses.
-  defp rerank_prompt_tokens(payload) do
-    payload
-    |> Map.get("documents")
-    |> Rerank.document_texts()
-    |> Enum.reduce(estimate_strings(payload["query"]), fn text, acc ->
-      acc + TokenEstimator.estimate_completion(text)
-    end)
   end
 
   defp reported_or_estimated_usage(payload, body, resp_headers) do

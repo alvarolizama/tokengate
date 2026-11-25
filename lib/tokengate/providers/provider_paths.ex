@@ -50,13 +50,7 @@ defmodule Tokengate.Providers.ProviderPaths do
       default: "/audio/transcriptions"
     },
     %{key: "tts", path_key: :tts, label: "Speech (text → audio)", default: "/audio/speech"},
-    %{key: "image", path_key: :image, label: "Images", default: "/images/generations"},
-    %{
-      key: "rerank",
-      path_key: :rerank,
-      label: "Rerank (document relevance)",
-      default: "/rerank"
-    }
+    %{key: "image", path_key: :image, label: "Images", default: "/images/generations"}
   ]
 
   @keys Enum.map(@services, & &1.key)

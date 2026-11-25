@@ -186,7 +186,7 @@ defmodule TokengateWeb.ModelsLive do
 
   # Orden canónico de tipos = el del picker de alta (`model_type_choices/0`),
   # crudo porque un atributo de módulo no puede evaluar gettext.
-  @type_order ~w(llm embedding decision rerank stt tts image)
+  @type_order ~w(llm embedding decision stt tts image)
 
   defp type_rank(type), do: Enum.find_index(@type_order, &(&1 == type)) || length(@type_order)
 
@@ -258,7 +258,6 @@ defmodule TokengateWeb.ModelsLive do
       {gettext("LLM (chat)"), "llm", "hero-chat-bubble-left-right"},
       {gettext("Embedding"), "embedding", "hero-squares-2x2"},
       {gettext("Decisions"), "decision", "hero-scale"},
-      {gettext("Rerank"), "rerank", "hero-arrows-up-down"},
       {gettext("Transcription"), "stt", "hero-microphone"},
       {gettext("Speech"), "tts", "hero-speaker-wave"},
       {gettext("Images"), "image", "hero-photo"}
@@ -341,8 +340,7 @@ defmodule TokengateWeb.ModelsLive do
   #
   # El vocabulario que este handler acepta es EXACTAMENTE el que el picker
   # ofrece — los tipos con ruta pública (`type_endpoint/1`, el mismo filtro de
-  # `model_type_choices/0`). Una lista copiada a mano se desincroniza: `rerank`
-  # pintaba su tile y el click moría en un no-op.
+  # `model_type_choices/0`). Una lista copiada a mano se desincroniza.
   def handle_event("pick_model_type", %{"type" => type}, socket) when is_binary(type) do
     cond do
       not socket.assigns.is_admin ->

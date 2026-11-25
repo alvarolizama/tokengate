@@ -289,7 +289,7 @@ defmodule Tokengate.AccountsTest do
                  "password" => "NewPassword456"
                })
 
-      assert "no es correcta" in errors_on(changeset).current_password
+      assert "is incorrect" in errors_on(changeset).current_password
     end
 
     test "validates the complexity of the new password" do

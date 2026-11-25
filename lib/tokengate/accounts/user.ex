@@ -260,7 +260,7 @@ defmodule Tokengate.Accounts.User do
         changeset
 
       true ->
-        add_error(changeset, :current_password, "no es correcta")
+        add_error(changeset, :current_password, "is incorrect")
     end
   end
 end

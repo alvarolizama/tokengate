@@ -9,7 +9,7 @@ defmodule Tokengate.Providers.PricingTest do
   alias Tokengate.Providers.Pricing
   alias Tokengate.Providers.ModelProvider
 
-  @all_types ~w(llm embedding decision rerank stt tts image)
+  @all_types ~w(llm embedding decision stt tts image)
 
   describe "vocabulario" do
     test "las unidades son las ocho del CHECK de la migración" do
@@ -62,7 +62,7 @@ defmodule Tokengate.Providers.PricingTest do
     end
 
     test "los tipos que sí se facturan por tokens se quedan en tokens" do
-      for type <- ~w(llm embedding decision rerank) do
+      for type <- ~w(llm embedding decision) do
         assert Pricing.default_unit_for_type(type) == "per_1m_tokens"
       end
     end
@@ -78,13 +78,6 @@ defmodule Tokengate.Providers.PricingTest do
       assert Pricing.units_for_type("image") == ~w(per_image per_megapixel per_request)
       assert Pricing.units_for_type("tts") == ~w(per_1k_characters per_request)
       assert Pricing.units_for_type("stt") == ~w(per_minute per_second per_request)
-
-      # Rerank cotiza por token en los lanes que publican precio (Fireworks,
-      # Jina) y `per_request` es el override de la tarifa plana (NaN/Helmcode)
-      # y de un oMLX local. No hay unidad por documento: ningún lane inicial
-      # cobra por documento (F64).
-      assert Pricing.units_for_type("rerank") == ~w(per_1m_tokens per_1k_tokens per_request)
-      refute "per_document" in Pricing.units_for_type("rerank")
     end
 
     test "los tipos de token ofrecen las dos variantes de token" do

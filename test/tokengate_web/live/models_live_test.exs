@@ -321,34 +321,14 @@ defmodule TokengateWeb.ModelsLiveTest do
     refute has_element?(view, "#wizard-provider-cerebras")
   end
 
-  # `rerank` es un tipo más del vocabulario y su tile tiene que abrir el wizard:
-  # el handler filtraba por una lista copiada a mano (llm, embedding, decision,
-  # stt, tts, image) y el click en Rerank caía en el no-op del catch-all.
-  test "rerank type is offered and its tile opens the wizard", %{conn: conn} do
+  test "rerank type is not offered in the type picker", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/catalog/models")
 
     view |> element("#new-model-btn") |> render_click()
-    assert has_element?(view, "#pick-type-rerank")
-
-    view |> element("#pick-type-rerank") |> render_click()
-
-    # The tile starts the alta: the picker closes and the wizard opens on the
-    # provider step, with the type already chosen.
-    refute has_element?(view, "#model-type-picker")
-    assert has_element?(view, "#model-wizard")
-    assert has_element?(view, "#wizard-crumb-provider[aria-current='step']")
-
-    view |> element("#wizard-custom") |> render_click()
-
-    view
-    |> form("#model-form", %{model: %{name: "bge-reranker-test", context_window: 8192}})
-    |> render_submit()
-
-    model_record = Tokengate.Providers.get_model_by_name("bge-reranker-test")
-    assert model_record.model_type == "rerank"
+    refute has_element?(view, "#pick-type-rerank")
   end
 
   # El render del logo era `img si logo_url / icono si nil`, así que una URL que
@@ -1825,7 +1805,6 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert has_element?(view, "#model-section-image")
     # Tipos sin modelos no abren sección; los retirados ya no existen.
     refute has_element?(view, "#model-section-stt")
-    refute has_element?(view, "#model-section-rerank")
     refute has_element?(view, "#model-section-video")
     refute has_element?(view, "#model-section-other")
 
@@ -2987,8 +2966,7 @@ defmodule TokengateWeb.ModelsLiveTest do
   end
 
   # El paso 0 no puede ofrecer un tipo que el gateway no sabe servir, y el
-  # vocabulario de capabilities es EXACTAMENTE el de las rutas: `rerank` entra
-  # solo cuando exista su superficie (W14).
+  # vocabulario de capabilities es EXACTAMENTE el de las rutas.
   test "every offered type has a /v1 route and matches the catalog vocabulary" do
     alias Tokengate.Providers.Catalog
 

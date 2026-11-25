@@ -22,7 +22,7 @@ defmodule TokengateWeb.ProfileModal do
 
   @impl true
   def update(assigns, socket) do
-    user = assigns.user
+    user = fresher_user(socket.assigns[:user], assigns.user)
 
     {:ok,
      socket
@@ -30,16 +30,18 @@ defmodule TokengateWeb.ProfileModal do
      |> assign(:initials, assigns.initials)
      |> assign_new(:open, fn -> false end)
      |> assign_new(:saved?, fn -> false end)
+     |> assign_new(:form_version, fn -> 0 end)
      |> assign_new(:form, fn -> password_form(user) end)}
   end
 
   @impl true
   def handle_event("open_profile", _params, socket) do
-    # Abrir siempre limpio: el formulario no arrastra errores de la vez pasada.
+    # Abrir siempre limpio: el formulario no arrastra errores ni valores de la vez pasada.
     {:noreply,
      socket
      |> assign(:open, true)
      |> assign(:saved?, false)
+     |> update(:form_version, &(&1 + 1))
      |> assign(:form, password_form(socket.assigns.user))}
   end
 
@@ -49,7 +51,7 @@ defmodule TokengateWeb.ProfileModal do
   end
 
   def handle_event("save_password", %{"profile" => params}, socket) do
-    user = socket.assigns.user
+    user = Accounts.get_user(socket.assigns.user.id) || socket.assigns.user
 
     case Accounts.update_user_password(user, params) do
       {:ok, user} ->
@@ -66,11 +68,13 @@ defmodule TokengateWeb.ProfileModal do
          socket
          |> assign(:user, user)
          |> assign(:saved?, true)
+         |> update(:form_version, &(&1 + 1))
          |> assign(:form, password_form(user))}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
          socket
+         |> assign(:user, user)
          |> assign(:saved?, false)
          |> assign(:form, to_form(changeset, as: :profile))}
     end
@@ -101,6 +105,7 @@ defmodule TokengateWeb.ProfileModal do
         id="profile-modal-dialog"
         class="modal"
         data-open={to_string(@open)}
+        data-reset-key={@form_version}
         phx-hook=".ProfileModal"
         phx-target={@myself}
         aria-labelledby="profile-modal-title"
@@ -142,7 +147,7 @@ defmodule TokengateWeb.ProfileModal do
               <.icon name="hero-exclamation-triangle" class="w-4 h-4 shrink-0" />
               <span>
                 {gettext("Every session of this account was closed, this one included.")}
-                <.link navigate={~p"/login"} class="link font-semibold">
+                <.link href={~p"/login"} class="link font-semibold">
                   {gettext("Sign in again")}
                 </.link>
               </span>
@@ -209,10 +214,15 @@ defmodule TokengateWeb.ProfileModal do
         // El cierre nativo (Esc, la X o el backdrop) se devuelve al servidor.
         export default {
           mounted() {
+            this.lastResetKey = this.el.dataset.resetKey
             this.el.addEventListener("close", () => this.pushEventTo(this.el, "close_modal", {}))
             this.syncOpen()
           },
           updated() {
+            if (this.el.dataset.resetKey !== this.lastResetKey) {
+              this.lastResetKey = this.el.dataset.resetKey
+              this.el.querySelector("#profile-password-form")?.reset()
+            }
             this.syncOpen()
           },
           syncOpen() {
@@ -229,6 +239,16 @@ defmodule TokengateWeb.ProfileModal do
     </div>
     """
   end
+
+  defp fresher_user(%{id: id} = current, %{id: id} = incoming) do
+    if (current.session_version || 0) > (incoming.session_version || 0) do
+      current
+    else
+      incoming
+    end
+  end
+
+  defp fresher_user(_current, incoming), do: incoming
 
   # El formulario usa su propio namespace (`profile[...]`) para no chocar con
   # los ids `user[...]` de las demás páginas (p. ej. /access/users), que

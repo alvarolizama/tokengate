@@ -144,10 +144,6 @@ defmodule Tokengate.Providers.ServiceModelsTest do
       assert ServiceModels.known_ids("nan", "tts") == ~w(kokoro)
       assert ServiceModels.known_ids("nan", "image") == ~w(flux-2-klein qwen-image-2.1)
       assert ServiceModels.known_ids("nan", "embedding") == ~w(qwen3-embedding)
-
-      # `rerank` no se siembra: el gateway no tiene esa superficie (`rerank`
-      # se retiró por completo en 887a1a9), y sembrarlo ofrecería un tipo que
-      # ninguna ruta sirve.
       assert ServiceModels.known_ids("nan", "rerank") == []
     end
   end
@@ -250,7 +246,6 @@ defmodule Tokengate.Providers.ServiceModelsTest do
       assert ServiceModels.classify(nil, "qwen3-asr-flash") == nil
       # El hint del id sí aplica: un embedding local se lista como embedding.
       assert ServiceModels.type_of(nil, "mlx-community/Qwen3-Embedding-0.6B-4bit") == "embedding"
-      # Y nada inventa un `rerank` que el gateway todavía no sirve (W14).
       assert ServiceModels.type_of(nil, "bge-reranker-v2-m3") == "llm"
     end
   end

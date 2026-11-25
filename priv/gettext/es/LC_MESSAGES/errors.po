@@ -154,6 +154,18 @@ msgstr "el perfil de límites todavía tiene destinos de observabilidad"
 msgid "cannot be empty"
 msgstr "no puede estar vacío"
 
+msgid "is incorrect"
+msgstr "no es correcta"
+
+msgid "must contain a letter"
+msgstr "debe contener una letra"
+
+msgid "must contain a digit"
+msgstr "debe contener un dígito"
+
+msgid "must be a valid email address"
+msgstr "debe ser un correo electrónico válido"
+
 msgid "the member key needs an owner (user_id)"
 msgstr "la key del miembro necesita un dueño (user_id)"
 

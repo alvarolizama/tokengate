@@ -14,10 +14,9 @@
 #   * 4 perfiles de límites (grupos) con techo mensual: uno ilimitado (Data Lab)
 #     y uno por debajo del consumo real (Contractors → agotado / 402).
 #   * 3 servicios máquina con techo propio + supervisores.
-#   * 3 proveedores custom (2 de chat/embedding + el host local de rerank)
-#     + credenciales nuevas sobre builtins, una de ellas
+#   * 2 proveedores custom de chat/embedding + credenciales nuevas sobre builtins, una de ellas
 #     en `error` y otra `disabled` (para probar reactivación).
-#   * 12 modelos nuevos (9 llm + 2 embedding + 1 rerank) con precio manual,
+#   * 11 modelos nuevos (9 llm + 2 embedding) con precio manual,
 #     `prompt_cache_enabled`, `pinned`, TTL sticky, `extra_body`
 #     y rutas exclusivas de usuario / grupo / servicio.
 #   * ~11k `request_logs` repartidos por hora local de cada sujeto, con
@@ -68,9 +67,7 @@ defmodule Tokengate.DemoSeeds do
 
   @group_names ["Platform Crew", "Growth Squad", "Data Lab", "Contractors"]
   @service_names ["ci-eval-bot", "docs-rag", "batch-reports"]
-  # "oMLX (local)" es un host LOCAL de rerank: fila custom (F70 — nunca
-  # builtin) con el prerequisito de tener un reranker instalado en oMLX.
-  @custom_providers ["Internal LiteLLM", "VLLM Cluster", "oMLX (local)"]
+  @custom_providers ["Internal LiteLLM", "VLLM Cluster"]
   @custom_lab_key "acme"
   @custom_lab_name "Acme Research"
 
@@ -92,8 +89,7 @@ defmodule Tokengate.DemoSeeds do
     "glm-5.2",
     "qwen3-coder",
     "bge-m3",
-    "text-embedding-3-large",
-    "qwen3-reranker-8b"
+    "text-embedding-3-large"
   ]
 
   # Credenciales demo: clave del provider builtin → nombre de la credencial.
@@ -381,22 +377,6 @@ defmodule Tokengate.DemoSeeds do
         max_rpm: 120,
         max_concurrent: 16,
         receive_timeout_ms: 60_000
-      },
-      # Host LOCAL de rerank (oMLX). Fila custom, nunca builtin (F70): su
-      # `base_url` es 127.0.0.1 y el operador la repunta a LAN/Tailscale desde
-      # /catalog/providers. PREREQUISITO: oMLX debe tener un reranker
-      # (`SequenceClassification` / Qwen3-Reranker) instalado; sin él
-      # `/v1/rerank` responde 404 con "Available models: (none)".
-      %{
-        name: "oMLX (local)",
-        base_url: "http://127.0.0.1:8000/v1",
-        dialect: "openai",
-        capabilities: ~w(rerank),
-        source: "custom",
-        billing_type: "subscription",
-        max_rpm: 60,
-        max_concurrent: 4,
-        receive_timeout_ms: 120_000
       }
     ]
 
@@ -499,7 +479,6 @@ defmodule Tokengate.DemoSeeds do
     opencode = provider_by(providers, "opencode")
     lite_llm = custom_provider(providers, "Internal LiteLLM")
     vllm = custom_provider(providers, "VLLM Cluster")
-    omlx = custom_provider(providers, "oMLX (local)")
 
     specs = [
       %{
@@ -597,18 +576,6 @@ defmodule Tokengate.DemoSeeds do
         model_type: "embedding",
         routes: [
           {openrouter, "openai/text-embedding-3-large", 0, {0.13, 0.0, 0.0}, []}
-        ]
-      },
-      # Rerank local: precio `per_request` a $0 (correr en la misma máquina no
-      # tiene costo marginal). El lane es el de oMLX — fila custom, con el
-      # prerequisito del modelo instalado documentado en seed_providers/0.
-      %{
-        name: "qwen3-reranker-8b",
-        context_window: 32_768,
-        model_type: "rerank",
-        routes: [
-          {omlx, "Qwen3-Reranker-8B", 0, nil,
-           [pricing_unit: "per_request", unit_cost: Decimal.new(0)]}
         ]
       }
     ]
@@ -1969,7 +1936,7 @@ defmodule Tokengate.DemoSeeds do
     · /budget/profiles           → perfiles de límites: techos, un ilimitado (Data Lab) y uno agotado (Contractors)
     · /budget/topups             → top-up activo (Ana, docs-rag), agotado (Luis) y vencido (Iván, archivado)
     · /calculator                → real vs estimado por modelo (hay logs con costo $0 para el backfill)
-    · /catalog/providers         → 3 proveedores custom (incl. oMLX local, rerank), credencial en error y credencial deshabilitada
+    · /catalog/providers         → 2 proveedores custom, credencial en error y credencial deshabilitada
     · /budget/profiles/:id       → membresías, extras, suspensión de Bruno y servicios supervisados
     · /operations/observability  → 2 webhooks OTLP (Datadog / Grafana)
     · /catalog/labs              → lab custom "Acme Research" sobre el catálogo de models.dev
