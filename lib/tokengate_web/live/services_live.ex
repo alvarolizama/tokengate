@@ -15,7 +15,6 @@ defmodule TokengateWeb.ServicesLive do
   import TokengateWeb.StatsHelpers, only: [budget_cell: 1, format_usd: 1]
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Service
-  alias Tokengate.Budgets
   alias Tokengate.Credits
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
@@ -138,13 +137,13 @@ defmodule TokengateWeb.ServicesLive do
         ttl: @credit_ttl_ms
       )
 
-    # Gasto mensual / total por servicio — mismas columnas que la tabla de
-    # Usuarios. Agregados whole-table cacheados (5s TTL) para no re-escanear
-    # request_logs en cada keystroke de búsqueda/orden.
+    # Per-service credit + monthly spend — derived from one batched Credits
+    # read (cached 5s per service in DashboardCache) instead of an extra
+    # whole-table `Budgets.spend_by_service/0` scan.
+    credit_map = service_credit(services)
+
     monthly_spend =
-      DashboardCache.fetch_or_compute({:services_monthly_spend, timezone}, fn ->
-        Budgets.spend_by_service()
-      end)
+      Map.new(credit_map, fn {service_id, credit} -> {service_id, credit.spend_usd} end)
 
     # Lifetime total: it walks every retained partition (Merge Append over ~90
     # of them), so it gets the 60s TTL its Users twin already uses — lifetime
@@ -162,7 +161,7 @@ defmodule TokengateWeb.ServicesLive do
     |> assign(:granted_models, granted_models)
     |> assign(:service_stats, stats)
     |> assign(:monthly_spend_by_service, monthly_spend)
-    |> assign(:service_credit, service_credit(services))
+    |> assign(:service_credit, credit_map)
     |> assign(:total_spend_by_service, total_spend)
     |> assign(:supervisors_map, build_supervisors_map(service_ids))
     |> assign(:keys_by_service, Accounts.count_active_api_keys_by_service(service_ids))

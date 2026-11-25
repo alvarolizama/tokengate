@@ -686,8 +686,8 @@ defmodule TokengateWeb.CoreComponents do
     assigns = assign(assigns, :dom_id, assigns[:id] || "sidebar-link-" <> path_id(assigns.path))
 
     ~H"""
-    <a
-      href={@path}
+    <.link
+      navigate={@path}
       id={@dom_id}
       title={@label}
       aria-current={@active && "page"}
@@ -710,7 +710,7 @@ defmodule TokengateWeb.CoreComponents do
       >
         {@badge}
       </span>
-    </a>
+    </.link>
     """
   end
 

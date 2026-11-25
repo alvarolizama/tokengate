@@ -85,10 +85,16 @@ defmodule Tokengate.Budgets do
   @spec list_member_budgets(String.t()) :: [member_budget()]
   def list_member_budgets(timezone) do
     members = list_members_with_group_and_user()
-    spend = spend_by_member_ids(Enum.map(members, & &1.id), timezone)
+    daily = daily_spend_by_member_ids(Enum.map(members, & &1.id), timezone)
     credits = Tokengate.Credits.summaries(members)
 
-    Enum.map(members, &member_budget(&1, spend, Map.get(credits, &1.id)))
+    Enum.map(members, &member_budget(&1, %{daily: daily, monthly: %{}}, Map.get(credits, &1.id)))
+  end
+
+  defp daily_spend_by_member_ids([], _timezone), do: %{}
+
+  defp daily_spend_by_member_ids(member_ids, timezone) do
+    member_spend_map(member_ids, Periods.start_of_day_utc(timezone))
   end
 
   defp list_members_with_group_and_user do
@@ -223,7 +229,12 @@ defmodule Tokengate.Budgets do
   @spec list_group_budgets(String.t()) :: [group_budget()]
   def list_group_budgets(timezone) do
     cached_read({:budgets_group_rollup, timezone}, fn ->
-      list_member_budgets(timezone) |> rollup_group_budgets()
+      members = list_members_with_group_and_user()
+      credits = Tokengate.Credits.summaries(members)
+
+      members
+      |> Enum.map(&member_budget(&1, %{daily: %{}, monthly: %{}}, Map.get(credits, &1.id)))
+      |> rollup_group_budgets()
     end)
   end
 

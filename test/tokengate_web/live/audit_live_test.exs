@@ -138,5 +138,7 @@ defmodule TokengateWeb.AuditLiveTest do
     assigns = :sys.get_state(view.pid).socket.assigns
     assert assigns.export_query =~ "from=2026-11-25"
     assert assigns.export_query =~ "to=2026-11-25"
+    assert has_element?(view, "#audit-filters input[name='f[ip]'][phx-debounce='300']")
+    assert has_element?(view, "#audit-filters input[name='f[action]'][phx-debounce='300']")
   end
 end

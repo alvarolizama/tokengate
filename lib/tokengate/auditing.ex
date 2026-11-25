@@ -117,6 +117,18 @@ defmodule Tokengate.Auditing do
     limit = filters |> get_filter(:limit) |> parse_int(@default_limit) |> min(@max_limit)
     offset = filters |> get_filter(:offset) |> parse_int(0)
 
+    filters
+    |> audit_logs_query()
+    |> limit(^limit)
+    |> offset(^offset)
+    |> Repo.all()
+  end
+
+  @doc """
+  Builds the filtered, ordered query for `Repo.stream/2` CSV exports without a
+  hard row cap.
+  """
+  def audit_logs_query(filters \\ %{}) do
     AuditLog
     |> maybe_where(:user_id, filters)
     |> maybe_where(:actor_email, filters)
@@ -127,9 +139,6 @@ defmodule Tokengate.Auditing do
     |> maybe_where(:ip, filters)
     |> maybe_between(:inserted_at, get_filter(filters, :from), get_filter(filters, :to))
     |> order_by([al], desc: al.inserted_at, desc: al.id)
-    |> limit(^limit)
-    |> offset(^offset)
-    |> Repo.all()
   end
 
   @doc """

@@ -260,7 +260,12 @@ defmodule TokengateWeb.Layouts do
             ttl: 5_000
           )
 
-        breakers = Tokengate.Routing.CircuitBreakerManager.count_open()
+        breakers =
+          Tokengate.Metrics.DashboardCache.fetch_or_compute(
+            {:sidebar_open_breakers},
+            fn -> Tokengate.Routing.CircuitBreakerManager.count_open() end,
+            ttl: 5_000
+          )
 
         assigns
         |> assign(:alert_count, creds + breakers)

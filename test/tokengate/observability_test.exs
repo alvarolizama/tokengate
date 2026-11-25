@@ -136,4 +136,19 @@ defmodule Tokengate.ObservabilityTest do
       assert Observability.list_all_destinations() == []
     end
   end
+
+  describe "destinations cache" do
+    test "caches list_all_destinations/0 and invalidates on create/update/delete" do
+      assert Observability.list_all_destinations() == []
+
+      dest = destination_fixture(%{name: "Cached Dest"})
+      assert Enum.map(Observability.list_all_destinations(), & &1.id) == [dest.id]
+
+      {:ok, updated} = Observability.update_destination(dest, %{name: "Renamed Dest"})
+      assert Enum.map(Observability.list_all_destinations(), & &1.name) == [updated.name]
+
+      {:ok, _} = Observability.delete_destination(updated)
+      assert Observability.list_all_destinations() == []
+    end
+  end
 end

@@ -29,6 +29,7 @@ defmodule TokengateWeb.MonitoringLive do
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
     scope_member_ids = resolve_scope_member_ids(user)
+    api_key_opts = api_key_options()
 
     socket =
       socket
@@ -48,7 +49,8 @@ defmodule TokengateWeb.MonitoringLive do
       |> assign(:stream_rows, 0)
       |> assign(:model_options, model_options())
       |> assign(:group_options, group_options())
-      |> assign(:api_key_options, api_key_options())
+      |> assign(:api_key_options, api_key_opts)
+      |> assign(:api_key_labels, Map.new(api_key_opts, fn {label, id} -> {id, label} end))
       |> assign(:is_admin, user.global_role == "admin")
       |> assign(:error_detail, nil)
       |> require_admin_hook()
@@ -775,14 +777,14 @@ defmodule TokengateWeb.MonitoringLive do
   # histórico (`api_key_prefix`), que es lo único que tienen las filas viejas.
   # Las opciones del selector ya traen {display, id} de las keys con logs, así
   # que el label sale de ahí sin una query por fila.
-  defp api_key_display(%{api_key_id: id} = log, options) when is_binary(id) do
-    case api_key_option_display(options, id) do
+  defp api_key_display(%{api_key_id: id} = log, labels) when is_binary(id) do
+    case Map.get(labels, id) do
       label when is_binary(label) and label != "" -> label
       _ -> api_key_display_from_prefix(log)
     end
   end
 
-  defp api_key_display(log, _options), do: api_key_display_from_prefix(log)
+  defp api_key_display(log, _labels), do: api_key_display_from_prefix(log)
 
   # Las filas viejas no tienen `api_key_id`: se cae al prefijo histórico.
   defp api_key_display_from_prefix(%{api_key_prefix: prefix})
@@ -793,9 +795,6 @@ defmodule TokengateWeb.MonitoringLive do
     do: to_string(prefix)
 
   defp api_key_display_from_prefix(_), do: "—"
-
-  defp api_key_option_display(options, id),
-    do: Map.new(options, &{elem(&1, 1), elem(&1, 0)})[id] || ""
 
   defp prov_key_display(%{credential_name: name, provider_key_prefix: prefix})
        when is_binary(name) and name != "" and is_binary(prefix) and prefix != "",
@@ -1138,7 +1137,7 @@ defmodule TokengateWeb.MonitoringLive do
               </span>
             </:col>
             <:col :let={log} label={gettext("API key")}>
-              <span class="text-sm">{api_key_display(log, @api_key_options)}</span>
+              <span class="text-sm">{api_key_display(log, @api_key_labels)}</span>
             </:col>
             <:col :let={log} label={gettext("Provider")}>
               <span class="text-sm">{provider_name(log)}</span>
@@ -1368,7 +1367,7 @@ defmodule TokengateWeb.MonitoringLive do
             <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
               <span class="text-base-content/50">{gettext("API Key")}</span>
               <span class="font-medium truncate font-mono">
-                {api_key_display(@error_detail, @api_key_options)}
+                {api_key_display(@error_detail, @api_key_labels)}
               </span>
             </div>
             <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">

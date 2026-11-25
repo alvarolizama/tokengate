@@ -83,12 +83,19 @@ defmodule TokengateWeb.TopupsLive do
     topups = Topups.list_all()
     consumed = Topups.consumed_by_topup_ids(topups)
     archived = Enum.filter(topups, &archived?(&1, consumed))
-    visible = visible_topups(topups, consumed, socket)
 
     socket
     |> assign(:consumed, consumed)
     |> assign(:archived_count, length(archived))
     |> assign(:all_topups, topups)
+    |> stream_topups()
+  end
+
+  # Filters and sorts already-loaded top-ups in memory (zero DB queries).
+  defp stream_topups(socket) do
+    visible = visible_topups(socket.assigns.all_topups, socket.assigns.consumed, socket)
+
+    socket
     |> assign(:topups_empty?, visible == [])
     |> stream(:topups, visible, reset: true)
   end
@@ -168,7 +175,7 @@ defmodule TokengateWeb.TopupsLive do
 
   @impl true
   def handle_event("search_topups", %{"q" => query}, socket) do
-    {:noreply, socket |> assign(:search_query, query) |> load_topups()}
+    {:noreply, socket |> assign(:search_query, query) |> stream_topups()}
   end
 
   def handle_event("sort_topups", %{"field" => field}, socket) do
@@ -184,7 +191,7 @@ defmodule TokengateWeb.TopupsLive do
        socket
        |> assign(:sort_field, field)
        |> assign(:sort_direction, direction)
-       |> load_topups()}
+       |> stream_topups()}
     else
       _ -> {:noreply, socket}
     end
@@ -194,7 +201,7 @@ defmodule TokengateWeb.TopupsLive do
     {:noreply,
      socket
      |> assign(:show_archived, not socket.assigns.show_archived)
-     |> load_topups()}
+     |> stream_topups()}
   end
 
   ## Events — CRUD ----------------------------------------------------------
@@ -488,21 +495,9 @@ defmodule TokengateWeb.TopupsLive do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(value), do: value
 
-  defp search_users(query) do
-    q = String.downcase(query)
+  defp search_users(query), do: Accounts.search_users_for_picker(query, 8)
 
-    Accounts.list_users()
-    |> Enum.filter(fn u -> q == "" or String.contains?(String.downcase(u.email), q) end)
-    |> Enum.take(8)
-  end
-
-  defp search_services(query) do
-    q = String.downcase(query)
-
-    Accounts.list_services()
-    |> Enum.filter(fn s -> q == "" or String.contains?(String.downcase(s.name), q) end)
-    |> Enum.take(8)
-  end
+  defp search_services(query), do: Accounts.search_services_for_picker(query, 8)
 
   # Nombre y línea secundaria de un candidato (usuario o servicio), sin asumir
   # la forma del struct: el selector ofrece ambos.

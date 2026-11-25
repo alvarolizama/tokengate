@@ -1235,4 +1235,21 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert html =~ "El proveedor ya no existe."
     refute has_element?(view, "#edit-#{provider.id}")
   end
+
+  test "inflight_started coalesces rapid broadcasts instead of recomputing immediately", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    send(view.pid, {:inflight_started, %{}})
+    send(view.pid, {:inflight_done, "x"})
+    state = :sys.get_state(view.pid)
+    assert state.socket.assigns.inflight_scheduled == true
+
+    send(view.pid, :refresh_inflight)
+    state_after = :sys.get_state(view.pid)
+    assert state_after.socket.assigns.inflight_scheduled == false
+  end
 end

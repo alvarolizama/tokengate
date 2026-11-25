@@ -273,4 +273,11 @@ defmodule TokengateWeb.SidebarTest do
     html = render_component(&TokengateWeb.Layouts.flash_group/1, %{flash: %{}})
     refute html =~ "flash-warning"
   end
+
+  test "sidebar nav links use live navigation (data-phx-link=redirect)", %{conn: conn} do
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/providers")
+
+    assert has_element?(view, "#sidebar-link-catalog-models[data-phx-link='redirect']")
+    assert has_element?(view, "#sidebar-link-budget-topups[data-phx-link='redirect']")
+  end
 end

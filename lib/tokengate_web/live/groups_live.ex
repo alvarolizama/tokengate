@@ -18,7 +18,7 @@ defmodule TokengateWeb.GroupsLive do
 
   import Ecto.Query, only: [from: 2]
   alias Tokengate.Accounts
-  alias Tokengate.Accounts.Group
+  alias Tokengate.Accounts.{Group, GroupMember}
   alias Tokengate.Budgets
   alias Tokengate.Providers
   alias Tokengate.Providers.{Model, GroupModel}
@@ -69,11 +69,16 @@ defmodule TokengateWeb.GroupsLive do
   # here — they filter in-memory / touch no data (see the assign-only handlers).
   defp load_groups(socket) do
     groups =
-      from(t in Group,
-        preload: [:group_members],
-        order_by: [asc: t.name]
+      from(t in Group, order_by: [asc: t.name])
+      |> Repo.all()
+
+    member_counts =
+      from(gm in GroupMember,
+        group_by: gm.group_id,
+        select: {gm.group_id, count(gm.id)}
       )
       |> Repo.all()
+      |> Map.new()
 
     granted_models =
       from(tma in GroupModel, select: {tma.group_id, tma.model_id})
@@ -85,22 +90,19 @@ defmodule TokengateWeb.GroupsLive do
       |> Repo.all()
       |> Enum.group_by(fn _ma -> "all" end)
 
-    # Budget + spend rollup per group and per member. Se reusa el rollup de
-    # `Budgets` (misma definición de límite/consumo que /stats) en vez de
-    # recomputarlo aquí: la copia local convertía "todos sin límite" en $0.00
-    # en lugar de "sin límite", y el límite venía de un `nil` hardcodeado.
+    # Budget + spend rollup per group via cached Budgets.list_group_budgets/1.
     timezone = socket.assigns[:timezone] || "Etc/UTC"
-    member_budgets = Budgets.list_member_budgets(timezone)
 
     group_budgets =
-      member_budgets
-      |> Budgets.rollup_group_budgets()
+      timezone
+      |> Budgets.list_group_budgets()
       |> Map.new(fn budget -> {budget.group.id, budget} end)
 
     socket
     |> assign(:all_groups, groups)
     |> stream_groups()
     |> assign(:groups_empty?, groups == [])
+    |> assign(:member_counts, member_counts)
     |> assign(:granted_models, granted_models)
     |> assign(:models_by_org, models_by_org)
     |> assign(:group_budgets, group_budgets)
@@ -517,7 +519,7 @@ defmodule TokengateWeb.GroupsLive do
               </div>
             </:col>
             <:col :let={group} label={gettext("Members")} align="right">
-              <span class="font-mono text-sm">{length(group.group_members)}</span>
+              <span class="font-mono text-sm">{Map.get(@member_counts, group.id, 0)}</span>
             </:col>
             <:col :let={group} label={gettext("Limits")} align="right">
               <div class="text-xs whitespace-nowrap">

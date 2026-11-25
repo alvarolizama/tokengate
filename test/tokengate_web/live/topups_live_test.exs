@@ -149,7 +149,8 @@ defmodule TokengateWeb.TopupsLiveTest do
     end
 
     # N+1: el consumo de cada fila se lee desde `topup_consumption_counters`
-    # en una sola consulta para todo el lote, sin escanear `request_logs`.
+    # en una sola consulta por carga (sin escanear `request_logs`), y buscar/
+    # ordenar/archivar operan en memoria con cero queries.
     test "el consumo de la lista se resuelve en una sola query", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
       user = user_fixture()
@@ -161,12 +162,8 @@ defmodule TokengateWeb.TopupsLiveTest do
 
       ref = make_ref()
       parent = self()
-
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
-      # Se engancha DESPUÉS del montaje (el montaje estático + el conectado
-      # cargan la lista dos veces) y se mide una recarga completa del listado.
       :telemetry.attach(
         {__MODULE__, ref},
         [:tokengate, :repo, :query],
@@ -175,9 +172,8 @@ defmodule TokengateWeb.TopupsLiveTest do
             send(parent, {:counters_query, ref})
           end
 
-          if meta.source == "request_logs" and
-               String.contains?(to_string(meta.query), "credit_topup_id") do
-            send(parent, {:request_logs_query, ref})
+          if meta.source in ["credit_topups", "topup_consumption_counters", "request_logs"] do
+            send(parent, {:topup_list_query, ref, meta.source})
           end
         end,
         nil
@@ -185,14 +181,30 @@ defmodule TokengateWeb.TopupsLiveTest do
 
       on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
 
-      view |> element("#topup-search-form") |> render_change(%{"q" => ""})
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
-      # Exactamente una lectura sobre counters para las 4 filas y cero scans a request_logs.
+      # Static + connected mount: 1 counter query each, 0 request_logs scans.
+      assert_received {:counters_query, ^ref}
       assert_received {:counters_query, ^ref}
       refute_received {:counters_query, ^ref}
-      refute_received {:request_logs_query, ^ref}
+      refute_received {:topup_list_query, ^ref, "request_logs"}
 
+      # Drain mount notifications, then verify search/sort run purely in memory.
+      flush_topup_queries(ref)
+
+      view |> element("#topup-search-form") |> render_change(%{"q" => user.email})
+      view |> element("th button[phx-value-field='amount']") |> render_click()
+
+      refute_received {:topup_list_query, ^ref, _}
       assert render(view) =~ "$1.00"
+    end
+
+    defp flush_topup_queries(ref) do
+      receive do
+        {:topup_list_query, ^ref, _} -> flush_topup_queries(ref)
+      after
+        0 -> :ok
+      end
     end
 
     test "muestra lo consumido del top-up medido contra los logs", %{conn: conn} do

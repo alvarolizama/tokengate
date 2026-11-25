@@ -78,6 +78,9 @@ defmodule TokengateWeb.CalculatorLive do
       |> assign(:cost_cache_write, @default_prices.cache_write)
       |> assign(:chart_data, [])
       |> assign(:summary, nil)
+      |> assign(:raw_summary, nil)
+      |> assign(:raw_series, [])
+      |> assign(:loaded_scope, nil)
 
     {:ok, socket}
   end
@@ -181,6 +184,9 @@ defmodule TokengateWeb.CalculatorLive do
         socket
         |> assign(:chart_data, [])
         |> assign(:summary, nil)
+        |> assign(:raw_summary, nil)
+        |> assign(:raw_series, [])
+        |> assign(:loaded_scope, nil)
       end
 
     {:noreply, socket}
@@ -267,26 +273,41 @@ defmodule TokengateWeb.CalculatorLive do
     timezone = socket.assigns.timezone
     lane_unit = socket.assigns.lane_unit
     lane_non_token = socket.assigns.lane_non_token
-    bounds = Periods.period_bounds(period, timezone)
+    scope = {model_id, period, timezone, nilify(lane_id), nilify(credential_id)}
 
-    # Source of truth for totals: the same cost_summary that Stats uses, with
-    # the same from/to/filter. This guarantees identical numbers.
-    filters =
-      %{model_id: model_id, from: bounds.from, to: bounds.to}
-      |> put_filter(:model_provider_id, lane_id)
-      |> put_filter(:credential_id, credential_id)
+    {socket, summary_data, series} =
+      if socket.assigns[:loaded_scope] == scope and not is_nil(socket.assigns[:raw_summary]) do
+        {socket, socket.assigns.raw_summary, socket.assigns.raw_series}
+      else
+        bounds = Periods.period_bounds(period, timezone)
 
-    summary_data = Logs.cost_summary(filters)
+        # Source of truth for totals: the same cost_summary that Stats uses, with
+        # the same from/to/filter. This guarantees identical numbers.
+        filters =
+          %{model_id: model_id, from: bounds.from, to: bounds.to}
+          |> put_filter(:model_provider_id, lane_id)
+          |> put_filter(:credential_id, credential_id)
 
-    # Hourly series for the chart breakdown only — same lane/key filters.
-    series =
-      Rollup.hourly_series_for_model(model_id,
-        from: bounds.from,
-        to: bounds.to,
-        timezone: timezone,
-        model_provider_id: nilify(lane_id),
-        credential_id: nilify(credential_id)
-      )
+        summary_data = Logs.cost_summary(filters)
+
+        # Hourly series for the chart breakdown only — same lane/key filters.
+        series =
+          Rollup.hourly_series_for_model(model_id,
+            from: bounds.from,
+            to: bounds.to,
+            timezone: timezone,
+            model_provider_id: nilify(lane_id),
+            credential_id: nilify(credential_id)
+          )
+
+        socket =
+          socket
+          |> assign(:loaded_scope, scope)
+          |> assign(:raw_summary, summary_data)
+          |> assign(:raw_series, series)
+
+        {socket, summary_data, series}
+      end
 
     cost_input = prices.input
     cost_cache = prices.cache

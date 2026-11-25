@@ -98,4 +98,37 @@ defmodule TokengateWeb.AuditExportControllerTest do
 
     assert redirected_to(conn) == "/dashboard"
   end
+
+  test "streaming CSV export delivers more than 1000 rows without truncation", %{conn: conn} do
+    %{admin: admin, password: password} = admin_fixture()
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    rows =
+      for i <- 1..1005 do
+        %{
+          id: Ecto.UUID.dump!(Ecto.UUID.generate()),
+          inserted_at: now,
+          user_id: Ecto.UUID.dump!(admin.id),
+          actor_email: admin.email,
+          actor_role: admin.global_role,
+          action: "probe.stream",
+          entity_type: "model",
+          entity_id: "m-#{i}",
+          origin: "web",
+          changes: %{}
+        }
+      end
+
+    Tokengate.Repo.insert_all("audit_logs", rows)
+
+    csv =
+      conn
+      |> login(admin, password)
+      |> get(~p"/operations/audit/export?action=probe.stream")
+      |> Map.fetch!(:resp_body)
+
+    lines = csv |> String.trim_trailing("\n") |> String.split("\n")
+    # 1 header + 1005 data rows (no 1000-row cap)
+    assert length(lines) == 1006
+  end
 end

@@ -190,10 +190,25 @@ defmodule TokengateWeb.AuditLive do
         <.form for={@form} id="audit-filters" phx-change="filter" phx-submit="filter">
           <div class="card bg-base-100 border border-base-300 mb-4">
             <div class="card-body grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
-              <.input field={@form[:actor_email]} type="text" label={gettext("Actor (email)")} />
-              <.input field={@form[:entity_type]} type="text" label={gettext("Entity")} />
-              <.input field={@form[:action]} type="text" label={gettext("Action")} />
-              <.input field={@form[:ip]} type="text" label="IP" />
+              <.input
+                field={@form[:actor_email]}
+                type="text"
+                label={gettext("Actor (email)")}
+                phx-debounce="300"
+              />
+              <.input
+                field={@form[:entity_type]}
+                type="text"
+                label={gettext("Entity")}
+                phx-debounce="300"
+              />
+              <.input
+                field={@form[:action]}
+                type="text"
+                label={gettext("Action")}
+                phx-debounce="300"
+              />
+              <.input field={@form[:ip]} type="text" label="IP" phx-debounce="300" />
               <.input field={@form[:from]} type="date" label={gettext("From")} />
               <.input field={@form[:to]} type="date" label={gettext("To")} />
             </div>

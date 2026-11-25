@@ -65,7 +65,7 @@ defmodule Tokengate.Observability.WebhookWorker do
   @impl true
   def perform(%Oban.Job{
         id: job_id,
-        args: %{"destination_id" => destination_id, "request_log_ids" => log_ids}
+        args: %{"destination_id" => destination_id, "request_log_ids" => log_ids} = args
       }) do
     # `Repo.get!` moría con `Ecto.NoResultsError` cuando el destino se borraba
     # entre el dispatch y la ejecución: el job reintentaba 5 veces para volver
@@ -75,18 +75,23 @@ defmodule Tokengate.Observability.WebhookWorker do
         {:discard, "destination gone"}
 
       destination ->
-        deliver(destination, log_ids, job_id)
+        inserted_ats = Map.get(args, "request_log_inserted_ats", [])
+        deliver(destination, log_ids, inserted_ats, job_id)
     end
   end
 
-  defp deliver(destination, log_ids, job_id) do
+  defp deliver(destination, log_ids, inserted_ats, job_id) do
     logs =
-      Repo.all(
-        from rl in RequestLog,
-          where: rl.id in ^log_ids,
-          order_by: [asc: rl.inserted_at],
-          preload: [group_member: [:user, :group]]
+      from(rl in RequestLog,
+        left_join: gm in assoc(rl, :group_member),
+        left_join: u in assoc(gm, :user),
+        left_join: g in assoc(gm, :group),
+        where: rl.id in ^log_ids,
+        order_by: [asc: rl.inserted_at],
+        preload: [group_member: {gm, user: u, group: g}]
       )
+      |> maybe_prune_partitions(inserted_ats)
+      |> Repo.all()
 
     if logs == [] do
       {:discard, "no request logs found for ids: #{inspect(log_ids)}"}
@@ -111,6 +116,37 @@ defmodule Tokengate.Observability.WebhookWorker do
     end
   end
 
+  defp maybe_prune_partitions(query, []), do: query
+
+  defp maybe_prune_partitions(query, inserted_ats) when is_list(inserted_ats) do
+    dts =
+      Enum.flat_map(inserted_ats, fn
+        %DateTime{} = dt ->
+          [dt]
+
+        value when is_binary(value) ->
+          case DateTime.from_iso8601(value) do
+            {:ok, dt, _offset} -> [dt]
+            _ -> []
+          end
+
+        _ ->
+          []
+      end)
+
+    case dts do
+      [] ->
+        query
+
+      _ ->
+        min_dt = dts |> Enum.min(DateTime) |> DateTime.add(-1, :second)
+        max_dt = dts |> Enum.max(DateTime) |> DateTime.add(1, :second)
+        where(query, [rl], rl.inserted_at >= ^min_dt and rl.inserted_at <= ^max_dt)
+    end
+  end
+
+  defp maybe_prune_partitions(query, _), do: query
+
   @doc """
   Resolves every observability destination and enqueues one `WebhookWorker`
   job per destination, batching the log id.
@@ -128,12 +164,19 @@ defmodule Tokengate.Observability.WebhookWorker do
   the insert is safe to repeat), instead of raising and losing the fan-out.
   """
   @spec dispatch(RequestLog.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def dispatch(%RequestLog{id: log_id}) when is_binary(log_id) do
+  def dispatch(%RequestLog{id: log_id, inserted_at: inserted_at}) when is_binary(log_id) do
     log_id_str = to_string(log_id)
+    base_args = %{destination_id: nil, request_log_ids: [log_id_str]}
+
+    base_args =
+      case encode_inserted_at(inserted_at) do
+        nil -> base_args
+        iso -> Map.put(base_args, :request_log_inserted_ats, [iso])
+      end
 
     Tokengate.Observability.list_all_destinations()
     |> Enum.reduce_while({:ok, 0}, fn destination, {:ok, count} ->
-      %{destination_id: destination.id, request_log_ids: [log_id_str]}
+      %{base_args | destination_id: destination.id}
       |> __MODULE__.new()
       |> Oban.insert()
       |> case do
@@ -156,6 +199,13 @@ defmodule Tokengate.Observability.WebhookWorker do
   end
 
   def dispatch(_request_log), do: {:ok, 0}
+
+  defp encode_inserted_at(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+
+  defp encode_inserted_at(%NaiveDateTime{} = ndt),
+    do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+
+  defp encode_inserted_at(_), do: nil
 
   # ---------------------------------------------------------------------------
   # HTTP POST via Req (preferred HTTP client per AGENTS.md)

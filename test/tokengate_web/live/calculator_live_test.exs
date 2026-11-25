@@ -963,4 +963,46 @@ defmodule TokengateWeb.CalculatorLiveTest do
 
     assert has_element?(view, "#impersonation-banner", admin1.email)
   end
+
+  test "changing custom prices recomputes estimate in memory with debounced inputs", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    model_ = model_fixture()
+    conn = login(conn, admin, password)
+
+    {:ok, view, html} = live(conn, ~p"/calculator")
+    assert html =~ ~s(id="cost-input")
+    assert has_element?(view, "#cost-input[phx-debounce='200']")
+    assert has_element?(view, "#cost-output[phx-debounce='200']")
+
+    view |> form("#calculator-form", %{model_id: model_.id}) |> render_change()
+
+    ref = make_ref()
+    parent = self()
+    hook = {__MODULE__, ref}
+
+    :telemetry.attach(
+      hook,
+      [:tokengate, :repo, :query],
+      fn _event, _measurements, meta, _config ->
+        if meta[:source] in ["request_logs", "request_metrics_hourly"] do
+          send(parent, {:calc_db_query, ref, meta[:source]})
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(hook) end)
+
+    view
+    |> form("#calculator-form", %{
+      model_id: model_.id,
+      cost_input: "9.99",
+      cost_output: "29.99"
+    })
+    |> render_change()
+
+    refute_received {:calc_db_query, ^ref, _}
+  end
 end

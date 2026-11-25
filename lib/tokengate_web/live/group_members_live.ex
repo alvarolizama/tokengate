@@ -57,8 +57,10 @@ defmodule TokengateWeb.GroupMembersLive do
           |> assign(:add_member_error, nil)
           |> assign(:email_suggestions, [])
           |> stream_configure(:members, dom_id: &"members-#{&1.id}")
+          |> assign(:usage_tiers, [])
+          |> assign(:usage_tiers_by_member, %{})
           |> load_data()
-          |> load_usage_tiers()
+          |> maybe_load_usage_tiers()
 
         {:ok, socket}
 
@@ -165,6 +167,10 @@ defmodule TokengateWeb.GroupMembersLive do
     |> assign(:group_monthly_spend, group_monthly_spend)
   end
 
+  defp maybe_load_usage_tiers(socket) do
+    if connected?(socket), do: load_usage_tiers(socket), else: socket
+  end
+
   # Usage tiers for this group (last 30 days). The heaviest aggregate of
   # the page (member × minute buckets over 30 days) — NOT on the search
   # path: `search_members` re-filters the member list but cannot change
@@ -175,7 +181,9 @@ defmodule TokengateWeb.GroupMembersLive do
 
     usage_tiers = Rollup.member_usage_tiers(group.id, from: days_ago(30))
 
-    assign(socket, :usage_tiers, usage_tiers)
+    socket
+    |> assign(:usage_tiers, usage_tiers)
+    |> assign(:usage_tiers_by_member, Map.new(usage_tiers, &{&1.group_member_id, &1}))
   end
 
   defp days_ago(n) do
@@ -420,7 +428,7 @@ defmodule TokengateWeb.GroupMembersLive do
           {:noreply,
            socket
            |> put_flash(:info, "Modelos actualizados.")
-           |> load_data()}
+           |> refresh_member_model_overrides()}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
@@ -433,6 +441,38 @@ defmodule TokengateWeb.GroupMembersLive do
       :error ->
         {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
     end
+  end
+
+  defp refresh_member_model_overrides(socket) do
+    member_ids = Map.keys(socket.assigns.members_by_id)
+
+    extra_models =
+      if member_ids == [] do
+        %{}
+      else
+        from(tmea in GroupMemberExtraModel,
+          where: tmea.group_member_id in ^member_ids,
+          select: {tmea.group_member_id, tmea.model_id}
+        )
+        |> Repo.all()
+        |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
+      end
+
+    denied_models =
+      if member_ids == [] do
+        %{}
+      else
+        from(tmda in GroupMemberDeniedModel,
+          where: tmda.group_member_id in ^member_ids,
+          select: {tmda.group_member_id, tmda.model_id}
+        )
+        |> Repo.all()
+        |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
+      end
+
+    socket
+    |> assign(:extra_models, extra_models)
+    |> assign(:denied_models, denied_models)
   end
 
   defp add_member_form do
@@ -478,10 +518,6 @@ defmodule TokengateWeb.GroupMembersLive do
   defp format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
   defp format_decimal(nil), do: "—"
   defp format_decimal(value), do: to_string(value)
-
-  defp get_member_tier(usage_tiers, member_id) do
-    Enum.find(usage_tiers, &(&1.group_member_id == member_id))
-  end
 
   defp tier_badge_class("alto"), do: "badge-error"
   defp tier_badge_class("regular"), do: "badge-warning"
@@ -681,7 +717,7 @@ defmodule TokengateWeb.GroupMembersLive do
                 <span class="font-mono text-sm">${format_decimal(mb.monthly_spend)}</span>
               </:col>
               <:col :let={member} label={gettext("Usage")}>
-                <% tier = get_member_tier(@usage_tiers, member.id) %>
+                <% tier = Map.get(@usage_tiers_by_member, member.id) %>
                 <%= if tier do %>
                   <span
                     class={["badge badge-sm", tier_badge_class(tier.tier)]}

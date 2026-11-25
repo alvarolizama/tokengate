@@ -277,5 +277,38 @@ defmodule TokengateWeb.UserStatsLiveTest do
 
       assert has_element?(view, "#user-stats-filter-form")
     end
+
+    test "live stream caps rendered logs at page size when many :new_log broadcasts arrive", %{
+      conn: conn
+    } do
+      {_group, user} = fixture_user_with_memberships()
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for i <- 1..55 do
+        send(
+          view.pid,
+          {:new_log,
+           %Tokengate.Logs.RequestLog{
+             id: Ecto.UUID.generate(),
+             user_id: user.id,
+             model_requested: "stream-cap-#{i}",
+             status_code: 200,
+             prompt_tokens: 1,
+             completion_tokens: 1,
+             provider_cost_usd: Decimal.new("0.001"),
+             latency_ms: 10,
+             inserted_at: DateTime.add(now, i, :second)
+           }}
+        )
+      end
+
+      _ = render(view)
+      assert Enum.count(log_rows(view)) == 50
+    end
   end
 end

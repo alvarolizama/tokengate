@@ -129,6 +129,8 @@ defmodule TokengateWeb.ProviderKeysLive do
     |> assign_inflight()
   end
 
+  @inflight_refresh_ms 250
+
   defp assign_inflight(socket) do
     credential_counts =
       Tokengate.Logs.Inflight.count_by_credential()
@@ -137,15 +139,31 @@ defmodule TokengateWeb.ProviderKeysLive do
     assign(socket, :credential_inflight, credential_counts)
   end
 
+  defp schedule_inflight_refresh(socket) do
+    if socket.assigns[:inflight_scheduled] do
+      socket
+    else
+      Process.send_after(self(), :refresh_inflight, @inflight_refresh_ms)
+      assign(socket, :inflight_scheduled, true)
+    end
+  end
+
   ## Live in-flight refresh -------------------------------------------------
 
   @impl true
   def handle_info({:inflight_started, _entry}, socket) do
-    {:noreply, assign_inflight(socket)}
+    {:noreply, schedule_inflight_refresh(socket)}
   end
 
   def handle_info({:inflight_done, _id}, socket) do
-    {:noreply, assign_inflight(socket)}
+    {:noreply, schedule_inflight_refresh(socket)}
+  end
+
+  def handle_info(:refresh_inflight, socket) do
+    {:noreply,
+     socket
+     |> assign(:inflight_scheduled, false)
+     |> assign_inflight()}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}

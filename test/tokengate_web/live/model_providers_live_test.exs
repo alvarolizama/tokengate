@@ -1154,4 +1154,32 @@ defmodule TokengateWeb.ModelProvidersLiveTest do
 
     assert Providers.list_model_providers(model.id) == []
   end
+
+  test "reorder_providers invalidates Routing.Cache so cached routes see the new order", %{
+    conn: conn
+  } do
+    model = create_model()
+    provider = create_provider()
+    lane_a = create_lane(model, provider, %{priority: 1})
+    lane_b = create_lane(model, provider, %{priority: 2})
+
+    # Populate Routing.Cache before reordering.
+    cached_before =
+      Tokengate.Routing.Cache.fetch_model_providers(model.id, nil, fn ->
+        Providers.list_model_providers(model.id)
+      end)
+
+    assert Enum.map(cached_before, & &1.id) == [lane_a.id, lane_b.id]
+
+    conn = admin_session(conn)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models/#{model.id}")
+
+    render_hook(view, "reorder_providers", %{
+      "model_id" => model.id,
+      "ids" => [lane_b.id, lane_a.id]
+    })
+
+    # Re-reading after stagger window / cache invalidation reflects new priority.
+    assert Enum.map(Providers.list_model_providers(model.id), & &1.id) == [lane_b.id, lane_a.id]
+  end
 end

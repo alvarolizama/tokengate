@@ -64,9 +64,20 @@ defmodule Tokengate.Providers.CatalogSync do
   def materialize do
     entries = Repo.all(from c in CatalogProvider, order_by: [asc: c.key])
 
+    keys = Enum.map(entries, & &1.key)
+
+    existing_providers =
+      if keys == [] do
+        %{}
+      else
+        from(p in Provider, where: p.key in ^keys)
+        |> Repo.all()
+        |> Map.new(&{&1.key, &1})
+      end
+
     {materialized, skipped} =
       Enum.reduce(entries, {0, 0}, fn entry, {ok, skip} ->
-        case materialize(entry) do
+        case materialize(entry, existing_providers) do
           :ok -> {ok + 1, skip}
           :skipped -> {ok, skip + 1}
         end
@@ -103,14 +114,25 @@ defmodule Tokengate.Providers.CatalogSync do
   @spec ensure_code_providers() :: :ok
   def ensure_code_providers do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
+    entries = Catalog.code_providers()
+    keys = Enum.map(entries, & &1.key)
 
-    Enum.each(Catalog.code_providers(), fn entry ->
+    existing_by_key =
+      if keys == [] do
+        %{}
+      else
+        from(c in CatalogProvider, where: c.key in ^keys)
+        |> Repo.all()
+        |> Map.new(&{&1.key, &1})
+      end
+
+    Enum.each(entries, fn entry ->
       attrs =
         entry
         |> Map.merge(%{fetched_at: now, status: "active"})
         |> Map.put(:fingerprint, CatalogProvider.fingerprint(entry))
 
-      case Repo.get(CatalogProvider, entry.key) do
+      case Map.get(existing_by_key, entry.key) do
         nil ->
           %CatalogProvider{} |> CatalogProvider.changeset(attrs) |> Repo.insert()
 
@@ -143,12 +165,12 @@ defmodule Tokengate.Providers.CatalogSync do
   # Only catalog rows still present upstream materialize. A "stale" row (gone
   # from models.dev) keeps whatever `providers` row it already has — deleting
   # it would cascade credentials.
-  defp materialize(%CatalogProvider{status: "stale"}), do: :skipped
+  defp materialize(%CatalogProvider{status: "stale"}, _existing_providers), do: :skipped
 
-  defp materialize(%CatalogProvider{} = entry) do
+  defp materialize(%CatalogProvider{} = entry, existing_providers) do
     case Catalog.unsupported_reason(entry) do
       nil ->
-        upsert(entry)
+        upsert(entry, Map.get(existing_providers, entry.key))
         :ok
 
       reason ->
@@ -157,7 +179,7 @@ defmodule Tokengate.Providers.CatalogSync do
     end
   end
 
-  defp upsert(entry) do
+  defp upsert(entry, existing) do
     {:ok, dialect} = Catalog.dialect(entry)
 
     attrs = %{
@@ -169,7 +191,7 @@ defmodule Tokengate.Providers.CatalogSync do
       capabilities: Catalog.capabilities(entry.key)
     }
 
-    case Repo.get_by(Provider, key: entry.key) do
+    case existing do
       nil ->
         %Provider{}
         |> Ecto.Changeset.change(

@@ -54,13 +54,14 @@ defmodule Tokengate.Accounts do
   end
 
   def delete_group(%Group{} = group) do
-    alias Tokengate.Providers.{GroupModel, GroupMemberExtraModel}
+    alias Tokengate.Providers.{GroupModel, GroupMemberExtraModel, GroupMemberDeniedModel}
 
     Repo.transaction(fn ->
       # The preload runs inside the transaction: it reads the memberships and
       # their keys through the same connection, so a concurrent membership
       # change cannot slip between the read and the deletes below.
       group = Repo.preload(group, group_members: :api_key)
+      member_ids = Enum.map(group.group_members, & &1.id)
 
       # Delete group_models (FK group_id)
       from(t in GroupModel, where: t.group_id == ^group.id)
@@ -74,24 +75,25 @@ defmodule Tokengate.Accounts do
       from(s in "services", where: s.group_id == type(^group.id, :binary_id))
       |> Repo.update_all(set: [group_id: nil])
 
-      # For each group_member: delete api_key, extra_models, then the member
-      for member <- group.group_members do
-        if member.api_key, do: Repo.delete!(member.api_key)
+      if member_ids != [] do
+        api_key_ids =
+          group.group_members
+          |> Enum.map(& &1.api_key)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.map(& &1.id)
 
-        from(t in GroupMemberExtraModel, where: t.group_member_id == ^member.id)
+        if api_key_ids != [] do
+          from(k in ApiKey, where: k.id in ^api_key_ids)
+          |> Repo.delete_all()
+        end
+
+        from(t in GroupMemberExtraModel, where: t.group_member_id in ^member_ids)
         |> Repo.delete_all()
 
-        member
-        |> Ecto.Changeset.change()
-        |> Ecto.Changeset.foreign_key_constraint(:group_member_id,
-          name: "request_logs_group_member_id_fkey",
-          message: "el miembro tiene logs de uso y no se puede eliminar"
-        )
-        |> Repo.delete()
-        |> case do
-          {:ok, _} -> :ok
-          {:error, changeset} -> Repo.rollback(changeset)
-        end
+        from(t in GroupMemberDeniedModel, where: t.group_member_id in ^member_ids)
+        |> Repo.delete_all()
+
+        batch_delete_group_members(group.group_members, member_ids)
       end
 
       # Finally delete the group itself. Declare the residual FK constraints
@@ -114,6 +116,30 @@ defmodule Tokengate.Accounts do
       end
     end)
     |> invalidate_group_auth_cache(group.id)
+  end
+
+  defp batch_delete_group_members(members, member_ids) do
+    # Savepoint protects the outer transaction: if any member has request_logs
+    # (FK RESTRICT), roll back only the batch delete and emit the changeset error.
+    Repo.transaction(fn ->
+      from(gm in GroupMember, where: gm.id in ^member_ids)
+      |> Repo.delete_all()
+    end)
+  rescue
+    Postgrex.Error ->
+      for member <- members do
+        member
+        |> Ecto.Changeset.change()
+        |> Ecto.Changeset.foreign_key_constraint(:group_member_id,
+          name: "request_logs_group_member_id_fkey",
+          message: "el miembro tiene logs de uso y no se puede eliminar"
+        )
+        |> Repo.delete()
+        |> case do
+          {:ok, _} -> :ok
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end
   end
 
   def change_group(%Group{} = group, attrs \\ %{}) do
@@ -336,6 +362,48 @@ defmodule Tokengate.Accounts do
         order_by: [asc: u.email],
         limit: ^limit
     )
+  end
+
+  @doc "SQL search of users for admin owner pickers (tolerates empty query)."
+  def search_users_for_picker(query, limit \\ 8) when is_binary(query) do
+    trimmed = String.trim(query)
+
+    base = from(u in User, order_by: [desc: u.inserted_at], limit: ^limit)
+
+    if trimmed == "" do
+      Repo.all(base)
+    else
+      pattern = "%#{String.downcase(escape_like(trimmed))}%"
+
+      Repo.all(
+        from(u in User,
+          where: ilike(u.email, ^pattern) or ilike(u.name, ^pattern),
+          order_by: [desc: u.inserted_at],
+          limit: ^limit
+        )
+      )
+    end
+  end
+
+  @doc "SQL search of services for admin owner pickers (tolerates empty query)."
+  def search_services_for_picker(query, limit \\ 8) when is_binary(query) do
+    trimmed = String.trim(query)
+
+    base = from(s in Service, order_by: [desc: s.inserted_at], limit: ^limit)
+
+    if trimmed == "" do
+      Repo.all(base)
+    else
+      pattern = "%#{String.downcase(escape_like(trimmed))}%"
+
+      Repo.all(
+        from(s in Service,
+          where: ilike(s.name, ^pattern),
+          order_by: [desc: s.inserted_at],
+          limit: ^limit
+        )
+      )
+    end
   end
 
   def create_user(attrs) do

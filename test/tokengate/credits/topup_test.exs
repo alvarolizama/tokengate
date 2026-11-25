@@ -176,6 +176,46 @@ defmodule Tokengate.Credits.TopupTest do
     assert DateTime.compare(get_field(changeset, :expires_at), explicit) == :eq
   end
 
+  test "Topups.summary/1 batches consumption lookup in one counter query for multiple topups" do
+    user = insert_user!()
+
+    for _ <- 1..4 do
+      {:ok, topup} =
+        Tokengate.Credits.Topups.create(%{
+          "user_id" => user.id,
+          "amount_usd" => "10.00"
+        })
+
+      Tokengate.Repo.insert!(%Tokengate.Metrics.TopupConsumptionCounter{
+        topup_id: topup.id,
+        consumed_micro: 1_000_000
+      })
+    end
+
+    ref = make_ref()
+    parent = self()
+    hook = {__MODULE__, ref}
+
+    :telemetry.attach(
+      hook,
+      [:tokengate, :repo, :query],
+      fn _event, _measurements, meta, _config ->
+        if meta[:source] == "topup_consumption_counters" do
+          send(parent, {:counter_query, ref})
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(hook) end)
+
+    summary = Tokengate.Credits.Topups.summary({:user, user.id})
+    assert length(summary.topups) == 4
+    assert Decimal.equal?(summary.remaining_topup_usd, Decimal.new("36.00"))
+    assert_received {:counter_query, ^ref}
+    refute_received {:counter_query, ^ref}
+  end
+
   defp insert_user! do
     Tokengate.Repo.insert!(%Tokengate.Accounts.User{
       email: "topup-#{System.unique_integer([:positive])}@test.local",

@@ -104,7 +104,7 @@ defmodule TokengateWeb.UserStatsLive do
       if log_matches_filters?(log, filters, timezone) do
         socket =
           socket
-          |> stream_insert(:logs, log, at: 0)
+          |> stream_insert(:logs, log, at: 0, limit: @page_size)
           |> assign(:logs_empty?, false)
 
         # Coalesce summary reloads: at most one member_stats recompute per

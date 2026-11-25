@@ -3575,6 +3575,11 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "POST /v1/decisions traduce a System One para un proveedor systemone-shape", %{conn: conn} do
     %{token: token, model: model, provider: provider} = proxy_fixture(%{model_type: "decision"})
 
+    # The sandbox may already have materialized the builtin `typesafe` row
+    # (CatalogSync), and `key` is unique, so remove it inside this test
+    # transaction before the fixture takes its key.
+    Repo.delete_all(from p in Tokengate.Providers.Provider, where: p.key == "typesafe")
+
     provider
     |> Ecto.Changeset.change(key: "typesafe")
     |> Repo.update!()

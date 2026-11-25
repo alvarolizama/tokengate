@@ -170,5 +170,12 @@ defmodule Tokengate.CreditsTest do
       assert cold == 1
       assert warm == 0
     end
+
+    test "summaries/1 resolves spend and limit_spend in one request_logs query" do
+      {_user, member} = member_with_limit("100.00")
+      spend(member, "1.00")
+
+      assert count_request_log_queries(fn -> Credits.summaries([member]) end) == 1
+    end
   end
 end

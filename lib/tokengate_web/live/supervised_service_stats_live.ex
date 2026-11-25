@@ -198,7 +198,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
          ) do
       socket =
         socket
-        |> stream_insert(:logs, log, at: 0)
+        |> stream_insert(:logs, log, at: 0, limit: @page_size)
         |> assign(:logs_empty?, false)
 
       socket =

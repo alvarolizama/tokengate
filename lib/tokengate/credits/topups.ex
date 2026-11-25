@@ -199,21 +199,11 @@ defmodule Tokengate.Credits.Topups do
   end
 
   defp summarize(_subject, topups) do
-    rows =
-      Enum.map(topups, fn topup ->
-        consumed = consumed_usd(topup)
-        remaining = Decimal.sub(topup.amount_usd, consumed)
-
-        %{
-          topup: topup,
-          consumed_usd: consumed,
-          remaining_usd:
-            if(Decimal.compare(remaining, 0) == :lt, do: Decimal.new(0), else: remaining)
-        }
-      end)
+    consumed = consumed_by_topup_ids(topups)
+    rows = Enum.map(topups, &row(&1, Map.get(consumed, &1.id, Decimal.new(0))))
 
     remaining =
-      Enum.reduce(rows, Decimal.new(0), fn row, acc -> Decimal.add(acc, row.remaining_usd) end)
+      Enum.reduce(rows, Decimal.new(0), fn r, acc -> Decimal.add(acc, r.remaining_usd) end)
 
     %{
       topups: rows,

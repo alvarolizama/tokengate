@@ -596,10 +596,27 @@ defmodule Tokengate.Providers do
     Repo.one(from(ma in Model, where: ma.name == ^name))
   end
 
+  @doc "Cached lookup of model id by unique model name (for cold gate-error logs)."
+  def get_model_id_by_name(nil), do: nil
+
+  def get_model_id_by_name(name) when is_binary(name) do
+    Tokengate.Cache.fetch({:model_id_by_name, name}, :timer.minutes(5), fn ->
+      Repo.one(from(ma in Model, where: ma.name == ^name, select: ma.id))
+    end)
+  end
+
   def create_model(attrs) do
     %Model{}
     |> Model.changeset(attrs)
     |> Repo.insert()
+    |> case do
+      {:ok, ma} = ok ->
+        Tokengate.Cache.invalidate({:model_id_by_name, ma.name})
+        ok
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   def update_model(%Model{} = model, attrs) do
@@ -607,7 +624,9 @@ defmodule Tokengate.Providers do
     |> Model.changeset(attrs)
     |> Repo.update()
     |> case do
-      {:ok, _ma} = ok ->
+      {:ok, ma} = ok ->
+        Tokengate.Cache.invalidate({:model_id_by_name, model.name})
+        Tokengate.Cache.invalidate({:model_id_by_name, ma.name})
         Tokengate.Routing.Cache.invalidate_all()
         ok
 
@@ -626,6 +645,7 @@ defmodule Tokengate.Providers do
     |> Repo.delete()
     |> case do
       {:ok, _ma} = ok ->
+        Tokengate.Cache.invalidate({:model_id_by_name, model.name})
         Tokengate.Routing.Cache.invalidate_all()
         ok
 
@@ -727,6 +747,47 @@ defmodule Tokengate.Providers do
 
   def change_model_provider(%ModelProvider{} = model_provider, attrs \\ %{}),
     do: ModelProvider.changeset(model_provider, attrs)
+
+  @doc """
+  Reorders `ModelProvider` priorities for `model_id` in a single UPDATE statement
+  and invalidates `Tokengate.Routing.Cache`.
+  """
+  def reorder_model_providers(model_id, ids) when is_binary(model_id) and is_list(ids) do
+    with {:ok, model_id} <- Ecto.UUID.cast(model_id),
+         true <- ids != [] do
+      valid_ids =
+        from(ap in ModelProvider, where: ap.model_id == ^model_id, select: ap.id)
+        |> Repo.all()
+        |> MapSet.new()
+
+      if Enum.all?(ids, &MapSet.member?(valid_ids, &1)) do
+        now = DateTime.truncate(DateTime.utc_now(), :second)
+
+        {:ok, _} =
+          Repo.transaction(fn ->
+            from(ap in ModelProvider,
+              where: ap.model_id == ^model_id and ap.id in ^ids,
+              update: [
+                set: [
+                  priority: fragment("array_position(?::text[], ?::text)", ^ids, ap.id),
+                  updated_at: ^now
+                ]
+              ]
+            )
+            |> Repo.update_all([])
+          end)
+
+        Tokengate.Routing.Cache.invalidate_all()
+        {:ok, :reordered}
+      else
+        {:error, :invalid_order}
+      end
+    else
+      _ -> {:error, :invalid_order}
+    end
+  end
+
+  def reorder_model_providers(_model_id, _ids), do: {:error, :invalid_order}
 
   @doc """
   Returns enabled model_providers for a model, ordered by priority ASC

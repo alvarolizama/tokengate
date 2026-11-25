@@ -462,5 +462,51 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log_b.id)]}
       )
     end
+
+    test "dispatch/1 propagates inserted_at and perform/1 prunes partitions in 1 query" do
+      {tm, _group} = group_member_fixture()
+      log = log_fixture(tm.id)
+      dest = destination_fixture(base_url())
+
+      assert {:ok, 1} = WebhookWorker.dispatch(log)
+      iso = log.inserted_at |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+
+      assert_enqueued(
+        worker: WebhookWorker,
+        args: %{
+          "destination_id" => dest.id,
+          "request_log_ids" => [to_string(log.id)],
+          "request_log_inserted_ats" => [iso]
+        }
+      )
+
+      ref = make_ref()
+      parent = self()
+      hook = {__MODULE__, ref}
+
+      :telemetry.attach(
+        hook,
+        [:tokengate, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if meta[:source] in ["request_logs", "group_members", "users", "groups"] do
+            send(parent, {:webhook_query, ref, meta[:source], to_string(meta[:query])})
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(hook) end)
+
+      assert :ok =
+               perform_job(WebhookWorker, %{
+                 "destination_id" => dest.id,
+                 "request_log_ids" => [to_string(log.id)],
+                 "request_log_inserted_ats" => [iso]
+               })
+
+      assert_received {:webhook_query, ^ref, "request_logs", sql}
+      assert sql =~ ~s("inserted_at" >=)
+      refute_received {:webhook_query, ^ref, _, _}
+    end
   end
 end

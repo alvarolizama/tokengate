@@ -66,8 +66,6 @@ defmodule TokengateWeb.ProxyController do
 
   require Logger
 
-  import Ecto.Query, only: [from: 2]
-
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Accounts.GroupMember
   alias Tokengate.Limits.Manager, as: Limits
@@ -3248,17 +3246,11 @@ defmodule TokengateWeb.ProxyController do
     conn
   end
 
-  # Resolves the model id by name for gate-error logs. Alias names are
-  # globally unique. The gate path is cold (the request already failed), so a
-  # single indexed lookup is acceptable; a miss (model_not_found) returns nil.
+  # Resolves the model id by name via ETS cache for gate-error logs.
   defp model_id_for_name(nil), do: nil
 
   defp model_id_for_name(name) when is_binary(name) do
-    Tokengate.Repo.one(
-      from ma in Tokengate.Providers.Model,
-        where: ma.name == ^name,
-        select: ma.id
-    )
+    Tokengate.Providers.get_model_id_by_name(name)
   end
 
   defp enqueue_error_log(conn, route, member, opts) do

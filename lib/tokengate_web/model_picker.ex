@@ -219,6 +219,8 @@ defmodule TokengateWeb.ModelPicker do
     socket
     |> assign(:groups_for_select, groups)
     |> assign(:members_for_select, members)
+    |> assign(:groups_by_id, Map.new(groups, &{&1.id, &1}))
+    |> assign(:members_by_id, Map.new(members, &{&1.id, &1}))
   end
 
   # El path del endpoint /v1 que sirve cada tipo de modelo — el mismo contrato

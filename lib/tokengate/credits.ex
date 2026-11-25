@@ -219,6 +219,90 @@ defmodule Tokengate.Credits do
     end)
   end
 
+  @doc """
+  Spend and limit-debited spend for multiple subjects in ONE query per subject type
+  using `FILTER (WHERE credit_topup_id IS NULL)`.
+
+  Returns `%{spend: %{subject => Decimal.t()}, limit_spend: %{subject => Decimal.t()}}`.
+  """
+  def spend_and_limit_by_subjects(subjects) when is_list(subjects) do
+    users = for {:user, id} <- subjects, do: id
+    services = for {:service, id} <- subjects, do: id
+
+    {user_spend, user_limit} = spend_and_limit_grouped_users(users)
+    {svc_spend, svc_limit} = spend_and_limit_grouped_services(services)
+
+    spend =
+      Map.new(subjects, fn
+        {:user, id} = s -> {s, Map.get(user_spend, id, Decimal.new(0))}
+        {:service, id} = s -> {s, Map.get(svc_spend, id, Decimal.new(0))}
+      end)
+
+    limit_spend =
+      Map.new(subjects, fn
+        {:user, id} = s -> {s, Map.get(user_limit, id, Decimal.new(0))}
+        {:service, id} = s -> {s, Map.get(svc_limit, id, Decimal.new(0))}
+      end)
+
+    %{spend: spend, limit_spend: limit_spend}
+  end
+
+  defp spend_and_limit_for_subject({:user, id}) do
+    {spend, limit} = spend_and_limit_grouped_users([id])
+    {Map.get(spend, id, Decimal.new(0)), Map.get(limit, id, Decimal.new(0))}
+  end
+
+  defp spend_and_limit_for_subject({:service, id}) do
+    {spend, limit} = spend_and_limit_grouped_services([id])
+    {Map.get(spend, id, Decimal.new(0)), Map.get(limit, id, Decimal.new(0))}
+  end
+
+  defp spend_and_limit_grouped_users([]), do: {%{}, %{}}
+
+  defp spend_and_limit_grouped_users(user_ids) do
+    RequestLog
+    |> where([rl], rl.user_id in ^user_ids)
+    |> since(nil)
+    |> group_by([rl], rl.user_id)
+    |> select([rl], {
+      rl.user_id,
+      fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+      fragment(
+        "COALESCE(SUM(?) FILTER (WHERE ? IS NULL), 0)",
+        rl.provider_cost_usd,
+        rl.credit_topup_id
+      )
+    })
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.reduce({%{}, %{}}, fn {id, spent, against_limit}, {spend, limit_spend} ->
+      {Map.put(spend, id, Decimal.new(to_string(spent))),
+       Map.put(limit_spend, id, Decimal.new(to_string(against_limit)))}
+    end)
+  end
+
+  defp spend_and_limit_grouped_services([]), do: {%{}, %{}}
+
+  defp spend_and_limit_grouped_services(service_ids) do
+    RequestLog
+    |> where([rl], rl.service_id in ^service_ids)
+    |> since(nil)
+    |> group_by([rl], rl.service_id)
+    |> select([rl], {
+      rl.service_id,
+      fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+      fragment(
+        "COALESCE(SUM(?) FILTER (WHERE ? IS NULL), 0)",
+        rl.provider_cost_usd,
+        rl.credit_topup_id
+      )
+    })
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.reduce({%{}, %{}}, fn {id, spent, against_limit}, {spend, limit_spend} ->
+      {Map.put(spend, id, Decimal.new(to_string(spent))),
+       Map.put(limit_spend, id, Decimal.new(to_string(against_limit)))}
+    end)
+  end
+
   defp spend_grouped_users([], _only_limit), do: %{}
 
   defp spend_grouped_users(user_ids, only_limit) do
@@ -386,8 +470,7 @@ defmodule Tokengate.Credits do
   """
   @spec summary(subject(), limit() | plan()) :: map()
   def summary(subject, %{limit_usd: limit_usd, unlimited?: unlimited?}) do
-    spend = monthly_spend_usd(subject)
-    against_limit = spend_debited_to_limit(subject)
+    {spend, against_limit} = spend_and_limit_for_subject(subject)
     topups = Topups.summary(subject)
 
     remaining_limit =
@@ -478,10 +561,11 @@ defmodule Tokengate.Credits do
       user_credit_aggregates()
     else
       subjects = members |> Enum.map(&{:user, &1.user_id}) |> Enum.uniq()
+      %{spend: spend, limit_spend: limit_spend} = spend_and_limit_by_subjects(subjects)
 
       %{
-        spend: key_by_user_id(spend_by_subjects(subjects)),
-        limit_spend: key_by_user_id(spend_by_subjects(subjects, only_limit: true)),
+        spend: key_by_user_id(spend),
+        limit_spend: key_by_user_id(limit_spend),
         topups: key_by_user_id(Topups.summaries(subjects))
       }
     end
@@ -496,8 +580,7 @@ defmodule Tokengate.Credits do
   """
   def service_summaries(services) when is_list(services) do
     subjects = Enum.map(services, &{:service, &1.id})
-    spend = spend_by_subjects(subjects)
-    limit_spend = spend_by_subjects(subjects, only_limit: true)
+    %{spend: spend, limit_spend: limit_spend} = spend_and_limit_by_subjects(subjects)
     topups = Topups.summaries(subjects)
 
     Map.new(services, fn service ->

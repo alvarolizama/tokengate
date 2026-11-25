@@ -1319,19 +1319,17 @@ defmodule TokengateWeb.StatsLive do
   # and shared across connected live tabs via the DashboardCache TTL so a
   # busy proxy doesn't multiply Postgres load.
   defp load_live_data(socket) do
-    timezone = socket.assigns[:timezone] || "Etc/UTC"
-
     # El p95 del día ordena TODA la partición del día (y crece con ella):
     # fuera del camino de 5s, con TTL propio de 60s.
     p95_latency_ms =
       DashboardCache.fetch_or_compute(
-        {:stats_live_p95, timezone},
+        {:stats_live_p95},
         fn -> Logs.today_p95_latency_ms("Etc/UTC") end,
         ttl: 60_000
       )
 
     bundle =
-      DashboardCache.fetch_or_compute({:stats_live, timezone}, fn ->
+      DashboardCache.fetch_or_compute({:stats_live}, fn ->
         # KPIs "Hoy" = día UTC (misma ventana que el kill-switch y que el
         # card de tope de arriba) — no el día local del usuario. UN solo
         # scan del día alimenta los totales planos, el perfil hora ×
@@ -1360,7 +1358,7 @@ defmodule TokengateWeb.StatsLive do
       if socket.assigns[:live_feed_loaded] do
         socket
       else
-        feed_logs = Logs.list_logs(%{limit: @live_feed_size})
+        feed_logs = Logs.list_feed(%{limit: @live_feed_size})
 
         socket
         |> stream(:live_feed, feed_logs, reset: true)

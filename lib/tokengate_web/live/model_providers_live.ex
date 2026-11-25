@@ -883,36 +883,13 @@ defmodule TokengateWeb.ModelProvidersLive do
          # El orden que llega es el de ESTA página: un model_id de otro modelo
          # (o forjado) no reordena nada.
          true <- model_id == socket.assigns.model.id do
-      valid_ids =
-        from(ap in ModelProvider, where: ap.model_id == ^model_id, select: ap.id)
-        |> Repo.all()
-        |> MapSet.new()
+      case Providers.reorder_model_providers(model_id, ids) do
+        {:ok, :reordered} ->
+          audit(socket, "model_provider.reorder", "model", model_id, %{"ids" => ids})
+          {:noreply, load_lanes(socket)}
 
-      if is_list(ids) and ids != [] and Enum.all?(ids, &MapSet.member?(valid_ids, &1)) do
-        # UNA sentencia para todo el orden: `priority` sale de la POSICIÓN del id
-        # en la lista. Un UPDATE por fila dentro de la transacción eran N round
-        # trips (y N re-escrituras de los mismos índices) por un drag & drop.
-        now = DateTime.truncate(DateTime.utc_now(), :second)
-
-        {:ok, _} =
-          Repo.transaction(fn ->
-            from(ap in ModelProvider,
-              where: ap.model_id == ^model_id and ap.id in ^ids,
-              update: [
-                set: [
-                  priority: fragment("array_position(?::text[], ?::text)", ^ids, ap.id),
-                  updated_at: ^now
-                ]
-              ]
-            )
-            |> Repo.update_all([])
-          end)
-
-        audit(socket, "model_provider.reorder", "model", model_id, %{"ids" => ids})
-
-        {:noreply, load_lanes(socket)}
-      else
-        {:noreply, put_flash(socket, :error, gettext("Invalid order for this model."))}
+        {:error, :invalid_order} ->
+          {:noreply, put_flash(socket, :error, gettext("Invalid order for this model."))}
       end
     else
       false ->
@@ -1086,12 +1063,7 @@ defmodule TokengateWeb.ModelProvidersLive do
     # user sees which group / member is bound to the provider.
     group_label =
       if ap.exclusive_to_group_id do
-        group =
-          Enum.find(
-            socket.assigns.groups_for_select || [],
-            &(&1.id == ap.exclusive_to_group_id)
-          )
-
+        group = Map.get(socket.assigns[:groups_by_id] || %{}, ap.exclusive_to_group_id)
         if group, do: group.name, else: ""
       else
         ""
@@ -1099,12 +1071,7 @@ defmodule TokengateWeb.ModelProvidersLive do
 
     member_label =
       if ap.exclusive_to_group_member_id do
-        member =
-          Enum.find(
-            socket.assigns.members_for_select || [],
-            &(&1.id == ap.exclusive_to_group_member_id)
-          )
-
+        member = Map.get(socket.assigns[:members_by_id] || %{}, ap.exclusive_to_group_member_id)
         if member && member.user, do: member.user.email, else: ""
       else
         ""
@@ -2459,13 +2426,12 @@ defmodule TokengateWeb.ModelProvidersLive do
   def scope_target_label(%ModelProvider{} = mp, assigns) do
     cond do
       mp.exclusive_to_group_member_id ->
-        member =
-          Enum.find(assigns.members_for_select || [], &(&1.id == mp.exclusive_to_group_member_id))
+        member = Map.get(assigns[:members_by_id] || %{}, mp.exclusive_to_group_member_id)
 
         if member && member.user, do: member.user.email, else: gettext("Member")
 
       mp.exclusive_to_group_id ->
-        group = Enum.find(assigns.groups_for_select || [], &(&1.id == mp.exclusive_to_group_id))
+        group = Map.get(assigns[:groups_by_id] || %{}, mp.exclusive_to_group_id)
         if group, do: group.name, else: gettext("Limit profile")
 
       true ->
@@ -3502,7 +3468,7 @@ defmodule TokengateWeb.ModelProvidersLive do
                           phx-click="toggle_scope_member"
                           phx-value-member_id={mid}
                         >
-                          {case Enum.find(@members_for_select || [], &(&1.id == mid)) do
+                          {case Map.get(@members_by_id || %{}, mid) do
                             %{user: %{email: e}} -> e
                             _ -> mid
                           end}
@@ -3637,7 +3603,7 @@ defmodule TokengateWeb.ModelProvidersLive do
                           phx-click="toggle_scope_group"
                           phx-value-group_id={tid}
                         >
-                          {case Enum.find(@groups_for_select || [], &(&1.id == tid)) do
+                          {case Map.get(@groups_by_id || %{}, tid) do
                             %{name: n} -> n
                             _ -> tid
                           end}

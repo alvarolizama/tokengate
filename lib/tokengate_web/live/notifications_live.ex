@@ -135,10 +135,17 @@ defmodule TokengateWeb.NotificationsLive do
 
         targets ->
           results =
-            Enum.map(
-              targets,
-              &{&1, Telegram.send_message(&1.chat_id, message(:test), thread_opts(&1))}
+            targets
+            |> Task.async_stream(
+              &{&1, Telegram.send_message(&1.chat_id, message(:test), thread_opts(&1))},
+              max_concurrency: 5,
+              timeout: 10_000,
+              on_timeout: :kill_task
             )
+            |> Enum.map(fn
+              {:ok, item} -> item
+              {:exit, _reason} -> {nil, {:error, :timeout}}
+            end)
 
           case Enum.find(results, fn {_t, res} -> match?({:ok, _}, res) end) do
             {_t, {:ok, _}} -> {:info, gettext("Test message sent.")}
