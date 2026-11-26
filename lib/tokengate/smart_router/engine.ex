@@ -37,7 +37,8 @@ defmodule Tokengate.SmartRouter.Engine do
 
   `decision_meta` is the billing/observability contract for S3: `source`,
   `classifier`, `confidence`, `cache_hit`, `latency_ms`, `classifier_ms`,
-  `usage`, `model_id`, `rules`, `fallback_reason`, `escalated` and `timeout`.
+  `usage`, `model_id`, `rules`, `fallback_reason`, `escalated`, `timeout` and
+  `config_id` (the configuration VERSION that decided, on every route).
   The decision's own cost is deliberately `nil`: S3 prices it with
   `CostCalculator` from the usage we return, outside the request budget.
 
@@ -126,7 +127,10 @@ defmodule Tokengate.SmartRouter.Engine do
                escalated: false,
                timeout: false,
                pinned: true,
-               dry_run: dry_run?
+               dry_run: dry_run?,
+               # Which version decided: the shadow comparison and the version
+               # audit both read it back from the row.
+               config_id: field(config, :id)
              },
              field(candidate, :effort_tier)
            )}
@@ -515,18 +519,24 @@ defmodule Tokengate.SmartRouter.Engine do
   end
 
   defp cache_key(config, analysis, viable) do
-    DecisionCache.fingerprint({
-      Enum.map(viable, fn {use_case, _} -> field(use_case, :key) end),
-      analysis.effort,
-      analysis.has_tools,
-      analysis.has_vision,
-      analysis.has_structured_output,
-      String.slice(
-        analysis.last_user_message || "",
-        0,
-        field(config, :decision_context_chars) || 1_200
-      )
-    })
+    # The version is part of the question: the same catalogue keys under two
+    # versions mean two different answers (F3), so the config id rides in the
+    # fingerprint and the versions can never read each other's cache entries.
+    DecisionCache.fingerprint(
+      {
+        Enum.map(viable, fn {use_case, _} -> field(use_case, :key) end),
+        analysis.effort,
+        analysis.has_tools,
+        analysis.has_vision,
+        analysis.has_structured_output,
+        String.slice(
+          analysis.last_user_message || "",
+          0,
+          field(config, :decision_context_chars) || 1_200
+        )
+      },
+      field(config, :id)
+    )
   end
 
   defp deterministic(
@@ -639,7 +649,11 @@ defmodule Tokengate.SmartRouter.Engine do
               timeout: match?(:timeout, fallback_reason),
               tier_substituted: primary.tier_substituted,
               pinned: false,
-              dry_run: dry_run?
+              dry_run: dry_run?,
+              # Every route (rule, fast_path, single_candidate, classifier,
+              # decision_cache, fallback_*, deterministic default) reports the
+              # version that produced it.
+              config_id: field(config, :id)
             },
             target_tier
           )

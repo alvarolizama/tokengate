@@ -39,7 +39,8 @@ defmodule Tokengate.SmartRouter.RequestAnalyzer do
           message_count: non_neg_integer(),
           agent_type: String.t() | nil,
           group_id: String.t() | nil,
-          service_id: String.t() | nil
+          service_id: String.t() | nil,
+          user_id: String.t() | nil
         }
 
   @default_output_tokens 256
@@ -74,6 +75,10 @@ defmodule Tokengate.SmartRouter.RequestAnalyzer do
       last_user_message: last_user_message(messages),
       message_count: length(messages),
       agent_type: context_value(context, :agent_type),
+      # The USER behind the member (nil for a service member): the same
+      # identity the proxy resolves as the spend subject, so a `user_ids` rule
+      # matches the caller the operator named.
+      user_id: context_value(context, :user_id),
       group_id: context_value(context, :group_id),
       service_id: context_value(context, :service_id)
     }

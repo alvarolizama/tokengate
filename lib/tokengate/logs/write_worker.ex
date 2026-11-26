@@ -187,6 +187,13 @@ defmodule Tokengate.Logs.WriteWorker do
   # string-keyed map would raise `Ecto.CastError` (mixed keys).
   defp attrs_from_args(args) do
     %{
+      # The proxy pre-generates the log id (S4/Shadow): the Shadow evaluator is
+      # dispatched with `{request_log_id, request_inserted_at}` right after the
+      # response, so the row it will point at has to be knowable before this
+      # worker runs. `nil` keeps the schema autogeneration for every other row;
+      # a non-UUID string is refused here so a malformed `id` can never blow up
+      # the INSERT of an otherwise valid accounting row.
+      id: uuid_or_nil(args["id"]),
       group_member_id: args["group_member_id"],
       # El sujeto del gasto viaja en la fila: sin la columna, agregar por
       # usuario exigía un `join` a `group_members` que el servicio no paga.
@@ -235,6 +242,9 @@ defmodule Tokengate.Logs.WriteWorker do
       # failed-enqueue insert persist identical router metadata.
       routed_via_router: args["routed_via_router"] || false,
       model_resolved: args["model_resolved"],
+      # Which configuration VERSION decided (the serving Default or a promoted
+      # one): the audit trail the version comparison reads back.
+      router_config_id: args["router_config_id"],
       router_use_case_id: args["router_use_case_id"],
       router_use_case_key: args["router_use_case_key"],
       router_use_case_model_id: args["router_use_case_model_id"],
@@ -316,6 +326,18 @@ defmodule Tokengate.Logs.WriteWorker do
       _ -> nil
     end
   end
+
+  # A pre-generated primary key only travels when it really is a UUID: the
+  # column is `uuid`, so `"abc"` would make the whole INSERT fail (and the
+  # accounting row with it) just to save one autogeneration.
+  defp uuid_or_nil(value) when is_binary(value) do
+    case Ecto.UUID.cast(value) do
+      {:ok, uuid} -> uuid
+      :error -> nil
+    end
+  end
+
+  defp uuid_or_nil(_value), do: nil
 
   # One message per request on `logs:new`, carrying only what the feeds READ.
   #

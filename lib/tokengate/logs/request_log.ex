@@ -96,6 +96,10 @@ defmodule Tokengate.Logs.RequestLog do
     field :routed_via_router, :boolean, default: false
     # Resolved logical model name (the alias only lives in `model_requested`).
     field :model_resolved, :string
+    # The SmartRouter configuration VERSION that decided this request (the
+    # serving Default, or a promoted version). Plain uuid, no FK — router
+    # metadata must outlive the version row.
+    field :router_config_id, :binary_id
     field :router_use_case_id, :binary_id
     field :router_use_case_key, :string
     field :router_use_case_model_id, :binary_id
@@ -151,13 +155,13 @@ defmodule Tokengate.Logs.RequestLog do
   # analítica de cambio de sesión nunca pudo leerlo. Entra junto con las
   # columnas del router (S1) para que el escritor no tenga que conocer una
   # segunda lista.
-  @permitted ~w(group_member_id user_id service_id subject_type provider_id model_provider_id credential_id model_id
+  @permitted ~w(id group_member_id user_id service_id subject_type provider_id model_provider_id credential_id model_id
     model_requested model_responded agent_type status_code provider_status_code
     error_reason error_message prompt_tokens completion_tokens cache_read_tokens
     cache_creation_tokens provider_cost_usd credit_subscription_id credit_topup_id
     latency_ms ttft_ms streaming cache_hit request_type think effort effort_applied api_key_prefix
     credential_name client_agent provider_key_prefix api_key_id session_id inserted_at oban_job_id
-    routed_via_router model_resolved router_use_case_id router_use_case_key
+    routed_via_router model_resolved router_config_id router_use_case_id router_use_case_key
     router_use_case_model_id router_effort_tier router_decision_source
     router_decision_ms router_decision_cost_usd router_baseline_model_id
     router_baseline_cost_usd router_direct_access prompt_tokens_saved_est)a

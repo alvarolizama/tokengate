@@ -16,17 +16,23 @@ defmodule Tokengate.SmartRouter.Presets do
 
   ## Idempotent by key
 
-  `ensure_all!/0` inserts only the presets whose `key` is missing
-  (`ON CONFLICT (key) DO NOTHING`). A use case that already exists is **never**
-  overwritten: once the operator edits a preset — renames it, flips a knob,
-  binds models — re-running the seeder must not undo that. It is safe on every
-  boot, on every seed run, and from the admin page.
+  `ensure_all!/1` inserts only the presets whose `key` is missing **in the
+  target version** (`ON CONFLICT (router_config_id, key) DO NOTHING`). A use
+  case that already exists is **never** overwritten: once the operator edits a
+  preset — renames it, flips a knob, binds models — re-running the seeder must
+  not undo that. It is safe on every boot, on every seed run, and from the
+  admin page.
 
-  The keys are the public identity of a use case (rules target keys, not ids),
-  so they are also the conflict target of the insert.
+  The keys are the public identity of a use case *within a version* (rules
+  target keys, not ids), so they are also the conflict target of the insert.
+  `ensure_all!/1` defaults to the serving Default, so a freshly migrated
+  instance seeds exactly one catalogue; passing a cloned version's id seeds
+  that version instead, and a clone can then hold the same twelve keys as the
+  Default.
   """
 
   alias Tokengate.Repo
+  alias Tokengate.SmartRouter.Config
   alias Tokengate.SmartRouter.UseCase
 
   @presets [
@@ -264,19 +270,35 @@ defmodule Tokengate.SmartRouter.Presets do
   def keys, do: Enum.map(@presets, & &1.key)
 
   @doc """
-  Inserts every missing preset. Idempotent and non-destructive.
+  Inserts every missing preset into `router_config_id` (the serving Default
+  when omitted). Idempotent and non-destructive.
 
-  Returns `%{inserted: n, existing: m}`. A preset whose `key` already exists is
-  left exactly as it is — operator edits always win over the shipped defaults.
+  Returns `%{inserted: n, existing: m}`. A preset whose `key` already exists in
+  that version is left exactly as it is — operator edits always win over the
+  shipped defaults — and the same key may exist in another version.
   """
-  @spec ensure_all!() :: %{inserted: non_neg_integer(), existing: non_neg_integer()}
-  def ensure_all! do
+  @spec ensure_all!(String.t() | nil) :: %{
+          inserted: non_neg_integer(),
+          existing: non_neg_integer()
+        }
+  def ensure_all!(router_config_id \\ nil) do
+    router_config_id = router_config_id || Config.ensure!().id
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    rows = Enum.map(@presets, &Map.merge(&1, %{inserted_at: now, updated_at: now}))
+    rows =
+      Enum.map(@presets, fn preset ->
+        Map.merge(preset, %{
+          router_config_id: router_config_id,
+          inserted_at: now,
+          updated_at: now
+        })
+      end)
 
     {inserted, _} =
-      Repo.insert_all(UseCase, rows, on_conflict: :nothing, conflict_target: :key)
+      Repo.insert_all(UseCase, rows,
+        on_conflict: :nothing,
+        conflict_target: [:router_config_id, :key]
+      )
 
     %{inserted: inserted, existing: length(rows) - inserted}
   end

@@ -70,6 +70,7 @@ defmodule TokengateWeb.ProxyController do
   alias Tokengate.Providers
   alias Tokengate.Providers.{Credential, Provider, ProviderLimits}
   alias Tokengate.SmartRouter
+  alias Tokengate.SmartRouter.ShadowEvaluator
 
   alias Tokengate.Proxy.{
     AudioMultipart,
@@ -172,6 +173,7 @@ defmodule TokengateWeb.ProxyController do
     Process.delete(:tg_inflight_id)
     Process.delete(:tg_router)
     Process.delete(:tg_router_decision_logged)
+    Process.delete(:tg_router_raw_payload)
 
     with :ok <- require_model(model),
          :ok <- acquire_group_limits(key_id, limits) do
@@ -293,6 +295,7 @@ defmodule TokengateWeb.ProxyController do
     Process.delete(:tg_router)
     Process.delete(:tg_router_decision_logged)
     Process.delete(:tg_prompt_tokens_saved)
+    Process.delete(:tg_router_raw_payload)
   end
 
   # A disabled router is a 503 even for a subject that opted in: the kill
@@ -308,9 +311,11 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp prepare_router_route(conn, member, payload) do
-    case SmartRouter.decide(payload, router_decision_context(conn, member)) do
+    context = router_decision_context(conn, member)
+
+    case SmartRouter.decide(payload, context) do
       {:ok, decision} ->
-        ctx = router_state(decision)
+        ctx = decision |> router_state() |> Map.put(:context, context)
         Process.put(:tg_router, ctx)
 
         case acquire_router_route(ctx, member, payload, conn, 0, 0) do
@@ -333,6 +338,11 @@ defmodule TokengateWeb.ProxyController do
   defp router_decision_context(conn, member) do
     %{
       subject_id: router_subject_id(member),
+      # The USER behind the member (nil for a service member): the spend
+      # subject is what a session/user rule must match, and the deterministic
+      # `user_ids` rule reads it from HERE, so the proxy — not the rule
+      # evaluator — decides who the caller is.
+      user_id: member.user_id,
       group_id: member.group_id,
       service_id: router_service_id(member),
       session_id: session_id_header(conn) || conn.assigns[:session_key],
@@ -359,6 +369,9 @@ defmodule TokengateWeb.ProxyController do
       decision: decision,
       chain: chain,
       position: 0,
+      # Which configuration version decided: `request_logs.router_config_id`
+      # and the shadow comparison both read it from the decision itself.
+      config_id: Map.get(decision.decision_meta, :config_id),
       exclude: %{},
       effort_overrides: router_effort_overrides(chain),
       decision_lane_cost: router_decision_lane_cost(decision.decision_meta),
@@ -620,6 +633,22 @@ defmodule TokengateWeb.ProxyController do
     case conn.assigns[:router_effort_overrides] do
       %{} = overrides -> Map.get(overrides, route.model.id)
       _ -> nil
+    end
+  end
+
+  # The body the CLIENT sent — before the `model` rewrite, the guard rails and
+  # any prompt optimisation. A Shadow version must re-decide exactly what
+  # arrived, not the gateway's rewrite of it (S4).
+  #
+  # It lives on the conn (a consumer of the request can see it) AND in the
+  # request process (the log builders never carry the conn). Only routed
+  # requests pay for the assign.
+  defp capture_router_payload(conn, payload) do
+    if Process.get(:tg_router) do
+      Process.put(:tg_router_raw_payload, payload)
+      assign(conn, :router_raw_payload, payload)
+    else
+      conn
     end
   end
 
@@ -2467,6 +2496,8 @@ defmodule TokengateWeb.ProxyController do
   defp execute(conn, route, payload, member, attempts_left, exclude, provider_retries) do
     provider = route.model_provider.credential.provider
 
+    conn = capture_router_payload(conn, payload)
+
     # El body que viaja a ESTE upstream se construye SIEMPRE desde el body
     # original del cliente: las guard rails del modelo, el dialecto de
     # reasoning que habla el upstream y los overrides del model_provider
@@ -2776,6 +2807,8 @@ defmodule TokengateWeb.ProxyController do
 
   defp execute_stream(conn, route, payload, member, attempts_left, exclude, provider_retries) do
     provider = route.model_provider.credential.provider
+
+    conn = capture_router_payload(conn, payload)
 
     # Mismo contrato que `execute/7`: el body por-intento se construye desde el
     # body ORIGINAL del cliente (nunca desde el del intento anterior).
@@ -3142,7 +3175,7 @@ defmodule TokengateWeb.ProxyController do
       |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
 
     {payload, saved} =
-      apply_prompt_policy(payload, Map.get(route_ctx, :prompt_policy),
+      PromptOptimizer.apply_router_policy(payload, Map.get(route_ctx, :prompt_policy),
         pinned: Map.get(route_ctx, :router_pinned) == true
       )
 
@@ -3159,44 +3192,6 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp maybe_optimize(payload, _model_model), do: {payload, nil}
-
-  # The SmartRouter use-case passes, applied in a fixed order and only for a
-  # request the router decided (`prompt_policy` comes from the decision's use
-  # case; nil = a direct request, byte-identical body).
-  #
-  # `prompt_tokens_saved_est` is measured, not guessed: the SAME estimator runs
-  # over the messages before and after the policy passes, so it reports exactly
-  # the tokens those passes removed from THIS request. The estimator includes
-  # the JSON that travels as strings (`tool_calls[*].function.arguments`), so
-  # `compact_json_tools` reports its real saving instead of zero.
-  #
-  # `:pinned` tells `stale_tool_trim/3` the session is served by an active
-  # `SessionPin`: rewriting its historical messages would invalidate the hot
-  # upstream prefix, so the trim has to clear `stale_tool_trim_threshold_pct`
-  # before it is allowed to run.
-  defp apply_prompt_policy(payload, nil, _opts), do: {payload, nil}
-
-  defp apply_prompt_policy(payload, policy, opts) when is_map(policy) do
-    messages = payload["messages"] || []
-    before = PromptOptimizer.estimate_prompt_tokens(messages)
-    pinned? = Keyword.get(opts, :pinned, false)
-
-    optimized =
-      messages
-      |> PromptOptimizer.keep_last_n_images(Map.get(policy, :keep_last_n_images))
-      |> PromptOptimizer.window_history(Map.get(policy, :max_history_turns))
-      |> compact_json_tools(Map.get(policy, :compact_json) == true)
-      |> PromptOptimizer.stale_tool_trim(Map.get(policy, :stale_tool_trim_threshold_pct),
-        pinned: pinned?
-      )
-
-    after_tokens = PromptOptimizer.estimate_prompt_tokens(optimized)
-
-    {Map.put(payload, "messages", optimized), max(before - after_tokens, 0)}
-  end
-
-  defp compact_json_tools(messages, true), do: PromptOptimizer.compact_json_tools(messages)
-  defp compact_json_tools(messages, false), do: messages
 
   # Body keys the gateway owns (model mapping, passthrough body, usage
   # accounting): never a valid rename target nor an override target — an
@@ -4008,6 +4003,9 @@ defmodule TokengateWeb.ProxyController do
         %{
           "routed_via_router" => true,
           "model_resolved" => route.model.name,
+          # The configuration VERSION that decided: the audit trail the version
+          # comparison reads back (`nil` for rows written before versioning).
+          "router_config_id" => Map.get(ctx, :config_id),
           "router_use_case_id" => ctx.decision.use_case.id,
           "router_use_case_key" => ctx.decision.use_case.key,
           "router_use_case_model_id" => entry && entry.use_case_model_id,
@@ -4087,68 +4085,156 @@ defmodule TokengateWeb.ProxyController do
        ) do
     subject = log_subject(member)
 
-    %{
-      "group_member_id" => subject.group_member_id,
-      "user_id" => member.user_id,
-      "service_id" => subject.service_id,
-      "subject_type" => subject.subject_type,
-      "provider_id" => route.model_provider.credential.provider_id,
-      "model_provider_id" => route.model_provider.id,
-      "model_id" => route.model.id,
-      # The client's own string: `"router"` when the alias was requested, so a
-      # routed request is never disguised as a direct one.
-      "model_requested" =>
-        router_model_requested(Keyword.get(extra, :model_requested, route.model.name)),
-      "model_responded" => route.model_responded,
-      "agent_type" => agent_type,
-      "client_agent" => Keyword.get(extra, :client_agent),
-      "status_code" => status,
-      "provider_status_code" => Keyword.get(extra, :provider_status_code),
-      "error_reason" => Keyword.get(extra, :error_reason),
-      "prompt_tokens" => usage.prompt_tokens,
-      "completion_tokens" => usage.completion_tokens,
-      "cache_read_tokens" => Map.get(usage, :cache_read_tokens, 0),
-      "cache_creation_tokens" => Map.get(usage, :cache_creation_tokens, 0),
-      "provider_cost_usd" => Decimal.to_string(cost, :normal),
-      # `credit_topup_id: nil` is passed by cache hits: their hold is RELEASED
-      # (nothing was charged), so the reservation id would name a debit that
-      # never happened.
-      "credit_topup_id" => Keyword.get(extra, :credit_topup_id, Process.get(:tg_credit_topup_id)),
-      "latency_ms" => latency_ms,
-      "ttft_ms" => Keyword.get(extra, :ttft_ms),
-      "streaming" => streaming,
-      # Durable cache-hit marker: `true` only when the response came from the
-      # gateway-local cache (both the chat and the passthrough hit paths pass
-      # it; every other enqueue leaves it false).
-      "cache_hit" => Keyword.get(extra, :cache_hit, false),
-      "request_type" => Keyword.get(extra, :request_type, "chat"),
-      "think" => Keyword.get(extra, :think, false),
-      "effort" => Keyword.get(extra, :effort),
-      # What the WINNING attempt sent to the wire (nil = no effort on the
-      # wire). `effort` keeps the client's intent; the pair makes the
-      # operator effort policy's rewrite visible.
-      "effort_applied" => Keyword.get(extra, :effort_applied),
-      "api_key_prefix" => member.api_key && member.api_key.key_prefix,
-      "api_key_id" => member.api_key && member.api_key.id,
-      "session_id" => Keyword.get(extra, :session_id),
-      "credential_name" => route.credential.name,
-      "credential_id" => route.credential.id,
-      "provider_key_prefix" => provider_key_prefix(route.credential),
-      # Idempotencia (C2): fijado UNA vez en enqueue — cada reintento de Oban
-      # lleva la MISMA pareja (oban_job_id, inserted_at) y cae en la MISMA
-      # partición. Sin esto, log_request regeneraría el timestamp por intento.
-      "inserted_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-    }
-    |> Map.merge(
-      router_log_attrs(route, member, usage, Keyword.get(extra, :router_baseline, true))
-    )
-    |> WriteWorker.new()
-    |> insert_log_job(%{
-      model_id: route.model.id,
-      provider_id: route.model_provider.credential.provider_id,
-      status: status,
-      error_reason: Keyword.get(extra, :error_reason)
-    })
+    # The id and the partition timestamp are fixed HERE, once: the Shadow
+    # evaluator is dispatched with `(request_log_id, request_inserted_at)` and
+    # writes its row before this log's Oban job may even run, so both sides
+    # must name the same pair (and the same day partition).
+    log_id = Keyword.get(extra, :id) || Ecto.UUID.generate()
+
+    inserted_at =
+      Keyword.get_lazy(extra, :inserted_at, fn ->
+        DateTime.utc_now() |> DateTime.truncate(:second)
+      end)
+
+    attrs =
+      %{
+        "id" => log_id,
+        "group_member_id" => subject.group_member_id,
+        "user_id" => member.user_id,
+        "service_id" => subject.service_id,
+        "subject_type" => subject.subject_type,
+        "provider_id" => route.model_provider.credential.provider_id,
+        "model_provider_id" => route.model_provider.id,
+        "model_id" => route.model.id,
+        # The client's own string: `"router"` when the alias was requested, so a
+        # routed request is never disguised as a direct one.
+        "model_requested" =>
+          router_model_requested(Keyword.get(extra, :model_requested, route.model.name)),
+        "model_responded" => route.model_responded,
+        "agent_type" => agent_type,
+        "client_agent" => Keyword.get(extra, :client_agent),
+        "status_code" => status,
+        "provider_status_code" => Keyword.get(extra, :provider_status_code),
+        "error_reason" => Keyword.get(extra, :error_reason),
+        "prompt_tokens" => usage.prompt_tokens,
+        "completion_tokens" => usage.completion_tokens,
+        "cache_read_tokens" => Map.get(usage, :cache_read_tokens, 0),
+        "cache_creation_tokens" => Map.get(usage, :cache_creation_tokens, 0),
+        "provider_cost_usd" => Decimal.to_string(cost, :normal),
+        # `credit_topup_id: nil` is passed by cache hits: their hold is RELEASED
+        # (nothing was charged), so the reservation id would name a debit that
+        # never happened.
+        "credit_topup_id" =>
+          Keyword.get(extra, :credit_topup_id, Process.get(:tg_credit_topup_id)),
+        "latency_ms" => latency_ms,
+        "ttft_ms" => Keyword.get(extra, :ttft_ms),
+        "streaming" => streaming,
+        # Durable cache-hit marker: `true` only when the response came from the
+        # gateway-local cache (both the chat and the passthrough hit paths pass
+        # it; every other enqueue leaves it false).
+        "cache_hit" => Keyword.get(extra, :cache_hit, false),
+        "request_type" => Keyword.get(extra, :request_type, "chat"),
+        "think" => Keyword.get(extra, :think, false),
+        "effort" => Keyword.get(extra, :effort),
+        # What the WINNING attempt sent to the wire (nil = no effort on the
+        # wire). `effort` keeps the client's intent; the pair makes the
+        # operator effort policy's rewrite visible.
+        "effort_applied" => Keyword.get(extra, :effort_applied),
+        "api_key_prefix" => member.api_key && member.api_key.key_prefix,
+        "api_key_id" => member.api_key && member.api_key.id,
+        "session_id" => Keyword.get(extra, :session_id),
+        "credential_name" => route.credential.name,
+        "credential_id" => route.credential.id,
+        "provider_key_prefix" => provider_key_prefix(route.credential),
+        # Idempotencia (C2): fijado UNA vez en enqueue — cada reintento de Oban
+        # lleva la MISMA pareja (oban_job_id, inserted_at) y cae en la MISMA
+        # partición. Sin esto, log_request regeneraría el timestamp por intento.
+        "inserted_at" => DateTime.to_iso8601(inserted_at)
+      }
+      |> Map.merge(
+        router_log_attrs(route, member, usage, Keyword.get(extra, :router_baseline, true))
+      )
+
+    result =
+      attrs
+      |> WriteWorker.new()
+      |> insert_log_job(%{
+        model_id: route.model.id,
+        provider_id: route.model_provider.credential.provider_id,
+        status: status,
+        error_reason: Keyword.get(extra, :error_reason)
+      })
+
+    maybe_evaluate_shadow(route, log_id, inserted_at, usage, cost, status, extra, member)
+
+    result
+  end
+
+  # Shadow evaluation of a SERVED chat request (S4). Dispatched after the log
+  # job — the response already left — and only when a version is actually
+  # `shadow_enabled`; `ShadowEvaluator.evaluate_async/1` returns immediately
+  # and spawns nothing otherwise.
+  #
+  # Skipped for: non-router requests, failures (no served destination to
+  # compare), gateway-local cache hits (nothing reached an upstream, so every
+  # token count is zero) and non-chat request types (the router only serves
+  # chat).
+  defp maybe_evaluate_shadow(route, log_id, inserted_at, usage, cost, status, extra, member) do
+    ctx = Process.get(:tg_router)
+
+    with %{} <- ctx,
+         true <- is_integer(status) and status < 400,
+         false <- Keyword.get(extra, :cache_hit, false) == true,
+         "chat" <- Keyword.get(extra, :request_type, "chat"),
+         [_ | _] <- SmartRouter.shadow_configs() do
+      ShadowEvaluator.evaluate_async(%{
+        request_log_id: log_id,
+        request_inserted_at: inserted_at,
+        # The client's own body, captured before any rewrite/optimisation.
+        payload: Process.get(:tg_router_raw_payload) || %{},
+        # The SAME context the Default decided with (`subject_id`, `user_id`,
+        # `session_id`, …): the sampling key and the rules the shadow applies
+        # must describe the same caller.
+        context: Map.get(ctx, :context) || %{},
+        # The decision the Default ACTUALLY served: when the cascade landed on
+        # a fallback, `primary` names the destination it chose, not the model
+        # that answered — the comparison must name the model that really
+        # served this request.
+        default_decision: effective_default_decision(ctx, route),
+        usage: usage,
+        default_served_cost_usd: cost,
+        prompt_tokens_saved_est: Process.get(:tg_prompt_tokens_saved),
+        group_member: member
+      })
+
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  # `decision.primary` is the destination the decision picked; `route.model` is
+  # the one that actually answered (the same when nothing fell back). A
+  # fallback rewrites the Default side to the serving model and its tier, so
+  # `default_model_id` / `default_model_name` / `default_effort_tier` on the
+  # evaluation describe reality instead of the abandoned candidate.
+  defp effective_default_decision(ctx, route) do
+    decision = ctx.decision
+    primary = Map.get(decision, :primary) || %{}
+
+    if Map.get(primary, :model_id) == route.model.id do
+      decision
+    else
+      entry = router_entry_for(ctx, route.model.id)
+
+      effective_primary =
+        primary
+        |> Map.put(:model_id, route.model.id)
+        |> Map.put(:model_name, route.model.name)
+        |> Map.put(:effort_tier, (entry && entry.effort_tier) || Map.get(primary, :effort_tier))
+
+      Map.put(decision, :primary, effective_primary)
+    end
   end
 
   # `Oban.insert/1`'s failure used to be discarded: on a saturated pool or a
@@ -4238,6 +4324,10 @@ defmodule TokengateWeb.ProxyController do
     subject = log_subject(member)
 
     %{
+      # A failed attempt books nothing and is never shadowed, but the id is
+      # still fixed here so every durable row of one request is born with a
+      # known identity (the same contract as `enqueue_log/9`).
+      "id" => Keyword.get(opts, :id) || Ecto.UUID.generate(),
       "group_member_id" => subject.group_member_id,
       "user_id" => member.user_id,
       "service_id" => subject.service_id,

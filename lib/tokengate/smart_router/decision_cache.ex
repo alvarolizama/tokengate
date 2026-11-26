@@ -16,6 +16,11 @@ defmodule Tokengate.SmartRouter.DecisionCache do
   the same head legitimately share an answer; two requests with different
   capabilities never do.
 
+  `fingerprint/2` also folds in the configuration **version**
+  (`router_configs.id`): the same keys under two versions mean two different
+  questions (different descriptions, destinations, rules), so a Shadow version
+  can never read the Default's cached answer — or the other way round.
+
   TTL is deliberately short (default 5 minutes) and shorter than the session
   pin: the classifier's answer is only as good as the catalogue it was asked
   against.
@@ -100,6 +105,17 @@ defmodule Tokengate.SmartRouter.DecisionCache do
     :crypto.hash(:sha256, :erlang.term_to_binary(parts))
     |> Base.encode16(case: :lower)
   end
+
+  @doc """
+  Fingerprint of the classifier's inputs **inside one configuration version**.
+
+  Two versions can hold the same use-case keys with different descriptions,
+  different destinations or different rules, so the same question has two
+  legitimate answers. Folding `config_id` into the hash keeps `v1` and `v2`
+  from ever reading each other's cached answer.
+  """
+  @spec fingerprint(term(), term()) :: String.t()
+  def fingerprint(parts, config_id), do: fingerprint({config_id, parts})
 
   defp now, do: System.monotonic_time(:millisecond)
 

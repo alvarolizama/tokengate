@@ -5,6 +5,9 @@ defmodule TokengateWeb.MonitoringLiveTest do
   alias Tokengate.{Accounts, Logs, Periods, Providers}
   alias Tokengate.Budgets.Manager
   alias Tokengate.Logs.Inflight
+  alias Tokengate.Repo
+  alias Tokengate.SmartRouter.Config, as: RouterConfig
+  alias Tokengate.SmartRouter.ShadowEvaluation
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -94,6 +97,82 @@ defmodule TokengateWeb.MonitoringLiveTest do
     _ = :sys.get_state(budget_pid)
 
     :ok
+  end
+
+  ## Default vs Shadow fixtures ------------------------------------------------
+
+  defp shadow_config(attrs) do
+    attrs = Map.merge(%{name: "Shadow #{unique()}"}, attrs)
+
+    {:ok, config} =
+      %RouterConfig{}
+      |> RouterConfig.changeset(attrs)
+      |> Repo.insert()
+
+    config
+  end
+
+  # A request the router served: the Default's decision is on the log row, which
+  # is exactly what the row detail has to show.
+  defp routed_log(opts \\ []) do
+    %{member: member, model: model} = member_with_log()
+
+    {:ok, log} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        model_requested: model.name,
+        model_resolved: Keyword.get(opts, :model_resolved, model.name),
+        model_responded: model.name,
+        agent_type: "api",
+        status_code: Keyword.get(opts, :status_code, 200),
+        error_reason: Keyword.get(opts, :error_reason),
+        error_message: Keyword.get(opts, :error_message),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        provider_cost_usd: "0.004",
+        latency_ms: 42,
+        streaming: false,
+        routed_via_router: true,
+        router_use_case_key: "coding_implement",
+        router_effort_tier: "high",
+        router_decision_source: "classifier",
+        router_decision_ms: 120,
+        router_decision_cost_usd: "0.001",
+        router_baseline_cost_usd: "0.010",
+        prompt_tokens_saved_est: 40,
+        inserted_at:
+          Keyword.get(opts, :inserted_at, DateTime.utc_now() |> DateTime.truncate(:second))
+      })
+
+    log
+  end
+
+  defp shadow_eval_for(log, config, attrs) do
+    base = %{
+      request_log_id: log.id,
+      request_inserted_at: log.inserted_at,
+      shadow_config_id: config.id,
+      shadow_config_name: config.name,
+      default_use_case_key: "coding_implement",
+      default_effort_tier: "high",
+      default_model_name: log.model_resolved,
+      default_served_cost_usd: Decimal.new("0.004000"),
+      use_case_key: "coding_implement",
+      effort_tier: "high",
+      model_name: log.model_resolved,
+      decision_source: "rule",
+      decision_ms: 7,
+      estimated_served_cost_usd: Decimal.new("0.002000"),
+      matches_default_model: true,
+      matches_default_tier: true
+    }
+
+    {:ok, eval} =
+      %ShadowEvaluation{}
+      |> ShadowEvaluation.changeset(Map.merge(base, attrs))
+      |> Repo.insert()
+
+    eval
   end
 
   ## Auth ---------------------------------------------------------------------
@@ -701,5 +780,115 @@ defmodule TokengateWeb.MonitoringLiveTest do
 
     view |> element("#monitoring-pause-btn") |> render_click()
     assert has_element?(view, "#logs", "paused-stream-model")
+  end
+
+  ## Default vs Shadow ---------------------------------------------------------
+
+  test "a routed log shows the router pill and the shadow badge, and its detail opens Default vs Shadow",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    shadow = shadow_config(%{name: "Shadow risk", shadow_enabled: true})
+    log = routed_log()
+
+    _eval =
+      shadow_eval_for(log, shadow, %{
+        matches_default_model: false,
+        matches_default_tier: false,
+        effort_tier: "low",
+        model_name: "cheaper-model"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    # The Model column says who decided and what the Shadow thought of it.
+    assert has_element?(view, "#log-router-#{log.id}")
+    assert has_element?(view, "#log-shadow-#{log.id}", "shadow ≠")
+
+    view |> element("#log-detail-#{log.id}") |> render_click()
+
+    assert has_element?(view, "#router-detail-modal")
+    # Default side: the real decision and its cost.
+    assert has_element?(view, "#router-default-use-case", "coding_implement")
+    assert has_element?(view, "#router-default-tier", "high")
+    assert has_element?(view, "#router-default-source", "classifier")
+    assert has_element?(view, "#router-default-cost", "$0.004")
+    # Shadow side: what the version would have decided.
+    assert has_element?(view, "#router-detail-shadow-table")
+    assert has_element?(view, "#router-detail-shadow-#{shadow.id}", shadow.name)
+    assert has_element?(view, "#router-detail-shadow-#{shadow.id}", "cheaper-model")
+    assert has_element?(view, "#router-detail-shadow-#{shadow.id}", "low")
+    assert has_element?(view, "#router-detail-shadow-#{shadow.id}", "Difiere")
+
+    view |> element("#router-detail-modal .btn-circle") |> render_click()
+    refute has_element?(view, "#router-detail-modal")
+  end
+
+  test "an agreeing Shadow version reads as a match", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    shadow = shadow_config(%{name: "Shadow twin"})
+    log = routed_log()
+
+    _eval = shadow_eval_for(log, shadow, %{})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    assert has_element?(view, "#log-shadow-#{log.id}", "shadow =")
+
+    # The badge itself opens the detail.
+    view |> element("#log-shadow-#{log.id}") |> render_click()
+
+    assert has_element?(view, "#router-detail-shadow-#{shadow.id}", "Coincide")
+  end
+
+  test "a shadow_evaluated event updates the row in place without growing the feed",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    shadow = shadow_config(%{name: "Shadow late"})
+    log = routed_log()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    # The row is routed but no version has evaluated it yet: no verdict.
+    assert has_element?(view, "#log-router-#{log.id}")
+    refute has_element?(view, "#log-shadow-#{log.id}")
+
+    rows_before = :sys.get_state(view.pid).socket.assigns.stream_rows
+
+    eval = shadow_eval_for(log, shadow, %{matches_default_tier: false, effort_tier: "low"})
+    send(view.pid, {:shadow_evaluated, log.id, [eval]})
+
+    assert has_element?(view, "#log-shadow-#{log.id}", "shadow ≠")
+    # Re-inserted under the same id: the feed did not gain a row.
+    assert :sys.get_state(view.pid).socket.assigns.stream_rows == rows_before
+  end
+
+  test "the error modal also shows the Default vs Shadow block for a routed failure",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    shadow = shadow_config(%{name: "Shadow failure"})
+
+    log =
+      routed_log(
+        status_code: 502,
+        error_reason: "server_error",
+        error_message: "Upstream gateway timeout on node 9"
+      )
+
+    _eval =
+      shadow_eval_for(log, shadow, %{matches_default_model: false, model_name: "backup-model"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    view |> element("td button.badge-error", "server_error") |> render_click()
+
+    # The error detail is untouched...
+    assert has_element?(view, "#error-detail-message", "Upstream gateway timeout on node 9")
+    # ...and now also carries what the Shadow would have done.
+    assert has_element?(view, "#error-detail-router")
+    assert has_element?(view, "#error-router-detail-shadow-#{shadow.id}", "backup-model")
   end
 end

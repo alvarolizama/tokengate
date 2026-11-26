@@ -63,13 +63,35 @@ defmodule Tokengate.SmartRouter.SchemaTest do
       assert reloaded.decision_timeout_ms == 250
     end
 
-    test "the database rejects a second row (singleton check)" do
-      Config.ensure!()
+    test "the database allows only one is_default = true row" do
+      config = Config.ensure!()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      assert_raise Postgrex.Error, ~r/router_configs_singleton_check/, fn ->
-        Repo.insert_all(Config, [%{id: Ecto.UUID.generate(), inserted_at: now, updated_at: now}])
+      assert_raise Postgrex.Error, ~r/router_configs_single_default_idx/, fn ->
+        Repo.insert_all(Config, [
+          %{
+            id: Ecto.UUID.generate(),
+            name: "Segunda default",
+            is_default: true,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
       end
+
+      # A candidate version (not the Default) is not capped: versions are the
+      # whole point, only the serving Default is unique.
+      assert {1, _} =
+               Repo.insert_all(Config, [
+                 %{
+                   id: Ecto.UUID.generate(),
+                   name: "Candidata",
+                   inserted_at: now,
+                   updated_at: now
+                 }
+               ])
+
+      assert Config.get().id == config.id
     end
 
     test "changeset/2 validates the policy and the bounded knobs" do

@@ -27,11 +27,17 @@ defmodule Tokengate.Logs.PartitionWorker do
        `request_logs` scan has to walk it.
     4. `cleanup_old_partitions/1` — drops named partitions older than
        `retention_days/0` (log retention policy).
+    5. `prune_shadow_evaluations/1` — deletes `router_shadow_evaluations` rows
+       past the same cutoff, in bounded batches. The table is a non-partitioned
+       child of `request_logs`, so nothing else would ever remove them: a
+       shadow row must never outlive the log it describes, and left alone it
+       would grow forever.
 
-  `prune_default_partition/1` and `cleanup_old_partitions/1` use the SAME
-  cutoff (`retention_days/0`, calendar days, `date < today - retention`), so
-  the raw retention policy has exactly one definition; the rollup prune reads
-  it through `HourlyAggregate.retention_days/0`.
+  `prune_default_partition/1`, `prune_shadow_evaluations/1` and
+  `cleanup_old_partitions/1` use the SAME cutoff (`retention_days/0`, calendar
+  days, `date < today - retention`), so the raw retention policy has exactly
+  one definition; the rollup prune reads it through
+  `HourlyAggregate.retention_days/0`.
 
   ### Why DELETE per day instead of DETACH + recreate the default
 
@@ -128,6 +134,7 @@ defmodule Tokengate.Logs.PartitionWorker do
     backfill_default_partitions(retention_days: retention_days())
     prune_default_partition(retention_days: retention_days())
     cleanup_old_partitions(retention_days())
+    prune_shadow_evaluations(retention_days())
     :ok
   end
 
@@ -400,6 +407,65 @@ defmodule Tokengate.Logs.PartitionWorker do
       0, acc -> {:halt, acc}
       n, acc -> {:cont, acc + n}
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Prune of shadow evaluations
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Deletes `router_shadow_evaluations` rows older than `retention_days`
+  (`retention_days/0` when omitted), in `#{@prune_batch_rows}`-row batches.
+
+  `router_shadow_evaluations` is NOT partitioned: it is the comparison child of
+  the partitioned `request_logs` (see
+  `20261126132447_add_smart_router_versions_and_shadow`), written by the Shadow
+  evaluator and read by the version screens. Its retention must follow the logs
+  it describes — an evaluation whose request is gone can never be shown again —
+  so it uses the same `cutoff_day/1` the partition cleanup uses, and the same
+  `ctid IN (SELECT ... LIMIT n)` batching so one statement (and one lock) never
+  spans millions of expired rows.
+
+  The cutoff compares `inserted_at` (the row's own timestamp, indexed) and not
+  `request_inserted_at`: the evaluator writes the row moments after the request
+  completed, so deleting by `inserted_at` is at most minutes more conservative
+  than deleting by the request timestamp, and it keeps every batch an index
+  range scan.
+
+  Returns `{:ok, %{deleted: n}}`.
+  """
+  @spec prune_shadow_evaluations(non_neg_integer() | nil) ::
+          {:ok, %{deleted: non_neg_integer()}}
+  def prune_shadow_evaluations(days \\ nil) do
+    cutoff = cutoff_day(days) |> Date.to_iso8601()
+
+    deleted =
+      Stream.repeatedly(fn ->
+        %{num_rows: n} =
+          Repo.query!("""
+          DELETE FROM router_shadow_evaluations
+          WHERE ctid IN (
+            SELECT ctid FROM router_shadow_evaluations
+            WHERE inserted_at < '#{cutoff}'::timestamp
+            LIMIT #{@prune_batch_rows}
+          )
+          """)
+
+        n
+      end)
+      |> Enum.reduce_while(0, fn
+        0, acc -> {:halt, acc}
+        n, acc -> {:cont, acc + n}
+      end)
+
+    if deleted > 0 do
+      Logger.info(
+        "PartitionWorker: pruned #{deleted} expired row(s) from " <>
+          "router_shadow_evaluations (before #{cutoff})"
+      )
+    end
+
+    {:ok, %{deleted: deleted}}
   end
 
   # ---------------------------------------------------------------------------

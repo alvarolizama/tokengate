@@ -50,6 +50,28 @@ defmodule Tokengate.SmartRouter.Analytics do
     * Throughput is `completion_tokens / (GREATEST(latency_ms - COALESCE(ttft_ms, 0), 1) / 1000.0)`,
       i.e. generated tokens over the generation window only, never over the
       full latency.
+
+  ## Shadow versions
+
+  Shadow reads answer "what would that candidate version have done?" over
+  `router_shadow_evaluations`, a separate child table (never `request_logs`):
+  the Default served the request, the Shadow re-decided it after the response
+  left. Their shape mirrors the rest of the module:
+
+    * `eval_count` = every recorded evaluation; `ok_count` = those with
+      `error_reason IS NULL` (the only rows that carry a decision);
+      `error_count` = the rest. Agreement/tier percentages divide by
+      `ok_count`, so a version that mostly errored cannot look agreeable.
+    * `priced_count` / `coverage_pct` say how many ok rows carried an
+      estimated price. `default_served_cost_usd` sums the Default's real cost
+      **only over priced rows**, so the delta compares the same requests on
+      both sides instead of mixing priced shadows with unpriced defaults.
+    * `estimated_delta_usd` is `shadow_total - default_served` over that same
+      priced set and is **never clipped**: negative is the estimated saving,
+      positive is the estimated premium.
+    * `decision_cost_usd` (the Shadow classifier's own cost) is folded into
+      `shadow_total_cost_usd` over the SAME priced ok rows, because a cheaper
+      destination paid for with an expensive classifier is not cheaper.
   """
 
   import Ecto.Query, warn: false
@@ -61,6 +83,8 @@ defmodule Tokengate.SmartRouter.Analytics do
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Providers.Model
   alias Tokengate.Repo
+  alias Tokengate.SmartRouter.Config, as: RouterConfig
+  alias Tokengate.SmartRouter.ShadowEvaluation
   alias Tokengate.SmartRouter.UseCase, as: RouterUseCase
 
   # Same budget-heavy env key the stats facades use: a cold window over
@@ -82,7 +106,9 @@ defmodule Tokengate.SmartRouter.Analytics do
     :group_id,
     :router_use_case_key,
     :router_effort_tier,
-    :router_decision_source
+    :router_decision_source,
+    :shadow_config_id,
+    :default_config_id
   ]
 
   # Thresholds behind `false_savings_signals/1` and `decision_insights/1`.
@@ -830,6 +856,312 @@ defmodule Tokengate.SmartRouter.Analytics do
   end
 
   # ---------------------------------------------------------------------
+  # Shadow versions (router_shadow_evaluations)
+  # ---------------------------------------------------------------------
+
+  @doc """
+  Default-vs-Shadow comparison, one row per Shadow version, over the window
+  bounded on `request_inserted_at`.
+
+  ## Row shape
+
+    * `shadow_config_id`, `shadow_config_name` — the version under evaluation
+      (the name is the denormalised one written by the evaluator, `MAX` over
+      the group, so a rename never splits the series). `shadow_enabled` /
+      `archived_at` / `archived` are the version's **current** state, read
+      through a left join to `router_configs`; they are `nil`/`false` only if
+      the version row was deleted.
+    * `eval_count` = all evaluations, `ok_count` = `error_reason IS NULL`,
+      `error_count` = `error_reason IS NOT NULL`. Agreements divide by
+      `ok_count`, never by `eval_count`.
+    * `matches_model_count` / `matches_tier_count` — agreeing ok rows.
+      `agreement_pct` / `tier_agreement_pct` are `nil` when `ok_count == 0`.
+    * `downgrade_count` / `upgrade_count` — ok rows where the Shadow tier is
+      below / above the Default tier on the `low < medium < high` order. A
+      `nil` tier on either side is neither (it is unknown, not equal).
+    * `priced_count` / `coverage_pct` — ok rows that carry an estimated price,
+      and their share of `ok_count`. An unpriced row is counted in volume but
+      excluded from the money block: coverage is stated next to the number it
+      decorates.
+    * `default_served_cost_usd` — the Default's real cost over the **same
+      priced ok rows** (apple to apple), never over the whole window.
+    * `shadow_estimated_cost_usd` — the priced destinations' estimated cost
+      over the same priced ok rows; `shadow_decision_cost_usd` — the Shadow
+      classifier's own cost **restricted to those same priced ok rows**, so the
+      delta never adds a classifier price to a Default cost that was not
+      counted; `shadow_total_cost_usd` = both summed.
+    * `estimated_delta_usd` = `shadow_total - default_served`, **never
+      clipped**: negative = estimated saving, positive = estimated premium.
+      `estimated_delta_pct` is `nil` when nothing was priced.
+    * `prompt_tokens_saved_est` — the Shadow's trimming would have saved this
+      many prompt tokens.
+
+  Sorted by `eval_count` descending.
+  """
+  def shadow_comparison(filters \\ []) do
+    filters = window!(filters, "Tokengate.SmartRouter.Analytics.shadow_comparison/1")
+
+    rows =
+      from(se in ShadowEvaluation,
+        left_join: c in RouterConfig,
+        on: c.id == se.shadow_config_id,
+        where: se.request_inserted_at >= ^filters.from,
+        group_by: [se.shadow_config_id, c.shadow_enabled, c.archived_at],
+        select: %{
+          shadow_config_id: se.shadow_config_id,
+          shadow_config_name: fragment("MAX(?)", se.shadow_config_name),
+          shadow_enabled: c.shadow_enabled,
+          archived_at: c.archived_at,
+          eval_count: count(se.id),
+          ok_count: fragment("COUNT(*) FILTER (WHERE ? IS NULL)", se.error_reason),
+          error_count: fragment("COUNT(*) FILTER (WHERE ? IS NOT NULL)", se.error_reason),
+          matches_model_count:
+            fragment(
+              "COUNT(*) FILTER (WHERE ? AND ? IS NULL)",
+              se.matches_default_model,
+              se.error_reason
+            ),
+          matches_tier_count:
+            fragment(
+              "COUNT(*) FILTER (WHERE ? AND ? IS NULL)",
+              se.matches_default_tier,
+              se.error_reason
+            ),
+          downgrade_count:
+            fragment(
+              """
+              COUNT(*) FILTER (
+                WHERE ? IS NULL
+                  AND CASE ? WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END
+                    < CASE ? WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END
+              )
+              """,
+              se.error_reason,
+              se.effort_tier,
+              se.default_effort_tier
+            ),
+          upgrade_count:
+            fragment(
+              """
+              COUNT(*) FILTER (
+                WHERE ? IS NULL
+                  AND CASE ? WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END
+                    > CASE ? WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END
+              )
+              """,
+              se.error_reason,
+              se.effort_tier,
+              se.default_effort_tier
+            ),
+          priced_count:
+            fragment(
+              "COUNT(*) FILTER (WHERE ? IS NOT NULL AND ? IS NULL)",
+              se.estimated_served_cost_usd,
+              se.error_reason
+            ),
+          default_served_cost:
+            fragment(
+              "COALESCE(SUM(COALESCE(?, 0)) FILTER (WHERE ? IS NOT NULL AND ? IS NULL), 0)",
+              se.default_served_cost_usd,
+              se.estimated_served_cost_usd,
+              se.error_reason
+            ),
+          shadow_estimated_cost:
+            fragment(
+              "COALESCE(SUM(COALESCE(?, 0)) FILTER (WHERE ? IS NULL), 0)",
+              se.estimated_served_cost_usd,
+              se.error_reason
+            ),
+          # Same priced-ok row set as `default_served_cost` / the estimated
+          # cost: an error row or an unpriced row has no Default cost to
+          # compare against, so its classifier price must not enter the delta.
+          shadow_decision_cost:
+            fragment(
+              "COALESCE(SUM(COALESCE(?, 0)) FILTER (WHERE ? IS NOT NULL AND ? IS NULL), 0)",
+              se.decision_cost_usd,
+              se.estimated_served_cost_usd,
+              se.error_reason
+            ),
+          prompt_tokens_saved:
+            fragment("COALESCE(SUM(COALESCE(?, 0)), 0)::bigint", se.prompt_tokens_saved_est)
+        }
+      )
+      |> maybe_eq(:shadow_config_id, filters[:shadow_config_id])
+      |> maybe_eq(:default_config_id, filters[:default_config_id])
+      |> shadow_maybe_to(filters.to)
+      |> Repo.all(timeout: query_timeout())
+
+    rows
+    |> Enum.map(fn row ->
+      default_served = decimal(row.default_served_cost)
+      shadow_estimated = decimal(row.shadow_estimated_cost)
+      shadow_decision = decimal(row.shadow_decision_cost)
+      shadow_total = Decimal.add(shadow_estimated, shadow_decision)
+      delta = Decimal.sub(shadow_total, default_served)
+
+      %{
+        shadow_config_id: row.shadow_config_id,
+        shadow_config_name: row.shadow_config_name,
+        shadow_enabled: row.shadow_enabled == true,
+        archived_at: utc_datetime(row.archived_at),
+        archived: not is_nil(row.archived_at),
+        eval_count: row.eval_count,
+        ok_count: row.ok_count,
+        error_count: row.error_count,
+        matches_model_count: row.matches_model_count,
+        matches_tier_count: row.matches_tier_count,
+        agreement_pct: percent(row.matches_model_count, row.ok_count),
+        tier_agreement_pct: percent(row.matches_tier_count, row.ok_count),
+        downgrade_count: row.downgrade_count,
+        upgrade_count: row.upgrade_count,
+        priced_count: row.priced_count,
+        coverage_pct: percent(row.priced_count, row.ok_count),
+        default_served_cost_usd: money(default_served),
+        shadow_estimated_cost_usd: money(shadow_estimated),
+        shadow_decision_cost_usd: money(shadow_decision),
+        shadow_total_cost_usd: money(shadow_total),
+        estimated_delta_usd: money(delta),
+        estimated_delta_pct: percent_of(delta, default_served),
+        prompt_tokens_saved_est: row.prompt_tokens_saved
+      }
+    end)
+    |> Enum.sort_by(&{-&1.eval_count, &1.shadow_config_name})
+  end
+
+  @doc """
+  The rows behind one Shadow version's disagreement: ok evaluations where the
+  Shadow did **not** match the Default's model or tier, grouped by the exact
+  `(use_case_key, default_use_case_key, default_model_name, model_name,
+  default_effort_tier, effort_tier)` migration they represent.
+
+  Each row carries `eval_count`, `priced_count`, `default_served_cost_usd`
+  (Default cost over the priced rows of the group), `shadow_estimated_cost_usd`,
+  `shadow_decision_cost_usd`, `shadow_total_cost_usd`, `estimated_delta_usd`,
+  `estimated_delta_pct` and `prompt_tokens_saved_est` — same honest money
+  contract as `shadow_comparison/1`, at the migration level.
+
+  Sorted by absolute impact (`abs(estimated_delta_usd)`) descending, then by
+  volume, so the migration that moves the most money is first.
+  """
+  def shadow_migrations(shadow_config_id, filters \\ []) do
+    filters = window!(filters, "Tokengate.SmartRouter.Analytics.shadow_migrations/2")
+
+    rows =
+      from(se in ShadowEvaluation,
+        where: se.shadow_config_id == ^shadow_config_id,
+        where: se.request_inserted_at >= ^filters.from,
+        where: is_nil(se.error_reason),
+        where: not se.matches_default_model or not se.matches_default_tier,
+        group_by: [
+          se.use_case_key,
+          se.default_use_case_key,
+          se.default_model_name,
+          se.model_name,
+          se.default_effort_tier,
+          se.effort_tier
+        ],
+        select: %{
+          use_case_key: se.use_case_key,
+          default_use_case_key: se.default_use_case_key,
+          default_model_name: se.default_model_name,
+          model_name: se.model_name,
+          default_effort_tier: se.default_effort_tier,
+          effort_tier: se.effort_tier,
+          eval_count: count(se.id),
+          priced_count:
+            fragment("COUNT(*) FILTER (WHERE ? IS NOT NULL)", se.estimated_served_cost_usd),
+          default_served_cost:
+            fragment(
+              "COALESCE(SUM(COALESCE(?, 0)) FILTER (WHERE ? IS NOT NULL), 0)",
+              se.default_served_cost_usd,
+              se.estimated_served_cost_usd
+            ),
+          shadow_estimated_cost:
+            fragment(
+              "COALESCE(SUM(COALESCE(?, 0)) FILTER (WHERE ? IS NULL), 0)",
+              se.estimated_served_cost_usd,
+              se.error_reason
+            ),
+          # Only the priced-ok rows carry a Default cost, so only their
+          # classifier price may enter `estimated_delta_usd` (apple to apple).
+          shadow_decision_cost:
+            fragment(
+              "COALESCE(SUM(COALESCE(?, 0)) FILTER (WHERE ? IS NOT NULL AND ? IS NULL), 0)",
+              se.decision_cost_usd,
+              se.estimated_served_cost_usd,
+              se.error_reason
+            ),
+          prompt_tokens_saved:
+            fragment("COALESCE(SUM(COALESCE(?, 0)), 0)::bigint", se.prompt_tokens_saved_est)
+        }
+      )
+      |> shadow_maybe_to(filters.to)
+      |> Repo.all(timeout: query_timeout())
+
+    rows
+    |> Enum.map(fn row ->
+      default_served = decimal(row.default_served_cost)
+      shadow_estimated = decimal(row.shadow_estimated_cost)
+      shadow_decision = decimal(row.shadow_decision_cost)
+      shadow_total = Decimal.add(shadow_estimated, shadow_decision)
+      delta = Decimal.sub(shadow_total, default_served)
+
+      %{
+        use_case_key: row.use_case_key,
+        default_use_case_key: row.default_use_case_key,
+        default_model_name: row.default_model_name,
+        model_name: row.model_name,
+        default_effort_tier: row.default_effort_tier,
+        effort_tier: row.effort_tier,
+        eval_count: row.eval_count,
+        priced_count: row.priced_count,
+        default_served_cost_usd: money(default_served),
+        shadow_estimated_cost_usd: money(shadow_estimated),
+        shadow_decision_cost_usd: money(shadow_decision),
+        shadow_total_cost_usd: money(shadow_total),
+        estimated_delta_usd: money(delta),
+        estimated_delta_pct: percent_of(delta, default_served),
+        prompt_tokens_saved_est: row.prompt_tokens_saved
+      }
+    end)
+    |> Enum.sort_by(&{-absolute(&1.estimated_delta_usd), -&1.eval_count})
+  end
+
+  @doc """
+  The Shadow evaluations of a batch of `request_logs` rows, keyed by
+  `request_log_id` — the per-request Default-vs-Shadow detail.
+
+  Accepts log ids or `{log_id, inserted_at}` pairs. When pairs are present the
+  read is additionally bounded by `[min(inserted_at), max(inserted_at)]` on
+  `request_inserted_at`, so it can lean on
+  `router_shadow_evaluations_request_index` (`(request_log_id,
+  request_inserted_at)`) instead of scanning the whole history of those ids.
+  This read is keyed by exact ids, so it is already bounded and does **not**
+  need `Logs.ensure_window!/2`.
+
+  Returns `%{}` for an empty input — no query. Otherwise
+  `%{request_log_id => [%ShadowEvaluation{}, ...]}`, each list ordered by
+  `shadow_config_name` ascending (the version switcher's own order).
+  """
+  def shadow_for_logs(log_refs) when is_list(log_refs) do
+    {ids, times} = split_log_refs(log_refs)
+
+    if ids == [] do
+      %{}
+    else
+      bounds = time_bounds(times)
+
+      from(se in ShadowEvaluation,
+        where: se.request_log_id in ^ids,
+        order_by: [asc: se.shadow_config_name, asc: se.inserted_at]
+      )
+      |> shadow_maybe_bounds(bounds)
+      |> Repo.all(timeout: query_timeout())
+      |> Enum.group_by(& &1.request_log_id)
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # False-savings signals
   # ---------------------------------------------------------------------
 
@@ -1437,6 +1769,66 @@ defmodule Tokengate.SmartRouter.Analytics do
   defp maybe_to(query, nil), do: query
   defp maybe_to(query, %DateTime{} = to), do: where(query, [rl], rl.inserted_at <= ^to)
 
+  # Shadow rows are bounded on `request_inserted_at` (the log's partition day,
+  # copied onto the row) so a read follows the same window as the log it
+  # describes.
+  defp shadow_maybe_to(query, nil), do: query
+
+  defp shadow_maybe_to(query, %DateTime{} = to),
+    do: where(query, [se], se.request_inserted_at <= ^to)
+
+  defp shadow_maybe_bounds(query, nil), do: query
+
+  defp shadow_maybe_bounds(query, {min, max}) do
+    where(query, [se], se.request_inserted_at >= ^min and se.request_inserted_at <= ^max)
+  end
+
+  # `{log_id, inserted_at}` pairs carry the partition key the composite index
+  # `(request_log_id, request_inserted_at)` wants; bare ids still work, they
+  # just cannot bound the time range.
+  defp split_log_refs(refs) do
+    {ids, times} =
+      Enum.reduce(refs, {[], []}, fn
+        {id, inserted_at}, {ids, times} when is_binary(id) ->
+          {[id | ids], [log_ref_datetime(inserted_at) | times]}
+
+        id, {ids, times} when is_binary(id) ->
+          {[id | ids], times}
+
+        other, _acc ->
+          raise ArgumentError,
+                "shadow_for_logs/1 expects log ids or {log_id, inserted_at} pairs, got: " <>
+                  inspect(other)
+      end)
+
+    {ids |> Enum.reverse() |> Enum.uniq(), times}
+  end
+
+  defp log_ref_datetime(%DateTime{} = value), do: DateTime.truncate(value, :second)
+
+  defp log_ref_datetime(%NaiveDateTime{} = value),
+    do: value |> DateTime.from_naive!("Etc/UTC") |> DateTime.truncate(:second)
+
+  defp log_ref_datetime(other) do
+    raise ArgumentError,
+          "shadow_for_logs/1 expects DateTime/NaiveDateTime timestamps, got: #{inspect(other)}"
+  end
+
+  defp time_bounds([]), do: nil
+
+  defp time_bounds(times) do
+    {min, max} = Enum.min_max(times)
+    {min, max}
+  end
+
+  defp absolute(%Decimal{} = value) do
+    case Decimal.compare(value, 0) do
+      :lt -> Decimal.negate(value)
+      _ -> value
+    end
+    |> Decimal.to_float()
+  end
+
   defp subject_filters(query, filters, opts \\ []) do
     query =
       Enum.reduce(
@@ -1488,8 +1880,15 @@ defmodule Tokengate.SmartRouter.Analytics do
     where(query, [rl], rl.group_member_id in subquery(member_ids))
   end
 
+  # Names come from the SERVING Default only. A clone may rename a use case
+  # (an experimental label for the same key), and letting it win the `Map.new`
+  # would relabel the Default's traffic in `use_case_breakdown/1`.
   defp use_case_names do
-    from(uc in RouterUseCase, select: {uc.key, uc.name})
+    from(uc in RouterUseCase,
+      join: c in RouterConfig,
+      on: uc.router_config_id == c.id and c.is_default == true,
+      select: {uc.key, uc.name}
+    )
     |> Repo.all(timeout: query_timeout())
     |> Map.new()
   end

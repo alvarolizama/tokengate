@@ -9,6 +9,8 @@ defmodule TokengateWeb.MonitoringLive do
   alias Tokengate.Logs.Inflight
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Providers
+  alias Tokengate.SmartRouter
+  alias Tokengate.SmartRouter.Analytics
   alias TokengateWeb.StatsHelpers, as: Stats
 
   @page_size 50
@@ -19,6 +21,9 @@ defmodule TokengateWeb.MonitoringLive do
   @max_stream_rows 500
   @pubsub Tokengate.PubSub
   @logs_topic "logs:new"
+  # Broadcast of `Tokengate.SmartRouter.ShadowEvaluator` when a Shadow version
+  # finished re-deciding a request the Default already served.
+  @shadow_topic "smart_router:shadow"
   @summary_refresh_interval_ms 2_000
   # El resumen vive en el DashboardCache global: el TTL tiene que sobrevivir
   # al tick (2s) para que los visores de una misma ventana compartan UN
@@ -59,12 +64,17 @@ defmodule TokengateWeb.MonitoringLive do
       |> assign(:errors_export_query, "type=errors")
       |> assign(:is_admin, is_admin?)
       |> assign(:error_detail, nil)
+      |> assign(:error_detail_shadows, [])
+      |> assign(:detail_log, nil)
+      |> assign(:detail_shadows, [])
+      |> assign(:shadow_by_log_id, %{})
       |> stream(:logs, [], reset: true)
       |> require_admin_hook()
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @logs_topic)
       Phoenix.PubSub.subscribe(@pubsub, Inflight.topic())
+      Phoenix.PubSub.subscribe(@pubsub, @shadow_topic)
 
       send(self(), :refresh_inflight)
 
@@ -128,6 +138,10 @@ defmodule TokengateWeb.MonitoringLive do
       else
         socket =
           socket
+          # The Shadow rows may already exist (a version that decided fast, a
+          # re-delivered event): one keyed read for this single row, and the
+          # row lands in the stream with its badge already decided.
+          |> attach_shadow(log)
           |> prepend_log(log)
           |> assign(:last_seen_at, max_datetime(log.inserted_at, socket.assigns[:last_seen_at]))
 
@@ -136,6 +150,27 @@ defmodule TokengateWeb.MonitoringLive do
     else
       {:noreply, socket}
     end
+  end
+
+  # A Shadow version just finished re-deciding a request. The row is already in
+  # the stream, and a stream is not enumerable, so the only way to re-render it
+  # is to insert it again under the SAME id: LiveView updates that row in place
+  # without moving it (no full re-query, no order change).
+  def handle_info({:shadow_evaluated, log_id, evals}, socket) do
+    known? = Map.has_key?(socket.assigns[:shadow_by_log_id] || %{}, log_id)
+    merged = merge_evals(Map.get(socket.assigns[:shadow_by_log_id] || %{}, log_id, []), evals)
+
+    map =
+      put_shadow(socket.assigns[:shadow_by_log_id] || %{}, log_id, merged)
+
+    socket =
+      socket
+      |> assign(:shadow_by_log_id, map)
+      |> refresh_open_details(log_id, merged)
+
+    # Only rows this feed is showing get re-rendered: a request outside the
+    # filter or long pruned from the stream costs nothing.
+    {:noreply, if(known?, do: refresh_stream_row(socket, log_id, merged), else: socket)}
   end
 
   def handle_info(:refresh_summary, socket) do
@@ -476,6 +511,116 @@ defmodule TokengateWeb.MonitoringLive do
     |> assign(:stream_rows, min(rows + 1, @max_stream_rows))
   end
 
+  ## Default vs Shadow (per request) ---------------------------------------
+
+  # The badge cache behind the `shadow ≠` column: `%{request_log_id => [%ShadowEvaluation{}]}`.
+  # It is a VIEW cache, capped so a session left open for days cannot grow it
+  # without bound; the modal always re-reads by id, so dropping an entry costs
+  # one keyed query, never correctness.
+  @shadow_cache_rows 1_000
+
+  defp shadow_map_for(logs, mode, socket) do
+    refs =
+      logs
+      |> Enum.filter(&(Map.get(&1, :routed_via_router) == true))
+      |> Enum.map(&{&1.id, &1.inserted_at})
+
+    # No routed row in this page → `shadow_for_logs/1` answers `%{}` without
+    # touching the database at all.
+    fetched = Analytics.shadow_for_logs(refs)
+
+    # Every routed row of the page gets an entry (empty when no version has
+    # evaluated it yet): that is how a later `:shadow_evaluated` knows the row
+    # is on screen and worth re-inserting.
+    page = Map.new(refs, fn {id, _inserted_at} -> {id, Map.get(fetched, id, [])} end)
+
+    case mode do
+      :reset -> page
+      :more -> Map.merge(socket.assigns[:shadow_by_log_id] || %{}, page)
+    end
+  end
+
+  # A single arriving row gets the same treatment: one keyed read, and only
+  # when the router actually served it. The read is skipped when the row is
+  # already on screen (a re-delivered event) and when no version is evaluating
+  # traffic at all (`shadow_configs/0` is cached, so the keyed read would always
+  # come back empty).
+  defp attach_shadow(socket, %{routed_via_router: true} = log) do
+    map = socket.assigns[:shadow_by_log_id] || %{}
+
+    cond do
+      Map.has_key?(map, log.id) ->
+        socket
+
+      SmartRouter.shadow_configs() == [] ->
+        assign(socket, :shadow_by_log_id, put_shadow(map, log.id, []))
+
+      true ->
+        shadows = Analytics.shadow_for_logs([{log.id, log.inserted_at}])
+        assign(socket, :shadow_by_log_id, put_shadow(map, log.id, Map.get(shadows, log.id, [])))
+    end
+  end
+
+  defp attach_shadow(socket, _log), do: socket
+
+  defp put_shadow(map, log_id, evals) do
+    map = Map.put(map, log_id, evals)
+
+    if map_size(map) > @shadow_cache_rows do
+      Map.delete(map, map |> Map.keys() |> hd())
+    else
+      map
+    end
+  end
+
+  # All versions of one request arrive together, so a version is replaced by
+  # its newer row, never appended twice.
+  defp merge_evals(existing, incoming) do
+    (existing ++ incoming)
+    |> Enum.reduce(%{}, fn eval, acc -> Map.put(acc, eval.shadow_config_id, eval) end)
+    |> Map.values()
+    |> Enum.sort_by(& &1.shadow_config_name)
+  end
+
+  # The open modals read from the same rows: an event that lands while a detail
+  # is open updates it in place instead of leaving stale numbers on screen.
+  defp refresh_open_details(socket, log_id, evals) do
+    socket
+    |> refresh_error_detail(log_id, evals)
+    |> refresh_row_detail(log_id, evals)
+  end
+
+  defp refresh_error_detail(socket, log_id, evals) do
+    case socket.assigns[:error_detail] do
+      %{id: ^log_id} -> assign(socket, :error_detail_shadows, evals)
+      _ -> socket
+    end
+  end
+
+  defp refresh_row_detail(socket, log_id, evals) do
+    case socket.assigns[:detail_log] do
+      %{id: ^log_id} -> assign(socket, :detail_shadows, evals)
+      _ -> socket
+    end
+  end
+
+  # A stream is not enumerable and the row must not move, so the refresh is a
+  # re-insert under the same id: `stream_insert/3` replaces that row in place
+  # (LiveView keeps the DOM order of the existing id). The read is by PK
+  # (`id` + `inserted_at`, the partition key) — not a page scan.
+  defp refresh_stream_row(socket, log_id, evals) do
+    case List.first(evals) do
+      %{request_inserted_at: %DateTime{} = inserted_at} ->
+        case Logs.get_log(log_id, inserted_at) do
+          nil -> socket
+          log -> stream_insert(socket, :logs, log)
+        end
+
+      _ ->
+        socket
+    end
+  end
+
   # El resumen (ventana de 5 min con el scope/filtros del visor) se comparte
   # entre visores con la misma forma de filtros: N monitores = 1 cálculo por
   # ventana de TTL, no N. La clave lleva los filtros completos, así que dos
@@ -529,6 +674,7 @@ defmodule TokengateWeb.MonitoringLive do
       |> assign(:summary, summary)
       |> assign(:has_more, has_more)
       |> assign(:stream_rows, stream_rows)
+      |> assign(:shadow_by_log_id, shadow_map_for(logs, mode, socket))
 
     socket =
       case mode do
@@ -684,14 +830,55 @@ defmodule TokengateWeb.MonitoringLive do
   # not depend on the row still being in the stream, and the lookup no longer
   # probes ~90 partitions (F49).
   def handle_event("show_error", %{"log-id" => log_id} = params, socket) do
-    {:noreply, assign(socket, :error_detail, Logs.get_log(log_id, params["inserted-at"]))}
+    detail = Logs.get_log(log_id, params["inserted-at"])
+
+    # One modal at a time: leaving a stale `detail_log` assigned would keep
+    # `#router-detail-modal` (and its ids) in the DOM behind this one.
+    {:noreply,
+     socket
+     |> assign(:detail_log, nil)
+     |> assign(:detail_shadows, [])
+     |> assign(:error_detail, detail)
+     |> assign(:error_detail_shadows, detail_shadows(detail))}
   end
 
   def handle_event("show_error", _params, socket), do: {:noreply, socket}
 
   def handle_event("close_error", _params, socket) do
-    {:noreply, assign(socket, :error_detail, nil)}
+    {:noreply, socket |> assign(:error_detail, nil) |> assign(:error_detail_shadows, [])}
   end
+
+  # Row detail for a request the router served (`routed_via_router`), error or
+  # not: the Default's decision next to what each Shadow version would have
+  # done. Read by PK like `show_error`, so it never depends on the row still
+  # being in the stream.
+  def handle_event("show_detail", %{"log-id" => log_id} = params, socket) do
+    case Logs.get_log(log_id, params["inserted-at"]) do
+      nil ->
+        {:noreply, socket}
+
+      log ->
+        {:noreply,
+         socket
+         |> assign(:error_detail, nil)
+         |> assign(:error_detail_shadows, [])
+         |> assign(:detail_log, log)
+         |> assign(:detail_shadows, detail_shadows(log))}
+    end
+  end
+
+  def handle_event("show_detail", _params, socket), do: {:noreply, socket}
+
+  def handle_event("close_detail", _params, socket) do
+    {:noreply, socket |> assign(:detail_log, nil) |> assign(:detail_shadows, [])}
+  end
+
+  # One keyed read for one log; a direct (non-routed) row has nothing to ask.
+  defp detail_shadows(%{routed_via_router: true} = log) do
+    Analytics.shadow_for_logs([{log.id, log.inserted_at}]) |> Map.get(log.id, [])
+  end
+
+  defp detail_shadows(_log), do: []
 
   defp apply_filters(socket, filter_params) do
     socket
@@ -903,8 +1090,210 @@ defmodule TokengateWeb.MonitoringLive do
     """
   end
 
-  ## Render ----------------------------------------------------------------
+  ## Default vs Shadow components -------------------------------------------
 
+  attr :evals, :list, default: []
+  attr :log_id, :any, required: true
+  attr :inserted_at, :any, required: true
+
+  # Compact badge in the Model column: `shadow ≠` when any successful Shadow
+  # evaluation disagreed with the Default, `shadow =` when all agreed. Clicking
+  # it opens the same row detail as the `Detail` button.
+  defp shadow_badge(assigns) do
+    ~H"""
+    <button
+      :if={@evals != []}
+      type="button"
+      id={"log-shadow-#{@log_id}"}
+      phx-click="show_detail"
+      phx-value-log-id={@log_id}
+      phx-value-inserted-at={DateTime.to_iso8601(@inserted_at)}
+      class={["badge badge-xs cursor-pointer", shadow_badge_class(@evals)]}
+      title={shadow_badge_title(@evals)}
+    >
+      {shadow_badge_label(@evals)}
+    </button>
+    """
+  end
+
+  defp shadow_badge_class(evals) do
+    case shadow_state(evals) do
+      :differs -> "badge-warning"
+      :matches -> "badge-success badge-outline"
+      :error -> "badge-ghost"
+    end
+  end
+
+  defp shadow_badge_label(evals) do
+    case shadow_state(evals) do
+      :differs -> gettext("shadow ≠")
+      :matches -> gettext("shadow =")
+      :error -> gettext("shadow !")
+    end
+  end
+
+  # Every version that saw this request, with its own verdict: one disagreeing
+  # version is enough to make the row interesting.
+  defp shadow_badge_title(evals) do
+    Enum.map_join(evals, " · ", fn eval ->
+      verdict =
+        cond do
+          eval.error_reason -> gettext("error")
+          shadow_differs?(eval) -> gettext("differs")
+          true -> gettext("matches")
+        end
+
+      "#{eval.shadow_config_name}: #{verdict}"
+    end)
+  end
+
+  defp shadow_state(evals) do
+    ok = Enum.reject(evals, &(&1.error_reason not in [nil, ""]))
+
+    cond do
+      Enum.any?(ok, &shadow_differs?/1) -> :differs
+      ok != [] -> :matches
+      true -> :error
+    end
+  end
+
+  defp shadow_differs?(eval) do
+    eval.matches_default_model != true or eval.matches_default_tier != true
+  end
+
+  attr :log, :map, required: true
+  attr :shadows, :list, default: []
+  # Both modals render this block, so every id it emits is namespaced: two
+  # copies of `#router-default-use-case` in the DOM would make the operator's
+  # screenshot and the tests address the wrong modal.
+  attr :id_prefix, :string, default: "router"
+
+  # The Default's decision next to every Shadow version's counterfactual, for
+  # ONE request. Shared by `#router-detail-modal` and the router block inside
+  # `#error-detail-modal`, so both screens say exactly the same thing.
+  defp router_vs_shadow(assigns) do
+    ~H"""
+    <div class="space-y-4" id={"#{@id_prefix}-vs-shadow"}>
+      <div id={"#{@id_prefix}-default-block"}>
+        <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-1.5">
+          {gettext("Default served")}
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+          <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+            <span class="text-base-content/50">{gettext("Use case")}</span>
+            <span class="font-medium font-mono truncate" id={"#{@id_prefix}-default-use-case"}>
+              {@log.router_use_case_key || "—"}
+            </span>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+            <span class="text-base-content/50">{gettext("Effort tier")}</span>
+            <span class="font-medium" id={"#{@id_prefix}-default-tier"}>{@log.router_effort_tier ||
+              "—"}</span>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+            <span class="text-base-content/50">{gettext("Decision source")}</span>
+            <span class="font-medium font-mono" id={"#{@id_prefix}-default-source"}>
+              {@log.router_decision_source || "—"}
+            </span>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+            <span class="text-base-content/50">{gettext("Decision time")}</span>
+            <span class="font-medium">{Stats.format_ms(@log.router_decision_ms)}</span>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+            <span class="text-base-content/50">{gettext("Model resolved")}</span>
+            <span class="font-medium truncate" id={"#{@id_prefix}-default-model"}>
+              {@log.model_resolved || @log.model_responded || "—"}
+            </span>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+            <span class="text-base-content/50">{gettext("Provider")}</span>
+            <span class="font-medium truncate">{provider_name(@log)}</span>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+            <span class="text-base-content/50">{gettext("Served cost")}</span>
+            <span class="font-medium tabular-nums" id={"#{@id_prefix}-default-cost"}>
+              {format_cost(@log.provider_cost_usd)}
+            </span>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+            <span class="text-base-content/50">{gettext("Baseline cost")}</span>
+            <span class="font-medium tabular-nums">{format_cost(@log.router_baseline_cost_usd)}</span>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+            <span class="text-base-content/50">{gettext("Tokens trimmed")}</span>
+            <span class="font-medium tabular-nums">
+              {format_number(@log.prompt_tokens_saved_est || 0)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-1.5">
+          {gettext("Shadow evaluations")}
+        </p>
+
+        <div :if={@shadows != []} class="overflow-x-auto">
+          <table class="table table-xs" id={"#{@id_prefix}-detail-shadow-table"}>
+            <thead>
+              <tr>
+                <th>{gettext("Version")}</th>
+                <th>{gettext("Decision")}</th>
+                <th>{gettext("Tier")}</th>
+                <th>{gettext("Model")}</th>
+                <th class="text-right">{gettext("Est. vs default cost")}</th>
+                <th>{gettext("State")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={eval <- @shadows} id={"#{@id_prefix}-detail-shadow-#{eval.shadow_config_id}"}>
+                <td class="font-medium text-xs">{eval.shadow_config_name}</td>
+                <td class="text-xs font-mono">
+                  {eval.decision_source || "—"} · {Stats.format_ms(eval.decision_ms)}
+                </td>
+                <td class="text-xs">{eval.effort_tier || "—"}</td>
+                <td class="text-xs">{eval.model_name || "—"}</td>
+                <td class="text-right tabular-nums text-xs whitespace-nowrap">
+                  {format_cost(eval.estimated_served_cost_usd)}
+                  <span class="text-base-content/40">/</span>
+                  {format_cost(eval.default_served_cost_usd)}
+                </td>
+                <td>
+                  <span :if={eval.error_reason} class="badge badge-xs badge-ghost">
+                    {gettext("Error")}: {eval.error_reason}
+                  </span>
+                  <span
+                    :if={!eval.error_reason and shadow_differs?(eval)}
+                    class="badge badge-xs badge-warning"
+                  >
+                    {gettext("Differs")}
+                  </span>
+                  <span
+                    :if={!eval.error_reason and !shadow_differs?(eval)}
+                    class="badge badge-xs badge-success"
+                  >
+                    {gettext("Matches")}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p
+          :if={@shadows == []}
+          class="text-sm text-base-content/50 py-2"
+          id={"#{@id_prefix}-detail-no-shadow"}
+        >
+          {gettext("No Shadow version evaluated this request.")}
+        </p>
+      </div>
+    </div>
+    """
+  end
+
+  ## Render ----------------------------------------------------------------
   @impl true
   def render(assigns) do
     ~H"""
@@ -1211,11 +1600,43 @@ defmodule TokengateWeb.MonitoringLive do
               </div>
             </:col>
             <:col :let={log} label={gettext("Model")}>
-              <span class="text-sm">
-                {if Map.get(log, :__pending__),
-                  do: log.model_requested,
-                  else: model_display(log.model_requested, log.model_responded)}
-              </span>
+              <%= if Map.get(log, :routed_via_router) == true and Map.get(log, :__pending__) != true do %>
+                <div class="flex flex-col items-start gap-1">
+                  <span class="text-sm">
+                    {model_display(log.model_requested, log.model_responded)}
+                  </span>
+                  <span
+                    class="badge badge-xs badge-outline badge-info gap-1 font-mono"
+                    id={"log-router-#{log.id}"}
+                    title={gettext("Decision taken by the SmartRouter")}
+                  >
+                    <span class="opacity-60">router</span>
+                    <span class="opacity-60">→</span>
+                    {log.model_resolved || log.model_responded || "—"}
+                  </span>
+                  <.shadow_badge
+                    evals={Map.get(@shadow_by_log_id, log.id, [])}
+                    log_id={log.id}
+                    inserted_at={log.inserted_at}
+                  />
+                  <button
+                    type="button"
+                    phx-click="show_detail"
+                    phx-value-log-id={log.id}
+                    phx-value-inserted-at={DateTime.to_iso8601(log.inserted_at)}
+                    id={"log-detail-#{log.id}"}
+                    class="link link-hover text-xs text-base-content/60"
+                  >
+                    {gettext("Detail")}
+                  </button>
+                </div>
+              <% else %>
+                <span class="text-sm">
+                  {if Map.get(log, :__pending__),
+                    do: log.model_requested,
+                    else: model_display(log.model_requested, log.model_responded)}
+                </span>
+              <% end %>
             </:col>
             <:col :let={log} label={gettext("Type")}>
               <span :if={log.subject_type == "service"} class="badge badge-sm badge-info">
@@ -1455,6 +1876,18 @@ defmodule TokengateWeb.MonitoringLive do
             >{@error_detail.error_message || gettext("No error message recorded")}</pre>
           </div>
 
+          <div
+            :if={@error_detail.routed_via_router == true}
+            class="rounded-box border border-base-300 bg-base-200/40 p-3"
+            id="error-detail-router"
+          >
+            <.router_vs_shadow
+              log={@error_detail}
+              shadows={@error_detail_shadows}
+              id_prefix="error-router"
+            />
+          </div>
+
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
             <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
               <span class="text-base-content/50">{gettext("User")}</span>
@@ -1493,6 +1926,32 @@ defmodule TokengateWeb.MonitoringLive do
         </div>
         <:footer>
           <button type="button" phx-click="close_error" class="btn btn-ghost btn-sm">
+            {gettext("Close")}
+          </button>
+        </:footer>
+      </.modal>
+
+      <%!-- Row detail for a request the router served: the Default's decision
+           next to what each Shadow version would have decided. --%>
+      <.modal
+        :if={@detail_log}
+        id="router-detail-modal"
+        title={gettext("Default vs Shadow")}
+        on_close="close_detail"
+        max_w="max-w-3xl"
+      >
+        <div class="space-y-4">
+          <p class="text-sm text-base-content/50 truncate">
+            {format_datetime(@detail_log.inserted_at, @timezone)} · {model_display(
+              @detail_log.model_requested,
+              @detail_log.model_responded
+            )} · {member_display(@detail_log)}
+          </p>
+
+          <.router_vs_shadow log={@detail_log} shadows={@detail_shadows} />
+        </div>
+        <:footer>
+          <button type="button" phx-click="close_detail" class="btn btn-ghost btn-sm">
             {gettext("Close")}
           </button>
         </:footer>

@@ -6,6 +6,9 @@ defmodule TokengateWeb.StatsRouterTest do
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Providers
+  alias Tokengate.Repo
+  alias Tokengate.SmartRouter.Config, as: RouterConfig
+  alias Tokengate.SmartRouter.ShadowEvaluation
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -136,6 +139,60 @@ defmodule TokengateWeb.StatsRouterTest do
     log
   end
 
+  ## Shadow fixtures ----------------------------------------------------------
+
+  # The window of the Router tab is the canonical `today` window, so every
+  # evaluation has to sit inside today's UTC day AND before "now": a fixed hour
+  # would be in the future during the first hour of the day.
+  defp shadow_at do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    start_of_day = DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
+    candidate = DateTime.add(now, -60, :second)
+
+    if DateTime.compare(candidate, start_of_day) == :lt do
+      DateTime.add(start_of_day, 1, :second)
+    else
+      candidate
+    end
+  end
+
+  defp shadow_config(attrs) do
+    attrs = Map.merge(%{name: "Shadow #{unique()}"}, attrs)
+
+    {:ok, config} =
+      %RouterConfig{}
+      |> RouterConfig.changeset(attrs)
+      |> Repo.insert()
+
+    config
+  end
+
+  defp shadow_eval(config, attrs) do
+    base = %{
+      request_log_id: Ecto.UUID.generate(),
+      request_inserted_at: shadow_at(),
+      shadow_config_id: config.id,
+      shadow_config_name: config.name,
+      default_use_case_key: "coding_implement",
+      default_effort_tier: "medium",
+      default_model_name: "model-default",
+      use_case_key: "coding_implement",
+      effort_tier: "medium",
+      model_name: "model-default",
+      decision_source: "rule",
+      decision_ms: 5,
+      matches_default_model: true,
+      matches_default_tier: true
+    }
+
+    {:ok, eval} =
+      %ShadowEvaluation{}
+      |> ShadowEvaluation.changeset(Map.merge(base, attrs))
+      |> Repo.insert()
+
+    eval
+  end
+
   ## Navigation --------------------------------------------------------------
 
   test "the Router tab lives inside #stats-nav and loads", %{conn: conn} do
@@ -250,5 +307,128 @@ defmodule TokengateWeb.StatsRouterTest do
     # One served model → exactly one positional row, no duplicate DOM ids.
     assert has_element?(view, "#router-model-0")
     refute has_element?(view, "#router-model-1")
+  end
+
+  ## Default vs Shadow ---------------------------------------------------------
+
+  test "the Shadow comparison renders agreement, money and the migration breakdown",
+       %{conn: conn} do
+    shadow = shadow_config(%{name: "Shadow cheap", shadow_enabled: true})
+
+    # Agrees on model and tier, and is cheaper.
+    shadow_eval(shadow, %{
+      default_served_cost_usd: Decimal.new("1.000000"),
+      estimated_served_cost_usd: Decimal.new("0.400000")
+    })
+
+    # Full disagreement: medium/high → low, default model → a cheaper one.
+    shadow_eval(shadow, %{
+      matches_default_model: false,
+      matches_default_tier: false,
+      default_effort_tier: "medium",
+      effort_tier: "low",
+      default_model_name: "model-default",
+      model_name: "model-cheap",
+      default_served_cost_usd: Decimal.new("1.200000"),
+      estimated_served_cost_usd: Decimal.new("0.300000")
+    })
+
+    conn = admin_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/stats/router")
+    wait_router_loaded(view)
+
+    assert has_element?(view, "#router-shadow-comparison")
+    assert has_element?(view, "#router-shadow-table")
+    assert has_element?(view, "#router-shadow-#{shadow.id}", shadow.name)
+
+    # A version that is currently shadowing carries the live badge.
+    assert has_element?(view, "#router-shadow-live-#{shadow.id}")
+
+    # Agreement divides by the ok rows: 1 of 2 models and 1 of 2 tiers.
+    assert has_element?(view, "#router-shadow-#{shadow.id}", "50.0%")
+
+    # The migration breakdown names the exact migration, not a summary.
+    assert has_element?(view, "#router-shadow-migrations")
+    assert has_element?(view, "#router-shadow-migration-table", "model-cheap")
+    assert has_element?(view, "#router-shadow-migration-table", "low")
+
+    # 2.20 served vs 0.70 estimated: a real saving, painted green.
+    assert has_element?(view, "#router-shadow-#{shadow.id} td.text-success")
+
+    # The version manager lives in /catalog/router.
+    assert has_element?(
+             view,
+             "#router-shadow-open-#{shadow.id}[href*='/catalog/router?tab=versions']"
+           )
+  end
+
+  test "an estimate above the Default is painted red and an agreeing version shows no migration",
+       %{conn: conn} do
+    shadow = shadow_config(%{name: "Shadow premium"})
+
+    shadow_eval(shadow, %{
+      default_served_cost_usd: Decimal.new("0.200000"),
+      estimated_served_cost_usd: Decimal.new("0.500000")
+    })
+
+    conn = admin_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/stats/router")
+    wait_router_loaded(view)
+
+    assert has_element?(view, "#router-shadow-#{shadow.id} td.text-error")
+    assert has_element?(view, "#router-shadow-#{shadow.id}", "$0.3")
+
+    # Not a shadow anymore: no live badge.
+    refute has_element?(view, "#router-shadow-live-#{shadow.id}")
+
+    # Every evaluation agreed → there is no migration to show, and the page
+    # says so instead of rendering an empty table.
+    refute has_element?(view, "#router-shadow-migrations")
+    assert has_element?(view, "#router-shadow-agreement")
+  end
+
+  test "the version switcher and ?shadow_config_id= choose whose migrations are shown",
+       %{conn: conn} do
+    busy = shadow_config(%{name: "Shadow busy"})
+    quiet = shadow_config(%{name: "Shadow quiet"})
+
+    for _ <- 1..2 do
+      shadow_eval(busy, %{
+        matches_default_model: false,
+        matches_default_tier: false,
+        model_name: "busy-model"
+      })
+    end
+
+    shadow_eval(quiet, %{
+      matches_default_model: false,
+      matches_default_tier: false,
+      model_name: "quiet-model"
+    })
+
+    conn = admin_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/stats/router?period=30d")
+    wait_router_loaded(view)
+
+    # The busiest version is the default selection.
+    assert has_element?(view, "#router-shadow-migration-table", "busy-model")
+    refute has_element?(view, "#router-shadow-migration-table", "quiet-model")
+    assert has_element?(view, "#router-shadow-select-#{busy.id}.btn-primary")
+
+    # Switching versions patches the URL: the period survives the switch.
+    view |> element("#router-shadow-select-#{quiet.id}") |> render_click()
+    wait_router_loaded(view)
+
+    assert has_element?(view, "#router-shadow-migration-table", "quiet-model")
+    refute has_element?(view, "#router-shadow-migration-table", "busy-model")
+    assert has_element?(view, "#router-shadow-select-#{quiet.id}.btn-primary")
+    assert has_element?(view, "#period-30d.btn-primary")
+
+    # A shared link opens the same version.
+    {:ok, linked, _html} =
+      live(recycle(conn), ~p"/stats/router?period=30d&shadow_config_id=#{quiet.id}")
+
+    wait_router_loaded(linked)
+    assert has_element?(linked, "#router-shadow-migration-table", "quiet-model")
   end
 end

@@ -126,6 +126,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
       |> assign(:group_id, nil)
       |> assign(:agent_key, nil)
+      |> assign(:shadow_config_id, nil)
       |> assign(:sort_field, :cost_usd)
       |> assign(:sort_direction, :desc)
       |> assign(:chart_metric, "requests")
@@ -194,6 +195,16 @@ defmodule TokengateWeb.StatsLive do
         _ -> nil
       end
 
+    # `?shadow_config_id=` picks WHICH shadow version the /stats/router
+    # migration breakdown inspects. It lives in the URL for the same reason the
+    # period does: a shared link opens the same comparison, and the selector
+    # patches it without dropping `?period=`.
+    shadow_config_id =
+      case socket.assigns.live_action do
+        :router -> cast_uuid(params["shadow_config_id"])
+        _ -> nil
+      end
+
     socket =
       socket
       |> assign(:period, period)
@@ -202,6 +213,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:group_id, group_id)
       |> assign(:provider_id, provider_id)
       |> assign(:agent_key, agent_key)
+      |> assign(:shadow_config_id, shadow_config_id)
 
     # Cada sección tiene su propio listado: el filtro de la anterior no
     # aplica y escondería filas sin que se vea por qué. Pero cambiar de
@@ -337,6 +349,27 @@ defmodule TokengateWeb.StatsLive do
     {:noreply, show_more(socket, group_id)}
   end
 
+  # /stats/router: qué versión Shadow inspecciona la tabla de migraciones.
+  # Patch (no navigate) para conservar `?period=`: el cambio vuelve por
+  # `handle_params` y reusa el mismo cargador asíncrono de la pestaña.
+  def handle_event("select_shadow_version", %{"shadow_config_id" => shadow_id}, socket) do
+    case socket.assigns.live_action do
+      :router ->
+        query =
+          case cast_uuid(shadow_id) do
+            nil -> %{"period" => socket.assigns.period}
+            id -> %{"period" => socket.assigns.period, "shadow_config_id" => id}
+          end
+
+        {:noreply, push_patch(socket, to: "/stats/router?" <> URI.encode_query(query))}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("select_shadow_version", _params, socket), do: {:noreply, socket}
+
   defp show_more(socket, key) do
     shown = Map.get(socket.assigns.shown_counts, key, socket.assigns.per_page)
 
@@ -389,6 +422,12 @@ defmodule TokengateWeb.StatsLive do
   # El orden de las tablas NO entra: se aplica al asignar
   # (ver `apply_sorting/2`), así dos visores con distinto sort comparten el
   # mismo cálculo.
+  defp structural_cache_key(%{live_action: :router} = params) do
+    {:stats_structural, :router, params.period, params.timezone, params.model_filter,
+     params.group_filter, params.group_id, params.provider_id, params[:agent_key],
+     params[:shadow_config_id], cache_scope(params)}
+  end
+
   defp structural_cache_key(params) do
     {:stats_structural, params.live_action, params.period, params.timezone, params.model_filter,
      params.group_filter, params.group_id, params.provider_id, params[:agent_key],
@@ -514,6 +553,7 @@ defmodule TokengateWeb.StatsLive do
       group_id: assigns.group_id,
       provider_id: assigns[:provider_id],
       agent_key: assigns[:agent_key],
+      shadow_config_id: assigns[:shadow_config_id],
       scope_member_ids: assigns.scope_member_ids,
       live_action: assigns.live_action,
       timezone: assigns[:timezone] || "Etc/UTC",
@@ -739,13 +779,14 @@ defmodule TokengateWeb.StatsLive do
         fn -> {:router_vs_direct, Analytics.router_vs_direct_by_subject(filters)} end,
         fn -> {:router_attribution, Analytics.who_spent_on_what(filters)} end,
         fn -> {:router_signals, Analytics.false_savings_signals(filters)} end,
-        fn -> {:router_sources, Analytics.decision_source_breakdown(filters)} end
+        fn -> {:router_sources, Analytics.decision_source_breakdown(filters)} end,
+        fn -> {:router_shadow_comparison, Analytics.shadow_comparison(filters)} end
       ]
       |> run_parallel()
       |> Map.new()
 
-    Map.put(
-      bundle,
+    bundle
+    |> Map.put(
       :router_insights,
       Analytics.decision_insights_from(
         bundle.router_summary,
@@ -753,6 +794,29 @@ defmodule TokengateWeb.StatsLive do
         bundle.router_use_cases
       )
     )
+    |> put_shadow_migrations(filters, params[:shadow_config_id])
+  end
+
+  # The migration breakdown is only ever rendered for ONE version (the table is
+  # per migration, not per version), so loading it is a second read — and only
+  # when there is something to select. The version the operator asked for in
+  # `?shadow_config_id=` wins; it falls back to the busiest version when the
+  # param is absent or points at a version with no evaluations in the window.
+  defp put_shadow_migrations(%{router_shadow_comparison: []} = bundle, _filters, _requested_id) do
+    bundle
+    |> Map.put(:router_shadow_migrations, [])
+    |> Map.put(:router_shadow_selected_id, nil)
+  end
+
+  defp put_shadow_migrations(bundle, filters, requested_id) do
+    rows = bundle.router_shadow_comparison
+
+    selected = Enum.find(rows, &(&1.shadow_config_id == requested_id)) || hd(rows)
+
+    Map.merge(bundle, %{
+      router_shadow_migrations: Analytics.shadow_migrations(selected.shadow_config_id, filters),
+      router_shadow_selected_id: selected.shadow_config_id
+    })
   end
 
   defp router_filters(params) do
@@ -1315,7 +1379,10 @@ defmodule TokengateWeb.StatsLive do
       router_attribution: [],
       router_signals: nil,
       router_insights: [],
-      router_sources: []
+      router_sources: [],
+      router_shadow_comparison: [],
+      router_shadow_migrations: [],
+      router_shadow_selected_id: nil
     }
   end
 

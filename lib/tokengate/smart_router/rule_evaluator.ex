@@ -130,6 +130,9 @@ defmodule Tokengate.SmartRouter.RuleEvaluator do
   defp condition?("service_ids", expected, analysis) when is_list(expected),
     do: analysis.service_id != nil and analysis.service_id in expected
 
+  defp condition?("user_ids", expected, analysis) when is_list(expected),
+    do: analysis.user_id != nil and analysis.user_id in expected
+
   defp condition?("content_regex", expected, analysis) when is_binary(expected) do
     case Regex.compile(expected, "u") do
       {:ok, regex} when is_binary(analysis.last_user_message) ->

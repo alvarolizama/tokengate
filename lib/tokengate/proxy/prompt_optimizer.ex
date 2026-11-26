@@ -230,6 +230,60 @@ defmodule Tokengate.Proxy.PromptOptimizer do
   def compact_json_tools(messages), do: messages
 
   @doc """
+  Applies the four SmartRouter use-case passes of `policy` to `payload` and
+  returns `{optimized_payload, saved_tokens}`.
+
+  This is the ONE implementation of the router prompt policy: the serving path
+  (`ProxyController`) and the Shadow evaluator both call it, so a Shadow's
+  reported saving is measured exactly the way the Default's was.
+
+  Passes run in a fixed order — `keep_last_n_images/2`, `window_history/2`,
+  `compact_json_tools/1` (only when `compact_json: true`) and
+  `stale_tool_trim/3` — and each one is a no-op when its knob is unset.
+
+  `saved_tokens` is `max(estimated_before - estimated_after, 0)` using
+  `estimate_prompt_tokens/1` on both sides, so it reports exactly the tokens
+  these passes removed from THIS payload (including the JSON that travels as
+  strings). `nil` (not `0`) when there is no policy: nothing was measured.
+
+  Options:
+
+    * `:pinned` — forwarded to `stale_tool_trim/3`; a pinned session only trims
+      when the saving clears its threshold.
+
+  ## Examples
+
+      iex> Tokengate.Proxy.PromptOptimizer.apply_router_policy(%{"messages" => []}, nil)
+      {%{"messages" => []}, nil}
+
+  """
+  @spec apply_router_policy(map(), map() | nil, keyword()) ::
+          {map(), non_neg_integer() | nil}
+  def apply_router_policy(payload, policy, opts \\ [])
+
+  def apply_router_policy(payload, nil, _opts), do: {payload, nil}
+
+  def apply_router_policy(payload, policy, opts)
+      when is_map(payload) and is_map(policy) do
+    messages = Map.get(payload, "messages") || []
+    before = estimate_prompt_tokens(messages)
+    pinned? = Keyword.get(opts, :pinned, false)
+
+    optimized =
+      messages
+      |> keep_last_n_images(Map.get(policy, :keep_last_n_images))
+      |> window_history(Map.get(policy, :max_history_turns))
+      |> compact_json_tools_if(Map.get(policy, :compact_json) == true)
+      |> stale_tool_trim(Map.get(policy, :stale_tool_trim_threshold_pct), pinned: pinned?)
+
+    after_tokens = estimate_prompt_tokens(optimized)
+
+    {Map.put(payload, "messages", optimized), max(before - after_tokens, 0)}
+  end
+
+  def apply_router_policy(payload, _policy, _opts), do: {payload, nil}
+
+  @doc """
   Estimated prompt tokens of a `messages` list, INCLUDING the JSON documents
   that travel as strings: `tool_calls[*].function.arguments` and the legacy
   `function_call.arguments`.
@@ -362,6 +416,11 @@ defmodule Tokengate.Proxy.PromptOptimizer do
   end
 
   defp text_part, do: %{"type" => "text", "text" => @image_placeholder}
+
+  # `compact_json_tools/1` is opt-in via the use-case knob: the guard keeps the
+  # payload byte-identical when the operator did not enable it.
+  defp compact_json_tools_if(messages, true), do: compact_json_tools(messages)
+  defp compact_json_tools_if(messages, false), do: messages
 
   # Walks the conversation backwards, collecting messages until `remaining`
   # `user` messages have been counted; everything older is dropped.

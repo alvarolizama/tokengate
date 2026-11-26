@@ -25,6 +25,9 @@ defmodule TokengateWeb.StatsLive.Router do
   attr :signals, :any, required: true
   attr :insights, :any, required: true
   attr :sources, :any, required: true
+  attr :shadow_comparison, :list, default: []
+  attr :shadow_migrations, :list, default: []
+  attr :shadow_selected_id, :any, default: nil
   attr :period, :any, required: true
   attr :per_page, :integer, default: 10
   attr :shown_counts, :map, required: true
@@ -225,6 +228,221 @@ defmodule TokengateWeb.StatsLive.Router do
               </div>
             </li>
           </ul>
+        </div>
+      </div>
+
+      <%!-- Default vs Shadow: what a candidate version would have decided over
+           the traffic the Default already served. --%>
+      <div
+        :if={@shadow_comparison != []}
+        class="card bg-base-100 border border-base-300 shadow-sm"
+        id="router-shadow-comparison"
+      >
+        <div class="card-body">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="card-title text-base">
+              <.icon name="hero-beaker" class="w-5 h-5 text-base-content/60" />
+              {gettext("Default vs Shadow")}
+            </h2>
+            <span class="badge badge-sm badge-ghost" id="router-shadow-count">
+              {gettext("%{count} shadow versions", count: length(@shadow_comparison))}
+            </span>
+          </div>
+          <p class="text-xs text-base-content/60">
+            {gettext(
+              "A Shadow version estimates the input and its own decision with the real tokens of each request the Default already served. Nothing was sent upstream twice and nothing extra was billed."
+            )}
+          </p>
+
+          <div class="mt-3 overflow-x-auto">
+            <table class="table table-sm" id="router-shadow-table">
+              <thead>
+                <tr>
+                  <th>{gettext("Version")}</th>
+                  <th class="text-right">{gettext("Evaluations")}</th>
+                  <th class="text-right">{gettext("Model agreement")}</th>
+                  <th class="text-right">{gettext("Tier agreement")}</th>
+                  <th class="text-right">{gettext("Changes")}</th>
+                  <th class="text-right">{gettext("Default vs estimated")}</th>
+                  <th class="text-right">{gettext("Estimated delta")}</th>
+                  <th class="text-right">{gettext("Tokens trimmed")}</th>
+                  <th class="text-right">{gettext("Action")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :for={row <- @shadow_comparison} id={"router-shadow-#{row.shadow_config_id}"}>
+                  <td>
+                    <p class="text-sm font-medium flex flex-wrap items-center gap-1.5">
+                      {row.shadow_config_name}
+                      <span
+                        :if={row.shadow_enabled}
+                        class="badge badge-xs badge-success"
+                        id={"router-shadow-live-#{row.shadow_config_id}"}
+                      >
+                        {gettext("Active shadow")}
+                      </span>
+                      <span :if={row.archived} class="badge badge-xs badge-ghost">
+                        {gettext("Archived")}
+                      </span>
+                    </p>
+                  </td>
+                  <td class="text-right tabular-nums text-sm">
+                    {Stats.format_number(row.ok_count)}
+                    <span
+                      :if={row.error_count > 0}
+                      class="text-xs text-error"
+                      title={gettext("Evaluations that could not decide")}
+                    >
+                      +{Stats.format_number(row.error_count)}
+                    </span>
+                  </td>
+                  <td class="text-right tabular-nums text-sm">{pct(row.agreement_pct)}</td>
+                  <td class="text-right tabular-nums text-sm">{pct(row.tier_agreement_pct)}</td>
+                  <td class="text-right tabular-nums text-xs whitespace-nowrap">
+                    <span class="text-error">↓{Stats.format_number(row.downgrade_count)}</span>
+                    <span class="text-base-content/40"> · </span>
+                    <span class="text-warning">↑{Stats.format_number(row.upgrade_count)}</span>
+                  </td>
+                  <td class="text-right tabular-nums text-sm whitespace-nowrap">
+                    {Stats.money(row.default_served_cost_usd)}
+                    <span class="text-base-content/40">→</span>
+                    {Stats.money(row.shadow_total_cost_usd)}
+                    <p class="text-xs text-base-content/50">
+                      {gettext("%{coverage} priced", coverage: pct(row.coverage_pct))} ({Stats.format_number(
+                        row.priced_count
+                      )})
+                    </p>
+                  </td>
+                  <td class={[
+                    "text-right tabular-nums text-sm whitespace-nowrap",
+                    delta_money_class(row.estimated_delta_usd)
+                  ]}>
+                    {Stats.money(row.estimated_delta_usd)}
+                    <p class="text-xs">{delta_pct(row.estimated_delta_pct)}</p>
+                  </td>
+                  <td class="text-right tabular-nums text-xs">
+                    {Stats.format_number(row.prompt_tokens_saved_est)}
+                  </td>
+                  <td class="text-right">
+                    <.link
+                      navigate={~p"/catalog/router?tab=versions"}
+                      class="btn btn-xs btn-ghost"
+                      id={"router-shadow-open-#{row.shadow_config_id}"}
+                    >
+                      {gettext("Open in Router")}
+                    </.link>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <%!-- The version selector sits OUTSIDE the migration block on purpose:
+               a version that agreed on 100% of the window has no migrations,
+               yet the operator must still be able to switch to another one. --%>
+          <div
+            :if={length(@shadow_comparison) > 1}
+            class="mt-3 join"
+            id="router-shadow-switcher"
+          >
+            <button
+              :for={row <- @shadow_comparison}
+              type="button"
+              id={"router-shadow-select-#{row.shadow_config_id}"}
+              phx-click="select_shadow_version"
+              phx-value-shadow_config_id={row.shadow_config_id}
+              class={[
+                "btn btn-xs join-item",
+                if(row.shadow_config_id == @shadow_selected_id,
+                  do: "btn-primary",
+                  else: "btn-ghost"
+                )
+              ]}
+            >
+              {row.shadow_config_name}
+            </button>
+          </div>
+
+          <%!-- The migration breakdown answers "which decisions would change",
+               for ONE version at a time. --%>
+          <div
+            :if={@shadow_migrations != []}
+            class="mt-4 rounded-box border border-base-300 bg-base-200/40 p-3"
+            id="router-shadow-migrations"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p class="text-sm font-medium">
+                  {gettext("Top migrations · %{version}",
+                    version: shadow_name(@shadow_comparison, @shadow_selected_id)
+                  )}
+                </p>
+                <p class="text-xs text-base-content/50">
+                  {gettext(
+                    "Only the evaluations where the Shadow differed, grouped by the exact use case, model and tier it would have served."
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div class="mt-3 overflow-x-auto">
+              <table class="table table-xs" id="router-shadow-migration-table">
+                <thead>
+                  <tr>
+                    <th>{gettext("Migration")}</th>
+                    <th class="text-right">{gettext("Evaluations")}</th>
+                    <th class="text-right">{gettext("Default vs estimated")}</th>
+                    <th class="text-right">{gettext("Estimated delta")}</th>
+                    <th class="text-right">{gettext("Tokens trimmed")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={row <- @shadow_migrations}>
+                    <td class="text-xs">
+                      <p class="font-mono">
+                        {row.use_case_key}: {row.default_model_name || "—"}
+                        <span class="text-base-content/40">→</span>
+                        {row.model_name || "—"}
+                      </p>
+                      <p class="font-mono text-base-content/50">
+                        {row.default_effort_tier || "—"} → {row.effort_tier || "—"}
+                      </p>
+                    </td>
+                    <td class="text-right tabular-nums text-xs">
+                      {Stats.format_number(row.eval_count)}
+                    </td>
+                    <td class="text-right tabular-nums text-xs whitespace-nowrap">
+                      {Stats.money(row.default_served_cost_usd)}
+                      <span class="text-base-content/40">→</span>
+                      {Stats.money(row.shadow_total_cost_usd)}
+                    </td>
+                    <td class={[
+                      "text-right tabular-nums text-xs whitespace-nowrap",
+                      delta_money_class(row.estimated_delta_usd)
+                    ]}>
+                      {Stats.money(row.estimated_delta_usd)}
+                      <span class="text-base-content/50">
+                        ({delta_pct(row.estimated_delta_pct)})
+                      </span>
+                    </td>
+                    <td class="text-right tabular-nums text-xs">
+                      {Stats.format_number(row.prompt_tokens_saved_est)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <p
+            :if={@shadow_migrations == []}
+            class="text-xs text-base-content/50 mt-3"
+            id="router-shadow-agreement"
+          >
+            {gettext(
+              "The selected Shadow version agreed with the Default on every evaluation in this window: there is no migration to show."
+            )}
+          </p>
         </div>
       </div>
 
@@ -608,6 +826,27 @@ defmodule TokengateWeb.StatsLive.Router do
   end
 
   defp net_class(_), do: ""
+
+  # A Shadow delta is `shadow - default`: positive means the candidate would
+  # have been MORE expensive (red), negative is the estimated saving (green).
+  # Same convention as `delta_class/1`, for Decimals.
+  defp delta_money_class(%Decimal{} = value) do
+    cond do
+      Decimal.positive?(value) -> "text-error"
+      Decimal.negative?(value) -> "text-success"
+      true -> "text-base-content/50"
+    end
+  end
+
+  defp delta_money_class(_), do: "text-base-content/50"
+
+  # Which version's migrations are on screen (the selected one, falling back to
+  # whatever the row says).
+  defp shadow_name(rows, id) do
+    Enum.find_value(rows, "—", fn row ->
+      if row.shadow_config_id == id, do: row.shadow_config_name
+    end)
+  end
 
   defp status_badge(:ok), do: "badge-success"
   defp status_badge(:warning), do: "badge-warning"

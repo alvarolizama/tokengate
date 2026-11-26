@@ -26,6 +26,18 @@ defmodule Tokengate.SmartRouter.UseCase do
       falls back to `router_configs.default_model_id`; that is why the column is
       `ON DELETE NILIFY ALL` — losing the fallback model must not delete the
       specialty.
+
+  ## Version scope
+
+  A use case belongs to exactly one configuration version
+  (`router_config_id`, `ON DELETE DELETE ALL`): a clone carries its own copy of
+  every specialty, so two versions of `coding_implement` never share knobs.
+  The key is only unique **inside** a version
+  (`router_use_cases_config_key_unique_index`).
+
+  For backward compatibility with callers written against the global table,
+  `changeset/2` attaches a use case that has no version yet to the Default
+  (`Config.ensure!/0`). Nothing that predates versioning has to change.
   """
 
   use Ecto.Schema
@@ -33,6 +45,7 @@ defmodule Tokengate.SmartRouter.UseCase do
   import Ecto.Changeset
 
   alias Tokengate.Providers.Model
+  alias Tokengate.SmartRouter.Config
 
   @type t :: %__MODULE__{}
 
@@ -64,6 +77,8 @@ defmodule Tokengate.SmartRouter.UseCase do
     field :priority, :integer, default: 100
     field :enabled, :boolean, default: true
 
+    belongs_to :router_config, Config, foreign_key: :router_config_id
+
     belongs_to :fallback_model, Model, foreign_key: :fallback_model_id
 
     has_many :use_case_models, Tokengate.SmartRouter.UseCaseModel,
@@ -72,7 +87,7 @@ defmodule Tokengate.SmartRouter.UseCase do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(key name description tags requires_tools requires_vision
+  @permitted ~w(router_config_id key name description tags requires_tools requires_vision
     requires_structured_output critical_accuracy allow_downgrade pin_session
     keep_last_n_images max_history_turns compact_json
     stale_tool_trim_threshold_pct priority enabled fallback_model_id)a
@@ -83,6 +98,7 @@ defmodule Tokengate.SmartRouter.UseCase do
   def changeset(use_case, attrs) do
     use_case
     |> cast(attrs, @permitted)
+    |> put_default_router_config()
     |> validate_required(@required)
     |> validate_format(:key, @key_format,
       message: "must be a lowercase slug (letters, digits and underscores)"
@@ -93,7 +109,22 @@ defmodule Tokengate.SmartRouter.UseCase do
       greater_than_or_equal_to: 0,
       less_than_or_equal_to: 100
     )
-    |> unique_constraint(:key, name: :router_use_cases_key_unique_index)
+    |> unique_constraint([:router_config_id, :key],
+      name: :router_use_cases_config_key_unique_index,
+      error_key: :key
+    )
+    |> assoc_constraint(:router_config)
     |> foreign_key_constraint(:fallback_model_id)
+  end
+
+  # Backward compatibility: every caller written before versions existed built
+  # a use case with no `router_config_id`. Attaching it to the Default keeps
+  # those call sites, seeds and tests valid without a second argument.
+  defp put_default_router_config(changeset) do
+    if get_field(changeset, :router_config_id) do
+      changeset
+    else
+      put_change(changeset, :router_config_id, Config.ensure!().id)
+    end
   end
 end

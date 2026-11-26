@@ -23,6 +23,7 @@ defmodule Tokengate.SmartRouter.Rule do
   | `agent_types`              | list of strings   |
   | `group_ids`                | list of uuids     |
   | `service_ids`              | list of uuids     |
+  | `user_ids`                 | list of uuids     |
   | `content_regex`            | regex that compiles |
 
   ## Actions
@@ -34,11 +35,22 @@ defmodule Tokengate.SmartRouter.Rule do
 
   Targets are use-case **keys**, not ids: a rule keeps working when a preset is
   dropped and reseeded.
+
+  ## Version scope
+
+  A rule belongs to exactly one configuration version (`router_config_id`,
+  `ON DELETE DELETE ALL`), and its name is unique only inside that version
+  (`router_rules_config_name_unique_index`): a clone carries an editable copy
+  of every rule without colliding with the Default's. `changeset/2` attaches a
+  rule with no version to the Default, so callers written before versioning
+  keep working.
   """
 
   use Ecto.Schema
 
   import Ecto.Changeset
+
+  alias Tokengate.SmartRouter.Config
 
   @type t :: %__MODULE__{}
 
@@ -50,13 +62,15 @@ defmodule Tokengate.SmartRouter.Rule do
 
   @condition_keys ~w(min_tokens max_tokens has_tools has_vision
     has_structured_output reasoning_effort agent_types group_ids service_ids
-    content_regex)
+    user_ids content_regex)
 
   @boolean_conditions ~w(has_tools has_vision has_structured_output)
   @integer_conditions ~w(min_tokens max_tokens)
-  @string_list_conditions ~w(agent_types group_ids service_ids)
+  @string_list_conditions ~w(agent_types group_ids service_ids user_ids)
 
   schema "router_rules" do
+    belongs_to :router_config, Config, foreign_key: :router_config_id
+
     field :name, :string
     field :description, :string
     field :priority, :integer, default: 100
@@ -68,7 +82,7 @@ defmodule Tokengate.SmartRouter.Rule do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(name description priority enabled match_conditions action
+  @permitted ~w(router_config_id name description priority enabled match_conditions action
     target_use_case_keys)a
 
   @required ~w(name action)a
@@ -83,11 +97,26 @@ defmodule Tokengate.SmartRouter.Rule do
   def changeset(rule, attrs) do
     rule
     |> cast(attrs, @permitted)
+    |> put_default_router_config()
     |> validate_required(@required)
     |> validate_inclusion(:action, @actions)
-    |> unique_constraint(:name, name: :router_rules_name_unique_index)
+    |> unique_constraint([:router_config_id, :name],
+      name: :router_rules_config_name_unique_index,
+      error_key: :name
+    )
+    |> assoc_constraint(:router_config)
     |> validate_match_conditions()
     |> validate_targets()
+  end
+
+  # Same backward-compatibility rule as `UseCase.changeset/2`: a rule built
+  # without a version belongs to the Default.
+  defp put_default_router_config(changeset) do
+    if get_field(changeset, :router_config_id) do
+      changeset
+    else
+      put_change(changeset, :router_config_id, Config.ensure!().id)
+    end
   end
 
   defp validate_match_conditions(changeset) do

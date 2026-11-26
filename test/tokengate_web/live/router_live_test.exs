@@ -9,7 +9,16 @@ defmodule TokengateWeb.RouterLiveTest do
   alias Tokengate.Logs.Inflight
   alias Tokengate.Providers
   alias Tokengate.Repo
-  alias Tokengate.SmartRouter.{Config, Rule, UseCase, UseCaseModel}
+
+  alias Tokengate.SmartRouter.{
+    Config,
+    Rule,
+    ShadowEvaluation,
+    ShadowEvaluator,
+    UseCase,
+    UseCaseModel,
+    Versions
+  }
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -586,5 +595,525 @@ defmodule TokengateWeb.RouterLiveTest do
 
     Phoenix.PubSub.broadcast(Tokengate.PubSub, "logs:new", {:new_log, decision})
     refute render(view) =~ "decision-model"
+  end
+
+  ## Versions & shadow ------------------------------------------------------
+
+  defp default_config! do
+    Config.ensure!()
+    Versions.get_default!()
+  end
+
+  defp insert_rule!(config_id, name, overrides \\ %{}) do
+    attrs =
+      Map.merge(
+        %{
+          "router_config_id" => config_id,
+          "name" => name,
+          "description" => "Created by the router live test",
+          "action" => "restrict_use_cases",
+          "target_use_case_keys" => ["fast"],
+          "priority" => 50
+        },
+        overrides
+      )
+
+    %Rule{} |> Rule.changeset(attrs) |> Repo.insert!()
+  end
+
+  defp clone_via_ui!(view, name) do
+    view |> element("#clone-version-btn") |> render_click()
+    assert has_element?(view, "#clone-version-modal")
+
+    view
+    |> form("#clone-version-form", clone: %{"name" => name, "description" => "Candidate"})
+    |> render_submit()
+
+    Repo.get_by!(Config, name: name)
+  end
+
+  defp routed_log(id, model) do
+    %Tokengate.Logs.RequestLog{
+      id: id,
+      inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+      subject_type: "service",
+      service: %{name: "Shadow live service"},
+      model_requested: model,
+      model_resolved: model,
+      status_code: 200,
+      prompt_tokens: 100,
+      completion_tokens: 50,
+      latency_ms: 1_000,
+      ttft_ms: 200,
+      routed_via_router: true,
+      router_use_case_key: "fast",
+      router_effort_tier: "low",
+      router_decision_source: "classifier"
+    }
+  end
+
+  defp shadow_eval(log_id, attrs) do
+    struct(
+      %ShadowEvaluation{
+        id: Ecto.UUID.generate(),
+        request_log_id: log_id,
+        request_inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        shadow_config_id: Ecto.UUID.generate(),
+        shadow_config_name: "Shadow B",
+        use_case_key: "fast",
+        effort_tier: "low",
+        model_name: "shadow-model",
+        matches_default_model: false,
+        matches_default_tier: true
+      },
+      attrs
+    )
+  end
+
+  test "cloning a version creates an isolated draft in the switcher and the table", %{
+    conn: conn
+  } do
+    use_case = create_use_case!(%{"name" => "Default use case"})
+    default = default_config!()
+    rule = insert_rule!(default.id, "Default rule")
+
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/router")
+    assert has_element?(view, "#router-version-switcher")
+    assert has_element?(view, "#editing-version-name", default.name)
+
+    clone = clone_via_ui!(view, "Candidate A")
+
+    refute clone.is_default
+    refute clone.shadow_enabled
+    assert is_nil(clone.archived_at)
+
+    # It shows up in the switcher and in the Versions & Shadow table.
+    assert has_element?(view, "#router-versions-table")
+    assert has_element?(view, "#router-version-row-#{clone.id}")
+    assert has_element?(view, "#version-state-#{clone.id}", "Borrador")
+    assert has_element?(view, "#router-version-switcher option", "Candidate A")
+    assert Repo.exists?(from a in AuditLog, where: a.action == "router.version_clone")
+
+    # The copy owns its own use cases and rules: nothing is shared with the
+    # Default, so editing one can never move the other.
+    cloned_uc = Repo.get_by!(UseCase, router_config_id: clone.id, key: use_case.key)
+    cloned_rule = Repo.get_by!(Rule, router_config_id: clone.id, name: "Default rule")
+    refute cloned_uc.id == use_case.id
+    refute cloned_rule.id == rule.id
+    assert Repo.get(UseCase, use_case.id).router_config_id == default.id
+
+    # Selecting the clone scopes the engine tab to ITS catalogue.
+    view |> element("#edit-version-#{clone.id}") |> render_click()
+    assert has_element?(view, "#router-uc-row-#{cloned_uc.id}")
+    refute has_element?(view, "#router-uc-row-#{use_case.id}")
+    assert has_element?(view, "#editing-version-name", "Candidate A")
+
+    # The switcher itself drives the selection.
+    view
+    |> form("#router-version-switcher", nav: %{"version" => default.id})
+    |> render_change()
+
+    assert has_element?(view, "#router-uc-row-#{use_case.id}")
+    refute has_element?(view, "#router-uc-row-#{cloned_uc.id}")
+  end
+
+  test "a candidate can shadow a sample and the Default cannot", %{conn: conn} do
+    default = default_config!()
+    candidate = Versions.clone_version!(default.id, %{"name" => "Shadow candidate"})
+
+    {:ok, view, _html} =
+      live(admin_conn(conn), ~p"/catalog/router?tab=versions&version=#{candidate.id}")
+
+    assert has_element?(view, "#shadow-form-#{candidate.id}")
+    refute has_element?(view, "#shadow-form-#{default.id}")
+
+    view
+    |> form(
+      "#shadow-form-#{candidate.id}",
+      %{"shadow" => %{"shadow_enabled" => "true", "shadow_sample_pct" => "35"}}
+    )
+    |> render_submit()
+
+    updated = Repo.get(Config, candidate.id)
+    assert updated.shadow_enabled
+    assert updated.shadow_sample_pct == 35
+    assert has_element?(view, "#version-state-#{candidate.id}", "Shadow 35%")
+    assert Repo.exists?(from a in AuditLog, where: a.action == "router.version_shadow")
+
+    # Out-of-range samples are rejected instead of silently clamped.
+    view
+    |> form(
+      "#shadow-form-#{candidate.id}",
+      %{"shadow" => %{"shadow_enabled" => "true", "shadow_sample_pct" => "150"}}
+    )
+    |> render_submit()
+
+    assert Repo.get(Config, candidate.id).shadow_sample_pct == 35
+
+    # A non-numeric sample is reported, never applied as "keep the current".
+    view
+    |> form(
+      "#shadow-form-#{candidate.id}",
+      %{"shadow" => %{"shadow_enabled" => "true", "shadow_sample_pct" => "soon"}}
+    )
+    |> render_submit()
+
+    assert Repo.get(Config, candidate.id).shadow_sample_pct == 35
+
+    # The Default cannot shadow itself, even when the event is fired directly.
+    render_click(view, "set_shadow", %{
+      "id" => default.id,
+      "shadow_enabled" => "true",
+      "shadow_sample_pct" => "50"
+    })
+
+    refute Repo.get(Config, default.id).shadow_enabled
+  end
+
+  test "a candidate can be archived and restored from the Versions tab", %{conn: conn} do
+    default = default_config!()
+    candidate = Versions.clone_version!(default.id, %{"name" => "Archive me"})
+
+    {:ok, view, _html} =
+      live(admin_conn(conn), ~p"/catalog/router?tab=versions&version=#{candidate.id}")
+
+    view |> element("#archive-version-#{candidate.id}") |> render_click()
+
+    assert Repo.get!(Config, candidate.id).archived_at
+    assert Repo.exists?(from a in AuditLog, where: a.action == "router.version_archive")
+
+    # Archiving the edited version drops the selection back to the Default.
+    assert has_element?(view, "#editing-version-name", default.name)
+
+    view |> element("#toggle-archived-versions") |> render_click()
+    assert has_element?(view, "#router-version-row-#{candidate.id}")
+    assert has_element?(view, "#version-state-#{candidate.id}", "Archivada")
+    assert has_element?(view, "#unarchive-version-#{candidate.id}")
+    refute has_element?(view, "#promote-version-#{candidate.id}")
+
+    view |> element("#unarchive-version-#{candidate.id}") |> render_click()
+    refute Repo.get!(Config, candidate.id).archived_at
+  end
+
+  test "a candidate config form never moves the global kill switch or baseline", %{conn: conn} do
+    default = default_config!()
+    candidate = Versions.clone_version!(default.id, %{"name" => "Global guard"})
+
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/router?version=#{candidate.id}")
+
+    # The two global knobs render read-only instead of as form inputs.
+    assert has_element?(view, "#router-global-kill-switch")
+    assert has_element?(view, "#router-global-baseline")
+    assert has_element?(view, "#router-global-config-note")
+    refute has_element?(view, "#config_enabled")
+    refute has_element?(view, "#config_baseline_model_id")
+
+    # Even a hand-crafted payload cannot move them through a candidate.
+    render_click(view, "save_config", %{
+      "config" => %{
+        "enabled" => "true",
+        "baseline_model_id" => "",
+        "policy" => "latency_first"
+      }
+    })
+
+    refute Repo.get!(Config, default.id).enabled
+    assert Repo.get!(Config, candidate.id).policy == "latency_first"
+  end
+
+  test "promoting a version swaps the Default and keeps the globals intact", %{conn: conn} do
+    baseline = create_priced_model("baseline-#{unique()}")
+
+    default =
+      default_config!()
+      |> Config.changeset(%{"enabled" => true, "baseline_model_id" => baseline.id})
+      |> Repo.update!()
+
+    audit_count =
+      Repo.aggregate(from(a in AuditLog, where: a.action == "router.version_promote"), :count)
+
+    candidate = Versions.clone_version!(default.id, %{"name" => "Promotion candidate"})
+
+    # The candidate disagrees on its own knobs AND on the two global ones.
+    candidate
+    |> Config.changeset(%{
+      "enabled" => false,
+      "baseline_model_id" => nil,
+      "policy" => "quality_first"
+    })
+    |> Repo.update!()
+
+    {:ok, view, _html} =
+      live(admin_conn(conn), ~p"/catalog/router?tab=versions&version=#{candidate.id}")
+
+    view |> element("#promote-version-#{candidate.id}") |> render_click()
+    assert has_element?(view, "#promote-version-modal")
+
+    view |> element("#confirm-promote-version") |> render_click()
+
+    promoted = Repo.get!(Config, candidate.id)
+    assert promoted.is_default
+    refute promoted.shadow_enabled
+    # Global policy travelled with the promotion instead of from the candidate.
+    assert promoted.enabled
+    assert promoted.baseline_model_id == baseline.id
+    # Version content stayed the candidate's own.
+    assert promoted.policy == "quality_first"
+
+    outgoing = Repo.get!(Config, default.id)
+    refute outgoing.is_default
+
+    assert Repo.aggregate(
+             from(a in AuditLog, where: a.action == "router.version_promote"),
+             :count
+           ) == audit_count + 1
+  end
+
+  test "the diff modal reports real differences against the Default", %{conn: conn} do
+    use_case = create_use_case!(%{"name" => "Original name"})
+    default = default_config!()
+    candidate = Versions.clone_version!(default.id, %{"name" => "Diff candidate"})
+
+    cloned_uc = Repo.get_by!(UseCase, router_config_id: candidate.id, key: use_case.key)
+    cloned_uc |> UseCase.changeset(%{"name" => "Renamed in candidate"}) |> Repo.update!()
+
+    candidate
+    |> Config.changeset(%{"policy" => "quality_first", "fast_path_max_tokens" => 1234})
+    |> Repo.update!()
+
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/router?version=#{candidate.id}")
+
+    assert has_element?(view, "#diff-version-btn")
+    view |> element("#diff-version-btn") |> render_click()
+
+    assert has_element?(view, "#diff-version-modal")
+    assert has_element?(view, "#diff-config-policy", "quality_first")
+    assert has_element?(view, "#diff-config-fast_path_max_tokens", "1234")
+    assert has_element?(view, "#diff-use-case-#{use_case.key}", "Renamed in candidate")
+    refute has_element?(view, "#diff-rule-anything")
+  end
+
+  test "rule match pickers search users, services and limit profiles by name", %{conn: conn} do
+    use_case = create_use_case!(%{})
+    {:ok, group} = Accounts.create_group(%{"name" => "Premium profile #{unique()}"})
+    {:ok, service} = Accounts.create_service(%{"name" => "searchable-service-#{unique()}"})
+    %{user: target} = register("user")
+
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/router?tab=rules")
+
+    render_click(element(view, "#new-rule"))
+    assert has_element?(view, "#rule-form")
+
+    # Limit profile -----------------------------------------------------
+    view
+    |> element("#rule-group-search")
+    |> render_change(%{"rule_group_search" => group.name})
+
+    assert has_element?(view, "#rule-group-results")
+    assert has_element?(view, "#rule-group-option-#{group.id}", group.name)
+    view |> element("#rule-group-option-#{group.id}") |> render_click()
+    assert has_element?(view, "#rule-group-chips", group.name)
+
+    # Service -----------------------------------------------------------
+    view
+    |> element("#rule-service-search")
+    |> render_change(%{"rule_service_search" => service.name})
+
+    assert has_element?(view, "#rule-service-option-#{service.id}", service.name)
+    view |> element("#rule-service-option-#{service.id}") |> render_click()
+    assert has_element?(view, "#rule-service-chips", service.name)
+
+    # User --------------------------------------------------------------
+    view
+    |> element("#rule-user-search")
+    |> render_change(%{"rule_user_search" => target.name})
+
+    assert has_element?(view, "#rule-user-option-#{target.id}", target.name)
+    view |> element("#rule-user-option-#{target.id}") |> render_click()
+    assert has_element?(view, "#rule-user-chips", target.name)
+
+    view
+    |> form("#rule-form",
+      rule: %{
+        "name" => "Scoped rule",
+        "action" => "restrict_use_cases",
+        "target_use_case_keys" => use_case.key,
+        "priority" => "7",
+        "enabled" => "true"
+      }
+    )
+    |> render_submit()
+
+    rule = Repo.get_by!(Rule, name: "Scoped rule")
+    assert rule.match_conditions["group_ids"] == [group.id]
+    assert rule.match_conditions["service_ids"] == [service.id]
+    assert rule.match_conditions["user_ids"] == [target.id]
+
+    # The table resolves names instead of dumping raw uuids.
+    assert has_element?(view, "#router-rule-row-#{rule.id}", group.name)
+    assert has_element?(view, "#router-rule-row-#{rule.id}", service.name)
+    assert has_element?(view, "#router-rule-row-#{rule.id}", target.name)
+
+    # Editing repopulates the chips, and a chip can be removed again.
+    render_click(element(view, "#edit-rule-#{rule.id}"))
+    assert has_element?(view, "#rule-user-chips", target.name)
+
+    view |> element("#remove-rule-user-#{target.id}") |> render_click()
+    refute has_element?(view, "#rule-user-chips")
+  end
+
+  test "the dry run compares a candidate version against the Default", %{conn: conn} do
+    model_a = create_priced_model("cand-a-#{unique()}")
+    model_b = create_priced_model("cand-b-#{unique()}")
+
+    enable_router()
+    use_case = create_use_case!(%{})
+    insert_destination!(use_case.id, model_a.id, %{})
+
+    default = default_config!()
+    candidate = Versions.clone_version!(default.id, %{"name" => "Dry candidate"})
+
+    cloned_uc = Repo.get_by!(UseCase, router_config_id: candidate.id, key: use_case.key)
+
+    [cloned_destination] =
+      Repo.all(from d in UseCaseModel, where: d.router_use_case_id == ^cloned_uc.id)
+
+    cloned_destination
+    |> UseCaseModel.changeset(%{"target_model_id" => model_b.id})
+    |> Repo.update!()
+
+    {:ok, view, _html} =
+      live(admin_conn(conn), ~p"/catalog/router?tab=dry_run&version=#{candidate.id}")
+
+    assert has_element?(view, "#dry-run-version", "Dry candidate")
+
+    view
+    |> form("#dry-run-form",
+      dry: %{"prompt" => "Implement a small function", "has_tools" => "false"}
+    )
+    |> render_submit()
+
+    assert has_element?(view, "#dry-run-result")
+    assert has_element?(view, "#dry-run-comparison")
+    assert has_element?(view, "#dry-run-comparison-default-name", default.name)
+    assert has_element?(view, "#dry-run-comparison-version-name", "Dry candidate")
+    # The Default still runs its own destination; the candidate its own.
+    assert has_element?(view, "#dry-run-comparison-model", model_a.name)
+    assert has_element?(view, "#dry-run-comparison-model", model_b.name)
+    assert has_element?(view, "#dry-run-comparison-use-case", use_case.key)
+    assert has_element?(view, "#dry-run-comparison-model", "distinto")
+  end
+
+  test "the live tab shows shadow evaluations and filters discrepancies", %{conn: conn} do
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/router?tab=live")
+
+    disagreeing = routed_log(Ecto.UUID.generate(), "default-model")
+    Phoenix.PubSub.broadcast(Tokengate.PubSub, "logs:new", {:new_log, disagreeing})
+    assert render(view) =~ "Shadow live service"
+
+    eval = shadow_eval(disagreeing.id, %{})
+
+    Phoenix.PubSub.broadcast(
+      Tokengate.PubSub,
+      ShadowEvaluator.topic(),
+      {:shadow_evaluated, disagreeing.id, [eval]}
+    )
+
+    assert has_element?(view, "#router-shadows-#{disagreeing.id}")
+
+    assert has_element?(
+             view,
+             "#router-shadow-#{disagreeing.id}-#{eval.shadow_config_id}",
+             "Shadow B"
+           )
+
+    assert has_element?(
+             view,
+             "#router-shadow-#{disagreeing.id}-#{eval.shadow_config_id}",
+             "shadow-model"
+           )
+
+    assert has_element?(
+             view,
+             "#router-shadow-#{disagreeing.id}-#{eval.shadow_config_id}",
+             "modelo distinto"
+           )
+
+    agreeing = routed_log(Ecto.UUID.generate(), "agree-model")
+    Phoenix.PubSub.broadcast(Tokengate.PubSub, "logs:new", {:new_log, agreeing})
+
+    agreed_eval =
+      shadow_eval(agreeing.id, %{model_name: "agree-model", matches_default_model: true})
+
+    Phoenix.PubSub.broadcast(
+      Tokengate.PubSub,
+      ShadowEvaluator.topic(),
+      {:shadow_evaluated, agreeing.id, [agreed_eval]}
+    )
+
+    assert has_element?(
+             view,
+             "#router-shadow-#{agreeing.id}-#{agreed_eval.shadow_config_id}",
+             "= igual"
+           )
+
+    # The discrepancy filter keeps only the request the candidate would have
+    # routed differently.
+    view |> element("#live-filter-discrepancies") |> render_click()
+
+    assert has_element?(view, "#router-shadows-#{disagreeing.id}")
+    refute has_element?(view, "#router-shadows-#{agreeing.id}")
+
+    view |> element("#live-filter-all") |> render_click()
+    assert has_element?(view, "#router-shadows-#{agreeing.id}")
+
+    # Leaving and re-entering the tab keeps the evaluations and re-hydrates the
+    # map from the recorded rows (a no-op here, but the query must run clean).
+    view |> element("#router-tab-engine") |> render_click()
+    view |> element("#router-tab-live") |> render_click()
+
+    assert has_element?(view, "#router-shadows-#{disagreeing.id}")
+    assert has_element?(view, "#router-shadows-#{agreeing.id}")
+  end
+
+  test "a verdict that only now makes a row visible clears the empty state", %{conn: conn} do
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/router?tab=live")
+
+    view |> element("#live-filter-discrepancies") |> render_click()
+    assert has_element?(view, "#router-events-card", "Esperando la próxima request ruteada…")
+
+    log = routed_log(Ecto.UUID.generate(), "default-model")
+    send(view.pid, {:new_log, log})
+    _ = :sys.get_state(view.pid)
+
+    # Without a verdict the row is hidden by the filter: the empty state stays.
+    refute has_element?(view, "#router-events", "default-model")
+
+    send(view.pid, {:shadow_evaluated, log.id, [shadow_eval(log.id, %{})]})
+
+    assert has_element?(view, "#router-shadows-#{log.id}")
+    # A real row is on screen now: the "waiting" line must not sit above it.
+    refute has_element?(view, "#router-events-card", "Esperando la próxima request ruteada…")
+  end
+
+  test "the shadow map and the routed window stay bounded to the same rows", %{conn: conn} do
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/router?tab=live")
+
+    for _ <- 1..105 do
+      id = Ecto.UUID.generate()
+      send(view.pid, {:new_log, routed_log(id, "bounded-model")})
+      send(view.pid, {:shadow_evaluated, id, [shadow_eval(id, %{})]})
+    end
+
+    state = :sys.get_state(view.pid).socket.assigns
+    window = Enum.map(state.recent_refs, &elem(&1, 0))
+
+    assert length(window) == 100
+    assert map_size(state.recent_logs) == 100
+    # No evaluation outlives the row it describes.
+    assert Enum.sort(Map.keys(state.shadows_by_log_id)) == Enum.sort(window)
+
+    # The counter tracks the rows on screen, not every event ever seen.
+    assert state.router_events_count == 100
   end
 end

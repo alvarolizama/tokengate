@@ -38,10 +38,14 @@ defmodule Tokengate.SmartRouter do
   ## Snapshot
 
   The config, use cases, destinations and rules are loaded once per minute
-  through `Tokengate.Cache` under `{:smart_router_config}`. Every mutation made
-  through the admin surfaces must call `invalidate/0` after the write (S5 owns
-  those screens; this module owns the invalidation). Tests and simulations can
-  bypass the loader entirely by passing `:snapshot`.
+  through `Tokengate.Cache`, **per configuration version**: the serving Default
+  under `{:smart_router_config, :default}` and any other version under
+  `{:smart_router_config, config_id}` (`snapshot(config_id: id)`), so two
+  versions never share a catalogue and a Shadow evaluation reads its own. Every
+  mutation made through the admin surfaces must call `invalidate/0` (or
+  `invalidate/1` with the version that changed) after the write (S5 owns those
+  screens; this module owns the invalidation). Tests and simulations can bypass
+  the loader entirely by passing `:snapshot`.
 
   ## Decision cost
 
@@ -56,8 +60,11 @@ defmodule Tokengate.SmartRouter do
   alias Tokengate.Routing.Pools
   alias Tokengate.SmartRouter.{Config, Engine, Rule, UseCase, UseCaseModel}
 
+  import Ecto.Query, only: [from: 2]
+
   @cache_key {:smart_router_config}
   @enabled_key {:smart_router_enabled}
+  @shadow_configs_key {:smart_router_shadow_configs}
   @cache_ttl_ms :timer.minutes(1)
 
   @doc """
@@ -137,8 +144,7 @@ defmodule Tokengate.SmartRouter do
   """
   @spec decide(map(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def decide(payload, context \\ %{}, opts \\ []) do
-    snapshot = Keyword.get_lazy(opts, :snapshot, fn -> snapshot() end)
-    Engine.decide(snapshot, payload, context, opts)
+    Engine.decide(snapshot_for(opts), payload, context, opts)
   end
 
   @doc """
@@ -147,30 +153,105 @@ defmodule Tokengate.SmartRouter do
   """
   @spec dry_run(map(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def dry_run(payload, context \\ %{}, opts \\ []) do
-    opts = opts |> Keyword.put(:dry_run, true)
-    snapshot = Keyword.get_lazy(opts, :snapshot, fn -> snapshot() end)
-    Engine.decide(snapshot, payload, context, opts)
+    opts = Keyword.put(opts, :dry_run, true)
+    Engine.decide(snapshot_for(opts), payload, context, opts)
   end
 
   @doc """
-  The cached routing snapshot (`config`, `use_cases`, `rules`, `models`,
-  `decision_model`). Cached for one minute under `{:smart_router_config}`.
+  The cached routing snapshot of ONE version (`config`, `use_cases`, `rules`,
+  `models`, `decision_model`).
+
+  Options:
+
+    * `:config_id` — load that version instead of the serving Default. The
+      snapshot is cached under `{:smart_router_config, config_id}` (the Default
+      under `{:smart_router_config, :default}`), so two versions never share a
+      cached catalogue; a version whose row no longer exists yields the empty
+      snapshot.
+    * `:ttl_ms` — cache TTL for this read (default one minute).
+
+  ## Scoping
+
+  Only the use cases (`router_config_id`, `enabled`), their bindings (joined
+  through the use case, so a binding of another version never leaks in) and the
+  rules (`router_config_id`, `enabled`) of the requested version are loaded.
   """
   @spec snapshot(keyword()) :: map()
   def snapshot(opts \\ []) do
     ttl_ms = Keyword.get(opts, :ttl_ms, @cache_ttl_ms)
-    Tokengate.Cache.fetch(@cache_key, ttl_ms, &load_snapshot/0)
+    config_id = Keyword.get(opts, :config_id)
+
+    Tokengate.Cache.fetch(snapshot_key(config_id), ttl_ms, fn ->
+      load_snapshot(config_for(config_id))
+    end)
+  end
+
+  @doc """
+  Every version currently under evaluation as a Shadow: `shadow_enabled` on,
+  not archived, and never the serving Default.
+
+  Cached for a minute under `{:smart_router_shadow_configs}`; `invalidate/0`
+  and `invalidate/1` drop it, so toggling a shadow is visible on the next
+  request instead of on the next TTL.
+  """
+  @spec shadow_configs() :: [Config.t()]
+  def shadow_configs do
+    Tokengate.Cache.fetch(@shadow_configs_key, @cache_ttl_ms, fn -> load_shadow_configs() end)
   end
 
   @doc "Drops the cached snapshot (call after any router config mutation)."
   @spec invalidate() :: :ok
-  def invalidate do
+  def invalidate, do: invalidate(nil)
+
+  @doc """
+  Same as `invalidate/0`, optionally naming the version that changed.
+
+  Every cached entry is dropped — the Default's snapshot, `enabled?/0`, the
+  shadow list, EVERY per-version snapshot and the decision cache — because a
+  clone/promotion/archive can move any of them at once and the per-version key
+  set is small (one row per `router_configs` version).
+  """
+  @spec invalidate(String.t() | nil) :: :ok
+  def invalidate(config_id) when is_binary(config_id) or is_nil(config_id) do
+    # The pre-versioning key (kept so a rolling deploy never serves a stale
+    # snapshot from the old code path) plus the Default's own key.
     Tokengate.Cache.invalidate(@cache_key)
+    Tokengate.Cache.invalidate(snapshot_key(nil))
     Tokengate.Cache.invalidate(@enabled_key)
-    # The decision cache is keyed by the QUESTION (use-case catalogue + prompt),
-    # so a catalogue change makes every cached answer suspect: drop it too.
+    Tokengate.Cache.invalidate(@shadow_configs_key)
+
+    for id <- cached_config_ids() do
+      Tokengate.Cache.invalidate(snapshot_key(id))
+    end
+
+    if is_binary(config_id), do: Tokengate.Cache.invalidate(snapshot_key(config_id))
+
+    # The decision cache is keyed by the QUESTION (version + use-case catalogue
+    # + prompt), so a catalogue change makes every cached answer suspect.
     clear_decision_cache()
     :ok
+  end
+
+  defp cached_config_ids do
+    Repo.all(from c in Config, select: c.id)
+  rescue
+    _ -> []
+  end
+
+  # The per-version snapshot keys: the Default under `:default`, every other
+  # version under its own id (the shape the version screens and the Shadow
+  # evaluator read).
+  defp snapshot_key(nil), do: {:smart_router_config, :default}
+  defp snapshot_key(config_id), do: {:smart_router_config, config_id}
+
+  # An explicit version never falls back to the Default: a deleted/unknown
+  # version must evaluate as an empty catalogue, not silently as the serving
+  # configuration.
+  defp config_for(nil), do: Config.get()
+  defp config_for(config_id), do: Config.get_version(config_id)
+
+  defp snapshot_for(opts) do
+    Keyword.get_lazy(opts, :snapshot, fn -> snapshot(config_id: Keyword.get(opts, :config_id)) end)
   end
 
   defp clear_decision_cache do
@@ -238,12 +319,18 @@ defmodule Tokengate.SmartRouter do
   # Snapshot loader
   # ---------------------------------------------------------------------------
 
-  defp load_snapshot do
-    config = Config.get()
-    use_cases = Repo.all(UseCase) |> Enum.filter(& &1.enabled) |> Enum.sort_by(& &1.priority)
-    bindings = load_bindings()
+  defp load_snapshot(nil) do
+    # No configuration at all (never configured, or a shadow version that was
+    # deleted): an EMPTY, safe catalogue instead of the serving Default's —
+    # falling back would evaluate another version's rules against this one.
+    %{config: nil, use_cases: [], rules: [], models: %{}, decision_model: nil}
+  end
+
+  defp load_snapshot(%Config{} = config) do
+    use_cases = load_use_cases(config.id)
+    bindings = load_bindings(config.id)
     models = load_models(model_ids(config, use_cases, bindings))
-    rules = load_rules()
+    rules = load_rules(config.id)
 
     %{
       config: config,
@@ -254,12 +341,29 @@ defmodule Tokengate.SmartRouter do
     }
   end
 
-  defp load_bindings do
-    import Ecto.Query, only: [from: 2]
+  defp load_shadow_configs do
+    Repo.all(
+      from(c in Config,
+        where: c.shadow_enabled == true and is_nil(c.archived_at) and c.is_default == false,
+        order_by: [asc: c.inserted_at]
+      )
+    )
+  end
 
+  defp load_use_cases(config_id) do
+    Repo.all(
+      from(u in UseCase,
+        where: u.router_config_id == ^config_id and u.enabled == true,
+        order_by: [asc: u.priority]
+      )
+    )
+  end
+
+  defp load_bindings(config_id) do
     Repo.all(
       from(b in UseCaseModel,
-        where: b.enabled == true,
+        join: uc in assoc(b, :use_case),
+        where: uc.router_config_id == ^config_id and b.enabled == true,
         order_by: [asc: b.priority],
         preload: [:target_model]
       )
@@ -267,12 +371,10 @@ defmodule Tokengate.SmartRouter do
     |> Enum.group_by(& &1.router_use_case_id)
   end
 
-  defp load_rules do
-    import Ecto.Query, only: [from: 2]
-
+  defp load_rules(config_id) do
     Repo.all(
       from(r in Rule,
-        where: r.enabled == true,
+        where: r.router_config_id == ^config_id and r.enabled == true,
         order_by: [asc: r.priority]
       )
     )
@@ -389,8 +491,6 @@ defmodule Tokengate.SmartRouter do
   defp min_confidence(nil), do: nil
   defp min_confidence(%Decimal{} = value), do: Decimal.to_float(value)
   defp min_confidence(value) when is_float(value) or is_integer(value), do: value * 1.0
-
-  defp decision_model(nil), do: nil
 
   defp decision_model(%Config{decision_model_id: nil}), do: nil
 
