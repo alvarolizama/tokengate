@@ -32,7 +32,7 @@ defmodule Tokengate.Credits do
 
   alias Tokengate.Accounts.{Group, GroupMember, Service, User}
   alias Tokengate.Credits.{Topup, Topups}
-  alias Tokengate.Metrics.DashboardCache
+  alias Tokengate.Metrics.{ConsumptionCounter, ConsumptionCounters, DashboardCache}
 
   @stats_timeout 120_000
 
@@ -259,48 +259,118 @@ defmodule Tokengate.Credits do
 
   defp spend_and_limit_grouped_users([]), do: {%{}, %{}}
 
-  defp spend_and_limit_grouped_users(user_ids) do
-    RequestLog
-    |> where([rl], rl.user_id in ^user_ids)
-    |> since(nil)
-    |> group_by([rl], rl.user_id)
-    |> select([rl], {
-      rl.user_id,
-      fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-      fragment(
-        "COALESCE(SUM(?) FILTER (WHERE ? IS NULL), 0)",
-        rl.provider_cost_usd,
-        rl.credit_topup_id
+  defp spend_and_limit_grouped_users(user_ids), do: spend_and_limit(:user, user_ids)
+
+  defp spend_and_limit_grouped_services([]), do: {%{}, %{}}
+
+  defp spend_and_limit_grouped_services(service_ids), do: spend_and_limit(:service, service_ids)
+
+  # ---------------------------------------------------------------------------
+  # Lectura del mes en curso por sujeto
+  #
+  # Los agregados por sujeto se leen de `consumption_counters` (un renglón por
+  # sujeto por día UTC) y sólo caen a `request_logs` mientras los contadores no
+  # estén poblados. El motivo es de acceso, no de semántica: `request_logs` está
+  # particionada por DÍA y `inserted_at >= inicio de mes` cubre el 100% de cada
+  # partición, así que con `user_id = ANY($1)` de más de un puñado de llaves el
+  # planner abandona el índice covering y hace seq scan de ~25 particiones. El
+  # costo quedaba atado a lo que llevas del mes, no a lo que gastaron esos
+  # sujetos: 105 ms para una página de 25 usuarios y 149 ms para el listado
+  # completo (2M filas, medido), contra 0.24 ms y 1.18 ms leyendo contadores.
+  #
+  # Los contadores los mantiene el trigger `request_logs_consumption_counters`
+  # en la misma transacción del insert, en micro-USD (`numeric(12,6)` cabe
+  # exacto en `ROUND(usd * 1_000_000)`), así que la suma reconcilia al
+  # micro-dólar con `SUM(provider_cost_usd)`. `ConsumptionCounters.populated?/0`
+  # es el mismo guard que ya usa `Logs.total_spend_by_user/0`.
+  # ---------------------------------------------------------------------------
+
+  defp spend_and_limit(kind, scope) do
+    if ConsumptionCounters.populated?() do
+      spend_and_limit_from_counters(kind, scope)
+    else
+      spend_and_limit_from_logs(kind, scope)
+    end
+  end
+
+  # `scope` es la lista de ids del sujeto, o `:all` para todo el que tenga
+  # bucket en el mes (el agregado org-wide de los listados).
+  defp spend_and_limit_from_counters(kind, scope) do
+    column = subject_field(kind)
+    from_day = month_start_date()
+
+    query =
+      from(c in ConsumptionCounter,
+        where: c.day >= ^from_day,
+        group_by: field(c, ^column),
+        select:
+          {field(c, ^column), fragment("COALESCE(SUM(?), 0)::bigint", c.spend_micro),
+           fragment("COALESCE(SUM(?), 0)::bigint", c.limit_spend_micro)}
       )
-    })
+
+    query =
+      case scope do
+        :all -> where(query, [c], not is_nil(field(c, ^column)))
+        ids -> where(query, [c], field(c, ^column) in ^ids)
+      end
+
+    query
     |> Repo.all(timeout: stats_timeout())
-    |> Enum.reduce({%{}, %{}}, fn {id, spent, against_limit}, {spend, limit_spend} ->
+    |> Enum.reduce({%{}, %{}}, fn {id, spent_micro, limit_micro}, {spend, limit_spend} ->
+      {Map.put(spend, id, ConsumptionCounters.micro_to_usd(spent_micro)),
+       Map.put(limit_spend, id, ConsumptionCounters.micro_to_usd(limit_micro))}
+    end)
+  end
+
+  # Fallback (contadores aún sin backfill): el agregado sobre los logs, con la
+  # misma forma de resultado. Se deja a propósito como la referencia contra la
+  # que se reconcilian los contadores. El agregado que `spend_grouped_users/2`
+  # ya no usa sigue viviendo aquí, así que las dos rutas comparten una sola
+  # definición de la ventana y del filtro.
+  defp spend_and_limit_from_logs(kind, scope) when kind in [:user, :service] do
+    column = subject_field(kind)
+
+    query =
+      RequestLog
+      |> since(nil)
+      |> group_by([rl], field(rl, ^column))
+
+    query =
+      case scope do
+        :all -> where(query, [rl], not is_nil(field(rl, ^column)))
+        ids when is_list(ids) -> where(query, [rl], field(rl, ^column) in ^ids)
+      end
+
+    query
+    |> select(
+      [rl],
+      {field(rl, ^column), fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+       fragment(
+         "COALESCE(SUM(?) FILTER (WHERE ? IS NULL), 0)",
+         rl.provider_cost_usd,
+         rl.credit_topup_id
+       )}
+    )
+    # `since(nil)` spans every partition: give it the analytics timeout.
+    |> Repo.all(timeout: stats_timeout())
+    |> collect_spend_and_limit()
+  end
+
+  defp collect_spend_and_limit(rows) do
+    Enum.reduce(rows, {%{}, %{}}, fn {id, spent, against_limit}, {spend, limit_spend} ->
       {Map.put(spend, id, Decimal.new(to_string(spent))),
        Map.put(limit_spend, id, Decimal.new(to_string(against_limit)))}
     end)
   end
 
-  defp spend_and_limit_grouped_services([]), do: {%{}, %{}}
+  defp subject_field(:user), do: :user_id
+  defp subject_field(:service), do: :service_id
 
-  defp spend_and_limit_grouped_services(service_ids) do
-    RequestLog
-    |> where([rl], rl.service_id in ^service_ids)
-    |> since(nil)
-    |> group_by([rl], rl.service_id)
-    |> select([rl], {
-      rl.service_id,
-      fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-      fragment(
-        "COALESCE(SUM(?) FILTER (WHERE ? IS NULL), 0)",
-        rl.provider_cost_usd,
-        rl.credit_topup_id
-      )
-    })
-    |> Repo.all(timeout: stats_timeout())
-    |> Enum.reduce({%{}, %{}}, fn {id, spent, against_limit}, {spend, limit_spend} ->
-      {Map.put(spend, id, Decimal.new(to_string(spent))),
-       Map.put(limit_spend, id, Decimal.new(to_string(against_limit)))}
-    end)
+  # Los contadores bucketizan por `inserted_at::date`, que ya es UTC (la columna
+  # es `timestamp without time zone` en UTC), así que la ventana es la fecha del
+  # mismo `start_of_month_utc/1` que usa `since/2`.
+  defp month_start_date do
+    "Etc/UTC" |> Tokengate.Periods.start_of_month_utc() |> DateTime.to_date()
   end
 
   defp spend_grouped_users([], _only_limit), do: %{}
@@ -310,40 +380,16 @@ defmodule Tokengate.Credits do
     # el sufijo tiene que quedarse sin `join`. El usuario ya no depende de que
     # la membresía (`group_members`, que el cambio de sub borra en cascada)
     # siga existiendo para poder agregarse.
-    RequestLog
-    |> where([rl], rl.user_id in ^user_ids)
-    |> grouped_user_spend(only_limit)
-  end
-
-  # Per-subject spend for an explicit id list (the page-scoped reader). The
-  # whole-table twin that also returns the limit-debited amount is
-  # `spend_grouped_all_users_with_limit/0`, below.
-  defp grouped_user_spend(query, only_limit) do
-    query
-    |> since(nil)
-    |> only_limit_filter(only_limit)
-    |> group_by([rl], rl.user_id)
-    |> select([rl], {rl.user_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-    # `since(nil)` spans every partition: give it the analytics timeout.
-    |> Repo.all(timeout: stats_timeout())
-    |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+    {spend, limit_spend} = spend_and_limit(:user, user_ids)
+    if only_limit, do: limit_spend, else: spend
   end
 
   defp spend_grouped_services([], _only_limit), do: %{}
 
   defp spend_grouped_services(service_ids, only_limit) do
-    RequestLog
-    |> where([rl], rl.service_id in ^service_ids)
-    |> since(nil)
-    |> only_limit_filter(only_limit)
-    |> group_by([rl], rl.service_id)
-    |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-    |> Repo.all(timeout: stats_timeout())
-    |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+    {spend, limit_spend} = spend_and_limit(:service, service_ids)
+    if only_limit, do: limit_spend, else: spend
   end
-
-  defp only_limit_filter(query, false), do: query
-  defp only_limit_filter(query, true), do: where(query, [rl], is_nil(rl.credit_topup_id))
 
   defp spend_query({:service, service_id}, from) do
     RequestLog
@@ -422,26 +468,10 @@ defmodule Tokengate.Credits do
 
   # Whole-table twin of `spend_grouped_users/2` returning BOTH amounts at once:
   # the total and the part debited to the subject's limit (rows without a
-  # top-up). Same grouping, same window, one pass.
+  # top-up). Same grouping, same window, one pass — from the durable counters
+  # (one row per user per day) instead of every retained partition of the month.
   defp spend_grouped_all_users_with_limit do
-    RequestLog
-    |> where([rl], not is_nil(rl.user_id))
-    |> since(nil)
-    |> group_by([rl], rl.user_id)
-    |> select([rl], {
-      rl.user_id,
-      fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-      fragment(
-        "COALESCE(SUM(?) FILTER (WHERE ? IS NULL), 0)",
-        rl.provider_cost_usd,
-        rl.credit_topup_id
-      )
-    })
-    |> Repo.all(timeout: stats_timeout())
-    |> Enum.reduce({%{}, %{}}, fn {id, spent, against_limit}, {spend, limit_spend} ->
-      {Map.put(spend, id, Decimal.new(to_string(spent))),
-       Map.put(limit_spend, id, Decimal.new(to_string(against_limit)))}
-    end)
+    spend_and_limit(:user, :all)
   end
 
   # Every user with a live top-up, resolved through `Topups` (the single

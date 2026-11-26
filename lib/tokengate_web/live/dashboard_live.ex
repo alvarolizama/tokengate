@@ -518,10 +518,11 @@ defmodule TokengateWeb.DashboardLive do
   defp find_membership(_socket, _member_id), do: nil
 
   # El resumen del sujeto (límite efectivo + top-ups) se resuelve en lote:
-  # una pasada para todas las membresías.
+  # una pasada para todas las membresías, desde el agregado compartido
+  # (`user_credit_aggregates/0`, 5s de TTL) en vez de re-agregar por usuario.
   defp build_personal_data(user) do
     memberships = Accounts.list_group_members_for_user(user.id)
-    summaries = Tokengate.Credits.summaries(memberships)
+    summaries = Tokengate.Credits.summaries(memberships, cached: true)
     # Revoking inserts a NEW row for the same membership, so the `has_one`
     # preload can hand back the revoked one. The card resolves the user's
     # visible active key from ONE batched read instead (keys belong to the

@@ -3,7 +3,8 @@ defmodule Tokengate.CreditsTest do
 
   alias Tokengate.{Accounts, Credits, Logs}
   alias Tokengate.Credits.Topups
-  alias Tokengate.Metrics.DashboardCache
+  alias Tokengate.Metrics.{ConsumptionCounter, ConsumptionCounters, DashboardCache}
+  alias Tokengate.Repo
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -52,18 +53,21 @@ defmodule Tokengate.CreditsTest do
       )
   end
 
-  # Counts the Ecto queries that touch `request_logs` while `fun` runs.
+  # Counts the Ecto queries per source table while `fun` runs.
   # Telemetry handlers are node-global, so queries issued by another process
   # (the LiveView) are counted too.
-  defp count_request_log_queries(fun) do
-    counter = :counters.new(1, [:atomics])
+  defp count_queries(sources, fun) do
+    counters = Map.new(sources, &{&1, :counters.new(1, [:atomics])})
     handler_id = {__MODULE__, make_ref()}
 
     :telemetry.attach(
       handler_id,
       [:tokengate, :repo, :query],
       fn _event, _measurements, metadata, _config ->
-        if metadata[:source] == "request_logs", do: :counters.add(counter, 1, 1)
+        case Map.fetch(counters, metadata[:source]) do
+          {:ok, counter} -> :counters.add(counter, 1, 1)
+          :error -> :ok
+        end
       end,
       nil
     )
@@ -74,7 +78,7 @@ defmodule Tokengate.CreditsTest do
       :telemetry.detach(handler_id)
     end
 
-    :counters.get(counter, 1)
+    Map.new(counters, fn {source, counter} -> {source, :counters.get(counter, 1)} end)
   end
 
   defp assert_decimal(a, b, label) do
@@ -159,23 +163,44 @@ defmodule Tokengate.CreditsTest do
 
       DashboardCache.invalidate_all()
 
-      cold = count_request_log_queries(fn -> Credits.user_credit_aggregates() end)
-      warm = count_request_log_queries(fn -> Credits.user_credit_aggregates() end)
+      sources = ~w(request_logs consumption_counters)
+      cold = count_queries(sources, fn -> Credits.user_credit_aggregates() end)
+      warm = count_queries(sources, fn -> Credits.user_credit_aggregates() end)
 
-      # Cold: ONE fused spend aggregate over request_logs — the total and the
-      # limit-debited amount come from the same GROUP BY (`SUM(... FILTER ...)`);
-      # running them as two queries doubled the scan. The top-up consumption
-      # read only runs when live top-ups exist. Warm: nothing against
-      # request_logs at all.
-      assert cold == 1
-      assert warm == 0
+      # Cold: el agregado sale de los contadores durables (un renglón por
+      # usuario y día) — una sola pasada para el total y la parte debitada al
+      # límite (`SUM(... FILTER ...)`), más el `populated?/0` que elige la ruta.
+      # `request_logs` NO se escanea: eso es lo que dejó de costar el mes entero
+      # cada 5 segundos. Warm: nada contra la base.
+      assert cold == %{"request_logs" => 0, "consumption_counters" => 2}
+      assert warm == %{"request_logs" => 0, "consumption_counters" => 0}
     end
 
-    test "summaries/1 resolves spend and limit_spend in one request_logs query" do
+    test "summaries/1 resolves spend and limit_spend in one aggregate query" do
       {_user, member} = member_with_limit("100.00")
       spend(member, "1.00")
 
-      assert count_request_log_queries(fn -> Credits.summaries([member]) end) == 1
+      counts =
+        count_queries(~w(request_logs consumption_counters), fn -> Credits.summaries([member]) end)
+
+      # El total y la parte debitada al límite salen de la misma GROUP BY, y la
+      # fuente son los contadores: ninguna partición de request_logs se toca.
+      assert counts == %{"request_logs" => 0, "consumption_counters" => 2}
+    end
+
+    test "falls back to the raw aggregate when the counters are empty" do
+      {_user, member} = member_with_limit("100.00")
+      spend(member, "1.00")
+
+      # Contadores vacíos (deploy sin backfill): la lectura vuelve a los logs.
+      Repo.delete_all(ConsumptionCounter)
+      refute ConsumptionCounters.populated?()
+
+      counts =
+        count_queries(~w(request_logs consumption_counters), fn -> Credits.summaries([member]) end)
+
+      # `populated?/0` + el agregado crudo sobre request_logs.
+      assert counts == %{"request_logs" => 1, "consumption_counters" => 1}
     end
   end
 end
