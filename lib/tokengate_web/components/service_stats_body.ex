@@ -26,6 +26,7 @@ defmodule TokengateWeb.ServiceStatsBody do
   use Gettext, backend: TokengateWeb.Gettext
 
   import TokengateWeb.CoreComponents
+  import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
   import TokengateWeb.StatsHelpers, only: [period_selector: 1]
   import Phoenix.LiveView, only: [stream: 3, stream: 4]
 
@@ -36,6 +37,7 @@ defmodule TokengateWeb.ServiceStatsBody do
   alias TokengateWeb.StatsHelpers
 
   @page_size 50
+  @stats_task_timeout_ms 125_000
 
   ## Panel ------------------------------------------------------------------
 
@@ -67,60 +69,96 @@ defmodule TokengateWeb.ServiceStatsBody do
   attr :load_more_id, :string, default: "load-more-service-stats-logs"
   attr :show_service_summary, :boolean, default: true
   attr :compact_numbers, :boolean, default: false
+  attr :stats_loading, :boolean, default: false
 
   def panel(assigns) do
     ~H"""
     <div class="space-y-6">
       <%!-- Key selector + period selector --%>
-      <div class="flex flex-wrap items-end justify-end gap-4">
-        <.form
-          :if={@service_api_keys != []}
-          for={@key_filter_form}
-          id="key-filter-form"
-          phx-change="set_key"
-          class="w-48"
-        >
-          <.input
-            field={@key_filter_form[:key_id]}
-            type="select"
-            label={gettext("API key")}
-            options={[
-              {gettext("All API keys"), "all"}
-              | Enum.map(@service_api_keys, fn key ->
-                  label =
-                    (key.label || key.key_prefix) <>
-                      if(key.status == "revoked", do: " · " <> gettext("Revoked"), else: "")
+      <div class="flex flex-wrap items-end justify-between gap-4">
+        <div class="flex items-center gap-2">
+          <span
+            :if={@stats_loading}
+            id="service-stats-loading"
+            class="inline-flex items-center gap-1.5 text-xs text-base-content/60"
+          >
+            <span class="loading loading-spinner loading-xs" />
+            {gettext("Loading metrics…")}
+          </span>
+        </div>
+        <div class="flex flex-wrap items-end justify-end gap-3">
+          <.form
+            :if={@service_api_keys != []}
+            for={@key_filter_form}
+            id="key-filter-form"
+            phx-change="set_key"
+            class="w-48 [&_.fieldset]:mb-0"
+          >
+            <.input
+              field={@key_filter_form[:key_id]}
+              type="select"
+              label={gettext("API key")}
+              class="w-full select select-sm"
+              options={[
+                {gettext("All API keys"), "all"}
+                | Enum.map(@service_api_keys, fn key ->
+                    label =
+                      (key.label || key.key_prefix) <>
+                        if(key.status == "revoked", do: " · " <> gettext("Revoked"), else: "")
 
-                  {label, key.id}
-                end)
-            ]}
-          />
-        </.form>
-        <.period_selector target={@period_target} period={@period} id="period-selector" />
+                    {label, key.id}
+                  end)
+              ]}
+            />
+          </.form>
+          <.period_selector target={@period_target} period={@period} id="period-selector" />
+        </div>
+      </div>
+
+      <div
+        :if={@stats_loading and @summary.request_count == 0 and @logs_empty?}
+        id="service-stats-skeleton"
+        class="grid grid-cols-1 sm:grid-cols-3 gap-3 animate-pulse"
+      >
+        <div class="h-2.5 rounded bg-base-300" />
+        <div class="h-2.5 rounded bg-base-300" />
+        <div class="h-2.5 rounded bg-base-300" />
       </div>
 
       <%!-- KPI cards (selected period) --%>
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <.stat_card
+      <div class={[
+        "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 transition-opacity duration-150",
+        @stats_loading && "opacity-60"
+      ]}>
+        <.kpi_card
           id="kpi-requests"
           label={gettext("Requests")}
-          value={number(@summary.request_count, @compact_numbers)}
-          sub={safe_sub_count(@summary.realtime_5min.request_count, " en 5 min")}
           icon="hero-squares-2x2"
-        />
-        <.stat_card
+          accent="primary"
+        >
+          {number(@summary.request_count, @compact_numbers)}
+          <:sub>
+            {safe_sub_count(@summary.realtime_5min.request_count, " " <> gettext("in 5 min"))}
+          </:sub>
+        </.kpi_card>
+        <.kpi_card
           id="kpi-cost"
           label={gettext("Cost")}
-          value={fmt_money(@summary.total_cost_usd)}
-          sub={safe_sub_count(@summary.request_count, " reqs")}
           icon="hero-currency-dollar"
-        />
-        <.stat_card
+          accent="accent"
+        >
+          {fmt_money(@summary.total_cost_usd)}
+          <:sub>{safe_sub_count(@summary.request_count, " " <> gettext("reqs"))}</:sub>
+        </.kpi_card>
+        <.kpi_card
           id="kpi-input"
           label={gettext("Input tokens")}
-          value={number(@summary.total_prompt_tokens, @compact_numbers)}
-          sub={
-            "cached " <>
+          icon="hero-arrow-down-on-square-stack"
+          accent="primary"
+        >
+          {number(@summary.total_prompt_tokens, @compact_numbers)}
+          <:sub>
+            {"cached " <>
               format_number(@summary.total_cache_read_tokens) <>
               " · hit " <>
               KpiHelpers.format_hit_rate(
@@ -128,41 +166,50 @@ defmodule TokengateWeb.ServiceStatsBody do
                   @summary.total_cache_read_tokens,
                   @summary.total_prompt_tokens
                 )
-              )
-          }
-          icon="hero-arrow-down-on-square-stack"
-        />
-        <.stat_card
+              )}
+          </:sub>
+        </.kpi_card>
+        <.kpi_card
           id="kpi-output"
           label={gettext("Output tokens")}
-          value={number(@summary.total_completion_tokens, @compact_numbers)}
-          sub={gettext("avg TPS:") <> " " <> fmt_tps(@summary.avg_tps)}
           icon="hero-arrow-up-on-square-stack"
-        />
-        <.stat_card
+          accent="primary"
+        >
+          {number(@summary.total_completion_tokens, @compact_numbers)}
+          <:sub>{gettext("avg TPS:") <> " " <> fmt_tps(@summary.avg_tps)}</:sub>
+        </.kpi_card>
+        <.kpi_card
           id="kpi-errors"
           label={gettext("Errors")}
-          value={
-            Integer.to_string(@summary.status_breakdown["4xx"] + @summary.status_breakdown["5xx"])
-          }
-          sub={safe_sub_count(@summary.realtime_5min.error_rate, "% (5 min)")}
           icon="hero-exclamation-triangle"
-          tone={error_tone(@summary.status_breakdown)}
-        />
-        <.stat_card
+          accent={error_accent(@summary.status_breakdown)}
+        >
+          {Integer.to_string(@summary.status_breakdown["4xx"] + @summary.status_breakdown["5xx"])}
+          <:sub>{safe_sub_count(@summary.realtime_5min.error_rate, "% (5 min)")}</:sub>
+        </.kpi_card>
+        <.kpi_card
           id="kpi-latency"
           label={gettext("Last request")}
-          value={last_request_label(@summary.last_request_at, @timezone)}
-          sub={"latency prom: " <> fmt_ms(@summary.avg_latency_ms)}
           icon="hero-clock"
-        />
+          accent="neutral"
+        >
+          {last_request_label(@summary.last_request_at, @timezone)}
+          <:sub>{gettext("avg latency:") <> " " <> fmt_ms(@summary.avg_latency_ms)}</:sub>
+        </.kpi_card>
       </div>
 
       <%!-- Service + Status breakdown + Top models. show_service_summary
            hides only the Service card (its budget/config info is duplicated
            by #service-config in the supervised view); the status and top
            models cards are always rendered. --%>
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+      <div class={[
+        if(@show_service_summary,
+          do: "grid grid-cols-1 lg:grid-cols-3 gap-3",
+          else: "grid grid-cols-1 lg:grid-cols-2 gap-3"
+        ),
+        "transition-opacity duration-150",
+        @stats_loading && "opacity-60"
+      ]}>
         <div :if={@show_service_summary} class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body p-4">
             <h3 class="text-sm font-semibold mb-2">{gettext("Service")}</h3>
@@ -323,7 +370,7 @@ defmodule TokengateWeb.ServiceStatsBody do
         for={@form}
         id="service-stats-filter-form"
         phx-change="filter"
-        class="grid grid-cols-5 gap-3"
+        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3"
       >
         <.input
           field={@form[:status_class]}
@@ -432,53 +479,30 @@ defmodule TokengateWeb.ServiceStatsBody do
       service_api_keys: assigns.service_api_keys,
       period: assigns.period,
       timezone: assigns.timezone,
-      key_filter: assigns.key_filter
+      key_filter: assigns.key_filter,
+      locale: Gettext.get_locale(TokengateWeb.Gettext)
     }
   end
 
   @doc false
-  def compute_stats_assigns(%{
-        service_id: service_id,
-        service_api_keys: api_keys,
-        period: period,
-        timezone: timezone,
-        key_filter: key_filter
-      }) do
+  def compute_stats_assigns(
+        %{
+          service_id: service_id,
+          service_api_keys: api_keys,
+          period: period,
+          timezone: timezone,
+          key_filter: key_filter
+        } = params
+      ) do
+    if locale = Map.get(params, :locale) do
+      Gettext.put_locale(TokengateWeb.Gettext, locale)
+    end
+
     # BOTH bounds: a closed window ("yesterday") read with only `from` would
     # add every request of the day after it, and the table would stop matching
     # its own KPI. One source for the pair — never two `period_bounds` calls.
     %{from: from, to: to} = Periods.period_bounds(period, timezone)
     range = [from: from, to: to]
-
-    # El group by de la tabla SIEMPRE es del servicio completo (una query, el
-    # trim a una fila es en memoria); el summary sí se scopea por key cuando el
-    # selector lo pide — y su llave de cache lleva el scope.
-    key_stats =
-      DashboardCache.fetch_or_compute({:service_key_stats, service_id, period, timezone}, fn ->
-        Logs.service_key_stats(service_id, range)
-      end)
-
-    # Reporte por modelo: matriz modelo × API key (gasto del período). Se lee
-    # SIEMPRE del servicio completo — el pivote en memoria recorta la columna de
-    # la key cuando el selector la scopea — y comparte cache con las otras
-    # lecturas del período.
-    model_key_stats =
-      DashboardCache.fetch_or_compute(
-        {:service_model_key_stats, service_id, period, timezone},
-        fn -> Logs.service_model_key_stats(service_id, range) end
-      )
-
-    key_rows =
-      case key_filter do
-        "all" ->
-          build_key_rows(api_keys, key_stats)
-
-        key_id ->
-          Enum.filter(
-            build_key_rows(api_keys, key_stats),
-            &(&1.stats.api_key_id == key_id)
-          )
-      end
 
     summary_opts =
       if key_filter == "all" do
@@ -487,10 +511,71 @@ defmodule TokengateWeb.ServiceStatsBody do
         [from: from, to: to, api_key_id: key_filter]
       end
 
+    # Run the 3 independent period aggregates concurrently; Task.async inherits
+    # `$callers` so Ecto Sandbox allows it seamlessly in tests.
+    key_stats_task =
+      Task.async(fn ->
+        DashboardCache.fetch_or_compute({:service_key_stats, service_id, period, timezone}, fn ->
+          Logs.service_key_stats(service_id, [{:include_prefixes, false} | range])
+        end)
+      end)
+
+    model_key_stats_task =
+      Task.async(fn ->
+        DashboardCache.fetch_or_compute(
+          {:service_model_key_stats, service_id, period, timezone},
+          fn -> Logs.service_model_key_stats(service_id, range) end
+        )
+      end)
+
+    summary_core_task =
+      Task.async(fn ->
+        DashboardCache.fetch_or_compute(
+          {:service_summary_core, service_id, period, timezone, key_filter},
+          fn -> Logs.service_summary_core(service_id, summary_opts) end
+        )
+      end)
+
+    [key_stats, model_key_stats, summary_core] =
+      Task.await_many(
+        [key_stats_task, model_key_stats_task, summary_core_task],
+        @stats_task_timeout_ms
+      )
+
+    known_ids = MapSet.new(api_keys, & &1.id)
+
+    orphan_ids =
+      key_stats
+      |> Enum.filter(fn row ->
+        not is_nil(row.api_key_id) and
+          not MapSet.member?(known_ids, row.api_key_id) and
+          is_nil(row[:api_key_prefix])
+      end)
+      |> Enum.map(& &1.api_key_id)
+
+    orphan_prefixes =
+      if orphan_ids == [] do
+        %{}
+      else
+        Logs.api_key_prefixes_for_ids(service_id, orphan_ids, range)
+      end
+
+    all_key_rows = build_key_rows(api_keys, key_stats, orphan_prefixes)
+
+    key_rows =
+      case key_filter do
+        "all" ->
+          all_key_rows
+
+        key_id ->
+          Enum.filter(all_key_rows, &(&1.stats.api_key_id == key_id))
+      end
+
     summary =
-      DashboardCache.fetch_or_compute(
-        {:service_stats, service_id, period, timezone, key_filter},
-        fn -> Logs.service_stats(service_id, summary_opts) end
+      Map.put(
+        summary_core,
+        :top_models,
+        top_models_from_model_key_stats(model_key_stats, key_filter)
       )
 
     %{
@@ -498,6 +583,34 @@ defmodule TokengateWeb.ServiceStatsBody do
       key_rows: key_rows,
       model_breakdown: build_model_breakdown(model_key_stats, key_rows, key_filter)
     }
+  end
+
+  defp top_models_from_model_key_stats(model_key_stats, key_filter) do
+    stats =
+      case key_filter do
+        "all" -> model_key_stats
+        key_id -> Enum.filter(model_key_stats, &(&1.api_key_id == key_id))
+      end
+
+    stats
+    |> Enum.group_by(& &1.model_requested)
+    |> Enum.map(fn {model_requested, rows} ->
+      %{
+        model_requested: model_requested,
+        count: Enum.sum_by(rows, & &1.request_count),
+        total_cost_usd: Enum.reduce(rows, Decimal.new(0), &Decimal.add(&1.total_cost_usd, &2)),
+        total_prompt_tokens: Enum.sum_by(rows, & &1.total_prompt_tokens),
+        total_completion_tokens: Enum.sum_by(rows, & &1.total_completion_tokens)
+      }
+    end)
+    |> Enum.sort(fn a, b ->
+      case Decimal.compare(a.total_cost_usd, b.total_cost_usd) do
+        :gt -> true
+        :lt -> false
+        :eq -> a.count >= b.count
+      end
+    end)
+    |> Enum.take(5)
   end
 
   @doc """
@@ -547,7 +660,7 @@ defmodule TokengateWeb.ServiceStatsBody do
       nunca con el uuid desnudo;
     * grupo NULL → fila "Unattributed", sólo si trae tráfico.
   """
-  def build_key_rows(api_keys, key_stats) do
+  def build_key_rows(api_keys, key_stats, orphan_prefixes \\ %{}) do
     stats_by_id = Map.new(key_stats, fn row -> {row.api_key_id, row} end)
     known_ids = MapSet.new(api_keys, & &1.id)
 
@@ -569,7 +682,7 @@ defmodule TokengateWeb.ServiceStatsBody do
       |> Enum.map(fn row ->
         %{
           dom_id: "api-key-row-" <> row.api_key_id,
-          label: row.api_key_prefix || "—",
+          label: row[:api_key_prefix] || Map.get(orphan_prefixes, row.api_key_id) || "—",
           status: nil,
           stats: row
         }
@@ -689,9 +802,13 @@ defmodule TokengateWeb.ServiceStatsBody do
   # Bundle completo de la página (stats + primera página de logs) calculado
   # como valores planos: es lo que corre dentro de `start_async/3`.
   def compute_bundle(stats_params, logs_params) do
+    logs_task = Task.async(fn -> compute_logs(logs_params, :reset, nil) end)
+    stats = compute_stats_assigns(stats_params)
+    logs = Task.await(logs_task, @stats_task_timeout_ms)
+
     %{
-      stats: compute_stats_assigns(stats_params),
-      logs: compute_logs(logs_params, :reset, nil)
+      stats: stats,
+      logs: logs
     }
   end
 
@@ -882,32 +999,6 @@ defmodule TokengateWeb.ServiceStatsBody do
 
   ## Sub-components -------------------------------------------------------
 
-  attr :label, :string, required: true
-  attr :value, :string, required: true
-  attr :sub, :string, default: ""
-  attr :icon, :string, default: "hero-chart-bar"
-  attr :tone, :string, default: "default"
-  attr :id, :string, default: nil
-
-  defp stat_card(assigns) do
-    ~H"""
-    <div id={@id} class="card bg-base-100 border border-base-300 shadow-sm">
-      <div class="card-body p-4">
-        <div class="flex items-center justify-between">
-          <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-            {@label}
-          </p>
-          <.icon name={@icon} class="w-4 h-4 text-base-content/40" />
-        </div>
-        <p class={["mt-1 text-2xl font-bold", tone_class(@tone)]}>
-          {@value}
-        </p>
-        <p :if={@sub != ""} class="text-xs text-base-content/40 mt-1">{@sub}</p>
-      </div>
-    </div>
-    """
-  end
-
   attr :class_label, :string, required: true
   attr :count, :integer, default: 0
   attr :tone, :string, default: "default"
@@ -921,19 +1012,14 @@ defmodule TokengateWeb.ServiceStatsBody do
     """
   end
 
-  defp tone_class("error"), do: "text-error"
-  defp tone_class("warning"), do: "text-warning"
-  defp tone_class("success"), do: "text-success"
-  defp tone_class(_), do: "text-base-content"
-
   defp row_tone("error"), do: "badge-error"
   defp row_tone("warning"), do: "badge-warning"
   defp row_tone("success"), do: "badge-success"
   defp row_tone(_), do: "badge-ghost"
 
-  defp error_tone(%{"5xx" => n}) when n > 0, do: "error"
-  defp error_tone(%{"4xx" => n}) when n > 0, do: "warning"
-  defp error_tone(_), do: "default"
+  defp error_accent(%{"5xx" => n}) when n > 0, do: "error"
+  defp error_accent(%{"4xx" => n}) when n > 0, do: "warning"
+  defp error_accent(_), do: "neutral"
 
   ## Format helpers -------------------------------------------------------
 
@@ -1012,7 +1098,7 @@ defmodule TokengateWeb.ServiceStatsBody do
   Etiqueta del gasto del servicio: ilimitado, su techo mensual, o sin
   presupuesto (solo top-ups) — el modelo no tiene suscripciones.
   """
-  def limit_label(%{unlimited_spend: true}), do: "Ilimitado"
+  def limit_label(%{unlimited_spend: true}), do: gettext("Unlimited")
 
   def limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
     do: gettext("Cap $%{amount}/month", amount: Decimal.to_string(limit))

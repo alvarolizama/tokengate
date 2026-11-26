@@ -1788,6 +1788,29 @@ defmodule Tokengate.Logs do
   end
 
   @doc """
+  Single-pass core aggregate for a single **service** over `request_logs`.
+
+  Computes cost, prompt/completion/cache tokens, request count, latency/TTFT/TPS,
+  status breakdown, `last_request_at`, and the rolling `realtime_5min` window in
+  ONE index-only scan over `request_logs_service_spend_covering_idx` (unlike
+  `service_stats/2`, omits `top_models` which callers can derive in memory from
+  `service_model_key_stats/2`).
+  """
+  @spec service_summary_core(binary(), keyword() | map()) :: map()
+  def service_summary_core(service_id, opts \\ []) do
+    opts_map =
+      cond do
+        is_map(opts) -> opts
+        is_list(opts) -> Map.new(opts)
+        true -> %{}
+      end
+      |> ensure_window!("Logs.service_summary_core/2")
+
+    filters = service_stats_filters(service_id, opts_map)
+    service_summary_core_for_filters(filters)
+  end
+
+  @doc """
   Aggregated stats for a single **service** (the service-detail stats page).
 
   Mirror of `member_stats/2` for the service subject: a service has no
@@ -1814,6 +1837,13 @@ defmodule Tokengate.Logs do
       end
       |> ensure_window!("Logs.service_stats/2")
 
+    filters = service_stats_filters(service_id, opts_map)
+
+    service_summary_core_for_filters(filters)
+    |> Map.put(:top_models, top_models_for_service(filters))
+  end
+
+  defp service_stats_filters(service_id, opts_map) do
     range =
       opts_map
       |> Map.take([:from, :to])
@@ -1822,34 +1852,87 @@ defmodule Tokengate.Logs do
 
     filters = Map.merge(%{"service_id" => service_id}, range)
 
-    # Scope opcional por key (drill-down del selector de la página de stats):
-    # entra al MISMO mapa de filtros que consumen los cuatro cómputos de
-    # abajo — summary, desglose, top models, último request y realtime — para
-    # que ninguno escape del scope.
-    filters =
-      case Map.get(opts_map, :api_key_id) do
-        nil -> filters
-        key_id when is_binary(key_id) -> Map.put(filters, "api_key_id", key_id)
-        # Valor no-binario (payload forjado o error de llamada): se ignora
-        # antes que reventar una API pública.
-        _ -> filters
-      end
+    case Map.get(opts_map, :api_key_id) do
+      nil -> filters
+      key_id when is_binary(key_id) -> Map.put(filters, "api_key_id", key_id)
+      _ -> filters
+    end
+  end
 
-    last_request_at =
+  defp service_summary_core_for_filters(filters) do
+    cutoff =
+      DateTime.utc_now()
+      |> DateTime.add(-300, :second)
+      |> DateTime.truncate(:second)
+
+    result =
       RequestLog
       |> apply_log_filters(filters)
-      |> select([rl], rl.inserted_at)
-      |> order_by([rl], desc: rl.inserted_at)
-      |> limit(1)
-      |> Repo.one()
+      |> select([rl], %{
+        total_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+        total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+        total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
+        total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
+        request_count: count(rl.id),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms),
+        avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
+        avg_ttft_ms: fragment("AVG(?)", rl.ttft_ms),
+        status_2xx: fragment("COUNT(*) FILTER (WHERE ? BETWEEN 200 AND 299)", rl.status_code),
+        status_4xx: fragment("COUNT(*) FILTER (WHERE ? BETWEEN 400 AND 499)", rl.status_code),
+        status_5xx: fragment("COUNT(*) FILTER (WHERE ? BETWEEN 500 AND 599)", rl.status_code),
+        last_request_at: max(rl.inserted_at),
+        rt_request_count:
+          fragment(
+            "COUNT(*) FILTER (WHERE ? >= ?)",
+            rl.inserted_at,
+            type(^cutoff, :utc_datetime)
+          ),
+        rt_error_count:
+          fragment(
+            "COUNT(*) FILTER (WHERE ? >= ? AND ? >= 400)",
+            rl.inserted_at,
+            type(^cutoff, :utc_datetime),
+            rl.status_code
+          ),
+        rt_avg_latency_ms:
+          fragment(
+            "AVG(?) FILTER (WHERE ? >= ?)",
+            rl.latency_ms,
+            rl.inserted_at,
+            type(^cutoff, :utc_datetime)
+          )
+      })
+      |> Repo.one(timeout: stats_timeout())
 
-    cost_summary(filters)
-    |> Map.merge(%{
-      status_breakdown: status_breakdown_for_service(filters),
-      top_models: top_models_for_service(filters),
-      last_request_at: last_request_at,
-      realtime_5min: realtime_summary(filters)
-    })
+    rt_request_count = result.rt_request_count
+    rt_error_count = result.rt_error_count
+
+    %{
+      total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
+      total_prompt_tokens: result.total_prompt_tokens,
+      total_completion_tokens: result.total_completion_tokens,
+      total_cache_read_tokens: result.total_cache_read_tokens,
+      total_cache_creation_tokens: result.total_cache_creation_tokens,
+      request_count: result.request_count,
+      total_latency_ms: result.total_latency_ms,
+      avg_latency_ms: avg_to_float(result.avg_latency_ms),
+      avg_ttft_ms: avg_to_float(result.avg_ttft_ms),
+      avg_tps: compute_avg_tps(result.total_completion_tokens, result.total_latency_ms),
+      status_breakdown: %{
+        "2xx" => result.status_2xx,
+        "4xx" => result.status_4xx,
+        "5xx" => result.status_5xx
+      },
+      last_request_at: result.last_request_at,
+      realtime_5min: %{
+        request_count: rt_request_count,
+        req_per_min: Float.round(rt_request_count / 5, 1),
+        avg_latency_ms: avg_to_float(result.rt_avg_latency_ms),
+        error_count: rt_error_count,
+        error_rate: error_rate(rt_request_count, rt_error_count)
+      }
+    }
   end
 
   @doc """
@@ -1870,6 +1953,9 @@ defmodule Tokengate.Logs do
 
     * `:from` — `inserted_at >= from` (DateTime). Opcional.
     * `:to`   — `inserted_at <= to` (DateTime). Opcional.
+    * `:include_prefixes` — boolean (default `true`). When `false`, drops
+      `max(rl.api_key_prefix)` from the GROUP BY query to keep the scan
+      minimal; callers can resolve orphan IDs via `api_key_prefixes_for_ids/3`.
   """
   @spec service_key_stats(binary(), keyword() | map()) :: [
           %{
@@ -1899,58 +1985,82 @@ defmodule Tokengate.Logs do
       |> Map.new()
 
     filters = Map.merge(%{"service_id" => service_id}, range)
+    include_prefixes = Map.get(opts_map, :include_prefixes, true)
 
-    RequestLog
-    |> apply_log_filters(filters)
-    |> group_by([rl], rl.api_key_id)
-    |> select([rl], %{
-      api_key_id: rl.api_key_id,
-      request_count: count(rl.id),
-      total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
-      total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
-      total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
-      total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
-      total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
-      last_request_at: max(rl.inserted_at),
-      api_key_prefix: max(rl.api_key_prefix)
-    })
+    base =
+      RequestLog
+      |> apply_log_filters(filters)
+      |> group_by([rl], rl.api_key_id)
+
+    query =
+      if include_prefixes do
+        select(base, [rl], %{
+          api_key_id: rl.api_key_id,
+          request_count: count(rl.id),
+          total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
+          total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+          total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+          total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
+          total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
+          last_request_at: max(rl.inserted_at),
+          api_key_prefix: max(rl.api_key_prefix)
+        })
+      else
+        select(base, [rl], %{
+          api_key_id: rl.api_key_id,
+          request_count: count(rl.id),
+          total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
+          total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+          total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+          total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
+          total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
+          last_request_at: max(rl.inserted_at)
+        })
+      end
+
+    query
     |> Repo.all(timeout: stats_timeout())
     |> Enum.map(fn row ->
-      %{row | total_cost_usd: Decimal.new(to_string(row.total_cost_usd))}
+      row
+      |> Map.put(:total_cost_usd, Decimal.new(to_string(row.total_cost_usd)))
+      |> Map.put_new(:api_key_prefix, nil)
     end)
   end
 
-  defp status_breakdown_for_service(filters) do
-    empty = %{"2xx" => 0, "4xx" => 0, "5xx" => 0}
+  @doc """
+  Resolves `api_key_prefix` for a targeted list of orphan `api_key_id`s
+  (deleted keys still referenced in `request_logs`). Returns `%{api_key_id => prefix}`.
+  """
+  @spec api_key_prefixes_for_ids(binary(), [binary()], keyword() | map()) :: %{
+          binary() => String.t()
+        }
+  def api_key_prefixes_for_ids(service_id, api_key_ids, opts \\ [])
+
+  def api_key_prefixes_for_ids(_service_id, [], _opts), do: %{}
+
+  def api_key_prefixes_for_ids(service_id, api_key_ids, opts) when is_list(api_key_ids) do
+    opts_map =
+      cond do
+        is_map(opts) -> opts
+        is_list(opts) -> Map.new(opts)
+        true -> %{}
+      end
+
+    range =
+      opts_map
+      |> Map.take([:from, :to])
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    filters = Map.merge(%{"service_id" => service_id}, range)
 
     RequestLog
     |> apply_log_filters(filters)
-    |> group_by(
-      [rl],
-      fragment(
-        "CASE WHEN ? BETWEEN 200 AND 299 THEN '2xx'
-              WHEN ? BETWEEN 400 AND 499 THEN '4xx'
-              WHEN ? BETWEEN 500 AND 599 THEN '5xx'
-              ELSE NULL END",
-        rl.status_code,
-        rl.status_code,
-        rl.status_code
-      )
-    )
-    |> select(
-      [rl],
-      {fragment(
-         "CASE WHEN ? BETWEEN 200 AND 299 THEN '2xx'
-               WHEN ? BETWEEN 400 AND 499 THEN '4xx'
-               WHEN ? BETWEEN 500 AND 599 THEN '5xx'
-               ELSE NULL END",
-         rl.status_code,
-         rl.status_code,
-         rl.status_code
-       ), count(rl.id)}
-    )
+    |> where([rl], rl.api_key_id in ^api_key_ids and not is_nil(rl.api_key_prefix))
+    |> group_by([rl], rl.api_key_id)
+    |> select([rl], {rl.api_key_id, max(rl.api_key_prefix)})
     |> Repo.all(timeout: stats_timeout())
-    |> Enum.reduce(empty, fn {class, n}, acc -> Map.put(acc, class, n) end)
+    |> Map.new()
   end
 
   defp top_models_for_service(filters, limit \\ 5) do

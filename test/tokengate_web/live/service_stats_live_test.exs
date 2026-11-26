@@ -72,6 +72,27 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
     |> String.trim()
   end
 
+  defp assigns_of(view), do: :sys.get_state(view.pid).socket.assigns
+
+  defp wait_loaded(view) do
+    wait_for_assign(view, fn assigns -> assigns.stats_loading == false end)
+    view
+  end
+
+  defp wait_for_assign(view, fun, tries \\ 100) do
+    cond do
+      fun.(assigns_of(view)) ->
+        :ok
+
+      tries == 0 ->
+        flunk("timed out waiting for the LiveView assign")
+
+      true ->
+        Process.sleep(50)
+        wait_for_assign(view, fun, tries - 1)
+    end
+  end
+
   defp log_for(service, attrs) do
     Logs.log_request(
       Map.merge(
@@ -130,7 +151,8 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       {:ok, _} = log_for(service, %{model_requested: "gpt-4o-svc", status_code: 200})
       {:ok, _} = log_for(service, %{model_requested: "gpt-4o-svc", status_code: 503})
 
-      {:ok, _view, html} = live(conn, ~p"/stats/services/#{service.id}")
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      html = render(wait_loaded(view))
 
       assert html =~ "gpt-4o-svc"
       assert html =~ "200"
@@ -146,7 +168,8 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       {:ok, _} = log_for(service, %{model_requested: "only-this-one"})
       {:ok, _} = log_for(other, %{model_requested: "other-service-model"})
 
-      {:ok, _view, html} = live(conn, ~p"/stats/services/#{service.id}")
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      html = render(wait_loaded(view))
 
       assert html =~ "only-this-one"
       refute html =~ "other-service-model"
@@ -164,6 +187,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       conn = login(conn, admin, password)
 
       {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      wait_loaded(view)
 
       row = "#api-key-row-#{key.id}"
 
@@ -191,6 +215,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       conn = login(conn, admin, password)
 
       {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      wait_loaded(view)
 
       row = "#api-key-row-unattributed"
       assert has_element?(view, row)
@@ -210,6 +235,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       conn = login(conn, admin, password)
 
       {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      wait_loaded(view)
 
       row = "#api-key-row-#{orphan_id}"
       assert has_element?(view, row)
@@ -232,6 +258,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      wait_loaded(view)
 
       # Todas (default): las dos filas —la revocada incluida— y KPI = 2.
       assert has_element?(view, "#api-key-row-#{key_a.id}")
@@ -241,10 +268,11 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       # Sólo Beta (revocada): una fila, KPI = 1, logs scopeados y el selector
       # la lista marcada como revocada. Payload REAL del browser: anidado por
       # el to_form (name="key_filter[key_id]").
-      html =
-        view
-        |> form("#key-filter-form", %{"key_filter" => %{"key_id" => key_b.id}})
-        |> render_change()
+      view
+      |> form("#key-filter-form", %{"key_filter" => %{"key_id" => key_b.id}})
+      |> render_change()
+
+      html = render(wait_loaded(view))
 
       assert html =~ "Beta · Revocada"
       assert has_element?(view, "#api-key-row-#{key_b.id}")
@@ -260,6 +288,8 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       view
       |> form("#key-filter-form", %{"key_filter" => %{"key_id" => "all"}})
       |> render_change()
+
+      wait_loaded(view)
 
       assert has_element?(view, "#api-key-row-#{key_a.id}")
       assert has_element?(view, "#api-key-row-#{key_b.id}")
@@ -285,6 +315,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       conn = login(conn, admin, password)
 
       {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      wait_loaded(view)
 
       # El selector es un grupo de patch links (?period=...): cambiar de
       # periodo es navegación, no evento — handle_params es el único punto
@@ -297,6 +328,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       # Click a "today": el log de hoy sigue en la ventana y la tabla cuadra
       # con el KPI (mismo `from` compartido).
       view |> element("#period-today") |> render_click()
+      wait_loaded(view)
 
       assert has_element?(view, "#api-key-row-#{key.id}")
       assert cell_text(view, "#api-key-row-#{key.id} td:nth-child(3)") == "1"
@@ -304,12 +336,14 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
 
       # Click a "30d": el log de hoy también cae dentro de la ventana móvil.
       view |> element("#period-30d") |> render_click()
+      wait_loaded(view)
 
       assert has_element?(view, "#api-key-row-#{key.id}")
 
       # Un periodo desconocido viaja por la URL y se resuelve al default en
       # vez de reventar.
       {:ok, view_bogus, _html} = live(conn, ~p"/stats/services/#{service.id}?period=hack")
+      wait_loaded(view_bogus)
 
       assert has_element?(view_bogus, "#api-key-row-#{key.id}")
       # Vuelve al selector con el periodo default resuelto (week).
@@ -328,6 +362,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       conn = login(conn, admin, password)
 
       {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      wait_loaded(view)
 
       key_row = "#api-key-row-#{key.id}"
 
@@ -339,6 +374,29 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       # 2 atribuidos + 1 sin atribuir = el KPI de requests.
       assert render(element(view, "#kpi-requests")) =~
                ~r/text-2xl font-bold[^>]*>\s*3\s*</
+    end
+
+    test "a failed async load surfaces load_error state", %{conn: conn} do
+      service = service_fixture()
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      wait_loaded(view)
+
+      refute has_element?(view, "#service-stats-load-error")
+
+      socket = :sys.get_state(view.pid).socket
+
+      assert {:noreply, socket} =
+               TokengateWeb.ServiceStatsLive.handle_async(
+                 :service_bundle,
+                 {:exit, :timeout},
+                 socket
+               )
+
+      assert socket.assigns.load_error == :load_failed
+      assert socket.assigns.stats_loading == false
     end
   end
 

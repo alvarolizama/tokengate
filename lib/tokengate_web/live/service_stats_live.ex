@@ -79,9 +79,10 @@ defmodule TokengateWeb.ServiceStatsLive do
       |> assign(:key_rows, [])
       |> assign(:model_breakdown, %{rows: [], key_labels: %{}})
       |> assign(:summary_refresh_scheduled, false)
+      |> assign(:load_error, nil)
+      |> assign(:stats_loading, false)
+      |> stream(:logs, [], reset: true)
       |> require_admin_hook()
-      |> ServiceStatsBody.load_stats()
-      |> ServiceStatsBody.load_logs(:reset)
 
     {:ok, socket}
   end
@@ -147,7 +148,7 @@ defmodule TokengateWeb.ServiceStatsLive do
     {:noreply,
      socket
      |> assign(:summary_refresh_scheduled, false)
-     |> ServiceStatsBody.load_stats()}
+     |> load_stats_async()}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -194,8 +195,8 @@ defmodule TokengateWeb.ServiceStatsLive do
        socket
        |> assign(:key_filter, key_id)
        |> assign(:key_filter_form, to_form(%{"key_id" => key_id}, as: :key_filter))
-       |> ServiceStatsBody.load_stats()
-       |> ServiceStatsBody.load_logs(:reset)}
+       |> assign(:cursor, nil)
+       |> load_bundle()}
     else
       {:noreply, socket}
     end
@@ -208,17 +209,59 @@ defmodule TokengateWeb.ServiceStatsLive do
   # periodo.
   @impl true
   def handle_params(params, _uri, socket) do
-    period = parse_period(params["period"])
+    {:noreply,
+     socket
+     |> assign(:period, parse_period(params["period"]))
+     |> load_bundle()}
+  end
 
-    if period == socket.assigns.period do
-      {:noreply, socket}
-    else
-      {:noreply,
-       socket
-       |> assign(:period, period)
-       |> ServiceStatsBody.load_stats()
-       |> ServiceStatsBody.load_logs(:reset)}
-    end
+  defp load_bundle(socket) do
+    stats_params = ServiceStatsBody.stats_params(socket.assigns)
+    logs_params = ServiceStatsBody.logs_params(socket.assigns)
+
+    socket
+    |> assign(:load_error, nil)
+    |> assign(:stats_loading, true)
+    |> start_async(:service_bundle, fn ->
+      ServiceStatsBody.compute_bundle(stats_params, logs_params)
+    end)
+  end
+
+  defp load_stats_async(socket) do
+    stats_params = ServiceStatsBody.stats_params(socket.assigns)
+
+    start_async(socket, :service_stats, fn ->
+      ServiceStatsBody.compute_stats_assigns(stats_params)
+    end)
+  end
+
+  @impl true
+  def handle_async(:service_bundle, {:ok, bundle}, socket) do
+    {:noreply,
+     socket
+     |> ServiceStatsBody.apply_bundle(bundle)
+     |> assign(:stats_loading, false)
+     |> assign(:load_error, nil)}
+  end
+
+  def handle_async(:service_bundle, {:exit, reason}, socket) do
+    require Logger
+    Logger.warning("service stats load failed: #{inspect(reason)}")
+
+    {:noreply,
+     socket
+     |> assign(:stats_loading, false)
+     |> assign(:load_error, :load_failed)}
+  end
+
+  def handle_async(:service_stats, {:ok, stats}, socket) do
+    {:noreply, assign(socket, stats)}
+  end
+
+  def handle_async(:service_stats, {:exit, reason}, socket) do
+    require Logger
+    Logger.warning("service stats refresh failed: #{inspect(reason)}")
+    {:noreply, socket}
   end
 
   defp parse_period(period) do
@@ -256,6 +299,18 @@ defmodule TokengateWeb.ServiceStatsLive do
           </div>
         </header>
 
+        <div
+          :if={@load_error}
+          id="service-stats-load-error"
+          class="alert alert-warning text-sm"
+          role="alert"
+        >
+          <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
+          <span>
+            {gettext("Could not load this period. The data below is from the previous period.")}
+          </span>
+        </div>
+
         <ServiceStatsBody.panel
           service={@service}
           service_api_keys={@service_api_keys}
@@ -270,6 +325,7 @@ defmodule TokengateWeb.ServiceStatsLive do
           streams={@streams}
           has_more={@has_more}
           logs_empty?={@logs_empty?}
+          stats_loading={@stats_loading}
         />
       </div>
     </Layouts.dashboard>

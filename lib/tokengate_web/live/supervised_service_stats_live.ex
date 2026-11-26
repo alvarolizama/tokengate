@@ -35,7 +35,6 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Providers
-  alias Tokengate.Repo
   alias TokengateWeb.ServiceStatsBody
 
   import TokengateWeb.StatsHelpers, only: [period_label: 1]
@@ -77,7 +76,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
            socket
            |> assign(:denied?, false)
            |> assign(:page_title, "Stats · #{service.name} · Tokengate")
-           |> assign(:service, Repo.preload(service, [:api_key]))
+           |> assign(:service, service)
            |> assign(:granted_models, granted_models)
            |> assign(
              :models,
@@ -219,7 +218,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
     {:noreply,
      socket
      |> assign(:summary_refresh_scheduled, false)
-     |> ServiceStatsBody.load_stats()}
+     |> load_stats_async()}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -235,8 +234,8 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
        socket
        |> assign(:key_filter, key_id)
        |> assign(:key_filter_form, to_form(%{"key_id" => key_id}, as: :key_filter))
-       |> ServiceStatsBody.load_stats()
-       |> ServiceStatsBody.load_logs(:reset)}
+       |> assign(:cursor, nil)
+       |> load_bundle()}
     else
       {:noreply, socket}
     end
@@ -290,6 +289,14 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
     end)
   end
 
+  defp load_stats_async(socket) do
+    stats_params = ServiceStatsBody.stats_params(socket.assigns)
+
+    start_async(socket, :service_stats, fn ->
+      ServiceStatsBody.compute_stats_assigns(stats_params)
+    end)
+  end
+
   ## El bundle llegó: stats + primera página del stream en un solo diff.
   @impl true
   def handle_async(:service_bundle, {:ok, bundle}, socket) do
@@ -311,6 +318,16 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
      socket
      |> assign(:stats_loading, false)
      |> assign(:load_error, :load_failed)}
+  end
+
+  def handle_async(:service_stats, {:ok, stats}, socket) do
+    {:noreply, assign(socket, stats)}
+  end
+
+  def handle_async(:service_stats, {:exit, reason}, socket) do
+    require Logger
+    Logger.warning("supervised service stats refresh failed: #{inspect(reason)}")
+    {:noreply, socket}
   end
 
   ## Template helpers -----------------------------------------------------
@@ -408,6 +425,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           load_more_id="load-more-supervised-logs"
           show_service_summary={false}
           compact_numbers={true}
+          stats_loading={@stats_loading}
         />
 
         <%!-- Read-only configuration --%>
@@ -421,18 +439,13 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
             <dl class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
               <div class="rounded-xl border border-base-300 px-3 py-2">
                 <dt class="text-[10px] uppercase tracking-wide text-base-content/60">API key</dt>
-                <dd class="mt-1 flex items-center gap-2">
-                  <%= if @service.api_key do %>
-                    <span class="font-mono">{@service.api_key.key_prefix}…</span>
-                    <span class={[
-                      "badge badge-xs",
-                      if(@service.api_key.status == "active",
-                        do: "badge-success",
-                        else: "badge-error"
-                      )
-                    ]}>
-                      {@service.api_key.status}
-                    </span>
+                <dd class="mt-1 flex flex-wrap items-center gap-2">
+                  <% active_keys = Enum.filter(@service_api_keys, &(&1.status == "active")) %>
+                  <%= if active_keys != [] do %>
+                    <div :for={key <- active_keys} class="inline-flex items-center gap-1.5">
+                      <span class="font-mono">{key.key_prefix}…</span>
+                      <span class="badge badge-xs badge-success">{key.status}</span>
+                    </div>
                   <% else %>
                     <span class="text-base-content/40">{gettext("No key")}</span>
                   <% end %>

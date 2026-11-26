@@ -512,6 +512,8 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
       |> form("#key-filter-form", %{"key_filter" => %{"key_id" => key_b.id}})
       |> render_change()
 
+      wait_loaded(view)
+
       assert has_element?(view, "#api-key-row-#{key_b.id}")
       refute has_element?(view, "#api-key-row-#{key_a.id}")
       assert has_element?(view, "#model-breakdown-beta-model")
@@ -524,6 +526,8 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
       view
       |> form("#key-filter-form", %{"key_filter" => %{"key_id" => "all"}})
       |> render_change()
+
+      wait_loaded(view)
 
       assert has_element?(view, "#api-key-row-#{key_a.id}")
       assert has_element?(view, "#api-key-row-#{key_b.id}")

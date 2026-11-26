@@ -293,6 +293,36 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     assert render(element(view, "#supervised-service-#{service.id}")) =~ "2 claves"
   end
 
+  test "caps visible model badges at 4 and renders overflow count with title", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+    service = supervised_service(user, %{"name" => "Many Models"})
+
+    models =
+      for i <- 1..6 do
+        %{model: m} = grant_model_to_service(service)
+        {i, m}
+      end
+
+    conn = login(conn, user, password)
+    {:ok, view, html} = live(conn, ~p"/services/supervised")
+
+    assert has_element?(view, "#models-overflow-#{service.id}")
+    assert render(element(view, "#models-overflow-#{service.id}")) =~ "+2"
+
+    # Totals summary renders above the supervised services table.
+    {totals_pos, _} = :binary.match(html, ~s(id="supervised-totals"))
+    {table_pos, _} = :binary.match(html, ~s(id="supervised-services"))
+    assert totals_pos < table_pos
+
+    for {i, m} <- models do
+      if i <= 4 do
+        assert has_element?(view, "#model-badge-#{service.id}-#{m.id}")
+      else
+        refute has_element?(view, "#model-badge-#{service.id}-#{m.id}")
+      end
+    end
+  end
+
   test "service with no models shows the empty models message", %{conn: conn} do
     %{user: user, password: password} = register("user")
     service = supervised_service(user)
