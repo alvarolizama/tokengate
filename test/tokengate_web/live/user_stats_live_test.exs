@@ -62,6 +62,23 @@ defmodule TokengateWeb.UserStatsLiveTest do
     |> LazyHTML.query("#user-stats-logs tr:not(#user-stats-logs-empty)")
   end
 
+  defp wait_stats_loaded(view, attempts \\ 200)
+
+  defp wait_stats_loaded(view, attempts) when attempts > 0 do
+    state = :sys.get_state(view.pid)
+
+    case get_in(state, [Access.key(:socket), Access.key(:assigns), Access.key(:stats_loading)]) do
+      false ->
+        view
+
+      _other ->
+        Process.sleep(10)
+        wait_stats_loaded(view, attempts - 1)
+    end
+  end
+
+  defp wait_stats_loaded(_view, 0), do: raise("user stats async data never loaded")
+
   describe "auth" do
     test "unauthenticated visitors are redirected to /login", %{conn: conn} do
       {_, user} = fixture_user_with_memberships()
@@ -125,7 +142,9 @@ defmodule TokengateWeb.UserStatsLiveTest do
           latency_ms: 100
         })
 
-      {:ok, _view, html} = live(conn, ~p"/stats/users/#{user.id}")
+      {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      wait_stats_loaded(view)
+      html = render(view)
 
       assert html =~ "gpt-4o-stats"
       assert html =~ "200"
@@ -151,11 +170,73 @@ defmodule TokengateWeb.UserStatsLiveTest do
         latency_ms: 300
       })
 
-      {:ok, _view, html} = live(conn, ~p"/stats/users/#{user.id}")
+      {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      wait_stats_loaded(view)
 
-      # Cost card renders with the dollar sign and at least some digits.
-      assert html =~ "Costo (5d)"
-      assert html =~ "$0"
+      # Cost card renders with the canonical period label and dollar amount.
+      assert has_element?(view, "#user-kpi-cost", "Costo")
+      assert has_element?(view, "#user-kpi-cost", "$0.123")
+      assert has_element?(view, "#period-selector")
+      assert has_element?(view, "#period-week.btn-primary")
+    end
+
+    test "period selector switches window via ?period= and scopes summary", %{conn: conn} do
+      {group, user} = fixture_user_with_memberships()
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      member = hd(Accounts.list_group_members_for_user(user.id))
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      ten_days_ago = DateTime.add(now, -10 * 86_400, :second)
+
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          group_id: group.id,
+          user_email: user.email,
+          model_requested: "old-period-model",
+          status_code: 200,
+          prompt_tokens: 200,
+          completion_tokens: 100,
+          provider_cost_usd: Decimal.new("0.500"),
+          latency_ms: 150,
+          inserted_at: ten_days_ago
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      wait_stats_loaded(view)
+
+      # Default is "week": 10-day-old log is outside the week window.
+      assert has_element?(view, "#period-week.btn-primary")
+      assert has_element?(view, "#user-kpi-requests", "0")
+
+      # Switching to 30d includes the 10-day-old log.
+      view |> element("#period-30d") |> render_click()
+      wait_stats_loaded(view)
+
+      assert has_element?(view, "#period-30d.btn-primary")
+      assert has_element?(view, "#user-kpi-requests", "1")
+      assert has_element?(view, "#user-kpi-cost", "$0.5")
+    end
+
+    test "shows load error banner when an async load exits", %{conn: conn} do
+      {_, user} = fixture_user_with_memberships()
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      wait_stats_loaded(view)
+      refute has_element?(view, "#user-stats-load-error")
+
+      {:noreply, err_socket} =
+        TokengateWeb.UserStatsLive.handle_async(
+          :user_summary,
+          {:exit, :boom},
+          :sys.get_state(view.pid).socket
+        )
+
+      assert err_socket.assigns.load_error == true
+      assert err_socket.assigns.stats_loading == false
     end
 
     test "la membresía única enlaza a su grupo", %{conn: conn} do
@@ -228,6 +309,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       end
 
       {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      wait_stats_loaded(view)
       assert Enum.count(log_rows(view)) == 2
 
       from = Date.add(Date.utc_today(), -5) |> Date.to_string()
@@ -236,6 +318,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       |> form("#user-stats-filter-form", %{"filter" => %{"from" => from}})
       |> render_change()
 
+      wait_stats_loaded(view)
       assert Enum.count(log_rows(view)) == 1
       assert render(view) =~ "reciente-model"
 
@@ -245,6 +328,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       |> form("#user-stats-filter-form", %{"filter" => %{"from" => "no-es-fecha"}})
       |> render_change()
 
+      wait_stats_loaded(view)
       assert Enum.count(log_rows(view)) == 2
     end
 
@@ -254,8 +338,11 @@ defmodule TokengateWeb.UserStatsLiveTest do
       conn = login(conn, admin, password)
 
       {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      wait_stats_loaded(view)
 
-      html = render_change(view, "filter", %{"filter" => "wat"})
+      render_change(view, "filter", %{"filter" => "wat"})
+      wait_stats_loaded(view)
+      html = render(view)
 
       assert html =~ user.email
       assert has_element?(view, "#user-stats-filter-form")
@@ -268,6 +355,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       conn = login(conn, admin, password)
 
       {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      wait_stats_loaded(view)
 
       view
       |> form("#user-stats-filter-form", %{
@@ -275,6 +363,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       })
       |> render_change()
 
+      wait_stats_loaded(view)
       assert has_element?(view, "#user-stats-filter-form")
     end
 
@@ -286,6 +375,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       conn = login(conn, admin, password)
 
       {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      wait_stats_loaded(view)
 
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 

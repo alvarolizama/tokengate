@@ -111,7 +111,7 @@ defmodule TokengateWeb.StatsLive.Provider do
               "#{Stats.format_number(@provider_metrics.total_prompt_tokens)} in / #{Stats.format_number(@provider_metrics.total_completion_tokens)} out"
             }
           >
-            <span class="flex items-baseline gap-2">
+            <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
               {Stats.format_compact(@provider_metrics.total_prompt_tokens)}
               <span class="text-sm text-base-content/50">in</span>
               <span class="text-base-content/30">/</span>

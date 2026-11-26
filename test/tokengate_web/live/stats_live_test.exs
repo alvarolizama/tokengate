@@ -1068,11 +1068,11 @@ defmodule TokengateWeb.StatsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/stats")
 
-    # El card mide el día UTC (la misma ventana que Mantenimiento), así que su
-    # texto no puede nombrar la zona del usuario como si el número midiera su
-    # día local.
-    assert has_element?(view, "#live-org-budget", "Gasto del día UTC")
-    refute has_element?(view, "#live-org-budget", "día local")
+    # El card duplicado `#live-org-budget` se consolidó en `#live-today-cost`
+    # (S3: un solo card de gasto UTC del día).
+    refute has_element?(view, "#live-org-budget")
+    assert has_element?(view, "#live-today-cost", "Hoy · costo (UTC)")
+    refute has_element?(view, "#live-today-cost", "día local")
 
     # Sin tope diario: ni barra, ni %, ni exentos, ni countdown en el card.
     refute has_element?(view, "#live-org-budget-exempt")
@@ -1081,7 +1081,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     # El número queda como dato simple: el gasto del día, sin límite a la vista.
     assert has_element?(view, "#live-org-budget-spend")
-    refute has_element?(view, "#live-org-budget", "en tu hora local")
+    refute has_element?(view, "#live-today-cost", "en tu hora local")
   end
 
   test "En vivo: el card de gasto mide el día UTC, la misma ventana que Mantenimiento",
@@ -1614,7 +1614,9 @@ defmodule TokengateWeb.StatsLiveTest do
         |> Kernel.+(1)
 
       # Filtering keeps the original ranking position instead of renumbering.
-      view |> element("#provider-list-search") |> render_change(%{"value" => c.provider.name})
+      view
+      |> element("#provider-list-search-form")
+      |> render_change(%{"value" => c.provider.name})
 
       assert has_element?(view, "#provider-ranking-row-#{c.provider.id}")
       refute has_element?(view, "#provider-ranking-row-#{a.provider.id}")
@@ -1635,7 +1637,7 @@ defmodule TokengateWeb.StatsLiveTest do
       view = wait_stats_loaded(view)
 
       view
-      |> element("#provider-list-search")
+      |> element("#provider-list-search-form")
       |> render_change(%{"value" => "no-existe-este-proveedor"})
 
       assert has_element?(view, "#provider-list-empty")
@@ -1820,7 +1822,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
       # Filtra por nombre de modelo: queda sólo la fila que coincide, y
       # conserva su puesto (filtrar no renumera).
-      view |> element("#model-list-search") |> render_change(%{"value" => b.model.name})
+      view |> element("#model-list-search-form") |> render_change(%{"value" => b.model.name})
 
       assert has_element?(view, "#model-ranking-row-#{b.model.id}")
       refute has_element?(view, "#model-ranking-row-#{a.model.id}")
@@ -1846,18 +1848,20 @@ defmodule TokengateWeb.StatsLiveTest do
       assert has_element?(view, "#bd-user-#{b.owner.id}")
 
       # Por correo: queda sólo el que coincide.
-      view |> element("#user-list-search") |> render_change(%{"value" => b.owner.email})
+      view |> element("#user-list-search-form") |> render_change(%{"value" => b.owner.email})
 
       refute has_element?(view, "#bd-user-#{a.owner.id}")
       assert has_element?(view, "#bd-user-#{b.owner.id}")
 
       # Y se puede buscar por NOMBRE (no sólo por correo).
-      view |> element("#user-list-search") |> render_change(%{"value" => b.owner.name})
+      view |> element("#user-list-search-form") |> render_change(%{"value" => b.owner.name})
 
       assert has_element?(view, "#bd-user-#{b.owner.id}")
 
       # Sin coincidencias avisa en vez de dejar la tabla vacía sin explicación.
-      view |> element("#user-list-search") |> render_change(%{"value" => "nadie-coincide-aca"})
+      view
+      |> element("#user-list-search-form")
+      |> render_change(%{"value" => "nadie-coincide-aca"})
 
       assert has_element?(view, "#user-list-empty")
       refute has_element?(view, "#user-table")
@@ -1909,7 +1913,7 @@ defmodule TokengateWeb.StatsLiveTest do
       assert has_element?(groups, "#bd-group-#{a.group.id}")
       assert has_element?(groups, "#bd-group-#{b.group.id}")
 
-      groups |> element("#group-list-search") |> render_change(%{"value" => b.group.name})
+      groups |> element("#group-list-search-form") |> render_change(%{"value" => b.group.name})
 
       refute has_element?(groups, "#bd-group-#{a.group.id}")
       assert has_element?(groups, "#bd-group-#{b.group.id}")
@@ -1951,7 +1955,7 @@ defmodule TokengateWeb.StatsLiveTest do
       view = wait_stats_loaded(view)
 
       view
-      |> element("#provider-list-search")
+      |> element("#provider-list-search-form")
       |> render_change(%{"value" => "algo-que-no-coincide"})
 
       assert has_element?(view, "#provider-list-empty")
@@ -2105,6 +2109,14 @@ defmodule TokengateWeb.StatsLiveTest do
       assert has_element?(view, "#agents-table-totals", "Total · 2 agentes")
       assert has_element?(view, "#agents-table-totals", "$0.025")
       assert has_element?(view, "#agents-table-totals", "180")
+      assert has_element?(view, "#csv-agents[href='/stats/export?type=agents&period=today']")
+
+      # Filtrar por agente actualiza los totales y mantiene la medalla del podio.
+      view |> element("#agent-list-search-form") |> render_change(%{"value" => "Claude"})
+      assert has_element?(view, ~s([id="agent-row-Claude Code"]))
+      refute has_element?(view, ~s([id="agent-row-opencode|2"]))
+      assert has_element?(view, "#agents-table-totals", "Total · 1 agentes")
+      assert has_element?(view, "#agents-table-totals", "$0.005")
     end
 
     test "sin tráfico de agentes muestra el estado vacío", %{conn: conn} do
@@ -2119,6 +2131,92 @@ defmodule TokengateWeb.StatsLiveTest do
       assert has_element?(view, "#agent-empty")
       refute has_element?(view, "#agents-table tr")
       assert has_element?(view, "#agents-table-totals", "Total · 0 agentes")
+    end
+
+    test "providers: columnas ordenables y barra de totales filtrada", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      a = group_with_log(%{cost: "0.005", latency_ms: 10})
+      b = group_with_log(%{cost: "0.005", latency_ms: 80})
+      log_extra(a, 10, 10)
+      log_extra(b, 12, 80)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/providers?period=today")
+      view = wait_stats_loaded(view)
+
+      assert has_element?(
+               view,
+               "#provider-ranking table thead th button[phx-click='sort'][phx-value-field='request_count']"
+             )
+
+      assert has_element?(
+               view,
+               "#provider-ranking table thead th button[phx-click='sort'][phx-value-field='score']"
+             )
+
+      assert has_element?(view, "#provider-table-totals", "Total · 2 proveedores")
+      assert has_element?(view, "#provider-table-totals", "24")
+
+      # Ordenar por requests desc coloca b (13 req) antes que a (11 req).
+      view
+      |> element("button[phx-click='sort'][phx-value-field='request_count']")
+      |> render_click()
+
+      html = render(view)
+
+      assert order_before?(
+               html,
+               "provider-ranking-row-#{b.provider.id}",
+               "provider-ranking-row-#{a.provider.id}"
+             )
+
+      # Filtrar recalcula el pie.
+      view
+      |> element("#provider-list-search-form")
+      |> render_change(%{"value" => a.provider.name})
+
+      assert has_element?(view, "#provider-table-totals", "Total · 1 proveedores")
+      assert has_element?(view, "#provider-table-totals", "11")
+    end
+
+    test "services y users: CSV href interpola periodo y totales reflejan el filtro", %{
+      conn: conn
+    } do
+      %{user: admin, password: password} = register("admin")
+      [a, b] = for _ <- 1..2, do: group_with_log(%{cost: "0.005"})
+
+      {:ok, svc1} = Accounts.create_service(%{name: "svc-alpha-#{unique()}"})
+      {:ok, svc2} = Accounts.create_service(%{name: "svc-beta-#{unique()}"})
+      log_for_service(svc1, a.provider, a.model)
+      log_for_service(svc2, b.provider, b.model)
+
+      conn = login(conn, admin, password)
+
+      {:ok, services_view, _html} = live(conn, ~p"/stats/services?period=week")
+      services_view = wait_stats_loaded(services_view)
+
+      assert has_element?(
+               services_view,
+               "#csv-services[href='/stats/export?type=services&period=week']"
+             )
+
+      services_view
+      |> element("#service-list-search-form")
+      |> render_change(%{"value" => svc1.name})
+
+      assert has_element?(services_view, "#service-table-totals", "Total · 1 servicios")
+
+      {:ok, users_view, _html} = live(conn, ~p"/stats/users?period=week")
+      users_view = wait_stats_loaded(users_view)
+
+      assert has_element?(users_view, "#csv-users[href='/stats/export?type=users&period=week']")
+
+      users_view
+      |> element("#user-list-search-form")
+      |> render_change(%{"value" => b.owner.email})
+
+      assert has_element?(users_view, "#user-table-totals", "Total · 1 usuarios")
     end
   end
 

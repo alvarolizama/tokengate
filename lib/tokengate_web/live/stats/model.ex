@@ -14,6 +14,7 @@ defmodule TokengateWeb.StatsLive.Model do
 
   import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
   alias TokengateWeb.StatsHelpers, as: Stats
+  alias TokengateWeb.StatsLive.DailyStackedChart
 
   attr :model, :any, required: true
   attr :model_ranking, :any, required: true
@@ -76,7 +77,7 @@ defmodule TokengateWeb.StatsLive.Model do
       </div>
 
       <%= if @model do %>
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <.kpi_card
             id="model-kpi-requests"
             label="Requests"
@@ -104,7 +105,7 @@ defmodule TokengateWeb.StatsLive.Model do
                       "#{Stats.format_number(@metrics.prompt_tokens)} in / #{Stats.format_number(@metrics.completion_tokens)} out"
                     }
           >
-            <span class="flex items-baseline gap-2">
+            <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
               {Stats.format_compact(@metrics.prompt_tokens)}
               <span class="text-sm text-base-content/50">in</span>
               <span class="text-base-content/30">/</span>
@@ -122,97 +123,14 @@ defmodule TokengateWeb.StatsLive.Model do
         </div>
 
         <%!-- Daily usage sparkline: providers over time --%>
-        <%= if @drilldown_series != [] do %>
-          <% pivoted = Stats.pivot_daily_series(@drilldown_series) %>
-          <% spark_max = Stats.daily_series_max(pivoted) %>
-          <% labels = @drilldown_series_labels %>
-
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-4 gap-2">
-              <div class="flex items-center justify-between">
-                <h2 class="card-title text-base">
-                  <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
-                  {gettext("Daily usage per provider")}
-                </h2>
-                <span class="text-[10px] text-base-content/40 hidden sm:inline">
-                  {Stats.period_label(@period)}
-                </span>
-              </div>
-
-              <div class="flex gap-4 mt-2">
-                <%!-- Chart area --%>
-                <div class="flex-1">
-                  <div class="flex items-end gap-px h-32 relative">
-                    <div
-                      :for={day <- pivoted.days}
-                      class="flex-1 flex flex-col items-center justify-end h-full group relative"
-                    >
-                      <%!-- Tooltip --%>
-                      <div class="hidden group-hover:block absolute -top-1 -translate-y-full left-1/2 -translate-x-1/2 z-20 pointer-events-none">
-                        <div class="bg-base-300 text-base-content text-[10px] rounded-md px-2 py-1 shadow-lg whitespace-nowrap">
-                          <div class="font-semibold">
-                            {Calendar.strftime(day, "%d %b")}
-                          </div>
-                          <div :for={label <- labels} class="flex justify-between gap-2">
-                            <span class="truncate max-w-[100px]">{label}</span>
-                            <span class="tabular-nums">
-                              {Stats.format_number(Map.get(pivoted.series[label] || %{}, day, 0))}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <%!-- Stacked bar --%>
-                      <div class="w-full flex flex-col-reverse rounded-t overflow-hidden">
-                        <div
-                          :for={label <- labels}
-                          class={[
-                            "w-full",
-                            Stats.sparkline_color(Enum.find_index(labels, &(&1 == label)) || 0)
-                          ]}
-                          style={"height: #{Stats.sparkline_bar_height(Map.get(pivoted.series[label] || %{}, day, 0), spark_max)}%"}
-                          title={"#{label}: #{Stats.format_number(Map.get(pivoted.series[label] || %{}, day, 0))}"}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <%!-- Day labels --%>
-                  <div class="flex gap-px mt-1">
-                    <span
-                      :for={day <- pivoted.days}
-                      class="flex-1 text-center text-[9px] text-base-content/40"
-                    >
-                      {Calendar.strftime(day, "%d")}
-                    </span>
-                  </div>
-                </div>
-
-                <%!-- Legend --%>
-                <div class="w-40 shrink-0 border-l border-base-300 pl-3">
-                  <div class="text-[10px] font-semibold text-base-content/60 uppercase tracking-wide mb-2">
-                    {gettext("Providers")}
-                  </div>
-                  <div class="space-y-1.5">
-                    <div
-                      :for={{label, idx} <- Enum.with_index(labels)}
-                      class="flex items-center gap-1.5"
-                    >
-                      <span class={["w-2 h-2 rounded-sm shrink-0", Stats.sparkline_color(idx)]} />
-                      <Stats.provider_logo logo_url={Map.get(pivoted.logos, label)} />
-                      <span class="text-[10px] truncate flex-1">{label}</span>
-                      <span class="text-[9px] text-base-content/50 shrink-0">
-                        {Stats.format_number(
-                          Stats.sparkline_label_total(pivoted.series[label] || %{})
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        <% end %>
+        <DailyStackedChart.daily_stacked_chart
+          id="model-daily-chart"
+          title={gettext("Daily usage per provider")}
+          period={@period}
+          series={@drilldown_series}
+          labels={@drilldown_series_labels}
+          show_logos={true}
+        />
 
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body">

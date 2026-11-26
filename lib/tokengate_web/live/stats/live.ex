@@ -41,37 +41,11 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   def live(assigns) do
     ~H"""
     <div class="space-y-6">
-      <%!-- Gasto real del día UTC — datum simple, sin techo: mide la ventana
-           del día calendario UTC (00:00–24:00), la misma que Mantenimiento.
-           Día UTC y no local: si el número midiera el día local, no cuadraría
-           con el KPI de costo de abajo. Sin contador ETS: ese incluye holds en
-           vuelo y oscila con el tráfico en curso. --%>
-      <%= if @org_budget do %>
-        <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-org-budget">
-          <div class="card-body p-5">
-            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              {gettext("Today's spend (UTC)")}
-            </span>
-            <p
-              class="mt-2 text-2xl font-bold text-base-content tabular-nums"
-              id="live-org-budget-spend"
-            >
-              ${Stats.format_decimal(@org_budget.daily_spend_usd)}
-            </p>
-            <p class="text-xs text-base-content/40 mt-1">
-              {gettext("all subjects · 00:00–24:00 UTC window")}
-            </p>
-          </div>
-        </div>
-      <% end %>
-
-      <%!-- KPIs de hoy (día calendario) — primera fila de tarjetas, mismo
-           orden de filas que el Resumen: presupuesto → KPIs principales →
-           KPIs secundarios. Dentro de la fila: Costo · Tokens · Requests con
-           la latencia debajo (3 columnas: requests y latencia comparten
-           tarjeta porque son la misma lectura — volumen y su coste en
-           tiempo — y así la fila no deja un hueco vacío). --%>
-      <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
+      <%!-- KPIs de hoy (día calendario UTC) — primera fila de tarjetas, mismo
+           orden de filas que el Resumen: KPIs principales → KPIs secundarios.
+           Un solo card de gasto UTC del día (`#live-today-cost`, preservando
+           `#live-org-budget-spend`), junto a Tokens y Requests con latencia. --%>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <.kpi_card
           id="live-today-cost"
           label={gettext("Today · cost (UTC)")}
@@ -79,8 +53,12 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           accent="accent"
           title={gettext("UTC day spend (00:00–24:00 UTC)")}
         >
-          ${Stats.format_decimal(@today_metrics.cost_usd)}
-          <:sub>{gettext("Reported by the provider")}</:sub>
+          <span id="live-org-budget-spend">
+            ${Stats.format_decimal(
+              (@org_budget && @org_budget.daily_spend_usd) || @today_metrics.cost_usd
+            )}
+          </span>
+          <:sub>{gettext("all subjects · 00:00–24:00 UTC window")}</:sub>
         </.kpi_card>
 
         <.kpi_card
@@ -95,7 +73,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
             )
           }
         >
-          <span class="flex items-baseline gap-2">
+          <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
             {Stats.format_compact(@today_metrics.prompt_tokens)}
             <span class="text-sm text-base-content/50">in</span>
             <span class="text-base-content/30">/</span>

@@ -31,7 +31,6 @@ defmodule TokengateWeb.StatsLive do
   use TokengateWeb, :live_view
 
   alias Tokengate.Accounts
-  alias Tokengate.Agents
   alias Tokengate.Budgets
   alias Tokengate.Logs
   alias Tokengate.Logs.Inflight
@@ -39,6 +38,7 @@ defmodule TokengateWeb.StatsLive do
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Metrics.StatsQueries
   alias Tokengate.Periods
+  import TokengateWeb.StatsLive.Agents, only: [agents: 1]
   import TokengateWeb.StatsLive.Index, only: [index: 1]
   import TokengateWeb.StatsLive.Models, only: [models: 1]
   import TokengateWeb.StatsLive.Model, only: [model: 1]
@@ -80,6 +80,9 @@ defmodule TokengateWeb.StatsLive do
     "completion_tokens" => :completion_tokens,
     "avg_tps" => :avg_tps,
     "avg_latency_ms" => :avg_latency_ms,
+    "p95_latency_ms" => :p95_latency_ms,
+    "avg_ttft_ms" => :avg_ttft_ms,
+    "score" => :score,
     "error_rate" => :error_rate,
     "share" => :share,
     "label" => :label,
@@ -98,7 +101,8 @@ defmodule TokengateWeb.StatsLive do
     :breakdown_service,
     :breakdown_user,
     :member_models,
-    :agent_ranking
+    :agent_ranking,
+    :provider_ranking
   ]
 
   @impl true
@@ -187,15 +191,22 @@ defmodule TokengateWeb.StatsLive do
       end
       |> assign(:last_live_action, socket.assigns.live_action)
 
-    # Agents es un ranking de GASTO: la pestaña entra ordenada por costo (el
-    # default global es requests, que en esta tabla deja el dinero en segundo
-    # plano). Volver a entrar respeta el orden que el usuario eligió, y
-    # cambiar de período dentro de la pestaña tampoco lo pisa.
+    # Cada sección entra con su orden por defecto: Agents por gasto, Providers
+    # por score, y el resto por requests. Cambiar de período dentro de la misma
+    # pestaña (`entering? == false`) respeta el orden elegido por el usuario.
     socket =
-      if socket.assigns.live_action == :agents and entering? do
-        assign(socket, sort_field: :cost_usd, sort_direction: :desc)
-      else
-        socket
+      cond do
+        entering? and socket.assigns.live_action == :agents ->
+          assign(socket, sort_field: :cost_usd, sort_direction: :desc)
+
+        entering? and socket.assigns.live_action == :providers ->
+          assign(socket, sort_field: :score, sort_direction: :desc)
+
+        entering? ->
+          assign(socket, sort_field: :request_count, sort_direction: :desc)
+
+        true ->
+          socket
       end
 
     socket =
@@ -877,7 +888,7 @@ defmodule TokengateWeb.StatsLive do
         # Identidad del agente normalizada en LECTURA (sin migración ni
         # backfill): la query devuelve los buckets crudos y acá se mergean
         # por agente canónico. Un solo scan del período por bundle cacheado.
-        [fn -> {:agent_ranking, agent_ranking_rows(opts)} end]
+        [fn -> {:agent_ranking, TokengateWeb.StatsLive.Agents.build_ranking(opts)} end]
 
       :provider ->
         # Interior de la tabla de proveedores: métricas del proveedor, los
@@ -1138,114 +1149,6 @@ defmodule TokengateWeb.StatsLive do
 
   defp breakdown_by_service_if_admin(true, opts), do: Rollup.breakdown_by_service(opts)
   defp breakdown_by_service_if_admin(false, _opts), do: []
-
-  ## Agent ranking ---------------------------------------------------------
-
-  # `request_logs` guarda la identidad CRUDA del cliente (`agent_type` de
-  # X-Agent-Type + `client_agent` de X-Title/User-Agent), no el agente. Cada
-  # bucket de la query se normaliza con `Agents.identify/2` y se MERGEA por
-  # `key`: el histórico anterior a la identidad (agent_type "api"/"unknown") y
-  # el mismo cliente llegando por dos cabeceras caen en UNA fila con su label
-  # humano. Orden: gasto desc (es un ranking de costo), luego volumen.
-  defp agent_ranking_rows(opts) do
-    StatsQueries.agent_ranking(opts)
-    |> Enum.group_by(fn bucket ->
-      Agents.identify(bucket.client_agent, bucket.agent_type).key
-    end)
-    |> Enum.map(fn {_key, buckets} -> merge_agent_buckets(buckets) end)
-    |> with_agent_shares()
-    |> Enum.sort(&agent_before?/2)
-  end
-
-  defp merge_agent_buckets([first | _] = buckets) do
-    identity = Agents.identify(first.client_agent, first.agent_type)
-    request_count = Enum.reduce(buckets, 0, &(&1.request_count + &2))
-    error_count = Enum.reduce(buckets, 0, &(&1.error_count + &2))
-    latency_count = Enum.reduce(buckets, 0, &(&1.latency_count + &2))
-
-    # Latencia PONDERADA por las filas con latencia de cada bucket: promediar
-    # los avg de los buckets dejaría pesar igual a uno con 1 request que a uno
-    # con 10k.
-    latency_sum =
-      Enum.reduce(buckets, Decimal.new(0), fn bucket, acc ->
-        case bucket.avg_latency_ms do
-          nil ->
-            acc
-
-          avg ->
-            Decimal.add(acc, Decimal.mult(agent_decimal(avg), Decimal.new(bucket.latency_count)))
-        end
-      end)
-
-    %{
-      key: identity.key,
-      label: identity.label,
-      family: identity.family,
-      version: identity.version,
-      logo: identity.logo,
-      icon: identity.icon,
-      request_count: request_count,
-      error_count: error_count,
-      error_rate: if(request_count > 0, do: error_count / request_count, else: 0.0),
-      cost_usd:
-        Enum.reduce(buckets, Decimal.new(0), fn bucket, acc ->
-          Decimal.add(acc, agent_decimal(bucket.cost_usd))
-        end),
-      prompt_tokens: Enum.reduce(buckets, 0, &(&1.prompt_tokens + &2)),
-      completion_tokens: Enum.reduce(buckets, 0, &(&1.completion_tokens + &2)),
-      avg_latency_ms: weighted_latency(latency_sum, latency_count)
-    }
-  end
-
-  # Reparto del GASTO del período (la métrica del ranking): 0.0 sin total.
-  defp with_agent_shares([]), do: []
-
-  defp with_agent_shares(rows) do
-    total = Enum.reduce(rows, Decimal.new(0), fn row, acc -> Decimal.add(acc, row.cost_usd) end)
-
-    Enum.map(rows, fn row ->
-      share =
-        if Decimal.compare(total, Decimal.new(0)) == :gt do
-          row.cost_usd
-          |> Decimal.div(total)
-          |> Decimal.round(4, :half_up)
-          |> Decimal.to_float()
-        else
-          0.0
-        end
-
-      Map.put(row, :share, share)
-    end)
-  end
-
-  defp agent_before?(a, b) do
-    case Decimal.compare(a.cost_usd, b.cost_usd) do
-      :gt ->
-        true
-
-      :lt ->
-        false
-
-      :eq ->
-        if a.request_count == b.request_count,
-          do: a.label <= b.label,
-          else: a.request_count > b.request_count
-    end
-  end
-
-  defp weighted_latency(_sum, 0), do: nil
-
-  defp weighted_latency(sum, count) do
-    sum
-    |> Decimal.div(Decimal.new(count))
-    |> Decimal.round(0, :half_up)
-    |> Decimal.to_integer()
-  end
-
-  defp agent_decimal(%Decimal{} = d), do: d
-  defp agent_decimal(nil), do: Decimal.new(0)
-  defp agent_decimal(n) when is_integer(n), do: Decimal.new(n)
-  defp agent_decimal(n) when is_float(n), do: Decimal.from_float(n)
 
   defp fetch_summary(%{user: %{global_role: "admin"}} = params, opts) do
     # Hybrid read: rollup for the bulk of the window + raw tail (last 3h)

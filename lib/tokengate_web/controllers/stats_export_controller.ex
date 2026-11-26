@@ -40,8 +40,10 @@ defmodule TokengateWeb.StatsExportController do
   alias Tokengate.Accounts.ApiKey
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
+  alias Tokengate.Metrics.StatsQueries
   alias Tokengate.Periods
   alias Tokengate.Repo
+  alias TokengateWeb.StatsLive.Agents, as: AgentsStats
 
   # Rows per DB cursor fetch, and lines per socket chunk.
   @chunk_rows 500
@@ -215,6 +217,21 @@ defmodule TokengateWeb.StatsExportController do
     end
   end
 
+  # La tabla de usuarios es admin-only en el hub (live_session :admin) y
+  # `StatsQueries.breakdown_by_user/1` agrega org-wide sin filtrar por
+  # `member_ids`: si no eres admin, no baja.
+  defp build_csv(user, "users", _params, opts, timezone) do
+    if admin?(user) do
+      {:ok, build_users_csv(opts, timezone)}
+    else
+      {:error, :forbidden}
+    end
+  end
+
+  defp build_csv(user, "agents", _params, opts, timezone) do
+    {:ok, build_agents_csv(user, opts, timezone)}
+  end
+
   defp build_csv(user, "logs", _params, opts, timezone) do
     {:ok, build_logs_csv(user, opts, timezone)}
   end
@@ -305,6 +322,63 @@ defmodule TokengateWeb.StatsExportController do
     do: n |> Float.round(0) |> trunc() |> Integer.to_string()
 
   defp latency_to_csv(n) when is_integer(n), do: Integer.to_string(n)
+
+  ## Users CSV ------------------------------------------------------------
+
+  defp build_users_csv(opts, timezone) do
+    rows = StatsQueries.breakdown_by_user(opts)
+
+    header = ~w(usuario nombre perfiles requests costo tokens_in tokens_out tps)
+
+    {"estadisticas_usuarios_#{Periods.local_today(timezone)}.csv", header,
+     {:mem, rows, &row_to_csv_user/2}}
+  end
+
+  defp row_to_csv_user(row, _labels) do
+    groups =
+      row
+      |> Map.get(:groups, [])
+      |> Enum.map_join("; ", & &1.name)
+
+    [
+      csv_escape(row.user_email),
+      csv_escape(Map.get(row, :user_name) || ""),
+      csv_escape(groups),
+      row.request_count,
+      decimal_to_csv(Map.get(row, :cost_usd)),
+      Map.get(row, :prompt_tokens, 0),
+      Map.get(row, :completion_tokens, 0),
+      tps_to_csv(Map.get(row, :avg_tps))
+    ]
+  end
+
+  ## Agents CSV -----------------------------------------------------------
+
+  defp build_agents_csv(user, opts, timezone) do
+    opts = Keyword.put(opts, :member_ids, Accounts.scope_member_ids(user))
+    rows = AgentsStats.build_ranking(opts)
+
+    header =
+      ~w(agente familia requests costo share_pct tokens_in tokens_out latencia_ms errores error_pct)
+
+    {"estadisticas_agentes_#{Periods.local_today(timezone)}.csv", header,
+     {:mem, rows, &row_to_csv_agent/2}}
+  end
+
+  defp row_to_csv_agent(row, _labels) do
+    [
+      csv_escape(row.label),
+      csv_escape(row.family),
+      row.request_count,
+      decimal_to_csv(Map.get(row, :cost_usd)),
+      csv_percent(Map.get(row, :share)),
+      Map.get(row, :prompt_tokens, 0),
+      Map.get(row, :completion_tokens, 0),
+      csv_ms(Map.get(row, :avg_latency_ms)),
+      Map.get(row, :error_count, 0),
+      csv_percent(Map.get(row, :error_rate))
+    ]
+  end
 
   ## Models CSV -----------------------------------------------------------
 

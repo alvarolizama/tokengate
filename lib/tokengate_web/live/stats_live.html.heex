@@ -7,134 +7,135 @@
   <div class="space-y-6">
     <%!-- Header + period selector (hidden on credits: budgets are live
          calendar-day/month counters, not a rolling window) --%>
-    <div class="flex items-center justify-between flex-wrap gap-4">
-      <.header>
-        {gettext("Statistics")}
-        <:subtitle>
-          <span class="inline-flex items-center gap-2">
-            <.icon name="hero-funnel" class="w-4 h-4 text-base-content/50" />
-            {@scope_label}
+    <.header>
+      {gettext("Statistics")}
+      <:subtitle>
+        <span class="inline-flex items-center gap-2">
+          <.icon name="hero-funnel" class="w-4 h-4 text-base-content/50" />
+          {@scope_label}
+        </span>
+      </:subtitle>
+      <:actions>
+        <%!-- Selector de período: solo en las tabs de datos. "En vivo" es una
+             ventana fija (última hora + hoy), no un rango elegible; en su lugar
+             el header muestra el estado de la actualización automática. --%>
+        <div :if={@live_action not in [:live, :credits]} class="flex items-center gap-3">
+          <span
+            :if={@stats_loading}
+            class="loading loading-spinner loading-sm text-primary"
+            id="stats-loading"
+            title={gettext("Updating statistics…")}
+          ></span>
+          <.period_selector target={period_target(assigns)} period={@period} id="period-selector" />
+        </div>
+
+        <%!-- "En vivo": mismo lugar del header que ocupaban los timeframes --%>
+        <div
+          :if={@live_action == :live}
+          class="flex items-center gap-3 text-xs"
+          id="live-status"
+        >
+          <span class="relative flex h-2.5 w-2.5">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
+            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
           </span>
-        </:subtitle>
-      </.header>
-
-      <%!-- Selector de período: solo en las tabs de datos. "En vivo" es una
-           ventana fija (última hora + hoy), no un rango elegible; en su lugar
-           el header muestra el estado de la actualización automática. --%>
-      <div :if={@live_action not in [:live, :credits]} class="flex items-center gap-3">
-        <span
-          :if={@stats_loading}
-          class="loading loading-spinner loading-sm text-primary"
-          id="stats-loading"
-          title={gettext("Updating statistics…")}
-        ></span>
-        <.period_selector target={period_target(assigns)} period={@period} id="period-selector" />
-      </div>
-
-      <%!-- "En vivo": mismo lugar del header que ocupaban los timeframes --%>
-      <div
-        :if={@live_action == :live}
-        class="flex items-center gap-3 text-xs"
-        id="live-status"
-      >
-        <span class="relative flex h-2.5 w-2.5">
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
-          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
-        </span>
-        <span class="text-base-content/60">
-          {gettext("Live · auto-refresh")}
-        </span>
-        <span class="text-base-content/40 tabular-nums" id="live-last-sync">
-          {Stats.format_dt(@last_sync_at)}
-        </span>
-      </div>
-    </div>
+          <span class="text-base-content/60">
+            {gettext("Live · auto-refresh")}
+          </span>
+          <span class="text-base-content/40 tabular-nums" id="live-last-sync">
+            {Stats.format_dt(@last_sync_at)}
+          </span>
+        </div>
+      </:actions>
+    </.header>
 
     <%!-- Nav tabs between the views --%>
-    <div class="join" id="stats-nav" role="tablist">
-      <.link
-        patch={~p"/stats"}
-        class={[
-          "join-item btn btn-sm",
-          if(@live_action == :live, do: "btn-primary", else: "btn-ghost")
-        ]}
-        id="nav-live"
-      >
-        <span class="relative inline-flex w-4 h-4 items-center justify-center">
-          <span class="absolute w-2 h-2 rounded-full bg-success animate-pulse"></span>
-        </span>
-        {gettext("Live")}
-      </.link>
-      <.link
-        patch={~p"/stats/overview?period=#{@period}"}
-        class={[
-          "join-item btn btn-sm",
-          if(@live_action == :index, do: "btn-primary", else: "btn-ghost")
-        ]}
-        id="nav-overview"
-      >
-        <.icon name="hero-chart-bar-square" class="w-4 h-4" /> {gettext("Overview")}
-      </.link>
-      <.link
-        patch={~p"/stats/providers?period=#{@period}"}
-        class={[
-          "join-item btn btn-sm",
-          if(@live_action in [:providers, :provider], do: "btn-primary", else: "btn-ghost")
-        ]}
-        id="nav-providers"
-      >
-        <.icon name="hero-server-stack" class="w-4 h-4" /> {gettext("Providers")}
-      </.link>
-      <.link
-        patch={~p"/stats/models?period=#{@period}"}
-        class={[
-          "join-item btn btn-sm",
-          if(@live_action in [:models, :model], do: "btn-primary", else: "btn-ghost")
-        ]}
-        id="nav-models"
-      >
-        <.icon name="hero-rectangle-stack" class="w-4 h-4" /> {gettext("Models")}
-      </.link>
-      <.link
-        patch={~p"/stats/agents?period=#{@period}"}
-        class={[
-          "join-item btn btn-sm",
-          if(@live_action == :agents, do: "btn-primary", else: "btn-ghost")
-        ]}
-        id="nav-agents"
-      >
-        <.icon name="hero-command-line" class="w-4 h-4" /> {gettext("Agents")}
-      </.link>
-      <.link
-        patch={~p"/stats/profiles?period=#{@period}"}
-        class={[
-          "join-item btn btn-sm",
-          if(@live_action in [:groups, :group], do: "btn-primary", else: "btn-ghost")
-        ]}
-        id="nav-groups"
-      >
-        <.icon name="hero-user-group" class="w-4 h-4" /> {gettext("Limit profiles")}
-      </.link>
-      <.link
-        patch={~p"/stats/users?period=#{@period}"}
-        class={[
-          "join-item btn btn-sm",
-          if(@live_action == :users, do: "btn-primary", else: "btn-ghost")
-        ]}
-        id="nav-users"
-      >
-        <.icon name="hero-users" class="w-4 h-4" /> {gettext("Users")}
-      </.link>
-      <.link
-        patch={~p"/stats/services?period=#{@period}"}
-        class={[
-          "join-item btn btn-sm",
-          if(@live_action == :services, do: "btn-primary", else: "btn-ghost")
-        ]}
-        id="nav-services"
-      >
-        <.icon name="hero-wrench-screwdriver" class="w-4 h-4" /> {gettext("Services")}
-      </.link>
+    <div class="overflow-x-auto pb-1">
+      <div class="join whitespace-nowrap" id="stats-nav" role="tablist">
+        <.link
+          patch={~p"/stats"}
+          class={[
+            "join-item btn btn-sm",
+            if(@live_action == :live, do: "btn-primary", else: "btn-ghost")
+          ]}
+          id="nav-live"
+        >
+          <span class="relative inline-flex w-4 h-4 items-center justify-center">
+            <span class="absolute w-2 h-2 rounded-full bg-success animate-pulse"></span>
+          </span>
+          {gettext("Live")}
+        </.link>
+        <.link
+          patch={~p"/stats/overview?period=#{@period}"}
+          class={[
+            "join-item btn btn-sm",
+            if(@live_action == :index, do: "btn-primary", else: "btn-ghost")
+          ]}
+          id="nav-overview"
+        >
+          <.icon name="hero-chart-bar-square" class="w-4 h-4" /> {gettext("Overview")}
+        </.link>
+        <.link
+          patch={~p"/stats/providers?period=#{@period}"}
+          class={[
+            "join-item btn btn-sm",
+            if(@live_action in [:providers, :provider], do: "btn-primary", else: "btn-ghost")
+          ]}
+          id="nav-providers"
+        >
+          <.icon name="hero-server-stack" class="w-4 h-4" /> {gettext("Providers")}
+        </.link>
+        <.link
+          patch={~p"/stats/models?period=#{@period}"}
+          class={[
+            "join-item btn btn-sm",
+            if(@live_action in [:models, :model], do: "btn-primary", else: "btn-ghost")
+          ]}
+          id="nav-models"
+        >
+          <.icon name="hero-rectangle-stack" class="w-4 h-4" /> {gettext("Models")}
+        </.link>
+        <.link
+          patch={~p"/stats/agents?period=#{@period}"}
+          class={[
+            "join-item btn btn-sm",
+            if(@live_action == :agents, do: "btn-primary", else: "btn-ghost")
+          ]}
+          id="nav-agents"
+        >
+          <.icon name="hero-command-line" class="w-4 h-4" /> {gettext("Agents")}
+        </.link>
+        <.link
+          patch={~p"/stats/profiles?period=#{@period}"}
+          class={[
+            "join-item btn btn-sm",
+            if(@live_action in [:groups, :group], do: "btn-primary", else: "btn-ghost")
+          ]}
+          id="nav-groups"
+        >
+          <.icon name="hero-user-group" class="w-4 h-4" /> {gettext("Limit profiles")}
+        </.link>
+        <.link
+          patch={~p"/stats/users?period=#{@period}"}
+          class={[
+            "join-item btn btn-sm",
+            if(@live_action == :users, do: "btn-primary", else: "btn-ghost")
+          ]}
+          id="nav-users"
+        >
+          <.icon name="hero-users" class="w-4 h-4" /> {gettext("Users")}
+        </.link>
+        <.link
+          patch={~p"/stats/services?period=#{@period}"}
+          class={[
+            "join-item btn btn-sm",
+            if(@live_action == :services, do: "btn-primary", else: "btn-ghost")
+          ]}
+          id="nav-services"
+        >
+          <.icon name="hero-wrench-screwdriver" class="w-4 h-4" /> {gettext("Services")}
+        </.link>
+      </div>
     </div>
 
     <div
@@ -188,162 +189,22 @@
           <.providers
             provider_ranking={@provider_ranking}
             period={@period}
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
             per_page={@per_page}
             shown_counts={@shown_counts}
             list_search={@list_search}
           />
         <% @live_action == :agents -> %>
-          <div class="space-y-6">
-            <div class="card bg-base-100 border border-base-300 shadow-sm" id="agent-ranking">
-              <div class="card-body">
-                <h2 class="card-title text-base">
-                  <.icon name="hero-command-line" class="w-5 h-5 text-base-content/60" /> {gettext(
-                    "Agents"
-                  )}
-                </h2>
-                <p class="text-xs text-base-content/60">
-                  {gettext(
-                    "One row per coding agent identified from its client identity (X-Agent-Type / User-Agent), with its consumption for the period (%{period}).",
-                    period: Stats.period_label(@period)
-                  )}
-                </p>
-                <div class="mt-3 overflow-x-auto">
-                  <.table
-                    id="agents-table"
-                    rows={@agent_ranking}
-                    row_id={fn row -> "agent-row-#{row.key}" end}
-                    sort_field={@sort_field}
-                    sort_direction={@sort_direction}
-                    sort_event="sort"
-                  >
-                    <:col :let={row} label={gettext("Agent")} field={:label}>
-                      <div class="flex items-center gap-2 min-w-0">
-                        <img
-                          :if={row.logo}
-                          src={row.logo}
-                          alt=""
-                          class="w-5 h-5 object-contain shrink-0"
-                        />
-                        <.icon
-                          :if={!row.logo}
-                          name={row.icon}
-                          class="w-5 h-5 opacity-70 shrink-0"
-                        />
-                        <div class="min-w-0">
-                          <div class="font-medium truncate" title={row.key}>{row.label}</div>
-                          <div class="text-[10px] uppercase tracking-wide text-base-content/40">
-                            {row.family}
-                          </div>
-                        </div>
-                      </div>
-                    </:col>
-                    <:col
-                      :let={row}
-                      label={gettext("Requests")}
-                      field={:request_count}
-                      align="right"
-                    >
-                      <span class="font-mono tabular-nums">
-                        {Stats.format_number(row.request_count)}
-                      </span>
-                    </:col>
-                    <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
-                      <span class="font-mono tabular-nums">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </span>
-                    </:col>
-                    <:col
-                      :let={row}
-                      label={gettext("Share")}
-                      field={:share}
-                      align="right"
-                      tooltip={gettext("Share of the period's cost")}
-                    >
-                      <span class="font-mono tabular-nums">{Stats.format_percent(row.share)}</span>
-                    </:col>
-                    <:col
-                      :let={row}
-                      label={gettext("Tokens in")}
-                      field={:prompt_tokens}
-                      align="right"
-                    >
-                      <span class="font-mono tabular-nums">
-                        {Stats.format_number(row.prompt_tokens)}
-                      </span>
-                    </:col>
-                    <:col
-                      :let={row}
-                      label={gettext("Tokens out")}
-                      field={:completion_tokens}
-                      align="right"
-                    >
-                      <span class="font-mono tabular-nums">
-                        {Stats.format_number(row.completion_tokens)}
-                      </span>
-                    </:col>
-                    <:col
-                      :let={row}
-                      label={gettext("Latency")}
-                      field={:avg_latency_ms}
-                      align="right"
-                    >
-                      <span class="font-mono tabular-nums">
-                        {Stats.format_ms(row.avg_latency_ms)}
-                      </span>
-                    </:col>
-                    <:col :let={row} label={gettext("Errors")} field={:error_rate} align="right">
-                      <span class={[
-                        "font-mono tabular-nums",
-                        row.error_count > 0 && "text-error"
-                      ]}>
-                        {Stats.format_number(row.error_count)}
-                      </span>
-                      <span class="ml-1 text-[10px] text-base-content/40">
-                        {Stats.format_percent(row.error_rate)}
-                      </span>
-                    </:col>
-                    <:empty>
-                      <div id="agent-empty">
-                        <.icon
-                          name="hero-command-line"
-                          class="w-10 h-10 mx-auto mb-2 opacity-40"
-                        />
-                        <p>{gettext("No agent traffic in this period.")}</p>
-                      </div>
-                    </:empty>
-                  </.table>
-                </div>
-                <div
-                  id="agents-table-totals"
-                  class="mt-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-xs"
-                >
-                  <span class="font-semibold text-base-content/70">
-                    {gettext("Total · %{count} agents", count: length(@agent_ranking))}
-                  </span>
-                  <%= if totals = Stats.breakdown_total(@agent_ranking) do %>
-                    <div class="flex flex-wrap items-baseline gap-x-5 gap-y-1 font-mono tabular-nums text-base-content/80">
-                      <span>
-                        <span class="text-base-content/40">{gettext("Requests")}</span>
-                        {Stats.format_number(totals.request_count)}
-                      </span>
-                      <span>
-                        <span class="text-base-content/40">{gettext("Cost")}</span>
-                        ${Stats.format_decimal(totals.cost_usd)}
-                      </span>
-                      <span>
-                        <span class="text-base-content/40">{gettext("Tokens in")}</span>
-                        {Stats.format_number(totals.prompt_tokens)}
-                      </span>
-                      <span>
-                        <span class="text-base-content/40">{gettext("Tokens out")}</span>
-                        {Stats.format_number(totals.completion_tokens)}
-                      </span>
-                    </div>
-                  <% end %>
-                </div>
-              </div>
-            </div>
-          </div>
+          <.agents
+            agent_ranking={@agent_ranking}
+            period={@period}
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
+            per_page={@per_page}
+            shown_counts={@shown_counts}
+            list_search={@list_search}
+          />
         <% @live_action == :provider -> %>
           <.provider
             provider={@provider}

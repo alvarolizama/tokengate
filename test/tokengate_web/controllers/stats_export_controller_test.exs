@@ -291,6 +291,56 @@ defmodule TokengateWeb.StatsExportControllerTest do
     assert String.ends_with?(row, ",")
   end
 
+  test "users export: una fila por usuario, y sólo para admins", %{conn: conn} do
+    %{owner: owner, group: group} = group_with_log()
+    %{user: admin, password: admin_password} = register("admin")
+
+    conn =
+      conn
+      |> login(admin, admin_password)
+      |> get(~p"/stats/export?type=users&period=today")
+
+    body = response(conn, 200)
+
+    assert body =~ "usuario,nombre,perfiles,requests,costo,tokens_in,tokens_out,tps"
+    assert body =~ owner.email
+    assert body =~ group.name
+
+    [disposition] = get_resp_header(conn, "content-disposition")
+    assert disposition =~ "estadisticas_usuarios_"
+    assert disposition =~ ".csv"
+
+    %{user: plain, password: plain_password} = register("user")
+
+    forbidden_conn =
+      build_conn()
+      |> login(plain, plain_password)
+      |> get(~p"/stats/export?type=users&period=today")
+
+    assert response(forbidden_conn, 403) =~ "no autorizado"
+  end
+
+  test "agents export: una fila por agente normalizado", %{conn: conn} do
+    group_with_log()
+    %{user: admin, password: admin_password} = register("admin")
+
+    conn =
+      conn
+      |> login(admin, admin_password)
+      |> get(~p"/stats/export?type=agents&period=today")
+
+    body = response(conn, 200)
+
+    assert body =~
+             "agente,familia,requests,costo,share_pct,tokens_in,tokens_out,latencia_ms,errores,error_pct"
+
+    assert body =~ "Claude Code"
+
+    [disposition] = get_resp_header(conn, "content-disposition")
+    assert disposition =~ "estadisticas_agentes_"
+    assert disposition =~ ".csv"
+  end
+
   test "logs export neutralizes CSV formula injection in client_agent", %{conn: conn} do
     u = unique()
 
