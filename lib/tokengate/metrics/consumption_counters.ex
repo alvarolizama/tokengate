@@ -55,6 +55,46 @@ defmodule Tokengate.Metrics.ConsumptionCounters do
   end
 
   @doc """
+  Average latency and TTFT per subject, straight from the durable counters.
+
+  `SUM` + `COUNT` rebuild the exact `AVG()` over any range of days, and the
+  counters keep the lifetime — so speed metrics answer for days the raw
+  partitions no longer hold. Percentiles are NOT available: no histogram is
+  stored, only sum and count.
+
+  Returns `%{subject_id => %{avg_latency_ms, avg_ttft_ms, latency_samples,
+  ttft_samples}}`; the averages are `nil` when there are no samples (which is
+  what `AVG()` does too, rather than reporting a zero).
+  """
+  def speed_by_subject(kind) when kind in [:user, :service] do
+    field = if kind == :user, do: :user_id, else: :service_id
+
+    Repo.all(
+      from(c in ConsumptionCounter,
+        where: not is_nil(field(c, ^field)),
+        group_by: field(c, ^field),
+        select:
+          {field(c, ^field), fragment("COALESCE(SUM(?), 0)::bigint", c.total_latency_ms),
+           fragment("COALESCE(SUM(?), 0)::bigint", c.latency_count),
+           fragment("COALESCE(SUM(?), 0)::bigint", c.total_ttft_ms),
+           fragment("COALESCE(SUM(?), 0)::bigint", c.ttft_count)}
+      )
+    )
+    |> Map.new(fn {id, latency_sum, latency_n, ttft_sum, ttft_n} ->
+      {id,
+       %{
+         avg_latency_ms: average(latency_sum, latency_n),
+         avg_ttft_ms: average(ttft_sum, ttft_n),
+         latency_samples: latency_n,
+         ttft_samples: ttft_n
+       }}
+    end)
+  end
+
+  defp average(_sum, 0), do: nil
+  defp average(sum, count), do: Float.round(sum / count, 1)
+
+  @doc """
   True when the counters hold at least one row — the guard the readers use
   before trusting them (a deployment that has not backfilled yet keeps reading
   the raw aggregates).
@@ -221,7 +261,8 @@ defmodule Tokengate.Metrics.ConsumptionCounters do
     """
     INSERT INTO consumption_counters AS c
       (user_id, day, request_count, error_count, spend_micro, limit_spend_micro,
-       prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens)
+       prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens,
+       total_latency_ms, latency_count, total_ttft_ms, ttft_count)
     SELECT rl.user_id,
            rl.inserted_at::date,
            count(*),
@@ -234,7 +275,13 @@ defmodule Tokengate.Metrics.ConsumptionCounters do
            COALESCE(SUM(rl.prompt_tokens), 0),
            COALESCE(SUM(rl.completion_tokens), 0),
            COALESCE(SUM(rl.cache_read_tokens), 0),
-           COALESCE(SUM(rl.cache_creation_tokens), 0)
+           COALESCE(SUM(rl.cache_creation_tokens), 0),
+           -- SUM + count of the non-NULLs: `count(col)` mirrors what AVG()
+           -- uses as its divisor, so the average rebuilds exactly.
+           COALESCE(SUM(rl.latency_ms), 0)::bigint,
+           count(rl.latency_ms)::bigint,
+           COALESCE(SUM(rl.ttft_ms), 0)::bigint,
+           count(rl.ttft_ms)::bigint
     FROM request_logs rl
     WHERE rl.user_id IS NOT NULL
       AND rl.inserted_at < date_trunc('day', now() AT TIME ZONE 'utc')
@@ -248,6 +295,10 @@ defmodule Tokengate.Metrics.ConsumptionCounters do
       completion_tokens     = GREATEST(c.completion_tokens,     EXCLUDED.completion_tokens),
       cache_read_tokens     = GREATEST(c.cache_read_tokens,     EXCLUDED.cache_read_tokens),
       cache_creation_tokens = GREATEST(c.cache_creation_tokens, EXCLUDED.cache_creation_tokens),
+      total_latency_ms      = GREATEST(c.total_latency_ms,      EXCLUDED.total_latency_ms),
+      latency_count         = GREATEST(c.latency_count,         EXCLUDED.latency_count),
+      total_ttft_ms         = GREATEST(c.total_ttft_ms,         EXCLUDED.total_ttft_ms),
+      ttft_count            = GREATEST(c.ttft_count,            EXCLUDED.ttft_count),
       updated_at            = (now() AT TIME ZONE 'utc')
     """
   end
@@ -256,7 +307,8 @@ defmodule Tokengate.Metrics.ConsumptionCounters do
     """
     INSERT INTO consumption_counters AS c
       (service_id, day, request_count, error_count, spend_micro, limit_spend_micro,
-       prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens)
+       prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens,
+       total_latency_ms, latency_count, total_ttft_ms, ttft_count)
     SELECT rl.service_id,
            rl.inserted_at::date,
            count(*),
@@ -269,7 +321,11 @@ defmodule Tokengate.Metrics.ConsumptionCounters do
            COALESCE(SUM(rl.prompt_tokens), 0),
            COALESCE(SUM(rl.completion_tokens), 0),
            COALESCE(SUM(rl.cache_read_tokens), 0),
-           COALESCE(SUM(rl.cache_creation_tokens), 0)
+           COALESCE(SUM(rl.cache_creation_tokens), 0),
+           COALESCE(SUM(rl.latency_ms), 0)::bigint,
+           count(rl.latency_ms)::bigint,
+           COALESCE(SUM(rl.ttft_ms), 0)::bigint,
+           count(rl.ttft_ms)::bigint
     FROM request_logs rl
     WHERE rl.service_id IS NOT NULL
       AND rl.inserted_at < date_trunc('day', now() AT TIME ZONE 'utc')
@@ -283,6 +339,10 @@ defmodule Tokengate.Metrics.ConsumptionCounters do
       completion_tokens     = GREATEST(c.completion_tokens,     EXCLUDED.completion_tokens),
       cache_read_tokens     = GREATEST(c.cache_read_tokens,     EXCLUDED.cache_read_tokens),
       cache_creation_tokens = GREATEST(c.cache_creation_tokens, EXCLUDED.cache_creation_tokens),
+      total_latency_ms      = GREATEST(c.total_latency_ms,      EXCLUDED.total_latency_ms),
+      latency_count         = GREATEST(c.latency_count,         EXCLUDED.latency_count),
+      total_ttft_ms         = GREATEST(c.total_ttft_ms,         EXCLUDED.total_ttft_ms),
+      ttft_count            = GREATEST(c.ttft_count,            EXCLUDED.ttft_count),
       updated_at            = (now() AT TIME ZONE 'utc')
     """
   end

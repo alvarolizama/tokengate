@@ -40,11 +40,19 @@ defmodule Tokengate.Metrics.ConsumptionCounter do
     field :completion_tokens, :integer, default: 0
     field :cache_read_tokens, :integer, default: 0
     field :cache_creation_tokens, :integer, default: 0
+    # Sum + count, never an average: an average is not additive across buckets.
+    # `*_count` is a separate divisor because AVG() skips NULLs — a failed
+    # request (no latency) or a non-streaming one (no TTFT) must not dilute.
+    field :total_latency_ms, :integer, default: 0
+    field :latency_count, :integer, default: 0
+    field :total_ttft_ms, :integer, default: 0
+    field :ttft_count, :integer, default: 0
     timestamps(type: :utc_datetime, updated_at: :updated_at)
   end
 
   @fields ~w(day request_count error_count spend_micro limit_spend_micro prompt_tokens
-    completion_tokens cache_read_tokens cache_creation_tokens)a
+    completion_tokens cache_read_tokens cache_creation_tokens total_latency_ms
+    latency_count total_ttft_ms ttft_count)a
 
   @doc false
   def changeset(counter, attrs) do
