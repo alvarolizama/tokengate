@@ -86,21 +86,20 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/operations/observability")
 
-    # El binding vive en el FORM, no en el input: un `phx-change` sin <form>
-    # alrededor lanza en el cliente y el evento nunca llega al servidor.
-    assert has_element?(view, "#observability-search-form input[name='search']")
+    # <.admin_search> emits #search-form with input[name='q'].
+    assert has_element?(view, "#search-form input[name='q']")
 
     # No match — destination disappears
     view
-    |> element("#observability-search-form")
-    |> render_change(%{"search" => "zzz-no-match"})
+    |> element("#search-form")
+    |> render_change(%{"q" => "zzz-no-match"})
 
     refute has_element?(view, "#edit-destination-#{destination.id}")
 
     # Match by name — destination reappears
     view
-    |> element("#observability-search-form")
-    |> render_change(%{"search" => destination.name})
+    |> element("#search-form")
+    |> render_change(%{"q" => destination.name})
 
     assert has_element?(view, "#edit-destination-#{destination.id}")
   end
@@ -249,7 +248,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     assert has_element?(view, "#flash-error")
   end
 
-  test "deletes a destination", %{conn: conn} do
+  test "deletes a destination via confirmation modal", %{conn: conn} do
     destination = destination_fixture()
     %{user: admin, password: password} = register("admin")
 
@@ -260,8 +259,38 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     |> element("#delete-destination-#{destination.id}")
     |> render_click()
 
+    assert has_element?(view, "#delete-destination-modal")
+    assert has_element?(view, "#delete-destination-target-name", destination.name)
+
+    view
+    |> element("#confirm-delete-destination-btn")
+    |> render_click()
+
     refute has_element?(view, "#edit-destination-#{destination.id}")
     assert has_element?(view, "#destinations-empty", "No webhooks configured.")
     refute Repo.get(Tokengate.Observability.Destination, destination.id)
+  end
+
+  test "toggles active/paused status and rejects missing URL", %{conn: conn} do
+    destination = destination_fixture()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/observability")
+
+    assert has_element?(view, "#toggle-destination-#{destination.id}", "Active")
+
+    view |> element("#toggle-destination-#{destination.id}") |> render_click()
+    assert has_element?(view, "#toggle-destination-#{destination.id}", "Paused")
+    refute Repo.get!(Tokengate.Observability.Destination, destination.id).enabled
+
+    view |> element("#new-destination-btn") |> render_click()
+
+    view
+    |> element("#destination-form")
+    |> render_submit(%{destination: %{name: "Missing URL", url: "", headers: ""}})
+
+    refute Repo.get_by(Tokengate.Observability.Destination, name: "Missing URL")
+    assert has_element?(view, "#destination-form")
   end
 end

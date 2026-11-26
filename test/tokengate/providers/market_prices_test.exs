@@ -93,4 +93,47 @@ defmodule Tokengate.Providers.MarketPricesTest do
     assert reloaded_manual.market_price_source == "manual"
     assert Decimal.equal?(reloaded_manual.market_input_price_per_1m, Decimal.new("9.99"))
   end
+
+  test "extract_index/1 captures context_window and sync_configured_models skips limit-only entries" do
+    u = System.unique_integer([:positive])
+
+    {:ok, limit_only_model} =
+      Providers.create_model(%{
+        name: "limit-only-#{u}",
+        context_window: 128_000,
+        lab_key: "openai"
+      })
+
+    payload = %{
+      "openai" => %{
+        "models" => %{
+          "limit-only-#{u}" => %{
+            "limit" => %{"context" => 256_000, "output" => 16_384}
+          },
+          "gpt-priced-#{u}" => %{
+            "cost" => %{"input" => 1.0, "output" => 2.0},
+            "limit" => %{"context" => 1_000_000}
+          }
+        }
+      }
+    }
+
+    index = MarketPrices.extract_index(payload)
+
+    assert {:ok, limit_entry} =
+             MarketPrices.lookup(index, name: "limit-only-#{u}", lab_key: "openai")
+
+    assert limit_entry.context_window == 256_000
+    assert limit_entry.input == nil
+
+    assert {:ok, priced_entry} =
+             MarketPrices.lookup(index, name: "gpt-priced-#{u}", lab_key: "openai")
+
+    assert priced_entry.context_window == 1_000_000
+    assert Decimal.equal?(priced_entry.input, Decimal.new("1.0"))
+
+    assert %{updated: 0} = MarketPrices.sync_configured_models(payload)
+    reloaded = Repo.get!(Model, limit_only_model.id)
+    assert reloaded.market_price_source == nil
+  end
 end

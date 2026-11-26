@@ -74,6 +74,9 @@ defmodule Tokengate.Observability.WebhookWorker do
       nil ->
         {:discard, "destination gone"}
 
+      %Destination{enabled: false} ->
+        {:discard, "destination disabled"}
+
       destination ->
         inserted_ats = Map.get(args, "request_log_inserted_ats", [])
         deliver(destination, log_ids, inserted_ats, job_id)
@@ -174,7 +177,7 @@ defmodule Tokengate.Observability.WebhookWorker do
         iso -> Map.put(base_args, :request_log_inserted_ats, [iso])
       end
 
-    Tokengate.Observability.list_all_destinations()
+    Tokengate.Observability.list_enabled_destinations()
     |> Enum.reduce_while({:ok, 0}, fn destination, {:ok, count} ->
       %{base_args | destination_id: destination.id}
       |> __MODULE__.new()
@@ -210,6 +213,40 @@ defmodule Tokengate.Observability.WebhookWorker do
   # ---------------------------------------------------------------------------
   # HTTP POST via Req (preferred HTTP client per AGENTS.md)
   # ---------------------------------------------------------------------------
+
+  @doc """
+  Sends a synchronous test OTLP/JSON webhook POST to `destination`.
+
+  Returns `{:ok, %{status: status, latency_ms: ms}}` for 2xx responses, or
+  `{:error, reason}` otherwise.
+  """
+  @spec send_test(Destination.t()) ::
+          {:ok, %{status: integer(), latency_ms: integer()}} | {:error, term()}
+  def send_test(%Destination{url: url} = destination) when is_binary(url) do
+    payload = OtlpBuilder.build_payload([], destination)
+    body = Jason.encode!(payload)
+    headers = build_headers(destination, body, nil) ++ [{"x-tokengate-test", "true"}]
+    started = System.monotonic_time(:millisecond)
+
+    case Req.post(url,
+           body: body,
+           headers: headers,
+           receive_timeout: 10_000,
+           retry: false,
+           finch: Tokengate.Finch
+         ) do
+      {:ok, %{status: status}} when status in 200..299 ->
+        {:ok, %{status: status, latency_ms: System.monotonic_time(:millisecond) - started}}
+
+      {:ok, %{status: status}} ->
+        {:error, "HTTP #{status}"}
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
+  end
+
+  def send_test(_destination), do: {:error, "missing URL"}
 
   defp http_post(url, body, headers) do
     Req.post(url,

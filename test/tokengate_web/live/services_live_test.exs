@@ -892,4 +892,195 @@ defmodule TokengateWeb.ServicesLiveTest do
     view |> element("#edit-models-#{service.id}") |> render_click()
     assert has_element?(view, "#models-modal-#{service.id}")
   end
+
+  describe "filtros, sort de límite, modal de modelos, detalle y URL params" do
+    test "placeholder de búsqueda dice presupuesto y no perfil de límites", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+      {:ok, view, html} = live(conn, ~p"/access/services")
+
+      assert html =~ "Buscar por nombre o presupuesto"
+      refute html =~ "perfil de límites"
+      assert has_element?(view, "#service-filter-pills")
+    end
+
+    test "pills de filtro filtran en Postgres por presupuesto y sin claves", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      {:ok, budgeted} =
+        Accounts.create_service(%{
+          name: "Svc Budgeted #{unique()}",
+          monthly_spend_limit_usd: "50"
+        })
+
+      {:ok, unlimited} =
+        Accounts.create_service(%{name: "Svc Unlimited #{unique()}", unlimited_spend: true})
+
+      {:ok, no_budget} = Accounts.create_service(%{name: "Svc NoBudget #{unique()}"})
+
+      {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      {:ok, _} =
+        Accounts.create_api_key(%{
+          "subject_type" => "service",
+          "service_id" => budgeted.id,
+          "key_hash" => key_hash,
+          "key_prefix" => key_prefix,
+          "label" => "k1"
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#filter-service-budgeted") |> render_click()
+      assert has_element?(view, "#service-#{budgeted.id}")
+      refute has_element?(view, "#service-#{unlimited.id}")
+      refute has_element?(view, "#service-#{no_budget.id}")
+
+      view |> element("#filter-service-unlimited") |> render_click()
+      assert has_element?(view, "#service-#{unlimited.id}")
+      refute has_element?(view, "#service-#{budgeted.id}")
+
+      view |> element("#filter-service-no_budget") |> render_click()
+      assert has_element?(view, "#service-#{no_budget.id}")
+      refute has_element?(view, "#service-#{budgeted.id}")
+      refute has_element?(view, "#service-#{unlimited.id}")
+
+      view |> element("#filter-service-no_keys") |> render_click()
+      assert has_element?(view, "#service-#{unlimited.id}")
+      assert has_element?(view, "#service-#{no_budget.id}")
+      refute has_element?(view, "#service-#{budgeted.id}")
+    end
+
+    test "sort por límite mensual ordena numéricamente por consumo contra el techo", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      {:ok, low} =
+        Accounts.create_service(%{name: "A Low #{unique()}", monthly_spend_limit_usd: "100"})
+
+      {:ok, high} =
+        Accounts.create_service(%{name: "B High #{unique()}", monthly_spend_limit_usd: "100"})
+
+      {:ok, unlim} =
+        Accounts.create_service(%{name: "C Unlim #{unique()}", unlimited_spend: true})
+
+      {:ok, _} =
+        Tokengate.Logs.log_request(%{
+          subject_type: "service",
+          service_id: low.id,
+          model_requested: "gpt-4o",
+          provider_cost_usd: Decimal.new("9.00"),
+          latency_ms: 50
+        })
+
+      {:ok, _} =
+        Tokengate.Logs.log_request(%{
+          subject_type: "service",
+          service_id: high.id,
+          model_requested: "gpt-4o",
+          provider_cost_usd: Decimal.new("40.00"),
+          latency_ms: 50
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      html = view |> element("th button[phx-value-field='limit']") |> render_click()
+
+      ids =
+        Regex.scan(~r/<tr[^>]+id="service-([^"]+)"/, html)
+        |> Enum.map(&Enum.at(&1, 1))
+        |> Enum.filter(&(&1 in [to_string(low.id), to_string(high.id), to_string(unlim.id)]))
+
+      assert ids == [to_string(high.id), to_string(low.id), to_string(unlim.id)]
+    end
+
+    test "modal de modelos filtra la lista de modelos por nombre", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+
+      {:ok, m1} =
+        Tokengate.Providers.create_model(%{name: "alpha-model-#{unique()}", context_window: 8192})
+
+      {:ok, m2} =
+        Tokengate.Providers.create_model(%{name: "beta-model-#{unique()}", context_window: 8192})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#edit-models-#{service.id}") |> render_click()
+      assert has_element?(view, "#model-picker-#{service.id}-#{m1.id}")
+      assert has_element?(view, "#model-picker-#{service.id}-#{m2.id}")
+
+      view
+      |> element("#models-modal-search-form")
+      |> render_change(%{"q" => "alpha-model"})
+
+      assert has_element?(view, "#model-picker-#{service.id}-#{m1.id}")
+      refute has_element?(view, "#model-picker-#{service.id}-#{m2.id}")
+    end
+
+    test "modal de detalle usa metric_tile con precisión adaptativa y picker substring", %{
+      conn: conn
+    } do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      u = unique()
+
+      {:ok, sub_user} =
+        Accounts.register_user(%{
+          email: "picker-#{u}@example.com",
+          name: "Maria Substring #{u}",
+          password: "password-secret-#{u}1",
+          global_role: "user"
+        })
+
+      {:ok, _} =
+        Tokengate.Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          model_requested: "gpt-4o",
+          provider_cost_usd: Decimal.new("0.000500"),
+          latency_ms: 50
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#detail-#{service.id}") |> render_click()
+      assert has_element?(view, "#detail-stat-cost", "$0.0005")
+      assert has_element?(view, "#detail-stat-requests", "1")
+
+      view
+      |> element(
+        "button[phx-click='toggle_supervisor_form'][phx-value-service-id='#{service.id}']"
+      )
+      |> render_click()
+
+      # Substring match (2+ chars, mid-string) funciona igual que en ServiceMembersLive.
+      view
+      |> element("#supervisor-search-form")
+      |> render_change(%{"supervisor_query" => "Substring"})
+
+      assert has_element?(
+               view,
+               "button[phx-click='add_supervisor'][phx-value-user-id='#{sub_user.id}']"
+             )
+    end
+
+    test "handle_params aplica búsqueda y filtro desde URL", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      {:ok, target} =
+        Accounts.create_service(%{name: "DeepLinkSvc #{unique()}", unlimited_spend: true})
+
+      {:ok, _other} = Accounts.create_service(%{name: "OtherSvc #{unique()}"})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services?q=DeepLinkSvc&filter=unlimited")
+
+      assert has_element?(view, "#service-#{target.id}")
+      assert has_element?(view, "#filter-service-unlimited.btn-primary")
+    end
+  end
 end

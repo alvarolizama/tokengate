@@ -466,11 +466,13 @@ defmodule TokengateWeb.ModelsLive do
       # sobre todo) vive en `source.changes`. Se arrastra entero para no perderlo
       # al rearmar el changeset con el nombre del id elegido.
       short_name = ModelIds.short_name(model)
+      lab_key = ModelIds.lab_key(model)
 
       params =
         socket.assigns.form.source.changes
         |> Map.new(fn {key, value} -> {to_string(key), value} end)
         |> Map.put("name", short_name)
+        |> maybe_put_lab_key(lab_key)
         |> maybe_prefill_market_prices(
           short_name,
           socket.assigns[:wizard_provider_key],
@@ -1310,11 +1312,26 @@ defmodule TokengateWeb.ModelsLive do
 
         changeset =
           form.source
-          |> Ecto.Changeset.put_change(:market_input_price_per_1m, entry.input)
-          |> Ecto.Changeset.put_change(:market_output_price_per_1m, entry.output)
-          |> Ecto.Changeset.put_change(:market_cache_price_per_1m, entry.cache)
-          |> Ecto.Changeset.put_change(:market_price_source, "models.dev")
-          |> Ecto.Changeset.put_change(:market_price_synced_at, now)
+          |> then(fn cs ->
+            if is_integer(entry.context_window) and entry.context_window > 0 and
+                 is_nil(Ecto.Changeset.get_field(cs, :context_window)) do
+              Ecto.Changeset.put_change(cs, :context_window, entry.context_window)
+            else
+              cs
+            end
+          end)
+          |> then(fn cs ->
+            if is_nil(entry.input) and is_nil(entry.output) and is_nil(entry.cache) do
+              cs
+            else
+              cs
+              |> Ecto.Changeset.put_change(:market_input_price_per_1m, entry.input)
+              |> Ecto.Changeset.put_change(:market_output_price_per_1m, entry.output)
+              |> Ecto.Changeset.put_change(:market_cache_price_per_1m, entry.cache)
+              |> Ecto.Changeset.put_change(:market_price_source, "models.dev")
+              |> Ecto.Changeset.put_change(:market_price_synced_at, now)
+            end
+          end)
 
         {:noreply,
          socket
@@ -1382,19 +1399,47 @@ defmodule TokengateWeb.ModelsLive do
 
         case MarketPrices.lookup(index, name: name, lab_key: params["lab_key"], lanes: lanes) do
           {:ok, entry} ->
-            now = DateTime.utc_now() |> DateTime.truncate(:second)
-
             params
-            |> maybe_put_decimal("market_input_price_per_1m", entry.input)
-            |> maybe_put_decimal("market_output_price_per_1m", entry.output)
-            |> maybe_put_decimal("market_cache_price_per_1m", entry.cache)
-            |> Map.put("market_price_source", "models.dev")
-            |> Map.put("market_price_synced_at", now)
+            |> maybe_put_context_window(entry.context_window)
+            |> maybe_put_entry_market_prices(entry)
 
           :not_found ->
             params
         end
     end
+  end
+
+  defp maybe_put_lab_key(params, lab_key) when is_binary(lab_key) and lab_key != "" do
+    if (params["lab_key"] || "") |> to_string() |> String.trim() == "" do
+      Map.put(params, "lab_key", lab_key)
+    else
+      params
+    end
+  end
+
+  defp maybe_put_lab_key(params, _), do: params
+
+  defp maybe_put_context_window(params, cw) when is_integer(cw) and cw > 0 do
+    if is_nil(params["context_window"]) or params["context_window"] == "" do
+      Map.put(params, "context_window", cw)
+    else
+      params
+    end
+  end
+
+  defp maybe_put_context_window(params, _), do: params
+
+  defp maybe_put_entry_market_prices(params, %{input: nil, output: nil, cache: nil}), do: params
+
+  defp maybe_put_entry_market_prices(params, entry) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    params
+    |> maybe_put_decimal("market_input_price_per_1m", entry.input)
+    |> maybe_put_decimal("market_output_price_per_1m", entry.output)
+    |> maybe_put_decimal("market_cache_price_per_1m", entry.cache)
+    |> Map.put("market_price_source", "models.dev")
+    |> Map.put("market_price_synced_at", now)
   end
 
   defp maybe_put_decimal(params, _key, nil), do: params

@@ -68,6 +68,7 @@ defmodule TokengateWeb.UserStatsLive do
           |> assign(:logs_empty?, true)
           |> assign(:page_size, @page_size)
           |> assign(:summary, default_summary())
+          |> assign(:user_breakdowns, %{agents: [], providers: []})
           |> assign(:summary_loading, true)
           |> assign(:logs_loading, true)
           |> assign(:stats_loading, true)
@@ -225,6 +226,13 @@ defmodule TokengateWeb.UserStatsLive do
         Logs.user_stats(user_id, from: from, to: to)
       end)
     end)
+    |> start_async(:user_breakdowns, fn ->
+      %{from: from, to: to} = Periods.period_bounds(period, timezone)
+
+      DashboardCache.fetch_or_compute({:user_stats_breakdowns, user_id, period, timezone}, fn ->
+        Logs.user_breakdowns(user_id, from: from, to: to)
+      end)
+    end)
   end
 
   defp start_logs_load(socket, mode) do
@@ -281,6 +289,14 @@ defmodule TokengateWeb.UserStatsLive do
      |> assign(:summary_loading, false)
      |> assign(:summary_error, true)
      |> update_status_flags()}
+  end
+
+  def handle_async(:user_breakdowns, {:ok, breakdowns}, socket) do
+    {:noreply, assign(socket, :user_breakdowns, breakdowns)}
+  end
+
+  def handle_async(:user_breakdowns, {:exit, _reason}, socket) do
+    {:noreply, socket}
   end
 
   def handle_async(:user_logs, {:ok, {mode, logs}}, socket) do
@@ -517,6 +533,13 @@ defmodule TokengateWeb.UserStatsLive do
               {fmt_money(@summary.total_cost_usd)}
               <:sub>
                 {gettext("%{count} reqs", count: Stats.format_number(@summary.request_count))}
+                <span :if={@summary.request_count > 0} class="tabular-nums">
+                  · {Stats.cost_per_request(@summary.total_cost_usd, @summary.request_count)}/req · {Stats.effective_cost_per_1m(
+                    @summary.total_cost_usd,
+                    @summary.total_prompt_tokens,
+                    @summary.total_completion_tokens
+                  )}/1M
+                </span>
               </:sub>
             </.kpi_card>
 
@@ -665,6 +688,114 @@ defmodule TokengateWeb.UserStatsLive do
                       </span>
                     </li>
                   </ol>
+                <% end %>
+              </div>
+            </div>
+          </div>
+
+          <%!-- Desglose por agente y proveedor del usuario --%>
+          <div
+            :if={@user_breakdowns.agents != [] or @user_breakdowns.providers != []}
+            class="grid grid-cols-1 lg:grid-cols-2 gap-3"
+            id="user-breakdowns-grid"
+          >
+            <div class="card bg-base-100 border border-base-300 shadow-sm" id="user-agents-breakdown">
+              <div class="card-body p-4">
+                <div class="flex items-center justify-between mb-2">
+                  <h3 class="text-sm font-semibold">{gettext("Agents used")}</h3>
+                  <span class="text-[10px] text-base-content/40">
+                    {Stats.period_label(@period)}
+                  </span>
+                </div>
+                <%= if @user_breakdowns.agents == [] do %>
+                  <p class="text-xs text-base-content/40">
+                    {gettext("No agent data in this period.")}
+                  </p>
+                <% else %>
+                  <ul class="divide-y divide-base-200/60">
+                    <li
+                      :for={row <- @user_breakdowns.agents}
+                      class="py-1.5 flex items-center justify-between gap-2 text-xs"
+                    >
+                      <div class="flex items-center gap-2 min-w-0">
+                        <img
+                          :if={row.logo}
+                          src={row.logo}
+                          alt=""
+                          class="w-4 h-4 object-contain shrink-0"
+                        />
+                        <.icon
+                          :if={!row.logo}
+                          name={row.icon}
+                          class="w-4 h-4 text-base-content/60 shrink-0"
+                        />
+                        <.link
+                          navigate={~p"/stats/agents/#{row.key}?period=#{@period}"}
+                          class="link link-hover font-medium truncate"
+                        >
+                          {row.label}
+                        </.link>
+                      </div>
+                      <div class="flex items-center gap-3 shrink-0 font-mono tabular-nums">
+                        <span class="text-base-content/60">
+                          {Stats.format_number(row.request_count)} req
+                        </span>
+                        <span class="text-base-content/60">
+                          {Stats.cache_hit_pct(row.prompt_tokens, row.cache_read_tokens)} cache
+                        </span>
+                        <span class="font-semibold text-warning">{fmt_money(row.cost_usd)}</span>
+                      </div>
+                    </li>
+                  </ul>
+                <% end %>
+              </div>
+            </div>
+
+            <div
+              class="card bg-base-100 border border-base-300 shadow-sm"
+              id="user-providers-breakdown"
+            >
+              <div class="card-body p-4">
+                <div class="flex items-center justify-between mb-2">
+                  <h3 class="text-sm font-semibold">{gettext("Providers used")}</h3>
+                  <span class="text-[10px] text-base-content/40">
+                    {Stats.period_label(@period)}
+                  </span>
+                </div>
+                <%= if @user_breakdowns.providers == [] do %>
+                  <p class="text-xs text-base-content/40">
+                    {gettext("No provider data in this period.")}
+                  </p>
+                <% else %>
+                  <ul class="divide-y divide-base-200/60">
+                    <li
+                      :for={row <- @user_breakdowns.providers}
+                      class="py-1.5 flex items-center justify-between gap-2 text-xs"
+                    >
+                      <div class="flex items-center gap-2 min-w-0">
+                        <Stats.provider_logo logo_url={row.provider_logo_url} />
+                        <%= if row.provider_id do %>
+                          <.link
+                            navigate={~p"/stats/providers/#{row.provider_id}?period=#{@period}"}
+                            class="link link-hover font-medium truncate"
+                          >
+                            {row.provider_name}
+                          </.link>
+                        <% else %>
+                          <span class="font-medium truncate">{row.provider_name}</span>
+                        <% end %>
+                      </div>
+                      <div class="flex items-center gap-3 shrink-0 font-mono tabular-nums">
+                        <span class="text-base-content/60">
+                          {Stats.format_number(row.request_count)} req
+                        </span>
+                        <span class="text-base-content/60">
+                          {Stats.cache_hit_pct(row.prompt_tokens, row.cache_read_tokens)} cache
+                        </span>
+                        <span class="font-semibold text-warning">{fmt_money(row.cost_usd)}</span>
+                      </div>
+                    </li>
+                  </ul>
                 <% end %>
               </div>
             </div>

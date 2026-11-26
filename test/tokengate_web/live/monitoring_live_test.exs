@@ -641,4 +641,65 @@ defmodule TokengateWeb.MonitoringLiveTest do
     # user never even mounts the view — they get bounced to /dashboard.
     assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/operations/monitoring")
   end
+
+  test "error modal renders real upstream message, Limit profile label, agent filter and pause live",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{member: member, model: model} = member_with_log()
+
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        model_requested: model.name,
+        model_responded: model.name,
+        status_code: 502,
+        provider_status_code: 502,
+        error_reason: "server_error",
+        error_message: "Upstream gateway timeout on node 7",
+        agent_type: "claude-code",
+        latency_ms: 85,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    # Error detail modal renders the real message (not literal template braces)
+    view |> element("td button.badge-error", "server_error") |> render_click()
+    assert has_element?(view, "#error-detail-message", "Upstream gateway timeout on node 7")
+    assert has_element?(view, "#error-detail-modal", "Perfil de límites")
+    view |> element("#error-detail-modal .btn-circle") |> render_click()
+
+    # Agent filter + filtered CSV export link + clear filters
+    view
+    |> form("#logs-filter-form", filter: %{agent_type: "claude-code"})
+    |> render_change()
+
+    assert has_element?(view, "#monitoring-clear-filters")
+    assert element(view, "#csv-logs-filtered") |> render() =~ "agent_type=claude-code"
+
+    view |> element("#monitoring-clear-filters") |> render_click()
+    refute has_element?(view, "#monitoring-clear-filters")
+
+    # Pause live buffers incoming logs until resumed
+    view |> element("#monitoring-pause-btn") |> render_click()
+
+    {:ok, buffered_log} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        model_requested: "paused-stream-model",
+        model_responded: "paused-stream-model",
+        status_code: 200,
+        agent_type: "api",
+        latency_ms: 10,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    send(view.pid, {:new_log, buffered_log})
+    assert has_element?(view, "#monitoring-pause-btn", "+1")
+    refute has_element?(view, "#logs", "paused-stream-model")
+
+    view |> element("#monitoring-pause-btn") |> render_click()
+    assert has_element?(view, "#logs", "paused-stream-model")
+  end
 end

@@ -44,6 +44,7 @@ defmodule TokengateWeb.StatsExportController do
   alias Tokengate.Periods
   alias Tokengate.Repo
   alias TokengateWeb.StatsLive.Agents, as: AgentsStats
+  alias TokengateWeb.TimezoneHelper
 
   # Rows per DB cursor fetch, and lines per socket chunk.
   @chunk_rows 500
@@ -200,8 +201,8 @@ defmodule TokengateWeb.StatsExportController do
     end
   end
 
-  defp build_csv(user, "errors", _params, opts, timezone) do
-    {:ok, build_errors_csv(user, opts, timezone)}
+  defp build_csv(user, "errors", params, opts, timezone) do
+    {:ok, build_errors_csv(user, params, opts, timezone)}
   end
 
   # La tabla de servicios es admin-only en el hub (la ruta vive en la
@@ -232,8 +233,8 @@ defmodule TokengateWeb.StatsExportController do
     {:ok, build_agents_csv(user, opts, timezone)}
   end
 
-  defp build_csv(user, "logs", _params, opts, timezone) do
-    {:ok, build_logs_csv(user, opts, timezone)}
+  defp build_csv(user, "logs", params, opts, timezone) do
+    {:ok, build_logs_csv(user, params, opts, timezone)}
   end
 
   defp build_csv(user, _type, params, opts, timezone) do
@@ -436,10 +437,11 @@ defmodule TokengateWeb.StatsExportController do
 
   ## Errors CSV -----------------------------------------------------------
 
-  defp build_errors_csv(user, opts, timezone) do
+  defp build_errors_csv(user, params, opts, timezone) do
     filters =
       opts
       |> Map.new()
+      |> apply_export_log_filters(params, timezone)
       |> Map.put(:status_class, "errors")
       |> Map.put(:group_member_ids, Accounts.scope_member_ids(user))
 
@@ -452,10 +454,11 @@ defmodule TokengateWeb.StatsExportController do
 
   ## Logs CSV (full export) -----------------------------------------------
 
-  defp build_logs_csv(user, opts, timezone) do
+  defp build_logs_csv(user, params, opts, timezone) do
     filters =
       opts
       |> Map.new()
+      |> apply_export_log_filters(params, timezone)
       |> Map.put(:group_member_ids, Accounts.scope_member_ids(user))
 
     header =
@@ -463,6 +466,53 @@ defmodule TokengateWeb.StatsExportController do
 
     {"logs_#{Periods.local_today(timezone)}.csv", header,
      {:db, Logs.stream_logs_for_export(filters), &row_to_csv_log/2}}
+  end
+
+  defp apply_export_log_filters(base, params, timezone) do
+    base
+    |> put_param(params, "status_class", :status_class)
+    |> put_param(params, "model_search", :model_search)
+    |> put_param(params, "subject_type", :subject_type)
+    |> put_param(params, "error_reason", :error_reason)
+    |> put_param(params, "agent_type", :agent_type)
+    |> put_bool_param(params, "streaming", :streaming)
+    |> put_uuid_param(params, "group_id", :group_id)
+    |> put_uuid_param(params, "api_key_id", :api_key_id)
+    |> put_date_param(params, "from", :from, timezone, :start_of_day)
+    |> put_date_param(params, "to", :to, timezone, :end_of_day)
+  end
+
+  defp put_param(acc, params, key, field) do
+    case Map.get(params, key) do
+      v when is_binary(v) and v != "" -> Map.put(acc, field, v)
+      _ -> acc
+    end
+  end
+
+  defp put_bool_param(acc, params, key, field) do
+    case Map.get(params, key) do
+      "true" -> Map.put(acc, field, true)
+      "false" -> Map.put(acc, field, false)
+      _ -> acc
+    end
+  end
+
+  defp put_uuid_param(acc, params, key, field) do
+    with v when is_binary(v) and v != "" <- Map.get(params, key),
+         {:ok, uuid} <- Ecto.UUID.cast(v) do
+      Map.put(acc, field, uuid)
+    else
+      _ -> acc
+    end
+  end
+
+  defp put_date_param(acc, params, key, field, timezone, mode) do
+    with v when is_binary(v) and v != "" <- Map.get(params, key),
+         %DateTime{} = dt <- TimezoneHelper.parse_local_date(v, timezone, mode) do
+      Map.put(acc, field, dt)
+    else
+      _ -> acc
+    end
   end
 
   defp row_to_csv_log(log, key_labels) do

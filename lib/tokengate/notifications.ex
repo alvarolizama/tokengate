@@ -32,6 +32,7 @@ defmodule Tokengate.Notifications do
 
   require Logger
 
+  alias Tokengate.Notifications.Delivery
   alias Tokengate.Notifications.Events
   alias Tokengate.Notifications.Link
   alias Tokengate.Notifications.Notification
@@ -40,9 +41,22 @@ defmodule Tokengate.Notifications do
   alias Tokengate.Repo
 
   @table :tokengate_notifications
+  @topic "notifications:updates"
   @settings_key {:settings}
   @default_limit 100
   @max_limit 1000
+
+  @doc "Subscribes the caller to live notification creation/delivery updates."
+  def subscribe do
+    Phoenix.PubSub.subscribe(Tokengate.PubSub, @topic)
+  end
+
+  @doc false
+  def broadcast_update(message) do
+    Phoenix.PubSub.broadcast(Tokengate.PubSub, @topic, message)
+  rescue
+    _ -> :ok
+  end
 
   # ---------------------------------------------------------------------------
   # GenServer lifecycle
@@ -226,6 +240,7 @@ defmodule Tokengate.Notifications do
     case Repo.insert(changeset) do
       {:ok, notification} ->
         enqueue(notification)
+        broadcast_update({:notification_updated, notification})
         :ok
 
       {:error, changeset} ->
@@ -366,6 +381,59 @@ defmodule Tokengate.Notifications do
 
   @doc "Gets a single notification. Raises when missing."
   def get_notification!(id), do: Repo.get!(Notification, id)
+
+  @doc """
+  Marks a notification `pending` and enqueues a fresh `TelegramWorker` job so
+  failed/missing chat deliveries are retried.
+  """
+  @spec resend_notification(term()) :: {:ok, Notification.t()} | {:error, :not_found}
+  def resend_notification(id) when is_binary(id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(id),
+         %Notification{} = notification <- get_notification(uuid),
+         {:ok, updated} <-
+           notification
+           |> Notification.changeset(%{status: "pending", error: nil})
+           |> Repo.update() do
+      %{notification_id: updated.id}
+      |> TelegramWorker.new()
+      |> Oban.insert()
+
+      broadcast_update({:notification_updated, updated})
+      {:ok, updated}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  def resend_notification(_), do: {:error, :not_found}
+
+  @doc """
+  Batch-loads per-chat delivery rows for a list of notification ids (one query).
+  Returns `%{notification_id => [%{status, chat_id, thread_id, label, error, attempts, sent_at}]}`.
+  """
+  @spec list_deliveries_by_notification([String.t()]) :: %{String.t() => [map()]}
+  def list_deliveries_by_notification([]), do: %{}
+
+  def list_deliveries_by_notification(notification_ids) when is_list(notification_ids) do
+    from(d in Delivery,
+      left_join: l in assoc(d, :link),
+      where: d.notification_id in ^notification_ids,
+      order_by: [asc: d.inserted_at],
+      select: %{
+        notification_id: d.notification_id,
+        chat_id: d.chat_id,
+        thread_id: d.thread_id,
+        label: l.label,
+        kind: l.kind,
+        status: d.status,
+        attempts: d.attempts,
+        error: d.error,
+        sent_at: d.sent_at
+      }
+    )
+    |> Repo.all()
+    |> Enum.group_by(& &1.notification_id)
+  end
 
   defp get_filter(filters, field),
     do: Map.get(filters, field) || Map.get(filters, to_string(field))

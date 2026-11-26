@@ -94,7 +94,14 @@ defmodule TokengateWeb.StatsLive.Agents do
                     class="w-5 h-5 opacity-70 shrink-0"
                   />
                   <div class="min-w-0">
-                    <div class="font-medium truncate" title={row.key}>{row.label}</div>
+                    <.link
+                      patch={~p"/stats/agents/#{row.key}?period=#{@period}"}
+                      class="link link-hover font-medium truncate block"
+                      id={"agent-link-#{row.key}"}
+                      title={row.key}
+                    >
+                      {row.label}
+                    </.link>
                     <div class="text-[10px] uppercase tracking-wide text-base-content/40">
                       {row.family}
                     </div>
@@ -119,6 +126,21 @@ defmodule TokengateWeb.StatsLive.Agents do
                 tooltip={gettext("Share of the period's cost")}
               >
                 <span class="font-mono tabular-nums">{Stats.format_percent(row.share)}</span>
+              </:col>
+              <:col :let={row} label={gettext("Cost / req")} align="right">
+                <span class="font-mono tabular-nums text-base-content/70">
+                  {Stats.cost_per_request(row.cost_usd, row.request_count)}
+                </span>
+              </:col>
+              <:col
+                :let={row}
+                label={gettext("Cache %")}
+                align="right"
+                tooltip={gettext("Percentage of prompt tokens with cache hit")}
+              >
+                <span class="font-mono tabular-nums">
+                  {Stats.cache_hit_pct(row.prompt_tokens, Map.get(row, :cache_read_tokens, 0))}
+                </span>
               </:col>
               <:col
                 :let={row}
@@ -269,6 +291,7 @@ defmodule TokengateWeb.StatsLive.Agents do
         end),
       prompt_tokens: Enum.reduce(buckets, 0, &(&1.prompt_tokens + &2)),
       completion_tokens: Enum.reduce(buckets, 0, &(&1.completion_tokens + &2)),
+      cache_read_tokens: Enum.reduce(buckets, 0, &(Map.get(&1, :cache_read_tokens, 0) + &2)),
       avg_latency_ms: weighted_latency(latency_sum, latency_count)
     }
   end

@@ -1148,10 +1148,10 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert json_response(conn, 200)
 
-    # The down provider 500s fast, so it gets @max_retries_per_provider
-    # attempts before being excluded (each one logs a fallback entry), then
-    # the healthy provider answers and logs the final success: 3 + 1 jobs.
-    assert %{success: 4} = Oban.drain_queue(queue: :logs)
+    # The down provider 500s fast, so it gets 1 initial + @max_retries_per_provider (1)
+    # retry before being excluded (each one logs a fallback entry), then
+    # the healthy provider answers and logs the final success: 2 + 1 jobs.
+    assert %{success: 3} = Oban.drain_queue(queue: :logs)
 
     fallback_logs =
       Repo.all(
@@ -4947,6 +4947,97 @@ defmodule TokengateWeb.ProxyControllerTest do
       assert %{success: 1} = Oban.drain_queue(queue: :logs)
       log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
       assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000082"))
+    end
+  end
+
+  describe "fallback Gate 2 release and 429 exclusion" do
+    test "fallback releases credential Gate 2 concurrency slot when moving to secondary", %{
+      conn: conn
+    } do
+      u = unique()
+
+      %{token: token, model: model, provider: prov1, credential: primary_cred} =
+        proxy_fixture(%{down: true})
+
+      {:ok, _prov1} = Providers.update_provider(prov1, %{max_concurrent: 1})
+
+      {:ok, prov2} =
+        Providers.create_provider(%{
+          name: "Healthy Gate2 #{u}",
+          base_url: upstream_url()
+        })
+
+      {:ok, cred2} =
+        Providers.create_credential(%{provider_id: prov2.id, api_key_encrypted: "sk-g2-#{u}"})
+
+      {:ok, _mp2} =
+        Providers.create_model_provider(%{
+          model_id: model.id,
+          credential_id: cred2.id,
+          provider_model: "gpt-4o-g2",
+          priority: 2
+        })
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+      assert json_response(conn, 200)
+
+      # Credential 1's Gate 2 concurrency slot must be back at 0 (no leak).
+      assert :ok =
+               Tokengate.Limits.Manager.acquire_concurrency(primary_cred.id, 1)
+
+      Tokengate.Limits.Manager.release_concurrency(primary_cred.id)
+    end
+
+    test "429 excludes credential immediately after 1st attempt without retrying same key", %{
+      conn: conn
+    } do
+      u = unique()
+
+      %{token: token, model: model, credential: primary_cred} =
+        proxy_fixture(%{path_overrides: %{"chat" => "/ratelimited"}})
+
+      {:ok, prov2} =
+        Providers.create_provider(%{
+          name: "Healthy 429 Fallback #{u}",
+          base_url: upstream_url()
+        })
+
+      {:ok, cred2} =
+        Providers.create_credential(%{
+          provider_id: prov2.id,
+          api_key_encrypted: "sk-429-fb-#{u}"
+        })
+
+      {:ok, _mp2} =
+        Providers.create_model_provider(%{
+          model_id: model.id,
+          credential_id: cred2.id,
+          provider_model: "gpt-4o-429-fb",
+          priority: 2
+        })
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+      assert json_response(conn, 200)
+
+      # Only 1 deferred fallback log for primary_cred (no wasted retry on 429) + 1 success for cred2.
+      assert %{success: 2} = Oban.drain_queue(queue: :logs)
+
+      fallback_logs =
+        Repo.all(
+          from l in RequestLog,
+            where: l.model_id == ^model.id and l.credential_id == ^primary_cred.id
+        )
+
+      assert length(fallback_logs) == 1
+      assert hd(fallback_logs).error_reason == "provider_rate_limited"
     end
   end
 end

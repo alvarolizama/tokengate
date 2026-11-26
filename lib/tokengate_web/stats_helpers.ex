@@ -123,13 +123,14 @@ defmodule TokengateWeb.StatsHelpers do
   attr :target, :string, required: true
   attr :period, :string, required: true
   attr :id, :string, default: "period-selector"
+  attr :extra_query, :string, default: "", doc: "params extra de la URL (p. ej. `&tab=logs`)"
 
   def period_selector(assigns) do
     ~H"""
     <div class="join" id={@id}>
       <.link
         :for={value <- canonical_periods()}
-        patch={"#{@target}?period=#{value}"}
+        patch={"#{@target}?period=#{value}#{@extra_query}"}
         id={"period-#{value}"}
         class={[
           "btn btn-sm join-item",
@@ -237,12 +238,80 @@ defmodule TokengateWeb.StatsHelpers do
   def breakdown_total(rows) when is_list(rows) do
     %{
       request_count: Enum.reduce(rows, 0, &(&1.request_count + &2)),
+      error_count: Enum.reduce(rows, 0, &(Map.get(&1, :error_count, 0) + &2)),
       cost_usd: Enum.reduce(rows, Decimal.new(0), fn r, acc -> Decimal.add(acc, r.cost_usd) end),
       prompt_tokens: Enum.reduce(rows, 0, &(&1.prompt_tokens + &2)),
       completion_tokens: Enum.reduce(rows, 0, &(&1.completion_tokens + &2)),
-      cache_read_tokens: Enum.reduce(rows, 0, &(Map.get(&1, :cache_read_tokens, 0) + &2))
+      cache_read_tokens: Enum.reduce(rows, 0, &(Map.get(&1, :cache_read_tokens, 0) + &2)),
+      cache_creation_tokens: Enum.reduce(rows, 0, &(Map.get(&1, :cache_creation_tokens, 0) + &2))
     }
   end
+
+  @doc "Average USD cost per request formatted with adaptive precision, or `—`."
+  def cost_per_request(_cost, count) when count in [0, nil], do: "—"
+
+  def cost_per_request(%Decimal{} = cost, count) when is_integer(count) and count > 0 do
+    cost
+    |> Decimal.div(Decimal.new(count))
+    |> money()
+  end
+
+  def cost_per_request(_, _), do: "—"
+
+  @doc "Percentage of total USD cost (1 decimal float 0.0..100.0)."
+  def cost_share_pct(_cost, nil), do: 0.0
+
+  def cost_share_pct(%Decimal{} = cost, %Decimal{} = total) do
+    if Decimal.compare(total, Decimal.new(0)) == :gt do
+      cost
+      |> Decimal.div(total)
+      |> Decimal.mult(Decimal.new(100))
+      |> Decimal.round(1, :half_up)
+      |> Decimal.to_float()
+    else
+      0.0
+    end
+  end
+
+  def cost_share_pct(_, _), do: 0.0
+
+  @doc "Output / input token ratio formatted as `0.5x`, or `—` when input is 0."
+  def out_in_ratio(_completion, prompt) when prompt in [0, nil], do: "—"
+
+  def out_in_ratio(completion, prompt)
+      when is_integer(completion) and is_integer(prompt) and prompt > 0 do
+    ratio = Float.round(completion / prompt, 2)
+    "#{:erlang.float_to_binary(ratio, [:compact, {:decimals, 2}])}x"
+  end
+
+  def out_in_ratio(_, _), do: "—"
+
+  @doc "Effective observed cost per 1M total tokens (prompt + completion), or `—`."
+  def effective_cost_per_1m(cost, prompt, completion)
+      when is_struct(cost, Decimal) and is_integer(prompt) and is_integer(completion) do
+    total_tokens = prompt + completion
+
+    if total_tokens > 0 do
+      cost
+      |> Decimal.mult(Decimal.new(1_000_000))
+      |> Decimal.div(Decimal.new(total_tokens))
+      |> money()
+    else
+      "—"
+    end
+  end
+
+  def effective_cost_per_1m(_, _, _), do: "—"
+
+  @doc "Error rate float (0.0..1.0) from error_count / request_count."
+  def error_rate_from(_errors, total) when total in [0, nil], do: 0.0
+
+  def error_rate_from(errors, total)
+      when is_integer(errors) and is_integer(total) and total > 0 do
+    Float.round(errors / total, 4)
+  end
+
+  def error_rate_from(_, _), do: 0.0
 
   @doc "Count distinct providers (by model_provider_id) in a provider breakdown."
   def distinct_providers(rows) when is_list(rows) do
@@ -324,18 +393,34 @@ defmodule TokengateWeb.StatsHelpers do
   Se deriva en memoria del agregado modelo × proveedor que el Resumen ya
   cargó (`Rollup.usage_by_model_provider_stacked/1`): ninguna query extra.
   """
-  def model_rows(rows) do
-    rows
-    |> Enum.map(fn row ->
-      %{
-        model_name: row.model_name,
-        requests: row.total_requests,
-        cost_usd:
-          Enum.reduce(row.providers, Decimal.new(0), fn p, acc -> Decimal.add(acc, p.cost_usd) end),
-        provider_count: length(row.providers)
-      }
-    end)
-    |> Enum.sort_by(& &1.requests, :desc)
+  def model_rows(rows, sort_by \\ :requests) do
+    mapped =
+      Enum.map(rows, fn row ->
+        %{
+          model_id: Map.get(row, :model_id),
+          model_name: row.model_name,
+          requests: row.total_requests,
+          cost_usd:
+            Enum.reduce(row.providers, Decimal.new(0), fn p, acc ->
+              Decimal.add(acc, p.cost_usd)
+            end),
+          provider_count: length(row.providers)
+        }
+      end)
+
+    case sort_by do
+      :cost ->
+        Enum.sort(mapped, fn a, b ->
+          case Decimal.compare(a.cost_usd, b.cost_usd) do
+            :eq -> a.requests >= b.requests
+            :gt -> true
+            :lt -> false
+          end
+        end)
+
+      _ ->
+        Enum.sort_by(mapped, & &1.requests, :desc)
+    end
   end
 
   @doc """
@@ -348,6 +433,19 @@ defmodule TokengateWeb.StatsHelpers do
   @doc "Requests totales del agregado modelo × proveedor (base del reparto)."
   def model_provider_total(rows) do
     Enum.reduce(rows, 0, &(&1.total_requests + &2))
+  end
+
+  @doc "Costo total del agregado modelo × proveedor (base del reparto por costo)."
+  def model_provider_total_cost(rows) do
+    Enum.reduce(rows, Decimal.new(0), fn r, acc ->
+      row_cost =
+        Map.get(r, :total_cost_usd) ||
+          Enum.reduce(r.providers, Decimal.new(0), fn p, p_acc ->
+            Decimal.add(p_acc, p.cost_usd)
+          end)
+
+      Decimal.add(acc, row_cost)
+    end)
   end
 
   @provider_colors ~w(
@@ -404,27 +502,41 @@ defmodule TokengateWeb.StatsHelpers do
   El logo y el id del proveedor se colapsan por nombre (varios ids pueden
   compartir nombre): sirve el del primer id que traiga identidad del catálogo.
   """
-  def provider_legend(rows) do
-    rows
-    |> Enum.flat_map(& &1.providers)
-    |> Enum.group_by(& &1.provider_name)
-    |> Enum.map(fn {provider_name, entries} ->
-      requests = Enum.reduce(entries, 0, &(&1.requests + &2))
+  def provider_legend(rows, sort_by \\ :requests) do
+    grouped =
+      rows
+      |> Enum.flat_map(& &1.providers)
+      |> Enum.group_by(& &1.provider_name)
+      |> Enum.map(fn {provider_name, entries} ->
+        requests = Enum.reduce(entries, 0, &(&1.requests + &2))
 
-      cost =
-        Enum.reduce(entries, Decimal.new(0), fn e, acc ->
-          Decimal.add(acc, e.cost_usd)
+        cost =
+          Enum.reduce(entries, Decimal.new(0), fn e, acc ->
+            Decimal.add(acc, e.cost_usd)
+          end)
+
+        %{
+          provider_name: provider_name,
+          provider_logo_url: Enum.find_value(entries, &Map.get(&1, :provider_logo_url)),
+          provider_stats_id: Enum.find_value(entries, &Map.get(&1, :provider_stats_id)),
+          requests: requests,
+          cost_usd: cost
+        }
+      end)
+
+    case sort_by do
+      :cost ->
+        Enum.sort(grouped, fn a, b ->
+          case Decimal.compare(a.cost_usd, b.cost_usd) do
+            :eq -> a.requests >= b.requests
+            :gt -> true
+            :lt -> false
+          end
         end)
 
-      %{
-        provider_name: provider_name,
-        provider_logo_url: Enum.find_value(entries, &Map.get(&1, :provider_logo_url)),
-        provider_stats_id: Enum.find_value(entries, &Map.get(&1, :provider_stats_id)),
-        requests: requests,
-        cost_usd: cost
-      }
-    end)
-    |> Enum.sort_by(& &1.requests, :desc)
+      _ ->
+        Enum.sort_by(grouped, & &1.requests, :desc)
+    end
   end
 
   defp pad2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
@@ -456,7 +568,7 @@ defmodule TokengateWeb.StatsHelpers do
     }
   }
   """
-  def pivot_daily_series(rows) when is_list(rows) do
+  def pivot_daily_series(rows, metric \\ :requests) when is_list(rows) do
     days =
       rows
       |> Enum.map(&DateTime.to_date(&1.date))
@@ -467,7 +579,22 @@ defmodule TokengateWeb.StatsHelpers do
       rows
       |> Enum.group_by(& &1.label)
       |> Map.new(fn {label, entries} ->
-        by_date = Map.new(entries, &{DateTime.to_date(&1.date), &1.request_count})
+        by_date =
+          Map.new(entries, fn entry ->
+            val =
+              case metric do
+                :cost ->
+                  entry
+                  |> Map.get(:total_cost_usd, Decimal.new(0))
+                  |> Decimal.to_float()
+
+                _ ->
+                  entry.request_count
+              end
+
+            {DateTime.to_date(entry.date), val}
+          end)
+
         {label, by_date}
       end)
 
@@ -483,7 +610,17 @@ defmodule TokengateWeb.StatsHelpers do
     %{days: days, series: series, logos: logos}
   end
 
-  @doc "Max single-day count across all labels (for scaling the chart)."
+  @doc "Max single-day total across all labels (for scaling the stacked chart)."
+  def daily_series_max(%{days: days, series: series}) when days != [] do
+    days
+    |> Enum.map(fn day ->
+      Enum.reduce(series, 0, fn {_label, by_date}, acc ->
+        acc + Map.get(by_date, day, 0)
+      end)
+    end)
+    |> Enum.max(fn -> 0 end)
+  end
+
   def daily_series_max(%{series: series}) do
     series
     |> Enum.flat_map(fn {_label, by_date} -> Map.values(by_date) end)
@@ -491,7 +628,9 @@ defmodule TokengateWeb.StatsHelpers do
   end
 
   @doc "Sparkline bar height in % using sqrt scale."
-  def sparkline_bar_height(count, max) when max > 0 do
+  def sparkline_bar_height(count, _max) when count in [0, 0.0], do: 0.0
+
+  def sparkline_bar_height(count, max) when max > 0 and count > 0 do
     pct = :math.sqrt(count / max) * 100
     max(Float.round(pct, 1), 4.0)
   end

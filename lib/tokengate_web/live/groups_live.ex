@@ -18,8 +18,9 @@ defmodule TokengateWeb.GroupsLive do
 
   import Ecto.Query, only: [from: 2]
   import TokengateWeb.AdminComponents
+  import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
   alias Tokengate.Accounts
-  alias Tokengate.Accounts.{Group, GroupMember}
+  alias Tokengate.Accounts.{Group, GroupMember, User}
   alias Tokengate.Budgets
   alias Tokengate.Providers
   alias Tokengate.Providers.{Model, GroupModel}
@@ -27,7 +28,7 @@ defmodule TokengateWeb.GroupsLive do
   alias TokengateWeb.StatsHelpers, as: Stats
 
   @per_page 30
-  @sort_columns ~w(name members spend)a
+  @sort_columns ~w(name members monthly_cap spend)a
 
   @impl true
   def mount(_params, _session, socket) do
@@ -128,6 +129,8 @@ defmodule TokengateWeb.GroupsLive do
       |> Budgets.list_group_budgets()
       |> Map.new(fn budget -> {budget.group.id, budget} end)
 
+    kpis = compute_kpis(group_budgets)
+
     sorted_groups =
       if socket.assigns.sort_field in Accounts.group_page_sql_sorts() do
         groups
@@ -147,11 +150,52 @@ defmodule TokengateWeb.GroupsLive do
     |> assign(:granted_models, granted_models)
     |> assign(:models_by_org, models_by_org)
     |> assign(:group_budgets, group_budgets)
+    |> assign(:kpis, kpis)
     |> assign(:page, page.page)
     |> assign(:total_count, page.total)
     |> assign(:total_pages, page.total_pages)
     |> assign(:groups_empty?, page.total == 0)
     |> stream(:groups, sorted_groups, reset: true)
+  end
+
+  defp compute_kpis(group_budgets) do
+    total_profiles = Repo.aggregate(Group, :count, :id)
+
+    unlimited_profiles =
+      Repo.aggregate(from(g in Group, where: g.unlimited_spend == true), :count, :id)
+
+    capped_profiles =
+      Repo.aggregate(
+        from(g in Group, where: not g.unlimited_spend and not is_nil(g.monthly_spend_limit_usd)),
+        :count,
+        :id
+      )
+
+    total_members = Repo.aggregate(GroupMember, :count, :id)
+    total_users = Repo.aggregate(User, :count, :id)
+
+    budget_values = Map.values(group_budgets)
+
+    total_spend =
+      Enum.reduce(budget_values, Decimal.new(0), fn b, acc ->
+        Decimal.add(acc, b.real_monthly_spend_usd)
+      end)
+
+    alert_profiles =
+      Enum.count(budget_values, fn b ->
+        not b.group.unlimited_spend and is_number(b.monthly_pct) and b.monthly_pct >= 80
+      end)
+
+    %{
+      total_profiles: total_profiles,
+      unlimited_profiles: unlimited_profiles,
+      capped_profiles: capped_profiles,
+      no_budget_profiles: max(total_profiles - unlimited_profiles - capped_profiles, 0),
+      total_members: total_members,
+      unassigned_users: max(total_users - total_members, 0),
+      total_spend: total_spend,
+      alert_profiles: alert_profiles
+    }
   end
 
   defp sort_groups(groups, field, direction, member_counts, group_budgets) do
@@ -172,11 +216,25 @@ defmodule TokengateWeb.GroupsLive do
   defp sort_value(g, :members, member_counts, _group_budgets),
     do: Map.get(member_counts, g.id, 0)
 
+  defp sort_value(g, :monthly_cap, _member_counts, _group_budgets) do
+    cond do
+      g.unlimited_spend -> {2, Decimal.new(0)}
+      not is_nil(g.monthly_spend_limit_usd) -> {1, g.monthly_spend_limit_usd}
+      true -> {0, Decimal.new(0)}
+    end
+  end
+
   defp sort_value(g, :spend, _member_counts, group_budgets),
     do: get_spend(g, group_budgets)
 
   defp sort_value(g, _field, _member_counts, _group_budgets),
     do: String.downcase(g.name || "")
+
+  defp compare_vals({tier_a, %Decimal{} = dec_a}, {tier_b, %Decimal{} = dec_b}) do
+    if tier_a == tier_b,
+      do: Decimal.compare(dec_a, dec_b),
+      else: if(tier_a < tier_b, do: :lt, else: :gt)
+  end
 
   defp compare_vals(%Decimal{} = a, %Decimal{} = b), do: Decimal.compare(a, b)
 
@@ -523,7 +581,7 @@ defmodule TokengateWeb.GroupsLive do
   defp toggle_sort_direction(:asc), do: :desc
   defp toggle_sort_direction(:desc), do: :asc
 
-  defp default_direction_for(field) when field in [:members, :spend], do: :desc
+  defp default_direction_for(field) when field in [:members, :monthly_cap, :spend], do: :desc
   defp default_direction_for(_), do: :asc
 
   def format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
@@ -559,6 +617,68 @@ defmodule TokengateWeb.GroupsLive do
             </div>
           </:actions>
         </.header>
+
+        <%!-- Resumen de perfiles de límites --%>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="profiles-kpis">
+          <.kpi_card
+            id="profiles-kpi-total"
+            label={gettext("Limit profiles")}
+            icon="hero-user-group"
+            accent="primary"
+          >
+            {@kpis.total_profiles}
+            <:sub>
+              {gettext("%{capped} capped · %{unlimited} unlimited",
+                capped: @kpis.capped_profiles,
+                unlimited: @kpis.unlimited_profiles
+              )}
+            </:sub>
+          </.kpi_card>
+
+          <.kpi_card
+            id="profiles-kpi-members"
+            label={gettext("Covered members")}
+            icon="hero-users"
+            accent="accent"
+          >
+            {@kpis.total_members}
+            <:sub>
+              <%= if @kpis.unassigned_users > 0 do %>
+                <.link navigate={~p"/access/users"} class="link link-hover text-warning">
+                  {gettext("%{count} users without profile", count: @kpis.unassigned_users)}
+                </.link>
+              <% else %>
+                {gettext("All users assigned")}
+              <% end %>
+            </:sub>
+          </.kpi_card>
+
+          <.kpi_card
+            id="profiles-kpi-spend"
+            label={gettext("Monthly spend (UTC)")}
+            icon="hero-currency-dollar"
+            accent="primary"
+          >
+            ${format_decimal(@kpis.total_spend)}
+            <:sub>{gettext("Across active limit profiles")}</:sub>
+          </.kpi_card>
+
+          <.kpi_card
+            id="profiles-kpi-alerts"
+            label={gettext("Profiles ≥80%")}
+            icon="hero-exclamation-triangle"
+            accent={if(@kpis.alert_profiles > 0, do: "warning", else: "neutral")}
+          >
+            {@kpis.alert_profiles}
+            <:sub>
+              <%= if @kpis.no_budget_profiles > 0 do %>
+                {gettext("%{count} without monthly budget", count: @kpis.no_budget_profiles)}
+              <% else %>
+                {gettext("Near or at monthly cap")}
+              <% end %>
+            </:sub>
+          </.kpi_card>
+        </div>
 
         <%!-- Group form (create / edit) — modal --%>
         <.modal
@@ -724,6 +844,31 @@ defmodule TokengateWeb.GroupsLive do
                 </p>
               </div>
             </:col>
+            <:col :let={group} label={gettext("Monthly cap")} field={:monthly_cap} align="right">
+              <div id={"group-cap-#{group.id}"}>
+                <%= cond do %>
+                  <% group.unlimited_spend -> %>
+                    <span
+                      class="badge badge-sm badge-success badge-outline"
+                      title={gettext("Marked unlimited: no monthly ceiling")}
+                    >
+                      {gettext("Unlimited")}
+                    </span>
+                  <% not is_nil(group.monthly_spend_limit_usd) -> %>
+                    <p class="font-mono text-sm">
+                      ${format_decimal(group.monthly_spend_limit_usd)}
+                    </p>
+                    <p class="text-[10px] text-base-content/50">{gettext("per member")}</p>
+                  <% true -> %>
+                    <span
+                      class="badge badge-sm badge-warning badge-outline"
+                      title={gettext("No monthly budget (top-ups only)")}
+                    >
+                      {gettext("No budget")}
+                    </span>
+                <% end %>
+              </div>
+            </:col>
             <:col :let={group} label={gettext("Spend/month")} field={:spend} align="right">
               <% budget = Map.get(@group_budgets, group.id) %>
               <p class="font-mono text-sm">${format_decimal(get_spend(group, @group_budgets))}</p>
@@ -736,14 +881,7 @@ defmodule TokengateWeb.GroupsLive do
                     >
                       {gettext("Unlimited")}
                     </span>
-                  <% is_nil(budget) or is_nil(budget.monthly_limit_usd) -> %>
-                    <span
-                      class="badge badge-sm badge-warning badge-outline"
-                      title={gettext("No monthly budget")}
-                    >
-                      {gettext("No budget")}
-                    </span>
-                  <% true -> %>
+                  <% budget && not is_nil(budget.monthly_limit_usd) -> %>
                     <div class="flex items-center justify-end gap-2 min-w-[150px]">
                       <Stats.budget_bar
                         compact
@@ -753,6 +891,23 @@ defmodule TokengateWeb.GroupsLive do
                       />
                       <Stats.budget_badge pct={budget.monthly_pct} />
                     </div>
+                  <% not is_nil(group.monthly_spend_limit_usd) -> %>
+                    <div class="flex items-center justify-end gap-2 min-w-[150px]">
+                      <Stats.budget_bar
+                        compact
+                        spend={Decimal.new(0)}
+                        limit={group.monthly_spend_limit_usd}
+                        pct={0.0}
+                      />
+                      <Stats.budget_badge pct={0.0} />
+                    </div>
+                  <% true -> %>
+                    <span
+                      class="badge badge-sm badge-warning badge-outline"
+                      title={gettext("No monthly budget")}
+                    >
+                      {gettext("No budget")}
+                    </span>
                 <% end %>
               </div>
             </:col>

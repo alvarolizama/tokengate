@@ -31,7 +31,8 @@ defmodule Tokengate.Providers.MarketPrices do
           model_id: String.t(),
           input: Decimal.t() | nil,
           output: Decimal.t() | nil,
-          cache: Decimal.t() | nil
+          cache: Decimal.t() | nil,
+          context_window: pos_integer() | nil
         }
 
   @type index :: %{
@@ -63,12 +64,14 @@ defmodule Tokengate.Providers.MarketPrices do
 
   defp extract_provider_models(provider_key, models) do
     Enum.flat_map(models, fn
-      {model_id, %{"cost" => cost}} when is_binary(model_id) and is_map(cost) ->
+      {model_id, %{} = model_meta} when is_binary(model_id) ->
+        cost = if is_map(model_meta["cost"]), do: model_meta["cost"], else: %{}
         input = to_decimal(cost["input"])
         output = to_decimal(cost["output"])
         cache = to_decimal(cost["cache_read"])
+        context_window = to_pos_int(get_in(model_meta, ["limit", "context"]))
 
-        if is_nil(input) and is_nil(output) and is_nil(cache) do
+        if is_nil(input) and is_nil(output) and is_nil(cache) and is_nil(context_window) do
           []
         else
           [
@@ -77,7 +80,8 @@ defmodule Tokengate.Providers.MarketPrices do
               model_id: model_id,
               input: input,
               output: output,
-              cache: cache
+              cache: cache,
+              context_window: context_window
             }
           ]
         end
@@ -212,6 +216,9 @@ defmodule Tokengate.Providers.MarketPrices do
           lanes = model_lanes_for_lookup(model)
 
           case lookup(index, name: model.name, lab_key: model.lab_key, lanes: lanes) do
+            {:ok, %{input: nil, output: nil, cache: nil}} ->
+              acc
+
             {:ok, entry} ->
               attrs = %{
                 market_input_price_per_1m: entry.input,
@@ -356,4 +363,7 @@ defmodule Tokengate.Providers.MarketPrices do
   end
 
   defp to_decimal(_), do: nil
+
+  defp to_pos_int(v) when is_integer(v) and v > 0, do: v
+  defp to_pos_int(_), do: nil
 end

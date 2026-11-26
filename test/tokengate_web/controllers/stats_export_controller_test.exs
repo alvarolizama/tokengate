@@ -661,5 +661,30 @@ defmodule TokengateWeb.StatsExportControllerTest do
       lines = body |> String.split("\n") |> Enum.drop(1) |> Enum.reject(&(&1 == ""))
       assert length(lines) == 4
     end
+
+    test "logs export applies optional monitoring filters", %{conn: conn} do
+      %{owner: owner, owner_password: password, member: member} = group_with_log()
+
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          model_requested: "filtered-match-model",
+          agent_type: "opencode",
+          status_code: 200,
+          prompt_tokens: 1,
+          completion_tokens: 1,
+          latency_ms: 5,
+          streaming: false
+        })
+
+      body =
+        conn
+        |> login(owner, password)
+        |> get(~p"/stats/export?type=logs&period=30d&agent_type=opencode")
+        |> response(200)
+
+      assert body =~ "filtered-match-model"
+      refute body =~ "gpt-4o"
+    end
   end
 end

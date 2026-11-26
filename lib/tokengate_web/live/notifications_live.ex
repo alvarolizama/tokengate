@@ -16,13 +16,13 @@ defmodule TokengateWeb.NotificationsLive do
 
   use TokengateWeb, :live_view
 
-  # How many recent deliveries the log shows (newest first). Bounded so the
-  # page stays cheap; the full trail lives in the audit/DB.
-  @delivery_log_limit 50
+  import TokengateWeb.AdminComponents
+
+  @per_page 25
 
   alias Tokengate.Notifications
+  alias Tokengate.Notifications.Events
   alias Tokengate.Notifications.Telegram
-  alias Tokengate.Notifications.TelegramWorker
 
   @impl true
   def mount(_params, _session, socket) do
@@ -35,10 +35,36 @@ defmodule TokengateWeb.NotificationsLive do
         |> assign(:is_admin, true)
         |> require_admin_hook()
         |> assign(:token, "")
-        |> assign(:delivery_log_limit, @delivery_log_limit)
+        |> assign(:per_page, @per_page)
+        |> assign(:page, 1)
+        |> assign(:total_notifications, 0)
+        |> assign(:total_pages, 1)
+        |> assign(:log_filters, %{"status" => "", "event" => ""})
+        |> assign(:log_filter_form, to_form(%{"status" => "", "event" => ""}, as: :nf))
+        |> assign(:deliveries_by_id, %{})
+        |> assign(:error_detail, nil)
+        |> assign(:settings, %{bot_username: nil, bot_token: nil})
+        |> assign(:events, [])
+        |> assign(:env_token?, false)
+        |> assign(:token_set?, false)
+        |> assign(:configured?, false)
+        |> assign(:links_empty?, true)
+        |> assign(:notifications_empty?, true)
+        |> stream(:links, [], reset: true)
+        |> stream(:notifications, [], reset: true)
         |> assign(:link_form, link_form())
-        |> assign(:quiet_form, quiet_form())
-        |> load_data()
+        |> assign(:quiet_form, to_form(%{"from" => "", "to" => ""}, as: :quiet))
+
+      socket =
+        if connected?(socket) do
+          Notifications.subscribe()
+
+          socket
+          |> assign(:quiet_form, quiet_form())
+          |> load_data()
+        else
+          socket
+        end
 
       {:ok, socket}
     else
@@ -79,9 +105,29 @@ defmodule TokengateWeb.NotificationsLive do
   end
 
   defp load_notifications(socket) do
-    notifications = Notifications.list_notifications(%{limit: @delivery_log_limit})
+    filters = socket.assigns.log_filters
+    per_page = socket.assigns.per_page
+    query_filters = %{status: filters["status"], event: filters["event"]}
+
+    total = Notifications.count_notifications(query_filters)
+    total_pages = max(ceil(total / per_page), 1)
+    page = min(socket.assigns.page, total_pages)
+
+    notifications =
+      Notifications.list_notifications(
+        Map.merge(query_filters, %{limit: per_page, offset: (page - 1) * per_page})
+      )
+
+    deliveries_by_id =
+      notifications
+      |> Enum.map(& &1.id)
+      |> Notifications.list_deliveries_by_notification()
 
     socket
+    |> assign(:page, page)
+    |> assign(:total_notifications, total)
+    |> assign(:total_pages, total_pages)
+    |> assign(:deliveries_by_id, deliveries_by_id)
     |> assign(:notifications_empty?, notifications == [])
     |> stream(:notifications, notifications, reset: true)
   end
@@ -222,32 +268,85 @@ defmodule TokengateWeb.NotificationsLive do
   end
 
   def handle_event("resend", %{"id" => id}, socket) do
-    with {:ok, uuid} <- Ecto.UUID.cast(id),
-         %{} = notification <- Notifications.get_notification(uuid) do
-      notification
-      |> Ecto.Changeset.change(%{status: "pending", error: nil})
-      |> Tokengate.Repo.update()
+    case Notifications.resend_notification(id) do
+      {:ok, notification} ->
+        audit(socket, "notification.resend", "notification", notification.id, %{
+          "event" => notification.event
+        })
 
-      %{notification_id: notification.id}
-      |> TelegramWorker.new()
-      |> Oban.insert()
+        {:noreply,
+         socket
+         |> put_flash(:info, gettext("Resend queued."))
+         |> load_notifications()}
 
-      audit(socket, "notification.resend", "notification", notification.id, %{
-        "event" => notification.event
-      })
-
-      {:noreply,
-       socket
-       |> put_flash(:info, gettext("Resend queued."))
-       |> load_notifications()}
-    else
-      _ -> {:noreply, put_flash(socket, :error, gettext("Notification not found."))}
+      {:error, :not_found} ->
+        {:noreply, put_flash(socket, :error, gettext("Notification not found."))}
     end
   end
 
   def handle_event("refresh_log", _params, socket) do
     {:noreply, load_notifications(socket)}
   end
+
+  def handle_event("filter_notifications", %{"nf" => params}, socket) do
+    filters = %{
+      "status" => Map.get(params, "status", ""),
+      "event" => Map.get(params, "event", "")
+    }
+
+    {:noreply,
+     socket
+     |> assign(:log_filters, filters)
+     |> assign(:log_filter_form, to_form(filters, as: :nf))
+     |> assign(:page, 1)
+     |> load_notifications()}
+  end
+
+  def handle_event("go_to_page", %{"page" => page}, socket) do
+    parsed =
+      case Integer.parse(to_string(page)) do
+        {n, ""} -> max(n, 1)
+        _ -> socket.assigns.page
+      end
+
+    {:noreply,
+     socket
+     |> assign(:page, parsed)
+     |> load_notifications()}
+  end
+
+  def handle_event("show_error", %{"id" => id}, socket) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} ->
+        case Notifications.get_notification(uuid) do
+          nil ->
+            {:noreply, socket}
+
+          notification ->
+            deliveries = Notifications.list_deliveries_by_notification([notification.id])
+
+            {:noreply,
+             assign(socket, :error_detail, %{
+               notification: notification,
+               deliveries: Map.get(deliveries, notification.id, [])
+             })}
+        end
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_error", _params, socket) do
+    {:noreply, assign(socket, :error_detail, nil)}
+  end
+
+  @impl true
+  def handle_info({:notification_updated, _notification}, socket) do
+    {:noreply, load_notifications(socket)}
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
 
   ## Helpers --------------------------------------------------------------
 
@@ -360,6 +459,52 @@ defmodule TokengateWeb.NotificationsLive do
 
   defp event_description(_), do: ""
 
+  defp quiet_local_hint(quiet_form, timezone) when timezone not in [nil, "", "Etc/UTC"] do
+    from_str = quiet_form[:from].value
+    to_str = quiet_form[:to].value
+
+    with true <- is_binary(from_str) and from_str != "",
+         true <- is_binary(to_str) and to_str != "",
+         {:ok, from_t} <- parse_hhmm(from_str),
+         {:ok, to_t} <- parse_hhmm(to_str),
+         today <- Date.utc_today(),
+         {:ok, f_utc} <- DateTime.new(today, from_t, "Etc/UTC"),
+         {:ok, t_utc} <- DateTime.new(today, to_t, "Etc/UTC") do
+      "#{format_time(f_utc, timezone)} – #{format_time(t_utc, timezone)} (#{timezone})"
+    else
+      _ -> nil
+    end
+  end
+
+  defp quiet_local_hint(_quiet_form, _timezone), do: nil
+
+  defp parse_hhmm(str) do
+    case String.split(str, ":") do
+      [h, m] ->
+        with {hh, ""} <- Integer.parse(h),
+             {mm, ""} <- Integer.parse(m),
+             {:ok, time} <- Time.new(hh, mm, 0) do
+          {:ok, time}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp format_time(%DateTime{} = dt, tz) do
+    case DateTime.shift_zone(dt, tz) do
+      {:ok, local} -> Calendar.strftime(local, "%H:%M")
+      _ -> Calendar.strftime(dt, "%H:%M")
+    end
+  end
+
+  defp event_options do
+    Enum.map(Events.names_as_strings(), fn name -> {event_label(name), name} end)
+  end
+
   ## Render ---------------------------------------------------------------
 
   @impl true
@@ -380,12 +525,12 @@ defmodule TokengateWeb.NotificationsLive do
         </.header>
 
         <%!-- Bot --%>
-        <div class="card bg-base-100 border border-base-300" id="notifications-bot-card">
-          <div class="card-body">
-            <h2 class="card-title flex items-center gap-2">
-              <.icon name="hero-paper-airplane" class="w-5 h-5" /> {gettext("Bot")}
-            </h2>
-
+        <.section
+          id="notifications-bot-card"
+          title={gettext("Bot")}
+          icon="hero-paper-airplane"
+        >
+          <div class="space-y-3">
             <div class="flex flex-wrap items-center gap-2 text-sm">
               <span class={[
                 "badge badge-sm",
@@ -438,6 +583,7 @@ defmodule TokengateWeb.NotificationsLive do
                   :if={@token_set?}
                   type="button"
                   phx-click="clear_token"
+                  data-confirm={gettext("Remove stored bot token?")}
                   class="btn btn-ghost btn-sm text-error"
                   id="clear-token-btn"
                 >
@@ -446,70 +592,68 @@ defmodule TokengateWeb.NotificationsLive do
               </div>
             </.form>
           </div>
-        </div>
+        </.section>
 
         <%!-- Events --%>
-        <div class="card bg-base-100 border border-base-300" id="notifications-events-card">
-          <div class="card-body">
-            <h2 class="card-title flex items-center gap-2">
-              <.icon name="hero-list-bullet" class="w-5 h-5" /> {gettext("Events")}
-            </h2>
-            <p class="text-sm text-base-content/60">
-              {gettext(
-                "Choose which events are delivered to Telegram. Each has its own anti-repeat window."
-              )}
-            </p>
-
-            <div class="overflow-x-auto mt-3">
-              <.table
-                id="events-rows"
-                rows={@events}
-                row_id={fn event -> "event-row-" <> event.name end}
-              >
-                <:col :let={event} label={gettext("Event")}>
-                  <div class="font-medium text-sm">{event_label(event.name)}</div>
-                  <div
-                    :if={event_description(event.name) != ""}
-                    class="text-xs text-base-content/50"
-                  >
-                    {event_description(event.name)}
-                  </div>
-                </:col>
-                <:col :let={event} label={gettext("Severity")}>
-                  <% {cls, text} = severity_badge(event.severity) %>
-                  <span class={"badge badge-sm " <> cls}>{text}</span>
-                </:col>
-                <:col :let={event} label={gettext("Enabled")} align="right">
-                  <button
-                    type="button"
-                    phx-click="toggle_event"
-                    phx-value-event={event.name}
-                    id={"toggle-event-" <> event.name}
-                    class={[
-                      "btn btn-xs",
-                      if(event.enabled, do: "btn-success", else: "btn-ghost")
-                    ]}
-                  >
-                    {if event.enabled, do: gettext("On"), else: gettext("Off")}
-                  </button>
-                </:col>
-              </.table>
-            </div>
+        <.section
+          id="notifications-events-card"
+          title={gettext("Events")}
+          icon="hero-list-bullet"
+          caption={
+            gettext(
+              "Choose which events are delivered to Telegram. Each has its own anti-repeat window."
+            )
+          }
+        >
+          <div class="overflow-x-auto">
+            <.table
+              id="events-rows"
+              rows={@events}
+              row_id={fn event -> "event-row-" <> event.name end}
+            >
+              <:col :let={event} label={gettext("Event")}>
+                <div class="font-medium text-sm">{event_label(event.name)}</div>
+                <div
+                  :if={event_description(event.name) != ""}
+                  class="text-xs text-base-content/50"
+                >
+                  {event_description(event.name)}
+                </div>
+              </:col>
+              <:col :let={event} label={gettext("Severity")}>
+                <% {cls, text} = severity_badge(event.severity) %>
+                <span class={"badge badge-sm " <> cls}>{text}</span>
+              </:col>
+              <:col :let={event} label={gettext("Enabled")} align="right">
+                <button
+                  type="button"
+                  phx-click="toggle_event"
+                  phx-value-event={event.name}
+                  id={"toggle-event-" <> event.name}
+                  class={[
+                    "btn btn-xs",
+                    if(event.enabled, do: "btn-success", else: "btn-ghost")
+                  ]}
+                >
+                  {if event.enabled, do: gettext("On"), else: gettext("Off")}
+                </button>
+              </:col>
+            </.table>
           </div>
-        </div>
+        </.section>
 
         <%!-- Quiet hours --%>
-        <div class="card bg-base-100 border border-base-300" id="notifications-quiet-card">
-          <div class="card-body">
-            <h2 class="card-title flex items-center gap-2">
-              <.icon name="hero-moon" class="w-5 h-5" /> {gettext("Quiet hours")}
-            </h2>
-            <p class="text-sm text-base-content/60">
-              {gettext(
-                "Within this UTC window only critical events are delivered. Leave both empty to disable."
-              )}
-            </p>
-
+        <.section
+          id="notifications-quiet-card"
+          title={gettext("Quiet hours")}
+          icon="hero-moon"
+          caption={
+            gettext(
+              "Within this UTC window only critical events are delivered. Leave both empty to disable."
+            )
+          }
+        >
+          <div class="space-y-2">
             <.form
               for={@quiet_form}
               id="quiet-hours-form"
@@ -528,72 +672,89 @@ defmodule TokengateWeb.NotificationsLive do
                 label={gettext("To")}
                 class="input input-sm"
               />
-              <button type="submit" class="btn btn-primary btn-sm" id="save-quiet-btn">
+              <button type="submit" class="btn btn-primary btn-sm mb-2" id="save-quiet-btn">
                 {gettext("Save")}
               </button>
             </.form>
+            <p
+              :if={local_hint = quiet_local_hint(@quiet_form, @timezone)}
+              class="text-xs text-base-content/50"
+              id="quiet-local-hint"
+            >
+              {gettext("Local equivalent:")} <span class="font-mono">{local_hint}</span>
+            </p>
           </div>
-        </div>
+        </.section>
 
         <%!-- Linked chats --%>
-        <div class="card bg-base-100 border border-base-300" id="notifications-links-card">
-          <div class="card-body">
-            <h2 class="card-title flex items-center gap-2">
-              <.icon name="hero-user-group" class="w-5 h-5" /> {gettext("Linked chats")}
-            </h2>
-            <p class="text-sm text-base-content/60">
-              {gettext(
-                "Chats and channels that receive the notifications. The chat id is the number Telegram shows for the conversation."
-              )}
-            </p>
-
+        <.section
+          id="notifications-links-card"
+          title={gettext("Linked chats")}
+          icon="hero-user-group"
+          caption={
+            gettext(
+              "Chats and channels that receive the notifications. The chat id is the number Telegram shows for the conversation."
+            )
+          }
+        >
+          <div class="space-y-3">
             <.form
               for={@link_form}
               id="link-form"
               phx-submit="add_link"
-              class="grid grid-cols-[14%_22%_18%_34%_12%] gap-3 items-end mt-2"
+              class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-end"
             >
-              <.input
-                field={@link_form[:kind]}
-                type="select"
-                label={gettext("Kind")}
-                class="w-full select select-sm"
-                options={[
-                  {gettext("Chat"), "chat"},
-                  {gettext("Group"), "group"},
-                  {gettext("Channel"), "channel"}
-                ]}
-              />
-              <.input
-                field={@link_form[:chat_id]}
-                type="text"
-                label={gettext("Chat id")}
-                class="w-full input input-sm"
-              />
-              <.input
-                field={@link_form[:thread_id]}
-                type="text"
-                label={gettext("Topic id")}
-                class="w-full input input-sm"
-              />
-              <.input
-                field={@link_form[:label]}
-                type="text"
-                label={gettext("Label")}
-                class="w-full input input-sm"
-              />
-              <button type="submit" class="btn btn-primary btn-sm w-full mb-2" id="add-link-btn">
-                {gettext("Link")}
-              </button>
+              <div class="lg:col-span-2">
+                <.input
+                  field={@link_form[:kind]}
+                  type="select"
+                  label={gettext("Kind")}
+                  class="w-full select select-sm"
+                  options={[
+                    {gettext("Chat"), "chat"},
+                    {gettext("Group"), "group"},
+                    {gettext("Channel"), "channel"}
+                  ]}
+                />
+              </div>
+              <div class="lg:col-span-3">
+                <.input
+                  field={@link_form[:chat_id]}
+                  type="text"
+                  label={gettext("Chat id")}
+                  class="w-full input input-sm"
+                />
+              </div>
+              <div class="lg:col-span-2">
+                <.input
+                  field={@link_form[:thread_id]}
+                  type="text"
+                  label={gettext("Topic id")}
+                  class="w-full input input-sm"
+                />
+              </div>
+              <div class="lg:col-span-3">
+                <.input
+                  field={@link_form[:label]}
+                  type="text"
+                  label={gettext("Label")}
+                  class="w-full input input-sm"
+                />
+              </div>
+              <div class="sm:col-span-2 lg:col-span-2">
+                <button type="submit" class="btn btn-primary btn-sm w-full mb-2" id="add-link-btn">
+                  {gettext("Link")}
+                </button>
+              </div>
             </.form>
 
-            <p class="text-xs text-base-content/50 mt-1">
+            <p class="text-xs text-base-content/50">
               {gettext(
                 "For a channel, add the bot as an administrator; a negative chat id (-100…) is normal. The topic id is only needed for a channel/group with topics."
               )}
             </p>
 
-            <div class="mt-3">
+            <div class="overflow-x-auto">
               <.table
                 id="links"
                 rows={@streams.links}
@@ -617,6 +778,7 @@ defmodule TokengateWeb.NotificationsLive do
                     type="button"
                     phx-click="remove_link"
                     phx-value-id={link.id}
+                    data-confirm={gettext("Remove this linked chat?")}
                     class="btn btn-ghost btn-xs text-error"
                     id={"remove-link-" <> link.id}
                   >
@@ -630,32 +792,58 @@ defmodule TokengateWeb.NotificationsLive do
               </.table>
             </div>
           </div>
-        </div>
+        </.section>
 
         <%!-- Delivery log --%>
-        <div class="card bg-base-100 border border-base-300" id="notifications-log-card">
-          <div class="card-body">
-            <div class="flex items-center justify-between">
-              <h2 class="card-title flex items-center gap-2">
-                <.icon name="hero-inbox" class="w-5 h-5" /> {gettext("Delivery log")}
-              </h2>
+        <.section
+          id="notifications-log-card"
+          title={gettext("Delivery log")}
+          icon="hero-inbox"
+          caption={gettext("Emitted notifications and per-chat delivery status.")}
+        >
+          <div class="space-y-3">
+            <div class="flex flex-wrap items-end justify-between gap-3">
+              <.form
+                for={@log_filter_form}
+                id="notifications-filter-form"
+                phx-change="filter_notifications"
+                class="flex flex-wrap items-end gap-2"
+              >
+                <div class="w-40">
+                  <.input
+                    field={@log_filter_form[:status]}
+                    type="select"
+                    prompt={gettext("All statuses")}
+                    options={[
+                      {gettext("Sent"), "sent"},
+                      {gettext("Pending"), "pending"},
+                      {gettext("Failed"), "failed"}
+                    ]}
+                    class="select select-sm w-full"
+                  />
+                </div>
+                <div class="w-56">
+                  <.input
+                    field={@log_filter_form[:event]}
+                    type="select"
+                    prompt={gettext("All events")}
+                    options={event_options()}
+                    class="select select-sm w-full"
+                  />
+                </div>
+              </.form>
+
               <button
                 type="button"
                 phx-click="refresh_log"
-                class="btn btn-ghost btn-xs"
+                class="btn btn-ghost btn-xs mb-2"
                 id="refresh-log-btn"
               >
                 <.icon name="hero-arrow-path" class="w-3.5 h-3.5" /> {gettext("Refresh")}
               </button>
             </div>
 
-            <p class="text-xs text-base-content/50">
-              {gettext("Showing the latest %{count} deliveries, newest first.",
-                count: @delivery_log_limit
-              )}
-            </p>
-
-            <div class="overflow-x-auto mt-3">
+            <div class="overflow-x-auto">
               <.table
                 id="notifications"
                 rows={@streams.notifications}
@@ -664,18 +852,50 @@ defmodule TokengateWeb.NotificationsLive do
               >
                 <:col :let={n} label={gettext("When")}>
                   <span class="text-xs text-base-content/60 whitespace-nowrap">
-                    {fmt_dt(n.inserted_at)}
+                    {format_datetime_short(n.inserted_at, @timezone)}
                   </span>
                 </:col>
                 <:col :let={n} label={gettext("Event")}>
-                  <span class="text-sm">{event_label(n.event)}</span>
+                  <div class="text-sm">{event_label(n.event)}</div>
+                  <div :if={n.target_label} class="text-xs text-base-content/50">
+                    {n.target_label}
+                  </div>
                 </:col>
-                <:col :let={n} label={gettext("Target")}>
-                  <span class="text-xs">{n.target_label}</span>
+                <:col :let={n} label={gettext("Chats")}>
+                  <% deliveries = Map.get(@deliveries_by_id, n.id, []) %>
+                  <%= if deliveries == [] do %>
+                    <span class="text-xs text-base-content/40">—</span>
+                  <% else %>
+                    <div class="flex flex-wrap gap-1">
+                      <span
+                        :for={d <- deliveries}
+                        class={[
+                          "badge badge-xs",
+                          elem(status_badge(d.status), 0)
+                        ]}
+                        title={d.error || d.chat_id}
+                      >
+                        {d.label || d.chat_id}
+                      </span>
+                    </div>
+                  <% end %>
                 </:col>
                 <:col :let={n} label={gettext("Status")}>
                   <% {cls, text} = status_badge(n.status) %>
-                  <span class={"badge badge-sm " <> cls} title={n.error}>{text}</span>
+                  <div class="flex items-center gap-1.5">
+                    <span class={"badge badge-sm " <> cls}>{text}</span>
+                    <button
+                      :if={n.error}
+                      type="button"
+                      phx-click="show_error"
+                      phx-value-id={n.id}
+                      id={"notification-error-btn-" <> n.id}
+                      class="btn btn-ghost btn-xs text-error"
+                      title={gettext("View error details")}
+                    >
+                      <.icon name="hero-exclamation-circle" class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </:col>
                 <:action :let={n}>
                   <button
@@ -694,13 +914,64 @@ defmodule TokengateWeb.NotificationsLive do
                 </:empty>
               </.table>
             </div>
+
+            <.admin_pagination
+              id="notifications-pagination"
+              page={@page}
+              per_page={@per_page}
+              total={@total_notifications}
+              total_pages={@total_pages}
+            />
+          </div>
+        </.section>
+      </div>
+
+      <.modal
+        :if={@error_detail}
+        id="notification-error-modal"
+        title={gettext("Delivery error details")}
+        on_close="close_error"
+        max_w="max-w-lg"
+      >
+        <div class="space-y-3 text-sm">
+          <div class="flex items-center justify-between text-xs text-base-content/60">
+            <span class="font-medium text-base-content">
+              {event_label(@error_detail.notification.event)}
+            </span>
+            <span>{format_datetime_short(@error_detail.notification.inserted_at, @timezone)}</span>
+          </div>
+
+          <pre
+            id="notification-error-message"
+            class="text-xs bg-base-200/60 rounded-lg p-3 whitespace-pre-wrap break-words font-mono text-error"
+          >{@error_detail.notification.error}</pre>
+
+          <div :if={@error_detail.deliveries != []} class="space-y-1.5">
+            <p class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              {gettext("Per-chat attempts")}
+            </p>
+            <div
+              :for={d <- @error_detail.deliveries}
+              class="flex items-start justify-between gap-3 rounded-lg border border-base-300 p-2 text-xs"
+            >
+              <div class="min-w-0">
+                <div class="font-medium truncate">{d.label || d.chat_id}</div>
+                <div class="font-mono text-base-content/50">{d.chat_id}</div>
+                <div :if={d.error} class="text-error mt-0.5 break-all">{d.error}</div>
+              </div>
+              <span class={["badge badge-xs shrink-0", elem(status_badge(d.status), 0)]}>
+                {elem(status_badge(d.status), 1)}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
+        <:footer>
+          <button type="button" phx-click="close_error" class="btn btn-ghost btn-sm">
+            {gettext("Close")}
+          </button>
+        </:footer>
+      </.modal>
     </Layouts.dashboard>
     """
   end
-
-  defp fmt_dt(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
-  defp fmt_dt(_), do: ""
 end

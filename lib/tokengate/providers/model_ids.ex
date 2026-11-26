@@ -21,10 +21,12 @@ defmodule Tokengate.Providers.ModelIds do
   sale del propio proveedor.
   """
 
-  # models.dev does not distinguish an embedding from a chat model. The id is
-  # the only signal upstream publishes, and this gateway only ever needs a HINT:
-  # it prefills `model_type` in the form and the operator confirms it.
-  @embedding_hint ~r/(^|[-_\/])embed/i
+  # models.dev does not distinguish an embedding from a chat model by default,
+  # and some providers name embedding families without the `embed` token
+  # (`voyage-*`, `bge-m3`, `e5-*`, `gte-*`, `all-mini-lm`, `mpnet`). Rerankers
+  # (`bge-reranker-*`, `voyage/rerank-*`) are explicitly excluded so they stay out
+  # of the embedding picker.
+  @embedding_hint ~r/(^|[-_\/])embed|(^|[-_\/])voyage[-_\/](?!.*rerank)|(^|[-_\/])(e5|gte)[-_]|(^|[-_\/])bge[-_](?!.*rerank)|mini[-_]?lm|mpnet/i
 
   # What a lab id looks like (models.dev lab ids are lowercase slugs, and the
   # `labs` table pins the same shape). A first segment that fails this is an

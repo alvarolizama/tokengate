@@ -3168,4 +3168,54 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert Decimal.equal?(updated.market_output_price_per_1m, Decimal.new("7.0"))
     assert Decimal.equal?(updated.market_cache_price_per_1m, Decimal.new("0.45"))
   end
+
+  test "wizard_pick_model prefills lab_key, context_window and market prices from models.dev index",
+       %{conn: conn} do
+    Tokengate.Providers.MarketPrices.clear_index()
+    on_exit(fn -> Tokengate.Providers.MarketPrices.clear_index() end)
+
+    u = unique()
+    provider = openrouter_provider!()
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "or-#{u}",
+        api_key_encrypted: "sk-or-#{u}",
+        status: "active"
+      })
+
+    Tokengate.Providers.MarketPrices.extract_index(%{
+      "openrouter" => %{
+        "models" => %{
+          "anthropic/claude-wizard-#{u}" => %{
+            "cost" => %{"input" => 3.0, "output" => 15.0, "cache_read" => 0.3},
+            "limit" => %{"context" => 200_000}
+          }
+        }
+      }
+    })
+    |> Tokengate.Providers.MarketPrices.put_index()
+
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+    view |> element("#wizard-provider-openrouter") |> render_click()
+
+    view
+    |> element("#wizard-credential-form")
+    |> render_change(%{"credential_id" => credential.id})
+
+    view |> element("#wizard-continue") |> render_click()
+
+    render_click(view, "wizard_pick_model", %{"model" => "anthropic/claude-wizard-#{u}"})
+
+    assert has_element?(view, "#model_name[value='claude-wizard-#{u}']")
+    assert has_element?(view, "#model_context_window[value='200000']")
+    assert has_element?(view, "#model_lab_key option[selected][value='anthropic']")
+    assert has_element?(view, "#model_market_input_price_per_1m[value='3.000000']")
+  end
 end

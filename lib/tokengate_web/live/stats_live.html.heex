@@ -99,7 +99,7 @@
           patch={~p"/stats/agents?period=#{@period}"}
           class={[
             "join-item btn btn-sm",
-            if(@live_action == :agents, do: "btn-primary", else: "btn-ghost")
+            if(@live_action in [:agents, :agent], do: "btn-primary", else: "btn-ghost")
           ]}
           id="nav-agents"
         >
@@ -162,6 +162,9 @@
             pulse={@pulse}
             today_metrics={@today_metrics}
             org_budget={@org_budget}
+            live_drivers={@live_drivers}
+            yesterday_pace={@yesterday_pace}
+            chart_metric={@chart_metric}
             minute_series={@minute_series}
             minute_series_max={@minute_series_max}
             minute_tokens_max={@minute_tokens_max}
@@ -177,10 +180,18 @@
           <.index
             metrics={@metrics}
             peak_concurrency={@peak_concurrency}
+            daily_series={@daily_series}
+            efficiency={@efficiency}
+            top_agents={@top_agents}
+            top_consumers={@top_consumers}
             busiest_hours={@busiest_hours}
+            busiest_cost_hours={@busiest_cost_hours}
             busiest_minutes={@busiest_minutes}
+            busiest_cost_minutes={@busiest_cost_minutes}
             hour_usage_by_provider={@hour_usage_by_provider}
             model_provider_stacked={@model_provider_stacked}
+            chart_metric={@chart_metric}
+            overview_metric={@overview_metric}
             period={@period}
             timezone={@timezone}
             current_user={@current_user}
@@ -205,11 +216,23 @@
             shown_counts={@shown_counts}
             list_search={@list_search}
           />
+        <% @live_action == :agent -> %>
+          <.agent
+            agent_key={@agent_key}
+            agent_detail={@agent_detail}
+            period={@period}
+            chart_metric={@chart_metric}
+            per_page={@per_page}
+            shown_counts={@shown_counts}
+            stats_loading={@stats_loading}
+          />
         <% @live_action == :provider -> %>
           <.provider
             provider={@provider}
             provider_ranking={@provider_ranking}
             provider_metrics={@provider_metrics}
+            drilldown_series={@drilldown_series}
+            chart_metric={@chart_metric}
             breakdown_model={@breakdown_model}
             breakdown_user={@breakdown_user}
             breakdown_service={@breakdown_service}
@@ -231,8 +254,11 @@
               breakdown_provider={@breakdown_provider}
               breakdown_group={@breakdown_group}
               breakdown_member={@breakdown_member}
+              breakdown_service={@breakdown_service}
+              breakdown_agent={@breakdown_agent}
               drilldown_series={@drilldown_series}
               drilldown_series_labels={@drilldown_series_labels}
+              chart_metric={@chart_metric}
               period={@period}
               sort_field={@sort_field}
               sort_direction={@sort_direction}

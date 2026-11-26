@@ -16,26 +16,54 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
   attr :series, :list, required: true
   attr :labels, :list, required: true
   attr :show_logos, :boolean, default: false
+  attr :metric, :string, default: "requests", values: ~w(requests cost)
+  attr :toggle_event, :string, default: nil
 
   def daily_stacked_chart(assigns) do
-    pivoted = Stats.pivot_daily_series(assigns.series)
+    metric_atom = if assigns.metric == "cost", do: :cost, else: :requests
+    pivoted = Stats.pivot_daily_series(assigns.series, metric_atom)
 
     assigns =
       assigns
+      |> assign(:metric_atom, metric_atom)
+      |> assign(:cost_mode?, metric_atom == :cost)
       |> assign(:pivoted, pivoted)
       |> assign(:spark_max, Stats.daily_series_max(pivoted))
 
     ~H"""
     <div :if={@series != []} class="card bg-base-100 border border-base-300 shadow-sm" id={@id}>
       <div class="card-body p-4 gap-2">
-        <div class="flex items-center justify-between gap-2">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
           <h2 class="card-title text-base">
             <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
             {@title}
           </h2>
-          <span class="text-[10px] text-base-content/40 hidden sm:inline">
-            {Stats.period_label(@period)}
-          </span>
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] text-base-content/40 hidden sm:inline">
+              {Stats.period_label(@period)}
+            </span>
+            <div :if={@toggle_event} class="join" id={@id && "#{@id}-metric-toggle"}>
+              <button
+                type="button"
+                phx-click={@toggle_event}
+                phx-value-metric="requests"
+                class={[
+                  "btn btn-xs join-item",
+                  if(!@cost_mode?, do: "btn-primary", else: "btn-ghost")
+                ]}
+              >
+                {gettext("Requests")}
+              </button>
+              <button
+                type="button"
+                phx-click={@toggle_event}
+                phx-value-metric="cost"
+                class={["btn btn-xs join-item", if(@cost_mode?, do: "btn-primary", else: "btn-ghost")]}
+              >
+                {gettext("Cost")}
+              </button>
+            </div>
+          </div>
         </div>
 
         <div class="mt-2">
@@ -53,7 +81,7 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
                   <div :for={label <- @labels} class="flex justify-between gap-2">
                     <span class="truncate max-w-[100px]">{label}</span>
                     <span class="tabular-nums">
-                      {Stats.format_number(Map.get(@pivoted.series[label] || %{}, day, 0))}
+                      {format_series_val(Map.get(@pivoted.series[label] || %{}, day, 0), @cost_mode?)}
                     </span>
                   </div>
                 </div>
@@ -68,7 +96,7 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
                     Stats.sparkline_color(Enum.find_index(@labels, &(&1 == label)) || 0)
                   ]}
                   style={"height: #{Stats.sparkline_bar_height(Map.get(@pivoted.series[label] || %{}, day, 0), @spark_max)}%"}
-                  title={"#{label}: #{Stats.format_number(Map.get(@pivoted.series[label] || %{}, day, 0))}"}
+                  title={"#{label}: #{format_series_val(Map.get(@pivoted.series[label] || %{}, day, 0), @cost_mode?)}"}
                 />
               </div>
             </div>
@@ -102,7 +130,10 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
               {label}
             </span>
             <span class="text-[10px] text-base-content/50 tabular-nums">
-              {Stats.format_number(Stats.sparkline_label_total(@pivoted.series[label] || %{}))}
+              {format_series_val(
+                Stats.sparkline_label_total(@pivoted.series[label] || %{}),
+                @cost_mode?
+              )}
             </span>
           </div>
         </div>
@@ -110,4 +141,11 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
     </div>
     """
   end
+
+  defp format_series_val(val, true) when is_number(val) do
+    val |> Float.round(4) |> Decimal.from_float() |> Stats.money()
+  end
+
+  defp format_series_val(val, false), do: Stats.format_number(val)
+  defp format_series_val(_val, true), do: "$0.00"
 end

@@ -300,11 +300,16 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([rl, model: ma], %{
         model_id: ma.id,
         model_name: ma.name,
+        market_input_price_per_1m: ma.market_input_price_per_1m,
+        market_output_price_per_1m: ma.market_output_price_per_1m,
+        market_cache_price_per_1m: ma.market_cache_price_per_1m,
         request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_creation_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
@@ -313,11 +318,16 @@ defmodule Tokengate.Metrics.Rollup do
       %{
         model_id: row.model_id,
         model_name: row.model_name || "—",
+        market_input_price_per_1m: row.market_input_price_per_1m,
+        market_output_price_per_1m: row.market_output_price_per_1m,
+        market_cache_price_per_1m: row.market_cache_price_per_1m,
         request_count: row.request_count,
+        error_count: row.error_count || 0,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         cache_read_tokens: row.cache_read_tokens,
+        cache_creation_tokens: row.cache_creation_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
       }
     end)
@@ -521,9 +531,12 @@ defmodule Tokengate.Metrics.Rollup do
         # y la columna de perfiles de límites salía "—" para todos.
         group_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.group_id),
         request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_creation_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
@@ -550,9 +563,12 @@ defmodule Tokengate.Metrics.Rollup do
           |> Enum.map(&%{id: &1, name: Map.get(group_names_by_id, &1, "—")})
           |> Enum.sort_by(& &1.name),
         request_count: row.request_count,
+        error_count: row.error_count || 0,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
+        cache_read_tokens: row.cache_read_tokens,
+        cache_creation_tokens: row.cache_creation_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
       }
     end)
@@ -608,10 +624,12 @@ defmodule Tokengate.Metrics.Rollup do
         service_id: s.id,
         service_name: s.name,
         request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_creation_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms),
         latency_count: fragment("COUNT(?)", rl.latency_ms)
       })
@@ -622,10 +640,12 @@ defmodule Tokengate.Metrics.Rollup do
         service_id: row.service_id,
         service_name: row.service_name,
         request_count: row.request_count,
+        error_count: row.error_count || 0,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         cache_read_tokens: row.cache_read_tokens,
+        cache_creation_tokens: row.cache_creation_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms),
         # Media por request con latencia (SUM ignora los NULL), igual que
         # `summary_from_rollup/1`: sin ninguna latencia registrada es nil, no 0.
@@ -767,10 +787,12 @@ defmodule Tokengate.Metrics.Rollup do
         group_id: t.id,
         group_name: t.name,
         request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_creation_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
@@ -780,10 +802,12 @@ defmodule Tokengate.Metrics.Rollup do
         group_id: row.group_id,
         group_name: row.group_name,
         request_count: row.request_count,
+        error_count: row.error_count || 0,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         cache_read_tokens: row.cache_read_tokens,
+        cache_creation_tokens: row.cache_creation_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
       }
     end)
@@ -862,11 +886,15 @@ defmodule Tokengate.Metrics.Rollup do
         provider_model: mp.provider_model,
         credential_name: c.name,
         request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
-        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_creation_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms),
+        avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
+        avg_ttft_ms: fragment("AVG(?)", rl.ttft_ms)
       })
 
     Repo.all(query, timeout: stats_timeout())
@@ -879,11 +907,20 @@ defmodule Tokengate.Metrics.Rollup do
         provider_model: row.provider_model,
         credential_name: row.credential_name,
         request_count: row.request_count,
+        error_count: row.error_count || 0,
+        error_rate:
+          if(row.request_count > 0,
+            do: Float.round((row.error_count || 0) / row.request_count, 4),
+            else: 0.0
+          ),
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         cache_read_tokens: row.cache_read_tokens,
-        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+        cache_creation_tokens: row.cache_creation_tokens,
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms),
+        avg_latency_ms: row.avg_latency_ms && round(to_float!(row.avg_latency_ms)),
+        avg_ttft_ms: row.avg_ttft_ms && round(to_float!(row.avg_ttft_ms))
       }
     end)
   end
@@ -1104,6 +1141,12 @@ defmodule Tokengate.Metrics.Rollup do
         provider_id: rl.provider_id,
         request_count: count(),
         error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_creation_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms),
         avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
         p95_latency_ms:
           fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)", rl.latency_ms),
@@ -1125,6 +1168,12 @@ defmodule Tokengate.Metrics.Rollup do
           provider_doc_url: p.doc_url,
           request_count: a.request_count,
           error_count: a.error_count,
+          cost_usd: a.cost_usd,
+          prompt_tokens: a.prompt_tokens,
+          completion_tokens: a.completion_tokens,
+          cache_read_tokens: a.cache_read_tokens,
+          cache_creation_tokens: a.cache_creation_tokens,
+          total_latency_ms: a.total_latency_ms,
           avg_latency_ms: a.avg_latency_ms,
           p95_latency_ms: a.p95_latency_ms,
           avg_ttft_ms: a.avg_ttft_ms
@@ -1189,12 +1238,25 @@ defmodule Tokengate.Metrics.Rollup do
         })
 
       _ ->
+        cost = Map.get(row, :cost_usd) || Decimal.new(0)
+        prompt = Map.get(row, :prompt_tokens) || 0
+        completion = Map.get(row, :completion_tokens) || 0
+        cache_read = Map.get(row, :cache_read_tokens) || 0
+        cache_creation = Map.get(row, :cache_creation_tokens) || 0
+        total_latency = Map.get(row, :total_latency_ms) || 0
+
         Map.merge(base, %{
           provider_id: row.provider_id,
           provider_name: row.provider_name,
           provider_key: Map.get(row, :provider_key),
           provider_logo_url: Map.get(row, :provider_logo_url),
-          provider_doc_url: Map.get(row, :provider_doc_url)
+          provider_doc_url: Map.get(row, :provider_doc_url),
+          cost_usd: Decimal.new(to_string(cost)),
+          prompt_tokens: prompt,
+          completion_tokens: completion,
+          cache_read_tokens: cache_read,
+          cache_creation_tokens: cache_creation,
+          avg_tps: compute_tps(completion, total_latency)
         })
     end
   end
@@ -1530,7 +1592,7 @@ defmodule Tokengate.Metrics.Rollup do
   """
   @spec usage_by_model_provider_stacked(keyword()) :: [map()]
   def usage_by_model_provider_stacked(opts \\ []) do
-    model_provider_stacked(model_provider_flat_rows(opts))
+    model_provider_stacked(model_provider_flat_rows(opts), Keyword.take(opts, [:sort_by, :limit]))
   end
 
   @doc """
@@ -1595,44 +1657,68 @@ defmodule Tokengate.Metrics.Rollup do
   provider_logo_url, request_count, cost_usd}`. Pública por la misma razón
   que `hour_provider_profile/1`: el híbrido la alimenta con rollup + cola.
   """
-  def model_provider_stacked(rows) do
+  def model_provider_stacked(rows, opts \\ []) do
+    sort_by = Keyword.get(opts, :sort_by, :requests)
+    limit = Keyword.get(opts, :limit, 10)
+
     # Agrupar por modelo
-    rows
-    |> Enum.group_by(& &1.model_id)
-    |> Enum.map(fn {_model_id, entries} ->
-      model_name = List.first(entries).model_name
+    grouped =
+      rows
+      |> Enum.group_by(& &1.model_id)
+      |> Enum.map(fn {model_id, entries} ->
+        model_name = List.first(entries).model_name
 
-      providers =
-        entries
-        |> Enum.group_by(&{&1.provider_id, &1.provider_name})
-        |> Enum.map(fn {{_pid, provider_name}, p_entries} ->
-          requests = Enum.reduce(p_entries, 0, &(&1.request_count + &2))
+        providers =
+          entries
+          |> Enum.group_by(&{&1.provider_id, &1.provider_name})
+          |> Enum.map(fn {{_pid, provider_name}, p_entries} ->
+            requests = Enum.reduce(p_entries, 0, &(&1.request_count + &2))
 
-          cost =
-            Enum.reduce(p_entries, Decimal.new(0), fn e, acc ->
-              Decimal.add(acc, e.cost_usd)
-            end)
+            cost =
+              Enum.reduce(p_entries, Decimal.new(0), fn e, acc ->
+                Decimal.add(acc, e.cost_usd)
+              end)
 
-          %{
-            provider_name: provider_name,
-            provider_stats_id: List.first(p_entries).provider_stats_id,
-            provider_logo_url: Enum.find_value(p_entries, & &1.provider_logo_url),
-            requests: requests,
-            cost_usd: cost
-          }
-        end)
-        |> Enum.sort_by(& &1.requests, :desc)
+            %{
+              provider_name: provider_name,
+              provider_stats_id: List.first(p_entries).provider_stats_id,
+              provider_logo_url: Enum.find_value(p_entries, & &1.provider_logo_url),
+              requests: requests,
+              cost_usd: cost
+            }
+          end)
+          |> Enum.sort_by(& &1.requests, :desc)
 
-      total_requests = Enum.reduce(providers, 0, &(&1.requests + &2))
+        total_requests = Enum.reduce(providers, 0, &(&1.requests + &2))
 
-      %{
-        model_name: model_name,
-        total_requests: total_requests,
-        providers: providers
-      }
-    end)
-    |> Enum.sort_by(& &1.total_requests, :desc)
-    |> Enum.take(10)
+        total_cost =
+          Enum.reduce(providers, Decimal.new(0), fn p, acc -> Decimal.add(acc, p.cost_usd) end)
+
+        %{
+          model_id: model_id,
+          model_name: model_name,
+          total_requests: total_requests,
+          total_cost_usd: total_cost,
+          providers: providers
+        }
+      end)
+
+    sorted =
+      case sort_by do
+        :cost ->
+          Enum.sort(grouped, fn a, b ->
+            case Decimal.compare(a.total_cost_usd, b.total_cost_usd) do
+              :eq -> a.total_requests >= b.total_requests
+              :gt -> true
+              :lt -> false
+            end
+          end)
+
+        _ ->
+          Enum.sort_by(grouped, & &1.total_requests, :desc)
+      end
+
+    if is_integer(limit), do: Enum.take(sorted, limit), else: sorted
   end
 
   # -----------------------------------------------------------------------
@@ -1668,6 +1754,7 @@ defmodule Tokengate.Metrics.Rollup do
     to = Keyword.get(opts, :to)
     limit = Keyword.get(opts, :limit, 5)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+    metric = Keyword.get(opts, :metric, :requests)
 
     bucketed =
       RequestLog
@@ -1676,31 +1763,53 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
       |> select([rl], %{
-        bucket: fragment("date_trunc(?, ? AT TIME ZONE ?)", ^unit, rl.inserted_at, ^timezone)
+        bucket: fragment("date_trunc(?, ? AT TIME ZONE ?)", ^unit, rl.inserted_at, ^timezone),
+        provider_cost_usd: rl.provider_cost_usd
       })
       |> subquery()
 
     counts =
       from(b in bucketed,
         group_by: b.bucket,
-        select: %{bucket: b.bucket, request_count: count()}
+        select: %{
+          bucket: b.bucket,
+          request_count: count(),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", b.provider_cost_usd)
+        }
       )
       |> subquery()
 
-    from(c in counts,
-      order_by: [
-        desc: c.request_count,
-        asc: fragment("? AT TIME ZONE ?", c.bucket, ^timezone)
-      ],
+    ordered =
+      case metric do
+        :cost ->
+          order_by(counts, [c],
+            desc: c.cost_usd,
+            desc: c.request_count,
+            asc: fragment("? AT TIME ZONE ?", c.bucket, ^timezone)
+          )
+
+        _ ->
+          order_by(counts, [c],
+            desc: c.request_count,
+            asc: fragment("? AT TIME ZONE ?", c.bucket, ^timezone)
+          )
+      end
+
+    from(c in ordered,
       limit: ^limit,
       select: %{
         bucket: fragment("? AT TIME ZONE ?", c.bucket, ^timezone),
-        request_count: c.request_count
+        request_count: c.request_count,
+        cost_usd: c.cost_usd
       }
     )
     |> Repo.all(timeout: stats_timeout())
     |> Enum.map(fn row ->
-      %{bucket: to_utc_datetime(row.bucket), request_count: row.request_count}
+      %{
+        bucket: to_utc_datetime(row.bucket),
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd))
+      }
     end)
   end
 
@@ -2534,11 +2643,16 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([m, model: ma], %{
         model_id: ma.id,
         model_name: ma.name,
+        market_input_price_per_1m: ma.market_input_price_per_1m,
+        market_output_price_per_1m: ma.market_output_price_per_1m,
+        market_cache_price_per_1m: ma.market_cache_price_per_1m,
         request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        error_count: fragment("COALESCE(SUM(?), 0)::bigint", m.error_count),
         cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
         cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_read_tokens),
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_creation_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms)
       })
 
@@ -2548,11 +2662,16 @@ defmodule Tokengate.Metrics.Rollup do
       %{
         model_id: row.model_id,
         model_name: row.model_name || "—",
+        market_input_price_per_1m: row.market_input_price_per_1m,
+        market_output_price_per_1m: row.market_output_price_per_1m,
+        market_cache_price_per_1m: row.market_cache_price_per_1m,
         request_count: row.request_count,
+        error_count: row.error_count,
         cost_usd: micro_to_decimal(row.cost_usd_raw),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         cache_read_tokens: row.cache_read_tokens,
+        cache_creation_tokens: row.cache_creation_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
       }
     end)
@@ -2644,10 +2763,12 @@ defmodule Tokengate.Metrics.Rollup do
         group_id: t.id,
         group_name: t.name,
         request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        error_count: fragment("COALESCE(SUM(?), 0)::bigint", m.error_count),
         cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
         cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_read_tokens),
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_creation_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms)
       })
 
@@ -2658,10 +2779,12 @@ defmodule Tokengate.Metrics.Rollup do
         group_id: row.group_id,
         group_name: row.group_name,
         request_count: row.request_count,
+        error_count: row.error_count,
         cost_usd: micro_to_decimal(row.cost_usd_raw),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         cache_read_tokens: row.cache_read_tokens,
+        cache_creation_tokens: row.cache_creation_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
       }
     end)
@@ -2745,6 +2868,9 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp maybe_from(query, nil), do: query
   defp maybe_from(query, from), do: where(query, [rl], rl.inserted_at >= ^from)
+
+  defp maybe_api_key(query, nil), do: query
+  defp maybe_api_key(query, api_key_id), do: where(query, [rl], rl.api_key_id == ^api_key_id)
 
   defp maybe_to(query, nil), do: query
   defp maybe_to(query, to), do: where(query, [rl], rl.inserted_at <= ^to)
@@ -2876,7 +3002,8 @@ defmodule Tokengate.Metrics.Rollup do
           ),
         label: p.name,
         label_logo: p.logo_url,
-        id: rl.id
+        id: rl.id,
+        spend: rl.provider_cost_usd
       })
       |> subquery()
 
@@ -2888,7 +3015,8 @@ defmodule Tokengate.Metrics.Rollup do
           date: b.bucket,
           label: b.label,
           label_logo: b.label_logo,
-          request_count: count(b.id)
+          request_count: count(b.id),
+          total_cost: fragment("COALESCE(SUM(?), 0)", b.spend)
         }
       )
 
@@ -2898,7 +3026,8 @@ defmodule Tokengate.Metrics.Rollup do
         date: to_utc_datetime(row.date),
         label: row.label || "—",
         label_logo: row.label_logo,
-        request_count: row.request_count
+        request_count: row.request_count,
+        total_cost_usd: Decimal.new(to_string(row.total_cost))
       }
     end)
   end
@@ -2934,7 +3063,8 @@ defmodule Tokengate.Metrics.Rollup do
             ^timezone
           ),
         label: rl.model_requested,
-        id: rl.id
+        id: rl.id,
+        spend: rl.provider_cost_usd
       })
       |> subquery()
 
@@ -2945,7 +3075,8 @@ defmodule Tokengate.Metrics.Rollup do
         select: %{
           date: b.bucket,
           label: b.label,
-          request_count: count(b.id)
+          request_count: count(b.id),
+          total_cost: fragment("COALESCE(SUM(?), 0)", b.spend)
         }
       )
 
@@ -2954,7 +3085,8 @@ defmodule Tokengate.Metrics.Rollup do
       %{
         date: to_utc_datetime(row.date),
         label: row.label || "—",
-        request_count: row.request_count
+        request_count: row.request_count,
+        total_cost_usd: Decimal.new(to_string(row.total_cost))
       }
     end)
   end
@@ -3012,5 +3144,801 @@ defmodule Tokengate.Metrics.Rollup do
         request_count: row.request_count
       }
     end)
+  end
+
+  # -----------------------------------------------------------------------
+  # usage_series_by_model_for_service/2
+  # -----------------------------------------------------------------------
+  # serie de uso+gasto por modelo para el detalle de un servicio:
+  #   * granularity: :hour  → buckets por hora (today / yesterday);
+  #   * granularity: :day   → buckets por día (week / 30d).
+  # Devuelve filas %{date, label, request_count, total_cost_usd} — la gráfica
+  # "Spend & requests" del Overview del servicio apila por `label` con las
+  # requests y muestra el costo en el tooltip.
+  def usage_series_by_model_for_service(service_id, opts \\ [])
+
+  def usage_series_by_model_for_service(nil, _opts), do: []
+
+  def usage_series_by_model_for_service(service_id, opts)
+      when is_binary(service_id) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+    step = if Keyword.get(opts, :granularity, :day) == :hour, do: "hour", else: "day"
+    api_key_id = Keyword.get(opts, :api_key_id)
+
+    # Bucket por subquery: la expresión con placeholders (date_trunc + tz)
+    # vive SOLO en el select interno; la query externa agrupa por la columna
+    # del subquery, así Postgres puede casar ambas apariciones. El SUM del
+    # costo se hace a nivel externo.
+    bucketed =
+      RequestLog
+      |> where([rl], rl.service_id == ^service_id)
+      |> maybe_api_key(api_key_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc(?, ? AT TIME ZONE ?) AT TIME ZONE ?",
+            ^step,
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        label: rl.model_requested,
+        count_id: rl.id,
+        spend: rl.provider_cost_usd
+      })
+      |> subquery()
+
+    query =
+      from(b in bucketed,
+        group_by: [b.bucket, b.label],
+        order_by: [b.bucket, b.label],
+        select: %{
+          date: b.bucket,
+          label: b.label,
+          request_count: count(b.count_id),
+          total_cost: fragment("COALESCE(SUM(?), 0)", b.spend)
+        }
+      )
+
+    Repo.all(query, timeout: stats_timeout())
+    |> Enum.map(fn row ->
+      %{
+        date: to_utc_datetime(row.date),
+        label: row.label || "—",
+        request_count: row.request_count,
+        total_cost_usd: Decimal.new(to_string(row.total_cost))
+      }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # daily_series_by_provider/1 & daily_series_by_provider_from_rollup/1
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Serie diaria de uso, costo y tokens por proveedor en el período, en la
+  hora local del usuario. Usada por Overview para responder "¿cuándo?" en
+  ventanas de varios días (week / 30d).
+  """
+  @spec daily_series_by_provider(keyword()) :: [map()]
+  def daily_series_by_provider(opts \\ []) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+
+    bucketed =
+      RequestLog
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> maybe_member_ids(Keyword.get(opts, :member_ids))
+      |> maybe_user_ids(Keyword.get(opts, :user_ids))
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc('day', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        provider_id: rl.provider_id,
+        id: rl.id,
+        spend: rl.provider_cost_usd,
+        prompt_tokens: rl.prompt_tokens,
+        completion_tokens: rl.completion_tokens,
+        status_code: rl.status_code
+      })
+      |> subquery()
+
+    rows =
+      from(b in bucketed,
+        group_by: [b.bucket, b.provider_id],
+        order_by: [b.bucket],
+        select: %{
+          date: b.bucket,
+          provider_id: b.provider_id,
+          request_count: count(b.id),
+          total_cost: fragment("COALESCE(SUM(?), 0)", b.spend),
+          prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.prompt_tokens),
+          completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.completion_tokens),
+          error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", b.status_code)
+        }
+      )
+      |> Repo.all(timeout: stats_timeout())
+
+    attach_provider_labels(rows, :decimal)
+  end
+
+  @doc """
+  Mitad rollup de `daily_series_by_provider/1`. Agrupa sobre `hour_utc` en
+  buckets de día local y resuelve proveedores en una segunda query acotada.
+  """
+  @spec daily_series_by_provider_from_rollup(keyword()) :: [map()]
+  def daily_series_by_provider_from_rollup(opts \\ []) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+
+    bucketed =
+      RequestMetricsHourly
+      |> maybe_rollup_from(from)
+      |> maybe_rollup_to(to)
+      |> maybe_rollup_member_ids(Keyword.get(opts, :member_ids))
+      |> maybe_rollup_user_ids(Keyword.get(opts, :user_ids))
+      |> select([m], %{
+        bucket:
+          fragment(
+            "date_trunc('day', (? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?) AT TIME ZONE ?",
+            m.hour_utc,
+            ^timezone,
+            ^timezone
+          ),
+        provider_id: m.provider_id,
+        request_count: m.request_count,
+        cost_micro: m.cost_micro,
+        prompt_tokens: m.prompt_tokens,
+        completion_tokens: m.completion_tokens,
+        error_count: m.error_count
+      })
+      |> subquery()
+
+    rows =
+      from(b in bucketed,
+        group_by: [b.bucket, b.provider_id],
+        order_by: [b.bucket],
+        select: %{
+          date: b.bucket,
+          provider_id: b.provider_id,
+          request_count: fragment("COALESCE(SUM(?), 0)::bigint", b.request_count),
+          cost_micro: fragment("COALESCE(SUM(?), 0)::bigint", b.cost_micro),
+          prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.prompt_tokens),
+          completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.completion_tokens),
+          error_count: fragment("COALESCE(SUM(?), 0)::bigint", b.error_count)
+        }
+      )
+      |> Repo.all(timeout: stats_timeout())
+
+    attach_provider_labels(rows, :micro)
+  end
+
+  defp attach_provider_labels([], _cost_kind), do: []
+
+  defp attach_provider_labels(rows, cost_kind) do
+    provider_ids = rows |> Enum.map(& &1.provider_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    identities =
+      if provider_ids == [] do
+        %{}
+      else
+        from(p in Provider, where: p.id in ^provider_ids, select: {p.id, p.name, p.logo_url})
+        |> Repo.all(timeout: stats_timeout())
+        |> Map.new(fn {id, name, logo} -> {id, {name, logo}} end)
+      end
+
+    Enum.map(rows, fn row ->
+      {name, logo} = Map.get(identities, row.provider_id, {@no_provider, nil})
+
+      cost =
+        case cost_kind do
+          :micro -> micro_to_decimal(row.cost_micro)
+          :decimal -> Decimal.new(to_string(row.total_cost))
+        end
+
+      %{
+        date: to_utc_datetime(row.date),
+        provider_id: row.provider_id,
+        label: name || @no_provider,
+        label_logo: logo,
+        request_count: row.request_count,
+        total_cost_usd: cost,
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        error_count: row.error_count || 0
+      }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # efficiency_summary/1 (Overview: por qué cuesta tanto)
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Single-pass economic & friction breakdown over `request_logs` (bounded by
+  `Logs.ensure_window!/2`):
+
+    * desperdicio en errores (`status_code >= 400`)
+    * fallbacks recuperados (`status_code == 200` con `provider_status_code != 200`)
+    * hits en caché local (`cache_hit == true`)
+    * impacto de reasoning (`think == true` o `effort_applied IS NOT NULL`)
+    * reparto humanos (`subject_type == "user"`) vs servicios (`"service"`)
+  """
+  @spec efficiency_summary(keyword()) :: map()
+  def efficiency_summary(opts \\ []) do
+    opts_map = Map.new(opts) |> Logs.ensure_window!("Rollup.efficiency_summary/1")
+    from = Map.get(opts_map, :from)
+    to = Map.get(opts_map, :to)
+
+    row =
+      RequestLog
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> maybe_member_ids(Map.get(opts_map, :member_ids))
+      |> maybe_user_ids(Map.get(opts_map, :user_ids))
+      |> maybe_model_id(Map.get(opts_map, :model_id))
+      |> select([rl], %{
+        total_requests: count(rl.id),
+        total_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        error_requests: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+        error_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE ? >= 400), 0)",
+            rl.provider_cost_usd,
+            rl.status_code
+          ),
+        fallback_recovered_count:
+          fragment(
+            "COUNT(*) FILTER (WHERE ? = 200 AND ? IS NOT NULL AND ? <> 200)",
+            rl.status_code,
+            rl.provider_status_code,
+            rl.provider_status_code
+          ),
+        local_cache_hits: fragment("COUNT(*) FILTER (WHERE ? = true)", rl.cache_hit),
+        think_requests:
+          fragment(
+            "COUNT(*) FILTER (WHERE ? = true OR ? IS NOT NULL)",
+            rl.think,
+            rl.effort_applied
+          ),
+        think_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE ? = true OR ? IS NOT NULL), 0)",
+            rl.provider_cost_usd,
+            rl.think,
+            rl.effort_applied
+          ),
+        think_completion_tokens:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE ? = true OR ? IS NOT NULL), 0)::bigint",
+            rl.completion_tokens,
+            rl.think,
+            rl.effort_applied
+          ),
+        human_requests: fragment("COUNT(*) FILTER (WHERE ? = 'user')", rl.subject_type),
+        human_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE ? = 'user'), 0)",
+            rl.provider_cost_usd,
+            rl.subject_type
+          ),
+        service_requests: fragment("COUNT(*) FILTER (WHERE ? = 'service')", rl.subject_type),
+        service_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE ? = 'service'), 0)",
+            rl.provider_cost_usd,
+            rl.subject_type
+          )
+      })
+      |> Repo.one(timeout: stats_timeout())
+
+    %{
+      total_requests: row.total_requests || 0,
+      total_cost_usd: Decimal.new(to_string(row.total_cost_usd || 0)),
+      error_requests: row.error_requests || 0,
+      error_cost_usd: Decimal.new(to_string(row.error_cost_usd || 0)),
+      fallback_recovered_count: row.fallback_recovered_count || 0,
+      local_cache_hits: row.local_cache_hits || 0,
+      think_requests: row.think_requests || 0,
+      think_cost_usd: Decimal.new(to_string(row.think_cost_usd || 0)),
+      think_completion_tokens: row.think_completion_tokens || 0,
+      human_requests: row.human_requests || 0,
+      human_cost_usd: Decimal.new(to_string(row.human_cost_usd || 0)),
+      service_requests: row.service_requests || 0,
+      service_cost_usd: Decimal.new(to_string(row.service_cost_usd || 0))
+    }
+  end
+
+  # -----------------------------------------------------------------------
+  # Model detail extras: services & agents using a model
+  # -----------------------------------------------------------------------
+
+  @doc "Per-service aggregate metrics for a specific model, ranked by cost desc."
+  @spec breakdown_by_service_for_model(String.t() | nil, keyword()) :: [map()]
+  def breakdown_by_service_for_model(model_id, opts \\ [])
+  def breakdown_by_service_for_model(nil, _opts), do: []
+
+  def breakdown_by_service_for_model(model_id, opts) when is_binary(model_id) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    RequestLog
+    |> where([rl], rl.model_id == ^model_id)
+    |> join(:inner, [rl], s in Tokengate.Accounts.Service, on: rl.service_id == s.id)
+    |> maybe_from(from)
+    |> maybe_to(to)
+    |> group_by([rl, s], s.id)
+    |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
+    |> select([rl, s], %{
+      service_id: s.id,
+      service_name: s.name,
+      request_count: count(rl.id),
+      error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+      cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+      prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+      completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+      cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+      total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
+    })
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.map(fn row ->
+      %{
+        service_id: row.service_id,
+        service_name: row.service_name,
+        request_count: row.request_count,
+        error_count: row.error_count || 0,
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        cache_read_tokens: row.cache_read_tokens,
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+      }
+    end)
+  end
+
+  @doc "Per-agent breakdown for a specific model (normalized in read via `Tokengate.Agents`)."
+  @spec breakdown_by_agent_for_model(String.t() | nil, keyword()) :: [map()]
+  def breakdown_by_agent_for_model(model_id, opts \\ [])
+  def breakdown_by_agent_for_model(nil, _opts), do: []
+
+  def breakdown_by_agent_for_model(model_id, opts) when is_binary(model_id) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    RequestLog
+    |> where([rl], rl.model_id == ^model_id)
+    |> maybe_from(from)
+    |> maybe_to(to)
+    |> maybe_member_ids(Keyword.get(opts, :member_ids))
+    |> group_by([rl], [rl.agent_type, rl.client_agent])
+    |> select([rl], %{
+      agent_type: rl.agent_type,
+      client_agent: rl.client_agent,
+      request_count: count(rl.id),
+      error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+      cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+      prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+      completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+      cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_read_tokens)
+    })
+    |> Repo.all(timeout: stats_timeout())
+    |> merge_normalized_agent_rows()
+  end
+
+  defp merge_normalized_agent_rows(raw_rows) do
+    raw_rows
+    |> Enum.group_by(fn b -> Tokengate.Agents.identify(b.client_agent, b.agent_type).key end)
+    |> Enum.map(fn {_key, [first | _] = buckets} ->
+      id = Tokengate.Agents.identify(first.client_agent, first.agent_type)
+
+      %{
+        key: id.key,
+        label: id.label,
+        family: id.family,
+        logo: id.logo,
+        icon: id.icon,
+        request_count: Enum.reduce(buckets, 0, &(&1.request_count + &2)),
+        error_count: Enum.reduce(buckets, 0, &((&1.error_count || 0) + &2)),
+        cost_usd:
+          Enum.reduce(buckets, Decimal.new(0), fn b, acc ->
+            Decimal.add(acc, Decimal.new(to_string(b.cost_usd || 0)))
+          end),
+        prompt_tokens: Enum.reduce(buckets, 0, &(&1.prompt_tokens + &2)),
+        completion_tokens: Enum.reduce(buckets, 0, &(&1.completion_tokens + &2)),
+        cache_read_tokens: Enum.reduce(buckets, 0, &((&1.cache_read_tokens || 0) + &2))
+      }
+    end)
+    |> Enum.sort(fn a, b ->
+      case Decimal.compare(a.cost_usd, b.cost_usd) do
+        :eq -> a.request_count >= b.request_count
+        :gt -> true
+        :lt -> false
+      end
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # Provider detail daily series
+  # -----------------------------------------------------------------------
+
+  @doc "Daily request & cost series by model for a single provider."
+  @spec daily_series_by_model_for_provider(String.t() | nil, keyword()) :: [map()]
+  def daily_series_by_model_for_provider(provider_id, opts \\ [])
+  def daily_series_by_model_for_provider(nil, _opts), do: []
+
+  def daily_series_by_model_for_provider(provider_id, opts) when is_binary(provider_id) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+
+    bucketed =
+      RequestLog
+      |> where([rl], rl.provider_id == ^provider_id)
+      |> maybe_member_ids(Keyword.get(opts, :member_ids))
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc('day', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        label: rl.model_requested,
+        id: rl.id,
+        spend: rl.provider_cost_usd
+      })
+      |> subquery()
+
+    from(b in bucketed,
+      group_by: [b.bucket, b.label],
+      order_by: [b.bucket, b.label],
+      select: %{
+        date: b.bucket,
+        label: b.label,
+        request_count: count(b.id),
+        total_cost: fragment("COALESCE(SUM(?), 0)", b.spend)
+      }
+    )
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.map(fn row ->
+      %{
+        date: to_utc_datetime(row.date),
+        label: row.label || "—",
+        request_count: row.request_count,
+        total_cost_usd: Decimal.new(to_string(row.total_cost))
+      }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # Agent detail bundle (/stats/agents/:key)
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Detailed analytics for a single canonical coding agent (`Tokengate.Agents.identify/2`
+  key) in the bounded period: summary + effort split, models used, consumers
+  (users & services) and daily series.
+  """
+  @spec agent_detail(String.t() | nil, keyword()) :: map() | nil
+  def agent_detail(nil, _opts), do: nil
+
+  def agent_detail(agent_key, opts) when is_binary(agent_key) do
+    opts_map = Map.new(opts) |> Logs.ensure_window!("Rollup.agent_detail/2")
+    from = Map.get(opts_map, :from)
+    to = Map.get(opts_map, :to)
+    member_ids = Map.get(opts_map, :member_ids)
+    timezone = Map.get(opts_map, :timezone, "Etc/UTC")
+
+    base =
+      RequestLog
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> maybe_member_ids(member_ids)
+
+    # 1) Raw identity × effort buckets → filter by agent_key → KPIs + effort breakdown
+    identity_effort_rows =
+      base
+      |> group_by([rl], [rl.client_agent, rl.agent_type, rl.effort_applied, rl.think])
+      |> select([rl], %{
+        client_agent: rl.client_agent,
+        agent_type: rl.agent_type,
+        effort_applied: rl.effort_applied,
+        think: rl.think,
+        request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_read_tokens),
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_creation_tokens),
+        latency_sum_ms: fragment("COALESCE(SUM(?), 0)::bigint", rl.latency_ms),
+        latency_count: fragment("COUNT(?)", rl.latency_ms)
+      })
+      |> Repo.all(timeout: stats_timeout())
+      |> Enum.filter(fn r ->
+        Tokengate.Agents.identify(r.client_agent, r.agent_type).key == agent_key
+      end)
+
+    case identity_effort_rows do
+      [] ->
+        nil
+
+      [first | _] ->
+        identity = Tokengate.Agents.identify(first.client_agent, first.agent_type)
+        summary = summarize_agent_rows(identity_effort_rows)
+        effort_breakdown = build_agent_effort_breakdown(identity_effort_rows)
+
+        # 2) Models used by this agent
+        model_rows =
+          base
+          |> group_by([rl], [rl.client_agent, rl.agent_type, rl.model_id])
+          |> select([rl], %{
+            client_agent: rl.client_agent,
+            agent_type: rl.agent_type,
+            model_id: rl.model_id,
+            request_count: count(rl.id),
+            error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+            cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+            prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+            completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+            cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_read_tokens)
+          })
+          |> Repo.all(timeout: stats_timeout())
+          |> Enum.filter(fn r ->
+            Tokengate.Agents.identify(r.client_agent, r.agent_type).key == agent_key
+          end)
+          |> resolve_agent_models()
+
+        # 3) Consumers (users + services) running this agent
+        consumer_rows =
+          base
+          |> group_by([rl], [
+            rl.client_agent,
+            rl.agent_type,
+            rl.subject_type,
+            rl.user_id,
+            rl.service_id
+          ])
+          |> select([rl], %{
+            client_agent: rl.client_agent,
+            agent_type: rl.agent_type,
+            subject_type: rl.subject_type,
+            user_id: rl.user_id,
+            service_id: rl.service_id,
+            request_count: count(rl.id),
+            error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+            cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+            prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+            completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+            cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_read_tokens)
+          })
+          |> Repo.all(timeout: stats_timeout())
+          |> Enum.filter(fn r ->
+            Tokengate.Agents.identify(r.client_agent, r.agent_type).key == agent_key
+          end)
+          |> resolve_agent_consumers()
+
+        # 4) Daily series by model for this agent
+        bucketed =
+          base
+          |> select([rl], %{
+            bucket:
+              fragment(
+                "date_trunc('day', ? AT TIME ZONE ?) AT TIME ZONE ?",
+                rl.inserted_at,
+                ^timezone,
+                ^timezone
+              ),
+            client_agent: rl.client_agent,
+            agent_type: rl.agent_type,
+            model_requested: rl.model_requested,
+            id: rl.id,
+            spend: rl.provider_cost_usd
+          })
+          |> subquery()
+
+        daily_series =
+          from(b in bucketed,
+            group_by: [b.bucket, b.client_agent, b.agent_type, b.model_requested],
+            order_by: [b.bucket],
+            select: %{
+              date: b.bucket,
+              client_agent: b.client_agent,
+              agent_type: b.agent_type,
+              label: b.model_requested,
+              request_count: count(b.id),
+              total_cost: fragment("COALESCE(SUM(?), 0)", b.spend)
+            }
+          )
+          |> Repo.all(timeout: stats_timeout())
+          |> Enum.filter(fn r ->
+            Tokengate.Agents.identify(r.client_agent, r.agent_type).key == agent_key
+          end)
+          |> Enum.group_by(&{&1.date, &1.label || "—"})
+          |> Enum.map(fn {{date, label}, rows} ->
+            %{
+              date: to_utc_datetime(date),
+              label: label,
+              request_count: Enum.reduce(rows, 0, &(&1.request_count + &2)),
+              total_cost_usd:
+                Enum.reduce(rows, Decimal.new(0), fn r, acc ->
+                  Decimal.add(acc, Decimal.new(to_string(r.total_cost || 0)))
+                end)
+            }
+          end)
+          |> Enum.sort_by(&{&1.date, &1.label})
+
+        %{
+          identity: identity,
+          summary: summary,
+          effort_breakdown: effort_breakdown,
+          models: model_rows,
+          consumers: consumer_rows,
+          daily_series: daily_series
+        }
+    end
+  end
+
+  defp summarize_agent_rows(rows) do
+    reqs = Enum.reduce(rows, 0, &(&1.request_count + &2))
+    errs = Enum.reduce(rows, 0, &((&1.error_count || 0) + &2))
+    lat_sum = Enum.reduce(rows, 0, &((&1.latency_sum_ms || 0) + &2))
+    lat_cnt = Enum.reduce(rows, 0, &((&1.latency_count || 0) + &2))
+    prompt = Enum.reduce(rows, 0, &(&1.prompt_tokens + &2))
+    completion = Enum.reduce(rows, 0, &(&1.completion_tokens + &2))
+    cache_read = Enum.reduce(rows, 0, &(&1.cache_read_tokens + &2))
+    cache_creation = Enum.reduce(rows, 0, &(&1.cache_creation_tokens + &2))
+
+    cost =
+      Enum.reduce(rows, Decimal.new(0), fn r, acc ->
+        Decimal.add(acc, Decimal.new(to_string(r.cost_usd || 0)))
+      end)
+
+    %{
+      request_count: reqs,
+      error_count: errs,
+      error_rate: if(reqs > 0, do: Float.round(errs / reqs, 4), else: 0.0),
+      cost_usd: cost,
+      prompt_tokens: prompt,
+      completion_tokens: completion,
+      cache_read_tokens: cache_read,
+      cache_creation_tokens: cache_creation,
+      avg_latency_ms: if(lat_cnt > 0, do: round(lat_sum / lat_cnt), else: nil),
+      avg_tps: compute_tps(completion, lat_sum)
+    }
+  end
+
+  defp build_agent_effort_breakdown(rows) do
+    rows
+    |> Enum.group_by(fn r ->
+      cond do
+        is_binary(r.effort_applied) and r.effort_applied != "" -> r.effort_applied
+        r.think -> "think"
+        true -> "standard"
+      end
+    end)
+    |> Enum.map(fn {bucket, b_rows} ->
+      %{
+        effort: bucket,
+        request_count: Enum.reduce(b_rows, 0, &(&1.request_count + &2)),
+        completion_tokens: Enum.reduce(b_rows, 0, &(&1.completion_tokens + &2)),
+        cost_usd:
+          Enum.reduce(b_rows, Decimal.new(0), fn r, acc ->
+            Decimal.add(acc, Decimal.new(to_string(r.cost_usd || 0)))
+          end)
+      }
+    end)
+    |> Enum.sort(fn a, b -> Decimal.compare(a.cost_usd, b.cost_usd) != :lt end)
+  end
+
+  defp resolve_agent_models(rows) do
+    model_ids = rows |> Enum.map(& &1.model_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    names =
+      if model_ids == [] do
+        %{}
+      else
+        from(m in Model, where: m.id in ^model_ids, select: {m.id, m.name})
+        |> Repo.all(timeout: stats_timeout())
+        |> Map.new()
+      end
+
+    rows
+    |> Enum.group_by(& &1.model_id)
+    |> Enum.map(fn {model_id, m_rows} ->
+      %{
+        model_id: model_id,
+        model_name: Map.get(names, model_id) || "—",
+        request_count: Enum.reduce(m_rows, 0, &(&1.request_count + &2)),
+        error_count: Enum.reduce(m_rows, 0, &((&1.error_count || 0) + &2)),
+        cost_usd:
+          Enum.reduce(m_rows, Decimal.new(0), fn r, acc ->
+            Decimal.add(acc, Decimal.new(to_string(r.cost_usd || 0)))
+          end),
+        prompt_tokens: Enum.reduce(m_rows, 0, &(&1.prompt_tokens + &2)),
+        completion_tokens: Enum.reduce(m_rows, 0, &(&1.completion_tokens + &2)),
+        cache_read_tokens: Enum.reduce(m_rows, 0, &(&1.cache_read_tokens + &2))
+      }
+    end)
+    |> Enum.sort(fn a, b -> Decimal.compare(a.cost_usd, b.cost_usd) != :lt end)
+  end
+
+  defp resolve_agent_consumers(rows) do
+    user_ids = rows |> Enum.map(& &1.user_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    service_ids = rows |> Enum.map(& &1.service_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    users =
+      if user_ids == [] do
+        %{}
+      else
+        from(u in Tokengate.Accounts.User,
+          where: u.id in ^user_ids,
+          select: {u.id, u.email, u.name}
+        )
+        |> Repo.all(timeout: stats_timeout())
+        |> Map.new(fn {id, email, name} -> {id, %{email: email, name: name}} end)
+      end
+
+    services =
+      if service_ids == [] do
+        %{}
+      else
+        from(s in Tokengate.Accounts.Service, where: s.id in ^service_ids, select: {s.id, s.name})
+        |> Repo.all(timeout: stats_timeout())
+        |> Map.new()
+      end
+
+    rows
+    |> Enum.group_by(fn r ->
+      cond do
+        r.subject_type == "service" and r.service_id -> {:service, r.service_id}
+        r.user_id -> {:user, r.user_id}
+        true -> {:unknown, nil}
+      end
+    end)
+    |> Enum.map(fn {{kind, id}, c_rows} ->
+      label =
+        case kind do
+          :service -> Map.get(services, id, "—")
+          :user -> ((u = Map.get(users, id)) && (u.name || u.email)) || "—"
+          _ -> "—"
+        end
+
+      sublabel =
+        case kind do
+          :user -> (u = Map.get(users, id)) && u.email
+          _ -> nil
+        end
+
+      %{
+        subject_type: Atom.to_string(kind),
+        subject_id: id,
+        label: label,
+        sublabel: sublabel,
+        request_count: Enum.reduce(c_rows, 0, &(&1.request_count + &2)),
+        error_count: Enum.reduce(c_rows, 0, &((&1.error_count || 0) + &2)),
+        cost_usd:
+          Enum.reduce(c_rows, Decimal.new(0), fn r, acc ->
+            Decimal.add(acc, Decimal.new(to_string(r.cost_usd || 0)))
+          end),
+        prompt_tokens: Enum.reduce(c_rows, 0, &(&1.prompt_tokens + &2)),
+        completion_tokens: Enum.reduce(c_rows, 0, &(&1.completion_tokens + &2)),
+        cache_read_tokens: Enum.reduce(c_rows, 0, &(&1.cache_read_tokens + &2))
+      }
+    end)
+    |> Enum.sort(fn a, b -> Decimal.compare(a.cost_usd, b.cost_usd) != :lt end)
   end
 end

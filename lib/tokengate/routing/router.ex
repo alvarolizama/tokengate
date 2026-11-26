@@ -177,21 +177,29 @@ defmodule Tokengate.Routing.Router do
           :ok
   def record_outcome(route, outcome, opts \\ []) do
     credential_id = route.credential.id
+    breaker_opts = Keyword.take(opts, [:epoch, :retry_after_ms, :source])
 
     case outcome do
       :success ->
-        @default_breaker.record_success(credential_id)
+        @default_breaker.record_success(credential_id, breaker_opts)
 
         case Keyword.get(opts, :latency_ms) do
-          nil -> :ok
-          latency_ms -> CredentialHealth.record_success(credential_id, latency_ms)
+          nil ->
+            :ok
+
+          latency_ms ->
+            CredentialHealth.record_success(
+              credential_id,
+              latency_ms,
+              Keyword.take(opts, [:streaming])
+            )
         end
 
       {:failure, reason} ->
-        record_failure_outcome(route, reason, nil)
+        record_failure_outcome(route, reason, nil, breaker_opts)
 
       {:failure, reason, error_message} ->
-        record_failure_outcome(route, reason, error_message)
+        record_failure_outcome(route, reason, error_message, breaker_opts)
     end
 
     :ok
@@ -200,8 +208,8 @@ defmodule Tokengate.Routing.Router do
   # Every failure reason feeds the breaker — billing surface no longer makes a
   # 429 special. The breaker's cooldown and the routing cascade provide the
   # fallback a saturated credential needs.
-  defp record_failure_outcome(route, reason, error_message) do
-    @default_breaker.record_failure(route.credential.id, reason, error_message)
+  defp record_failure_outcome(route, reason, error_message, breaker_opts) do
+    @default_breaker.record_failure(route.credential.id, reason, error_message, breaker_opts)
   end
 
   @doc """
@@ -323,8 +331,16 @@ defmodule Tokengate.Routing.Router do
   end
 
   defp select_and_build_route(model, candidates, request_context, breaker, exclude) do
+    # Use side-effect-free usable?/1 when supported so Priority (Enum.filter on
+    # pools, sticky checks) never consumes a :half_open probe slot during
+    # selection. Probe lease acquisition happens right before the upstream HTTP
+    # call in ProxyController.
+    use_usable? = Code.ensure_loaded?(breaker) and function_exported?(breaker, :usable?, 1)
+
     available? = fn ap ->
-      breaker.allow?(ap.credential.id)
+      if use_usable?,
+        do: breaker.usable?(ap.credential.id),
+        else: breaker.allow?(ap.credential.id)
     end
 
     # Mark exclusive providers with priority -1 so they always come first.

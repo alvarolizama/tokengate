@@ -216,6 +216,45 @@ defmodule Tokengate.Credits.TopupTest do
     refute_received {:counter_query, ^ref}
   end
 
+  test "editar expires_in_days a nil limpia expires_at (vuelve a sin expiración)" do
+    user = insert_user!()
+
+    {:ok, topup} =
+      Tokengate.Credits.Topups.create(%{
+        "user_id" => user.id,
+        "amount_usd" => "10.00",
+        "expires_in_days" => "7"
+      })
+
+    assert topup.expires_at != nil
+
+    {:ok, updated} =
+      Tokengate.Credits.Topups.edit_topup(topup, %{"expires_in_days" => nil})
+
+    assert updated.expires_in_days == nil
+    assert updated.expires_at == nil
+  end
+
+  test "edit_topup rechaza bajar amount_usd por debajo de lo ya consumido" do
+    user = insert_user!()
+
+    {:ok, topup} =
+      Tokengate.Credits.Topups.create(%{
+        "user_id" => user.id,
+        "amount_usd" => "10.00"
+      })
+
+    Tokengate.Repo.insert!(%Tokengate.Metrics.TopupConsumptionCounter{
+      topup_id: topup.id,
+      consumed_micro: 4_500_000
+    })
+
+    assert {:error, changeset} =
+             Tokengate.Credits.Topups.edit_topup(topup, %{"amount_usd" => "3.00"})
+
+    assert errors_on(changeset).amount_usd != []
+  end
+
   defp insert_user! do
     Tokengate.Repo.insert!(%Tokengate.Accounts.User{
       email: "topup-#{System.unique_integer([:positive])}@test.local",

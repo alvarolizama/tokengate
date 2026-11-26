@@ -75,6 +75,10 @@ defmodule TokengateWeb.StatsLive.Providers do
                 @provider_ranking,
                 &Stats.matches?(@list_search, &1.provider_name)
               ) %>
+            <% total_cost =
+              Enum.reduce(rows, Decimal.new(0), fn r, acc ->
+                Decimal.add(acc, Map.get(r, :cost_usd, Decimal.new(0)))
+              end) %>
             <% list_rows = Stats.shown_rows(rows, "provider-list", @shown_counts, @per_page) %>
             <div class="mt-3 overflow-x-auto">
               <.table
@@ -111,6 +115,24 @@ defmodule TokengateWeb.StatsLive.Providers do
                 </:col>
                 <:col :let={row} label={gettext("Requests")} field={:request_count} align="right">
                   <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
+                  <span class="font-mono tabular-nums">
+                    ${Stats.format_decimal(Map.get(row, :cost_usd, Decimal.new(0)))}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Share")} align="right">
+                  <span class="font-mono tabular-nums text-base-content/70">
+                    {Stats.cost_share_pct(Map.get(row, :cost_usd, Decimal.new(0)), total_cost)}%
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Cost / req")} align="right">
+                  <span class="font-mono tabular-nums text-base-content/70">
+                    {Stats.cost_per_request(
+                      Map.get(row, :cost_usd, Decimal.new(0)),
+                      row.request_count
+                    )}
+                  </span>
                 </:col>
                 <:col :let={row} label={gettext("Failures")} field={:error_rate} align="right">
                   <span class={[
@@ -152,6 +174,10 @@ defmodule TokengateWeb.StatsLive.Providers do
                   <span>
                     <span class="text-base-content/40">{gettext("Requests")}</span>
                     <span class="ml-1">{Stats.format_number(total_requests)}</span>
+                  </span>
+                  <span>
+                    <span class="text-base-content/40">{gettext("Cost")}</span>
+                    <span class="ml-1">${Stats.format_decimal(total_cost)}</span>
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Failures")}</span>

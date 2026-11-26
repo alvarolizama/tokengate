@@ -38,6 +38,7 @@ defmodule TokengateWeb.StatsLive do
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Metrics.StatsQueries
   alias Tokengate.Periods
+  import TokengateWeb.StatsLive.Agent, only: [agent: 1]
   import TokengateWeb.StatsLive.Agents, only: [agents: 1]
   import TokengateWeb.StatsLive.Index, only: [index: 1]
   import TokengateWeb.StatsLive.Models, only: [models: 1]
@@ -84,6 +85,8 @@ defmodule TokengateWeb.StatsLive do
     "avg_ttft_ms" => :avg_ttft_ms,
     "score" => :score,
     "error_rate" => :error_rate,
+    "error_count" => :error_count,
+    "cache_read_tokens" => :cache_read_tokens,
     "share" => :share,
     "label" => :label,
     "model_name" => :model_name,
@@ -99,6 +102,7 @@ defmodule TokengateWeb.StatsLive do
     :breakdown_group,
     :breakdown_provider,
     :breakdown_service,
+    :breakdown_agent,
     :breakdown_user,
     :member_models,
     :agent_ranking,
@@ -118,8 +122,11 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:scope_label, scope_label_for(user))
       |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
       |> assign(:group_id, nil)
-      |> assign(:sort_field, :request_count)
+      |> assign(:agent_key, nil)
+      |> assign(:sort_field, :cost_usd)
       |> assign(:sort_direction, :desc)
+      |> assign(:chart_metric, "requests")
+      |> assign(:overview_metric, "cost")
       |> assign(:list_search, "")
       |> assign(:stats_loading, true)
       |> assign(:load_error, false)
@@ -128,6 +135,13 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:shown_counts, %{})
       |> assign(:reload_scheduled, false)
       |> assign(:pulse_scheduled, false)
+      |> assign(:live_drivers, %{
+        window_minutes: 15,
+        top_models: [],
+        top_consumers: [],
+        top_agents: []
+      })
+      |> assign(:yesterday_pace, nil)
       |> assign(empty_data_assigns())
 
     socket =
@@ -170,6 +184,12 @@ defmodule TokengateWeb.StatsLive do
         _ -> nil
       end
 
+    agent_key =
+      case socket.assigns.live_action do
+        :agent -> params["agent_key"]
+        _ -> nil
+      end
+
     socket =
       socket
       |> assign(:period, period)
@@ -177,6 +197,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:group_filter, group_filter)
       |> assign(:group_id, group_id)
       |> assign(:provider_id, provider_id)
+      |> assign(:agent_key, agent_key)
 
     # Cada sección tiene su propio listado: el filtro de la anterior no
     # aplica y escondería filas sin que se vea por qué. Pero cambiar de
@@ -191,19 +212,16 @@ defmodule TokengateWeb.StatsLive do
       end
       |> assign(:last_live_action, socket.assigns.live_action)
 
-    # Cada sección entra con su orden por defecto: Agents por gasto, Providers
-    # por score, y el resto por requests. Cambiar de período dentro de la misma
-    # pestaña (`entering? == false`) respeta el orden elegido por el usuario.
+    # Cada sección entra ordenada por impacto en dinero (`cost_usd` desc),
+    # salvo Providers que prioriza confiabilidad (`score` desc). Cambiar de
+    # período dentro de la misma pestaña respeta el orden elegido por el usuario.
     socket =
       cond do
-        entering? and socket.assigns.live_action == :agents ->
-          assign(socket, sort_field: :cost_usd, sort_direction: :desc)
-
         entering? and socket.assigns.live_action == :providers ->
           assign(socket, sort_field: :score, sort_direction: :desc)
 
         entering? ->
-          assign(socket, sort_field: :request_count, sort_direction: :desc)
+          assign(socket, sort_field: :cost_usd, sort_direction: :desc)
 
         true ->
           socket
@@ -243,6 +261,10 @@ defmodule TokengateWeb.StatsLive do
 
   def period_target(%{live_action: :providers}), do: "/stats/providers"
   def period_target(%{live_action: :agents}), do: "/stats/agents"
+
+  def period_target(%{live_action: :agent, agent_key: key}) when is_binary(key),
+    do: ~p"/stats/agents/#{key}"
+
   def period_target(%{live_action: :models}), do: "/stats/models"
   def period_target(%{live_action: :groups}), do: "/stats/profiles"
   def period_target(%{live_action: :services}), do: "/stats/services"
@@ -283,6 +305,20 @@ defmodule TokengateWeb.StatsLive do
   def handle_event("refresh", _params, socket) do
     {:noreply, start_data_load(socket)}
   end
+
+  def handle_event("set_chart_metric", %{"metric" => metric}, socket)
+      when metric in ~w(requests cost) do
+    {:noreply, assign(socket, :chart_metric, metric)}
+  end
+
+  def handle_event("set_chart_metric", _params, socket), do: {:noreply, socket}
+
+  def handle_event("set_overview_metric", %{"metric" => metric}, socket)
+      when metric in ~w(cost requests) do
+    {:noreply, assign(socket, :overview_metric, metric)}
+  end
+
+  def handle_event("set_overview_metric", _params, socket), do: {:noreply, socket}
 
   # "Ver más" de los listados largos: Créditos (una clave por perfil de límites) y los
   # detalles de proveedor y modelo (una clave por tabla). El conteo desplegado
@@ -350,7 +386,8 @@ defmodule TokengateWeb.StatsLive do
   # mismo cálculo.
   defp structural_cache_key(params) do
     {:stats_structural, params.live_action, params.period, params.timezone, params.model_filter,
-     params.group_filter, params.group_id, params.provider_id, cache_scope(params)}
+     params.group_filter, params.group_id, params.provider_id, params[:agent_key],
+     cache_scope(params)}
   end
 
   # Lectura/escritura del cache con el flag de tests: deshabilitado, ambos
@@ -452,6 +489,7 @@ defmodule TokengateWeb.StatsLive do
       group_filter: assigns.group_filter,
       group_id: assigns.group_id,
       provider_id: assigns[:provider_id],
+      agent_key: assigns[:agent_key],
       scope_member_ids: assigns.scope_member_ids,
       live_action: assigns.live_action,
       timezone: assigns[:timezone] || "Etc/UTC",
@@ -579,7 +617,10 @@ defmodule TokengateWeb.StatsLive do
     socket = assign(socket, :pulse_scheduled, false)
 
     if socket.assigns.live_action == :live do
-      {:noreply, assign(socket, :pulse, live_pulse())}
+      {:noreply,
+       socket
+       |> assign(:pulse, live_pulse())
+       |> assign(:live_drivers, live_drivers())}
     else
       {:noreply, socket}
     end
@@ -751,10 +792,42 @@ defmodule TokengateWeb.StatsLive do
 
   # Merge prev_metrics into the :metrics map as delta percentages.
   defp merge_prev_metrics(%{metrics: metrics, prev_metrics: prev} = data) do
-    Map.put(data, :metrics, Map.put(metrics, :deltas, compute_deltas(metrics, prev)))
+    deltas =
+      metrics
+      |> compute_deltas(prev)
+      |> Map.put(:cost_per_req, cost_per_req_delta(metrics, prev))
+      |> Map.put(:cache_hit_pp, cache_hit_delta(metrics, prev))
+
+    Map.put(data, :metrics, Map.put(metrics, :deltas, deltas))
   end
 
   defp merge_prev_metrics(data), do: data
+
+  defp cost_per_req_delta(%{requests_total: cur_n, cost_usd: cur_c}, %{
+         requests_total: prev_n,
+         cost_usd: prev_c
+       })
+       when cur_n > 0 and prev_n > 0 do
+    cur_avg = Decimal.div(cur_c, Decimal.new(cur_n))
+    prev_avg = Decimal.div(prev_c, Decimal.new(prev_n))
+    decimal_pct_delta(cur_avg, prev_avg)
+  end
+
+  defp cost_per_req_delta(_, _), do: nil
+
+  defp cache_hit_delta(
+         %{prompt_tokens: cur_p} = cur,
+         %{prompt_tokens: prev_p} = prev
+       )
+       when cur_p > 0 and prev_p > 0 do
+    cur_r = Map.get(cur, :cache_read_tokens, 0)
+    prev_r = Map.get(prev, :cache_read_tokens, 0)
+    cur_pct = cur_r / cur_p * 100
+    prev_pct = prev_r / prev_p * 100
+    Float.round(cur_pct - prev_pct, 1)
+  end
+
+  defp cache_hit_delta(_, _), do: nil
 
   # Run every query function concurrently and collect results in order.
   # Queries share the Repo pool, so wall time is pool rounds, not the sum of
@@ -850,10 +923,19 @@ defmodule TokengateWeb.StatsLive do
           hour_usage_tasks(params, opts) ++
           [
             fn ->
-              {:model_provider_stacked, StatsQueries.usage_by_model_provider_stacked(opts)}
+              {:model_provider_stacked,
+               StatsQueries.usage_by_model_provider_stacked(Keyword.put(opts, :limit, nil))}
             end,
             fn -> {:busiest_hours, StatsQueries.busiest_hours(nil, opts)} end,
-            fn -> {:busiest_minutes, Rollup.busiest_minutes(nil, opts)} end
+            fn ->
+              {:busiest_cost_hours,
+               StatsQueries.busiest_hours(nil, Keyword.put(opts, :metric, :cost))}
+            end,
+            fn -> {:busiest_minutes, Rollup.busiest_minutes(nil, opts)} end,
+            fn ->
+              {:busiest_cost_minutes,
+               Rollup.busiest_minutes(nil, Keyword.put(opts, :metric, :cost))}
+            end
           ]
 
       :models ->
@@ -890,6 +972,9 @@ defmodule TokengateWeb.StatsLive do
         # por agente canónico. Un solo scan del período por bundle cacheado.
         [fn -> {:agent_ranking, TokengateWeb.StatsLive.Agents.build_ranking(opts)} end]
 
+      :agent ->
+        [fn -> {:agent_detail, Rollup.agent_detail(params.agent_key, opts)} end]
+
       :provider ->
         # Interior de la tabla de proveedores: métricas del proveedor, los
         # modelos que sirve y quién lo usa (usuarios, servicios, perfiles de límites).
@@ -905,6 +990,9 @@ defmodule TokengateWeb.StatsLive do
             # la fila de la tabla y el detalle no pueden decir cosas distintas.
             fn -> {:provider_ranking, Rollup.provider_ranking(nil, opts)} end,
             fn -> {:provider_metrics, provider_metrics(provider_id, opts)} end,
+            fn ->
+              {:drilldown_series, Rollup.daily_series_by_model_for_provider(provider_id, opts)}
+            end,
             fn ->
               {:breakdown_model,
                Rollup.breakdown_by_model(nil, Keyword.put(opts, :provider_id, provider_id))}
@@ -1004,15 +1092,22 @@ defmodule TokengateWeb.StatsLive do
   defp model_detail_tasks(nil, _user, _opts), do: [fn -> {:model, nil} end]
 
   defp model_detail_tasks(model_id, user, opts) do
+    admin? = user.global_role == "admin"
+
     [
       fn -> {:model, Tokengate.Providers.get_model(model_id)} end,
       # El ranking completo entra para tomar de ahí tier/score/p95/fallos: la
-      # fila de la tabla y la cabecera del detalle no pueden decir cosas
-      # distintas (mismo criterio que el detalle de proveedor).
+      # fila de la tabla y el detalle no pueden decir cosas distintas (mismo
+      # criterio que el detalle de proveedor).
       fn -> {:model_ranking, Rollup.model_ranking(nil, opts)} end,
       fn -> {:breakdown_provider, Rollup.breakdown_by_provider_for_model(model_id, opts)} end,
       fn -> {:breakdown_group, breakdown_group_for_model(user, model_id, opts)} end,
       fn -> {:breakdown_member, Rollup.breakdown_by_member_for_model(model_id, opts)} end,
+      fn ->
+        {:breakdown_service,
+         if(admin?, do: Rollup.breakdown_by_service_for_model(model_id, opts), else: [])}
+      end,
+      fn -> {:breakdown_agent, Rollup.breakdown_by_agent_for_model(model_id, opts)} end,
       fn -> {:drilldown_series, Rollup.daily_series_by_provider_for_model(model_id, opts)} end
     ]
   end
@@ -1035,10 +1130,61 @@ defmodule TokengateWeb.StatsLive do
   # conserva el pico de concurrencia (admin): rankings y tiers viven en las
   # secciones models / groups / providers.
   defp index_admin_tasks(true, opts) do
-    [fn -> {:peak_concurrency, Rollup.peak_concurrency(nil, opts)} end]
+    [
+      fn -> {:peak_concurrency, Rollup.peak_concurrency(nil, opts)} end,
+      fn -> {:daily_series, StatsQueries.daily_series_by_provider(opts)} end,
+      fn -> {:efficiency, Rollup.efficiency_summary(opts)} end,
+      fn ->
+        {:top_agents,
+         opts
+         |> TokengateWeb.StatsLive.Agents.build_ranking()
+         |> Enum.take(5)}
+      end,
+      fn -> {:top_consumers, compute_top_consumers(opts)} end
+    ]
   end
 
   defp index_admin_tasks(false, _opts), do: []
+
+  defp compute_top_consumers(opts) do
+    users =
+      StatsQueries.breakdown_by_user(opts)
+      |> Enum.map(fn u ->
+        %{
+          subject_type: "user",
+          subject_id: u.user_id,
+          label: u.user_name || u.user_email,
+          sublabel: if(u.user_name, do: u.user_email, else: nil),
+          request_count: u.request_count,
+          error_count: Map.get(u, :error_count, 0),
+          cost_usd: u.cost_usd
+        }
+      end)
+
+    services =
+      Rollup.breakdown_by_service(opts)
+      |> Enum.map(fn s ->
+        %{
+          subject_type: "service",
+          subject_id: s.service_id,
+          label: s.service_name,
+          sublabel: nil,
+          request_count: s.request_count,
+          error_count: Map.get(s, :error_count, 0),
+          cost_usd: s.cost_usd
+        }
+      end)
+
+    (users ++ services)
+    |> Enum.sort(fn a, b ->
+      case Decimal.compare(a.cost_usd, b.cost_usd) do
+        :eq -> a.request_count >= b.request_count
+        :gt -> true
+        :lt -> false
+      end
+    end)
+    |> Enum.take(8)
+  end
 
   # Picks a single group's budget row out of the group rollup.
   defp find_group_budget(rows, group_id) do
@@ -1072,8 +1218,10 @@ defmodule TokengateWeb.StatsLive do
       breakdown_group: [],
       breakdown_provider: [],
       breakdown_service: [],
+      breakdown_agent: [],
       breakdown_user: [],
       agent_ranking: [],
+      agent_detail: nil,
       provider_ranking: [],
       provider: nil,
       provider_metrics: empty_provider_metrics(),
@@ -1083,8 +1231,14 @@ defmodule TokengateWeb.StatsLive do
       member_models: [],
       hour_usage_by_provider: [],
       model_provider_stacked: [],
+      daily_series: [],
+      efficiency: nil,
+      top_agents: [],
+      top_consumers: [],
       busiest_hours: [],
+      busiest_cost_hours: [],
       busiest_minutes: [],
+      busiest_cost_minutes: [],
       peak_concurrency: nil,
       model: nil,
       drilldown_series: [],
@@ -1216,6 +1370,22 @@ defmodule TokengateWeb.StatsLive do
     )
   end
 
+  defp live_drivers do
+    DashboardCache.fetch_or_compute(
+      {:stats_live_drivers},
+      fn -> Logs.live_cost_drivers(15, 5) end,
+      ttl: @pulse_cache_ttl_ms
+    )
+  end
+
+  defp yesterday_pace do
+    DashboardCache.fetch_or_compute(
+      {:stats_live_yesterday_pace},
+      fn -> Logs.yesterday_same_elapsed_summary() end,
+      ttl: 60_000
+    )
+  end
+
   # One bundled realtime refresh. The day partition is scanned ONCE per
   # cache cycle (flat KPI totals + hour × provider profile + budget spend
   # all come out of `Logs.today_live_bundle/0`; it used to be three scans)
@@ -1273,6 +1443,8 @@ defmodule TokengateWeb.StatsLive do
     socket
     |> assign(:stats_loading, false)
     |> assign(:pulse, live_pulse())
+    |> assign(:live_drivers, live_drivers())
+    |> assign(:yesterday_pace, yesterday_pace())
     # El p95 va aparte del bundle: vive en su propio cache de 60s y no se
     # congela dentro del bundle de 5s.
     |> assign(:today_metrics, Map.put(bundle.today_metrics, :p95_latency_ms, p95_latency_ms))

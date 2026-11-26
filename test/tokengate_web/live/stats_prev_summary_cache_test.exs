@@ -155,7 +155,10 @@ defmodule TokengateWeb.StatsPrevSummaryCacheTest do
     {:ok, view, _html} = live(conn, ~p"/stats/providers?period=today")
     wait_assign(view, &(!&1.stats_loading))
 
-    assert [{{:stats_structural, :providers, "today", _tz, nil, nil, nil, nil, nil}, _bundle, _}] =
+    assert [
+             {{:stats_structural, :providers, "today", _tz, nil, nil, nil, nil, nil, nil},
+              _bundle, _}
+           ] =
              structural_entries(:providers)
 
     # Segundo visor del mismo scope/período: el bundle sale del cache, así que
@@ -187,7 +190,7 @@ defmodule TokengateWeb.StatsPrevSummaryCacheTest do
   defp structural_entries(live_action) do
     :ets.tab2list(@table)
     |> Enum.filter(fn
-      {{:stats_structural, ^live_action, _, _, _, _, _, _, _}, _bundle, _expires_at} -> true
+      {{:stats_structural, ^live_action, _, _, _, _, _, _, _, _}, _bundle, _expires_at} -> true
       _ -> false
     end)
   end

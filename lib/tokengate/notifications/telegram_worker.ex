@@ -239,7 +239,8 @@ defmodule Tokengate.Notifications.TelegramWorker do
     case notification
          |> Notification.changeset(attrs)
          |> Repo.update() do
-      {:ok, _} ->
+      {:ok, updated} ->
+        Notifications.broadcast_update({:notification_updated, updated})
         :ok
 
       {:error, changeset} ->

@@ -65,13 +65,12 @@ defmodule TokengateWeb.AuditLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/operations/audit")
 
-    html =
-      view
-      |> form("#audit-filters", %{"f" => %{"action" => "topup.create"}})
-      |> render_change()
+    view
+    |> form("#audit-filters", %{"f" => %{"action" => "topup.create"}})
+    |> render_change()
 
-    assert html =~ "topup.create"
-    refute html =~ "model.create"
+    assert has_element?(view, "#audit-rows", "topup.create")
+    refute has_element?(view, "#audit-rows", "model.create")
 
     # No match → the .table empty-state slot renders instead of a colspan row.
     view
@@ -140,5 +139,46 @@ defmodule TokengateWeb.AuditLiveTest do
     assert assigns.export_query =~ "to=2026-11-25"
     assert has_element?(view, "#audit-filters input[name='f[ip]'][phx-debounce='300']")
     assert has_element?(view, "#audit-filters input[name='f[action]'][phx-debounce='300']")
+    assert has_element?(view, "#audit-filters input[name='f[target_label]'][phx-debounce='300']")
+  end
+
+  test "quick search, target_label filter, date presets and detail modal work", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    {:ok, log} =
+      Auditing.log(
+        admin,
+        "provider.update",
+        "provider",
+        "p-1",
+        %{"name" => "OpenRouter"},
+        %{target_label: "OpenRouter", ip: "198.51.100.9"}
+      )
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/audit")
+
+    # Quick search matches across target_label / action / IP
+    view |> element("#search-form") |> render_change(%{"q" => "OpenRouter"})
+    assert has_element?(view, "tr#audit-#{log.id}")
+
+    view |> element("#search-form") |> render_change(%{"q" => "no-such-match"})
+    refute has_element?(view, "tr#audit-#{log.id}")
+
+    # Clear filters resets search + form
+    view |> element("#audit-clear") |> render_click()
+    assert has_element?(view, "tr#audit-#{log.id}")
+
+    # Detail modal opens with formatted JSON changes
+    view |> element("#audit-detail-#{log.id}") |> render_click()
+    assert has_element?(view, "#audit-detail-modal")
+    assert has_element?(view, "#audit-detail-changes", "OpenRouter")
+
+    view |> element("#audit-detail-modal .btn-circle") |> render_click()
+    refute has_element?(view, "#audit-detail-modal")
+
+    # Date preset populates from/to
+    view |> element("#audit-preset-today") |> render_click()
+    assert has_element?(view, "tr#audit-#{log.id}")
   end
 end

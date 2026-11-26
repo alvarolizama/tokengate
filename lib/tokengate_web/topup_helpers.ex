@@ -16,36 +16,6 @@ defmodule TokengateWeb.TopupHelpers do
   alias Tokengate.Credits.Topups
 
   # ---------------------------------------------------------------------------
-  # Botón de orden
-  # ---------------------------------------------------------------------------
-
-  attr :field, :atom, required: true
-  attr :label, :string, required: true
-  attr :sort_field, :atom, required: true
-  attr :sort_direction, :atom, required: true
-
-  def sort_button(assigns) do
-    ~H"""
-    <button
-      type="button"
-      phx-click="sort_topups"
-      phx-value-field={@field}
-      class="inline-flex items-center gap-1 hover:text-primary transition-colors"
-    >
-      {@label}
-      <%= cond do %>
-        <% @sort_field != @field -> %>
-          <span class="opacity-30">↕</span>
-        <% @sort_direction == :asc -> %>
-          <span>↑</span>
-        <% true -> %>
-          <span>↓</span>
-      <% end %>
-    </button>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
   # Etiquetas y estado
   # ---------------------------------------------------------------------------
 

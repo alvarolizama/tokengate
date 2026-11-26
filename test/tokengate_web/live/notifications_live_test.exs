@@ -133,4 +133,82 @@ defmodule TokengateWeb.NotificationsLiveTest do
     render_click(view, "remove_link", %{"id" => "not-a-uuid"})
     assert has_element?(view, "#flash-error")
   end
+
+  test "filters delivery log, shows per-chat delivery and error modal, and updates on PubSub", %{
+    conn: conn
+  } do
+    {:ok, link} =
+      Notifications.create_link(%{
+        chat_id: "-100999",
+        kind: "group",
+        label: "Ops Alert Room"
+      })
+
+    {:ok, failed_notif} =
+      %Tokengate.Notifications.Notification{}
+      |> Tokengate.Notifications.Notification.changeset(%{
+        event: "breaker_opened",
+        severity: "warning",
+        entity_type: "credential",
+        entity_id: "cred-1",
+        target_label: "OpenRouter Key",
+        status: "failed",
+        error: "403 Forbidden: bot kicked"
+      })
+      |> Tokengate.Repo.insert()
+
+    {:ok, _delivery} =
+      %Tokengate.Notifications.Delivery{}
+      |> Tokengate.Notifications.Delivery.changeset(%{
+        notification_id: failed_notif.id,
+        link_id: link.id,
+        chat_id: link.chat_id,
+        status: "failed",
+        attempts: 1,
+        error: "403 Forbidden: bot kicked"
+      })
+      |> Tokengate.Repo.insert()
+
+    {:ok, sent_notif} =
+      %Tokengate.Notifications.Notification{}
+      |> Tokengate.Notifications.Notification.changeset(%{
+        event: "topup_changed",
+        severity: "info",
+        entity_type: "topup",
+        entity_id: "t-1",
+        target_label: "Team A",
+        status: "sent"
+      })
+      |> Tokengate.Repo.insert()
+
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/operations/notifications")
+
+    # Per-chat delivery badge and error modal
+    assert has_element?(view, "#notifications", "Ops Alert Room")
+    assert has_element?(view, "#notifications", "Team A")
+
+    view |> element("#notification-error-btn-#{failed_notif.id}") |> render_click()
+    assert has_element?(view, "#notification-error-modal")
+    assert has_element?(view, "#notification-error-message", "403 Forbidden: bot kicked")
+    view |> element("#notification-error-modal .btn-circle") |> render_click()
+    refute has_element?(view, "#notification-error-modal")
+
+    # Status filter narrows table
+    view
+    |> form("#notifications-filter-form", %{"nf" => %{"status" => "sent"}})
+    |> render_change()
+
+    assert has_element?(view, "#notifications", "Team A")
+    refute has_element?(view, "#notifications", "OpenRouter Key")
+
+    # Resend works via context and resets status
+    view
+    |> form("#notifications-filter-form", %{"nf" => %{"status" => ""}})
+    |> render_change()
+
+    view |> element("#resend-#{failed_notif.id}") |> render_click()
+    assert has_element?(view, "#flash-info")
+    assert Tokengate.Notifications.get_notification!(failed_notif.id).status == "pending"
+    assert sent_notif.id
+  end
 end

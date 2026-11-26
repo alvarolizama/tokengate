@@ -91,10 +91,23 @@ defmodule Tokengate.Routing.CredentialHealth do
   Records the outcome of a successful request by latency: slow successes
   degrade, fast successes heal. Centralizes the threshold read so callers
   don't repeat the config lookup.
+
+  Options:
+    * `:streaming` - `true` (default, compares against TTFT `slow_threshold_ms`)
+      or `false` (non-streaming full generation latency, which uses a higher
+      threshold `max(slow_threshold_ms * 3, 90_000)` so long completions don't
+      falsely degrade healthy primary keys).
   """
-  @spec record_success(binary(), non_neg_integer()) :: :ok
-  def record_success(credential_id, latency_ms) when is_binary(credential_id) do
-    if latency_ms > slow_threshold_ms() do
+  @spec record_success(binary(), non_neg_integer(), keyword()) :: :ok
+  def record_success(credential_id, latency_ms, opts \\ []) when is_binary(credential_id) do
+    threshold =
+      if Keyword.get(opts, :streaming, true) do
+        slow_threshold_ms()
+      else
+        max(slow_threshold_ms() * 3, 90_000)
+      end
+
+    if latency_ms > threshold do
       mark_slow(credential_id)
     else
       mark_healthy(credential_id)

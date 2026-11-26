@@ -1469,4 +1469,150 @@ defmodule TokengateWeb.UsersLiveTest do
       assert has_element?(view, "#flash-error")
     end
   end
+
+  describe "mejoras UI/UX, filtros, validación y URL params" do
+    test "búsqueda con 1-2 caracteres filtra usuarios en la tabla", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      {:ok, target} =
+        Accounts.register_user(%{
+          email: "qx-#{unique()}@example.com",
+          name: "Qx Match",
+          password: "valid-password-123",
+          global_role: "user"
+        })
+
+      {:ok, other} =
+        Accounts.register_user(%{
+          email: "other-#{unique()}@example.com",
+          name: "Other Person",
+          password: "valid-password-123",
+          global_role: "user"
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#search-form") |> render_change(%{"q" => "qx"})
+
+      assert has_element?(view, "#user-#{target.id}")
+      refute has_element?(view, "#user-#{other.id}")
+    end
+
+    test "pills de filtro filtran por rol, estado y sin presupuesto", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: plain} = register("user")
+      {:ok, suspended} = Accounts.admin_update_user(plain, %{"status" => "suspended"})
+      %{user: budgeted_user} = register("user")
+
+      {:ok, grp} =
+        Accounts.create_group(%{name: "FilterGrp #{unique()}", monthly_spend_limit_usd: "20"})
+
+      {:ok, _} = Accounts.create_group_member(%{user_id: budgeted_user.id, group_id: grp.id})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#filter-user-admin") |> render_click()
+      assert has_element?(view, "#user-#{admin.id}")
+      refute has_element?(view, "#user-#{suspended.id}")
+
+      view |> element("#filter-user-suspended") |> render_click()
+      assert has_element?(view, "#user-#{suspended.id}")
+      refute has_element?(view, "#user-#{admin.id}")
+      refute has_element?(view, "#user-#{budgeted_user.id}")
+
+      view |> element("#filter-user-no_budget") |> render_click()
+      assert has_element?(view, "#user-#{admin.id}")
+      assert has_element?(view, "#user-#{suspended.id}")
+      refute has_element?(view, "#user-#{budgeted_user.id}")
+    end
+
+    test "badge de Google vive en la celda User y rol se muestra traducido", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      {:ok, google_user} =
+        Accounts.create_from_google(%{
+          google_id: "g-sub-#{unique()}",
+          email: "guser-#{unique()}@example.com",
+          name: "Ana Lopez",
+          avatar_url: nil
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, html} = live(conn, ~p"/access/users")
+
+      assert has_element?(view, "#google-badge-#{google_user.id}", "Google")
+      assert has_element?(view, "tr#user-#{google_user.id}", "AL")
+      assert has_element?(view, "tr#user-#{admin.id}", "Administrador")
+      refute html =~ ">Google</th>"
+    end
+
+    test "edit_user conserva sub_id elegido si falla validación de otro campo", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      {:ok, grp} = Accounts.create_group(%{name: "KeepGrp #{unique()}"})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#edit-#{target.id}") |> render_click()
+
+      html =
+        view
+        |> form("#user-edit-form", %{
+          user: %{
+            name: target.name,
+            global_role: "user",
+            status: "active",
+            default_concurrency_limit: "-5",
+            sub_id: grp.id
+          }
+        })
+        |> render_submit()
+
+      assert html =~ "debe ser mayor que 0"
+      assert has_element?(view, "select[name='user[sub_id]'] option[value='#{grp.id}'][selected]")
+    end
+
+    test "new_user permite fijar límites propios de concurrencia y RPM", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      email = "limits-#{unique()}@example.com"
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#new-user-btn") |> render_click()
+
+      view
+      |> form("#user-form", %{
+        user: %{
+          email: email,
+          name: "Limited User",
+          password: "valid-password-123",
+          global_role: "user",
+          default_concurrency_limit: "7",
+          default_rpm_limit: "90"
+        }
+      })
+      |> render_submit()
+
+      created = Accounts.get_user_by_email(email)
+      assert created.default_concurrency_limit == 7
+      assert created.default_rpm_limit == 90
+    end
+
+    test "handle_params aplica filtro y búsqueda desde URL", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      {:ok, target} = Accounts.admin_update_user(target, %{"status" => "suspended"})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users?filter=suspended")
+
+      assert has_element?(view, "#user-#{target.id}")
+      refute has_element?(view, "#user-#{admin.id}")
+      assert has_element?(view, "#filter-user-suspended.btn-primary")
+    end
+  end
 end

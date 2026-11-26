@@ -545,5 +545,81 @@ defmodule TokengateWeb.TopupsLiveTest do
 
       assert has_element?(view, "#topup-usage-#{topup.id}", "$4.25")
     end
+
+    test "muestra KPIs, etiqueta, nota, remanente, filtros por sujeto/estado, clear owner y deep-link",
+         %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      user = user_fixture()
+      service = service_fixture()
+
+      t_user =
+        topup_fixture(%{
+          "user_id" => user.id,
+          "amount_usd" => "20.00",
+          "label" => "hackathon",
+          "note" => "aprobado-nota-secreta",
+          "expires_in_days" => "3"
+        })
+
+      t_service =
+        topup_fixture(%{
+          "service_id" => service.id,
+          "amount_usd" => "50.00",
+          "label" => "svc-boost"
+        })
+
+      {:ok, t_revoked} =
+        Topups.create(%{"user_id" => user.id, "amount_usd" => "10.00", "label" => "viejo"})
+
+      {:ok, _} = Topups.revoke(t_revoked)
+
+      consume(t_user, "5.00")
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
+
+      assert has_element?(view, "#topups-kpis")
+      assert has_element?(view, "#topups-kpi-remaining", "$65.00")
+      assert has_element?(view, "#topups-kpi-consumed", "$5.00")
+      assert has_element?(view, "#topups-kpi-expiring", "1")
+      assert has_element?(view, "#topups-kpi-granted", "$70.00")
+
+      assert has_element?(view, "#topup-label-#{t_user.id}", "hackathon")
+      assert render(view) =~ "aprobado-nota-secreta"
+      assert has_element?(view, "#topup-remaining-#{t_user.id}", "$15.00")
+
+      # En filas ya revocadas no se muestra el botón de revocar (sí reactivar)
+      refute has_element?(view, "#revoke-topup-#{t_revoked.id}")
+      assert has_element?(view, "#toggle-topup-status-#{t_revoked.id}")
+
+      # Filtros por dueño y estado
+      view |> element("#filter-owner-service") |> render_click()
+      assert has_element?(view, "#edit-topup-#{t_service.id}")
+      refute has_element?(view, "#edit-topup-#{t_user.id}")
+
+      view |> element("#filter-owner-all") |> render_click()
+      view |> element("#filter-status-expiring") |> render_click()
+      assert has_element?(view, "#edit-topup-#{t_user.id}")
+      refute has_element?(view, "#edit-topup-#{t_service.id}")
+
+      view |> element("#filter-status-revoked") |> render_click()
+      assert has_element?(view, "#edit-topup-#{t_revoked.id}")
+      refute has_element?(view, "#edit-topup-#{t_user.id}")
+
+      # Búsqueda por nota
+      view |> element("#filter-status-all") |> render_click()
+      view |> element("#topup-search-form") |> render_change(%{"q" => "aprobado-nota-secreta"})
+      assert has_element?(view, "#edit-topup-#{t_user.id}")
+      refute has_element?(view, "#edit-topup-#{t_service.id}")
+
+      # Deep-link preselecciona dueño y permite limpiar selección
+      {:ok, deep_view, _html} =
+        live(recycle(conn), ~p"/budget/topups?owner_kind=user&owner_id=#{user.id}")
+
+      assert has_element?(deep_view, "#topup-form-modal")
+      assert has_element?(deep_view, "#selected-owner", user.email)
+      deep_view |> element("#clear-selected-owner-btn") |> render_click()
+      refute has_element?(deep_view, "#selected-owner")
+    end
   end
 end

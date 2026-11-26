@@ -251,10 +251,11 @@ defmodule Tokengate.Providers.Catalog do
     },
     # Los demás grandes sin base_url en models.dev: igual que Cerebras, el
     # endpoint es OpenAI-compatible y ambos datos van en código. Mistral sirve
-    # embeddings y transcripción (Voxtral); xAI imágenes (grok-image); el AI
-    # Gateway de Vercel todo — incluido decisions en shape OpenAI.
+    # embeddings, transcripción y síntesis de voz (Voxtral); xAI imágenes
+    # (grok-image); el AI Gateway de Vercel todo — incluido decisions en shape
+    # OpenAI.
     "mistral" => %{
-      capabilities: ~w(llm embedding stt),
+      capabilities: ~w(llm embedding stt tts),
       dialect: "openai",
       base_url: "https://api.mistral.ai/v1"
     },
@@ -294,6 +295,7 @@ defmodule Tokengate.Providers.Catalog do
     "abacus" => %{capabilities: ~w(llm image)},
     "aimlapi" => %{capabilities: ~w(llm image)},
     "digitalocean" => %{capabilities: ~w(llm embedding image tts)},
+    "doubleword" => %{capabilities: ~w(llm embedding)},
     "edenai" => %{capabilities: ~w(llm image)},
     "evroc" => %{capabilities: ~w(llm embedding stt)},
     "fastrouter" => %{capabilities: ~w(llm image)},
@@ -352,8 +354,10 @@ defmodule Tokengate.Providers.Catalog do
     "requesty" => %{capabilities: ~w(llm image)},
     "scaleway" => %{capabilities: ~w(llm embedding stt)},
     "stackit" => %{capabilities: ~w(llm embedding)},
+    "steadyrouter" => %{capabilities: ~w(llm image)},
     "stepfun" => %{capabilities: ~w(llm stt tts)},
     "stepfun-ai" => %{capabilities: ~w(llm stt tts)},
+    "stepping-stone" => %{capabilities: ~w(llm embedding)},
     "tempr" => %{capabilities: ~w(llm embedding)},
     "xiaomi-token-plan-ams" => %{capabilities: ~w(llm tts)},
     "xiaomi-token-plan-cn" => %{capabilities: ~w(llm tts)},

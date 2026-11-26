@@ -286,6 +286,12 @@
                         <span class="text-base-content/60">{gettext("Available top-ups")}</span>
                         <span class="font-mono text-success">
                           ${format_decimal(t.credit.remaining_topup_usd)}
+                          <span
+                            :if={expiry = next_topup_expiry(t.credit)}
+                            class="text-[10px] text-base-content/50 font-sans ml-1"
+                          >
+                            ({gettext("expires %{date}", date: format_date(expiry, @timezone))})
+                          </span>
                         </span>
                       </div>
                     <% else %>
@@ -304,6 +310,12 @@
                         <span class="text-base-content/60">{gettext("Available top-ups")}</span>
                         <span class="font-mono text-success">
                           ${format_decimal(t.credit.remaining_topup_usd)}
+                          <span
+                            :if={expiry = next_topup_expiry(t.credit)}
+                            class="text-[10px] text-base-content/50 font-sans ml-1"
+                          >
+                            ({gettext("expires %{date}", date: format_date(expiry, @timezone))})
+                          </span>
                         </span>
                       </div>
                     <% end %>

@@ -332,6 +332,8 @@ defmodule Tokengate.Metrics.StatsQueries do
   `usage_by_hour_of_day_by_provider/1`, guard included.
   """
   def usage_by_model_provider_stacked(opts \\ []) do
+    stacked_opts = Keyword.take(opts, [:sort_by, :limit])
+
     cond do
       not hybrid?(opts) ->
         Rollup.usage_by_model_provider_stacked(opts)
@@ -343,15 +345,78 @@ defmodule Tokengate.Metrics.StatsQueries do
         rollup_rows = opts |> rollup_model_provider_rows() |> model_provider_names()
         tail_rows = tail_model_provider_rows(opts)
 
-        Rollup.model_provider_stacked(merge_flat_rows(rollup_rows, tail_rows))
+        Rollup.model_provider_stacked(merge_flat_rows(rollup_rows, tail_rows), stacked_opts)
     end
   end
 
-  @doc "Top N horas con más requests. Same shape as `Rollup.busiest_hours/2`."
+  @doc """
+  Serie diaria por proveedor del período (`Rollup.daily_series_by_provider/1`),
+  híbrida sobre `request_metrics_hourly` + bordes crudos.
+  """
+  def daily_series_by_provider(opts \\ []) do
+    cond do
+      not hybrid?(opts) ->
+        Rollup.daily_series_by_provider(opts)
+
+      not coverage_ok?(opts) ->
+        Rollup.daily_series_by_provider(opts)
+
+      true ->
+        from = Keyword.fetch!(opts, :from)
+        to = Keyword.get(opts, :to)
+        {rollup_from, rollup_to} = rollup_window(opts)
+
+        rollup_rows =
+          if DateTime.compare(rollup_to, rollup_from) == :gt do
+            Rollup.daily_series_by_provider_from_rollup(
+              Keyword.merge(opts, from: rollup_from, to: rollup_to)
+            )
+          else
+            []
+          end
+
+        start_rows =
+          if DateTime.compare(rollup_from, from) == :gt do
+            edge_to = min_dt(DateTime.add(rollup_from, -1, :second), to)
+            Rollup.daily_series_by_provider(Keyword.merge(opts, from: from, to: edge_to))
+          else
+            []
+          end
+
+        tail_rows =
+          Rollup.daily_series_by_provider(Keyword.merge(opts, from: raw_tail_start(opts), to: to))
+
+        merge_daily_provider_rows(rollup_rows ++ start_rows ++ tail_rows)
+    end
+  end
+
+  defp merge_daily_provider_rows(rows) do
+    rows
+    |> Enum.group_by(&{&1.date, &1.provider_id, &1.label})
+    |> Enum.map(fn {{date, provider_id, label}, entries} ->
+      %{
+        date: date,
+        provider_id: provider_id,
+        label: label,
+        label_logo: Enum.find_value(entries, & &1.label_logo),
+        request_count: Enum.reduce(entries, 0, &(&1.request_count + &2)),
+        total_cost_usd:
+          Enum.reduce(entries, Decimal.new(0), fn e, acc ->
+            Decimal.add(acc, e.total_cost_usd)
+          end),
+        prompt_tokens: Enum.reduce(entries, 0, &(&1.prompt_tokens + &2)),
+        completion_tokens: Enum.reduce(entries, 0, &(&1.completion_tokens + &2)),
+        error_count: Enum.reduce(entries, 0, &((&1.error_count || 0) + &2))
+      }
+    end)
+    |> Enum.sort_by(&{&1.date, &1.label})
+  end
+
+  @doc "Top N horas con más requests o costo. Same shape as `Rollup.busiest_hours/2`."
   def busiest_hours(group_id \\ nil, opts \\ [])
 
-  def busiest_hours(group_id, _opts) when not is_nil(group_id),
-    do: Rollup.busiest_hours(group_id)
+  def busiest_hours(group_id, opts) when not is_nil(group_id),
+    do: Rollup.busiest_hours(group_id, opts)
 
   def busiest_hours(nil, opts) do
     cond do
@@ -375,16 +440,37 @@ defmodule Tokengate.Metrics.StatsQueries do
         # date_trunc local del lado completo, que aterriza en el mismo
         # instante. Merge aditivo por key y top-N en memoria.
         counts =
-          Enum.reduce(tail_hour_buckets(opts), rollup_hour_buckets(opts), fn {bucket, n}, acc ->
-            Map.update(acc, bucket, n, &(&1 + n))
+          Enum.reduce(tail_hour_buckets(opts), rollup_hour_buckets(opts), fn {bucket, vals},
+                                                                             acc ->
+            Map.update(acc, bucket, vals, fn cur ->
+              %{
+                request_count: cur.request_count + vals.request_count,
+                cost_usd: Decimal.add(cur.cost_usd, vals.cost_usd)
+              }
+            end)
           end)
 
         limit = Keyword.get(opts, :limit, 5)
+        metric = Keyword.get(opts, :metric, :requests)
 
         counts
-        |> Enum.sort_by(fn {bucket, n} -> {-n, bucket} end)
+        |> Enum.sort(fn {b1, v1}, {b2, v2} ->
+          case metric do
+            :cost ->
+              case Decimal.compare(v1.cost_usd, v2.cost_usd) do
+                :gt -> true
+                :lt -> false
+                :eq -> {v1.request_count, b2} >= {v2.request_count, b1}
+              end
+
+            _ ->
+              {-v1.request_count, b1} <= {-v2.request_count, b2}
+          end
+        end)
         |> Enum.take(limit)
-        |> Enum.map(fn {bucket, n} -> %{bucket: bucket, request_count: n} end)
+        |> Enum.map(fn {bucket, vals} ->
+          %{bucket: bucket, request_count: vals.request_count, cost_usd: vals.cost_usd}
+        end)
     end
   end
 
@@ -527,9 +613,12 @@ defmodule Tokengate.Metrics.StatsQueries do
         membership_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.id),
         group_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.group_id),
         request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        error_count: fragment("COALESCE(SUM(?), 0)::bigint", m.error_count),
         cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_read_tokens),
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_creation_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms)
       }
     )
@@ -563,9 +652,12 @@ defmodule Tokengate.Metrics.StatsQueries do
       membership_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.id),
       group_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.group_id),
       request_count: count(rl.id),
+      error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
       cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
       prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
       completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+      cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+      cache_creation_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_creation_tokens),
       total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
     })
     |> Repo.all(timeout: stats_query_timeout())
@@ -577,9 +669,12 @@ defmodule Tokengate.Metrics.StatsQueries do
         membership_ids: row.membership_ids,
         group_ids: row.group_ids,
         request_count: row.request_count,
+        error_count: row.error_count || 0,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
+        cache_read_tokens: row.cache_read_tokens,
+        cache_creation_tokens: row.cache_creation_tokens,
         total_latency_ms: row.total_latency_ms
       }
     end)
@@ -593,9 +688,12 @@ defmodule Tokengate.Metrics.StatsQueries do
       membership_ids: row.membership_ids,
       group_ids: row.group_ids,
       request_count: row.request_count,
+      error_count: row.error_count || 0,
       cost_usd: micro_to_decimal(row.cost_usd_raw),
       prompt_tokens: row.prompt_tokens,
       completion_tokens: row.completion_tokens,
+      cache_read_tokens: row.cache_read_tokens,
+      cache_creation_tokens: row.cache_creation_tokens,
       total_latency_ms: row.total_latency_ms
     }
   end
@@ -642,9 +740,12 @@ defmodule Tokengate.Metrics.StatsQueries do
           |> Enum.map(&%{id: &1, name: Map.get(group_names, &1, "—")})
           |> Enum.sort_by(& &1.name),
         request_count: merged.request_count,
+        error_count: Map.get(merged, :error_count, 0),
         cost_usd: merged.cost_usd,
         prompt_tokens: merged.prompt_tokens,
         completion_tokens: merged.completion_tokens,
+        cache_read_tokens: Map.get(merged, :cache_read_tokens, 0),
+        cache_creation_tokens: Map.get(merged, :cache_creation_tokens, 0),
         # A single-row group never went through `sum_row/2`, so derive the
         # ratio here (same formula) instead of reading a missing key.
         avg_tps: compute_tps(merged.completion_tokens, merged[:total_latency_ms] || 0)
@@ -1233,6 +1334,8 @@ defmodule Tokengate.Metrics.StatsQueries do
       cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
       prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
       completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+      cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_read_tokens),
+      cache_creation_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_creation_tokens),
       avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
       latency_count: fragment("COUNT(?)", rl.latency_ms)
     })
@@ -1437,12 +1540,19 @@ defmodule Tokengate.Metrics.StatsQueries do
     from(m in RequestMetricsHourly,
       where: m.hour_utc >= ^from and m.hour_utc < ^to,
       group_by: m.hour_utc,
-      select: %{hour_utc: m.hour_utc, n: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count)}
+      select: %{
+        hour_utc: m.hour_utc,
+        n: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        cost_micro: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)
+      }
     )
     |> rollup_day_bounds(from, to)
     |> maybe_rollup_scope(opts)
     |> Repo.all(timeout: stats_query_timeout())
-    |> Map.new(fn row -> {to_utc_dt(row.hour_utc), row.n} end)
+    |> Map.new(fn row ->
+      {to_utc_dt(row.hour_utc),
+       %{request_count: row.n, cost_usd: micro_to_decimal(row.cost_micro)}}
+    end)
   end
 
   defp tail_hour_buckets(opts) do
@@ -1461,18 +1571,26 @@ defmodule Tokengate.Metrics.StatsQueries do
             ^timezone,
             ^timezone
           ),
-        id: rl.id
+        id: rl.id,
+        spend: rl.provider_cost_usd
       })
       |> subquery()
 
     from(b in bucketed,
       group_by: b.bucket,
-      select: %{bucket: b.bucket, n: count(b.id)}
+      select: %{
+        bucket: b.bucket,
+        n: count(b.id),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", b.spend)
+      }
     )
     |> maybe_member_ids(opts[:member_ids])
     |> maybe_user_ids(opts[:user_ids])
     |> Repo.all(timeout: stats_query_timeout())
-    |> Map.new(fn row -> {to_utc_dt(row.bucket), row.n} end)
+    |> Map.new(fn row ->
+      {to_utc_dt(row.bucket),
+       %{request_count: row.n, cost_usd: Decimal.new(to_string(row.cost_usd))}}
+    end)
   end
 
   defp to_utc_dt(%DateTime{} = dt), do: dt
@@ -1571,12 +1689,17 @@ defmodule Tokengate.Metrics.StatsQueries do
     # dot access on a missing key raises.
     a
     |> Map.put(:request_count, a.request_count + b.request_count)
+    |> Map.put(:error_count, Map.get(a, :error_count, 0) + Map.get(b, :error_count, 0))
     |> Map.put(:cost_usd, Decimal.add(a.cost_usd, b.cost_usd))
     |> Map.put(:prompt_tokens, (a.prompt_tokens || 0) + (b.prompt_tokens || 0))
     |> Map.put(:completion_tokens, tokens)
     |> Map.put(
       :cache_read_tokens,
       Map.get(a, :cache_read_tokens, 0) + Map.get(b, :cache_read_tokens, 0)
+    )
+    |> Map.put(
+      :cache_creation_tokens,
+      Map.get(a, :cache_creation_tokens, 0) + Map.get(b, :cache_creation_tokens, 0)
     )
     |> Map.put(:avg_tps, compute_tps(tokens, latency))
   end
@@ -1624,7 +1747,10 @@ defmodule Tokengate.Metrics.StatsQueries do
     :group_member_ids,
     :user_ids,
     :model_id,
-    :provider_id
+    :provider_id,
+    :sort_by,
+    :limit,
+    :metric
   ]
 
   defp rollup_scope?(filters) when is_map(filters),

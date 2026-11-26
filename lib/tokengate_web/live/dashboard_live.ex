@@ -1183,6 +1183,18 @@ defmodule TokengateWeb.DashboardLive do
   def credit_visible?(%{limit_usd: limit}), do: not is_nil(limit)
   def credit_visible?(_), do: false
 
+  @doc "Earliest expiration DateTime among active top-ups with positive remaining balance, or nil."
+  def next_topup_expiry(%{topups: topups}) when is_list(topups) do
+    topups
+    |> Enum.filter(fn row ->
+      Decimal.compare(row.remaining_usd, 0) == :gt and not is_nil(row.topup.expires_at)
+    end)
+    |> Enum.map(& &1.topup.expires_at)
+    |> Enum.min(DateTime, fn -> nil end)
+  end
+
+  def next_topup_expiry(_), do: nil
+
   @doc "Formatea un monto en micro-USD como USD."
   def format_micro(micro) when is_integer(micro) do
     micro

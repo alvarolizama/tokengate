@@ -185,9 +185,12 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
         decoded = decode!(resp_body)
         {:ok, decoded, latency, normalize_headers(resp_headers)}
 
-      {:ok, %Finch.Response{status: status, body: resp_body}} ->
-        {:error, ProviderAdapter.classify_response(status, error_envelope(resp_body)), status,
-         extract_error_message(resp_body)}
+      {:ok, %Finch.Response{status: status, body: resp_body, headers: resp_headers}} ->
+        maybe_stash_retry_after(normalize_headers(resp_headers))
+
+        {:error,
+         ProviderAdapter.classify_response(status, error_envelope(resp_body) || resp_body),
+         status, extract_error_message(resp_body)}
 
       {:error, error} ->
         # Transport failures (timeouts, refused connections, DNS…) have no
@@ -227,9 +230,12 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
         resp_headers = normalize_headers(resp_headers)
         {:ok, decode_service_body(resp_body, resp_headers), latency, resp_headers}
 
-      {:ok, %Finch.Response{status: status, body: resp_body}} ->
-        {:error, ProviderAdapter.classify_response(status, error_envelope(resp_body)), status,
-         extract_error_message(resp_body)}
+      {:ok, %Finch.Response{status: status, body: resp_body, headers: resp_headers}} ->
+        maybe_stash_retry_after(normalize_headers(resp_headers))
+
+        {:error,
+         ProviderAdapter.classify_response(status, error_envelope(resp_body) || resp_body),
+         status, extract_error_message(resp_body)}
 
       {:error, error} ->
         {:error, ProviderAdapter.classify_error(error), nil, nil}
@@ -261,9 +267,12 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
         latency = System.monotonic_time(:millisecond) - start
         {:ok, decode!(resp_body), latency, normalize_headers(resp_headers)}
 
-      {:ok, %Finch.Response{status: status, body: resp_body}} ->
-        {:error, ProviderAdapter.classify_response(status, error_envelope(resp_body)), status,
-         extract_error_message(resp_body)}
+      {:ok, %Finch.Response{status: status, body: resp_body, headers: resp_headers}} ->
+        maybe_stash_retry_after(normalize_headers(resp_headers))
+
+        {:error,
+         ProviderAdapter.classify_response(status, error_envelope(resp_body) || resp_body),
+         status, extract_error_message(resp_body)}
 
       {:error, error} ->
         {:error, ProviderAdapter.classify_error(error), nil, nil}
@@ -400,7 +409,21 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
                   {:data, data} ->
                     if acc.error_status do
-                      {:cont, %{acc | error_body: acc.error_body <> data}}
+                      # Cap error body at 8 KB so giant CDN/502 HTML pages don't
+                      # bloat RAM before extract_error_message truncates to 500B.
+                      next_body =
+                        if byte_size(acc.error_body) < 8_192 do
+                          acc.error_body <>
+                            binary_part(
+                              data,
+                              0,
+                              min(byte_size(data), 8_192 - byte_size(acc.error_body))
+                            )
+                        else
+                          acc.error_body
+                        end
+
+                      {:cont, %{acc | error_body: next_body}}
                     else
                       case forward_sse(acc, data) do
                         {:cont, acc} -> {:cont, acc}
@@ -732,4 +755,14 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
   defp truncate_msg(msg) when byte_size(msg) > 500, do: String.slice(msg, 0, 500) <> "…"
   defp truncate_msg(msg), do: msg
+
+  # Captures upstream Retry-After (when present) into process state without
+  # breaking the adapter's 4-tuple error contract. ProxyController clears it
+  # before each call and forwards it to the circuit breaker on 429/503.
+  defp maybe_stash_retry_after(headers) do
+    case ProviderAdapter.parse_retry_after_ms(headers) do
+      nil -> :ok
+      ms -> Process.put(:tg_upstream_retry_after_ms, ms)
+    end
+  end
 end

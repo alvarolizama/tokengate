@@ -507,4 +507,28 @@ defmodule TokengateWeb.GroupsLiveTest do
     assert has_element?(view, "#group-credit-#{unlimited.id}", "Ilimitado")
     assert has_element?(view, "#group-credit-#{no_budget.id}", "Sin presupuesto")
   end
+
+  test "profile with monthly cap and zero members shows configured cap instead of Sin presupuesto, plus KPIs",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{group: empty_capped} = group_fixture(%{monthly_spend_limit_usd: "250.00"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/budget/profiles")
+
+    assert has_element?(view, "#profiles-kpis")
+    assert has_element?(view, "#profiles-kpi-total")
+    assert has_element?(view, "#profiles-kpi-members")
+    assert has_element?(view, "#profiles-kpi-spend")
+    assert has_element?(view, "#profiles-kpi-alerts")
+
+    assert has_element?(view, "#group-cap-#{empty_capped.id}", "$250.00")
+    assert has_element?(view, "#group-credit-#{empty_capped.id}", "OK")
+    refute has_element?(view, "#group-credit-#{empty_capped.id}", "Sin presupuesto")
+
+    # Sortable monthly_cap header exists and responds cleanly
+    assert has_element?(view, "th button[phx-click='sort_groups'][phx-value-field='monthly_cap']")
+    view |> element("th button[phx-value-field='monthly_cap']") |> render_click()
+    assert has_element?(view, "#groups-#{empty_capped.id}")
+  end
 end

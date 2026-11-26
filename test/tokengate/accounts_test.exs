@@ -919,12 +919,13 @@ defmodule Tokengate.AccountsTest do
              )
     end
 
-    test "searches case-insensitively in the DB once the query has 3+ chars" do
+    test "searches case-insensitively in the DB from the first character" do
       user = user_fixture(%{"email" => "findme@example.com", "name" => "Findable"})
       _other = user_fixture(%{"email" => "nope@example.com", "name" => "Elsewhere"})
 
-      # Short queries are ignored (the full list comes back).
-      assert Accounts.list_users_page(search: "fi").total == 2
+      # Short queries match too (same 1-char floor as Services and Profiles).
+      assert [short_found] = Accounts.list_users_page(search: "fi").entries
+      assert short_found.id == user.id
 
       assert [found] = Accounts.list_users_page(search: "FINDME").entries
       assert found.id == user.id

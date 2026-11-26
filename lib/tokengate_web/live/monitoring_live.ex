@@ -3,11 +3,13 @@ defmodule TokengateWeb.MonitoringLive do
   use TokengateWeb, :live_view
   import Ecto.Query, warn: false
 
-  alias Tokengate.{Accounts, Logs, Repo}
+  alias Tokengate.{Logs, Repo}
+  alias Tokengate.Accounts
   alias Tokengate.Accounts.ApiKey
   alias Tokengate.Logs.Inflight
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Providers
+  alias TokengateWeb.StatsHelpers, as: Stats
 
   @page_size 50
   # Hard cap on the rows the feed keeps in the DOM AND in the LiveView state.
@@ -28,16 +30,15 @@ defmodule TokengateWeb.MonitoringLive do
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
-    scope_member_ids = resolve_scope_member_ids(user)
-    api_key_opts = api_key_options()
+    is_admin? = user != nil and user.global_role == "admin"
 
     socket =
       socket
-      |> assign(:page_title, "Monitoring · Tokengate")
+      |> assign(:page_title, gettext("Monitoring") <> " · Tokengate")
       |> assign(:page_size, @page_size)
       |> assign(:has_more, false)
       |> assign(:cursor, nil)
-      |> assign(:scope_member_ids, scope_member_ids)
+      |> assign(:scope_member_ids, if(is_admin?, do: nil, else: []))
       |> assign(:filters, default_filters())
       |> assign(:form, to_form(default_filters(), as: :filter))
       |> assign(:summary, empty_summary())
@@ -47,21 +48,35 @@ defmodule TokengateWeb.MonitoringLive do
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
       |> assign(:pending, [])
       |> assign(:stream_rows, 0)
-      |> assign(:model_options, model_options())
-      |> assign(:group_options, group_options())
-      |> assign(:api_key_options, api_key_opts)
-      |> assign(:api_key_labels, Map.new(api_key_opts, fn {label, id} -> {id, label} end))
-      |> assign(:is_admin, user.global_role == "admin")
+      |> assign(:paused, false)
+      |> assign(:buffered_count, 0)
+      |> assign(:model_options, [])
+      |> assign(:group_options, [])
+      |> assign(:api_key_options, [])
+      |> assign(:api_key_labels, %{})
+      |> assign(:agent_type_options, ~w(api claude-code opencode hermes unknown))
+      |> assign(:filtered_export_query, "type=logs&period=30d")
+      |> assign(:errors_export_query, "type=errors")
+      |> assign(:is_admin, is_admin?)
       |> assign(:error_detail, nil)
+      |> stream(:logs, [], reset: true)
       |> require_admin_hook()
-
-    socket = load_logs(socket, :reset)
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @logs_topic)
       Phoenix.PubSub.subscribe(@pubsub, Inflight.topic())
 
       send(self(), :refresh_inflight)
+
+      api_key_opts = api_key_options()
+
+      socket =
+        socket
+        |> assign(:model_options, model_options())
+        |> assign(:group_options, group_options())
+        |> assign(:api_key_options, api_key_opts)
+        |> assign(:api_key_labels, Map.new(api_key_opts, fn {label, id} -> {id, label} end))
+        |> load_logs(:reset)
 
       pending = visible_pending(socket.assigns)
 
@@ -105,12 +120,19 @@ defmodule TokengateWeb.MonitoringLive do
     # Only prepend if the log falls within the user's scope and filters.
     if log_in_scope?(log, socket.assigns[:scope_member_ids]) and
          log_matches_filters?(log, socket.assigns[:filters], timezone) do
-      socket =
-        socket
-        |> prepend_log(log)
-        |> assign(:last_seen_at, max_datetime(log.inserted_at, socket.assigns[:last_seen_at]))
+      if socket.assigns[:paused] do
+        {:noreply,
+         socket
+         |> assign(:buffered_count, (socket.assigns[:buffered_count] || 0) + 1)
+         |> schedule_summary_refresh()}
+      else
+        socket =
+          socket
+          |> prepend_log(log)
+          |> assign(:last_seen_at, max_datetime(log.inserted_at, socket.assigns[:last_seen_at]))
 
-      {:noreply, schedule_summary_refresh(socket)}
+        {:noreply, schedule_summary_refresh(socket)}
+      end
     else
       {:noreply, socket}
     end
@@ -470,18 +492,6 @@ defmodule TokengateWeb.MonitoringLive do
 
   ## Scope resolution ------------------------------------------------------
 
-  defp resolve_scope_member_ids(%{global_role: "admin"}) do
-    nil
-  end
-
-  defp resolve_scope_member_ids(user) do
-    # Sorted: the list feeds cache keys (DashboardCache) and it must be
-    # deterministic — two viewers with the same memberships must produce the
-    # same key regardless of row return order.
-    memberships = Accounts.list_group_members_for_user(user.id)
-    memberships |> Enum.map(& &1.id) |> Enum.sort()
-  end
-
   ## Data loading ----------------------------------------------------------
 
   defp load_logs_with_pending(socket, :reset) do
@@ -560,7 +570,8 @@ defmodule TokengateWeb.MonitoringLive do
       "group_id" => "",
       "subject_type" => "",
       "error_reason" => "",
-      "api_key_id" => ""
+      "api_key_id" => "",
+      "agent_type" => ""
     }
   end
 
@@ -580,6 +591,7 @@ defmodule TokengateWeb.MonitoringLive do
       |> maybe_put(:subject_type, form_filters["subject_type"])
       |> maybe_put(:error_reason, form_filters["error_reason"])
       |> maybe_put(:api_key_id, form_filters["api_key_id"])
+      |> maybe_put(:agent_type, form_filters["agent_type"])
       |> maybe_put(:from, parse_from_date(form_filters["from"], timezone))
       |> maybe_put(:to, parse_to_date(form_filters["to"], timezone))
       |> maybe_put_scope(socket.assigns[:scope_member_ids])
@@ -636,35 +648,25 @@ defmodule TokengateWeb.MonitoringLive do
       |> Map.get("filter", %{})
       |> then(&Map.merge(default_filters(), &1))
 
-    socket =
-      socket
-      |> assign(:filters, filter_params)
-      |> assign(:form, to_form(filter_params, as: :filter))
-      |> assign(:cursor, nil)
-      |> assign(
-        :pending,
-        visible_pending(%{
-          filters: filter_params,
-          scope_member_ids: socket.assigns[:scope_member_ids],
-          timezone: socket.assigns[:timezone] || "Etc/UTC"
-        })
-      )
-      |> assign(
-        :top_models,
-        top_models_cached(%{
-          filters: filter_params,
-          scope_member_ids: socket.assigns[:scope_member_ids]
-        })
-      )
-      |> assign(
-        :top_users,
-        top_users_cached(%{
-          filters: filter_params,
-          scope_member_ids: socket.assigns[:scope_member_ids]
-        })
-      )
-
+    socket = apply_filters(socket, filter_params)
     {:noreply, load_logs_with_pending(socket, :reset)}
+  end
+
+  def handle_event("clear_filters", _params, socket) do
+    socket = apply_filters(socket, default_filters())
+    {:noreply, load_logs_with_pending(socket, :reset)}
+  end
+
+  def handle_event("toggle_pause", _params, socket) do
+    if socket.assigns[:paused] do
+      {:noreply,
+       socket
+       |> assign(:paused, false)
+       |> assign(:buffered_count, 0)
+       |> load_logs_with_pending(:reset)}
+    else
+      {:noreply, assign(socket, :paused, true)}
+    end
   end
 
   def handle_event("load_more", _params, socket) do
@@ -691,14 +693,61 @@ defmodule TokengateWeb.MonitoringLive do
     {:noreply, assign(socket, :error_detail, nil)}
   end
 
-  ## Template helpers ------------------------------------------------------
-
-  defp format_cost(%Decimal{} = d) do
-    d
-    |> Decimal.to_float()
-    |> then(&:erlang.float_to_binary(&1, [:compact, {:decimals, 6}]))
+  defp apply_filters(socket, filter_params) do
+    socket
+    |> assign(:filters, filter_params)
+    |> assign(:form, to_form(filter_params, as: :filter))
+    |> assign(:cursor, nil)
+    |> assign(:filtered_export_query, export_query(filter_params, "logs"))
+    |> assign(:errors_export_query, export_query(filter_params, "errors"))
+    |> assign(
+      :pending,
+      visible_pending(%{
+        filters: filter_params,
+        scope_member_ids: socket.assigns[:scope_member_ids],
+        timezone: socket.assigns[:timezone] || "Etc/UTC"
+      })
+    )
+    |> assign(
+      :top_models,
+      top_models_cached(%{
+        filters: filter_params,
+        scope_member_ids: socket.assigns[:scope_member_ids]
+      })
+    )
+    |> assign(
+      :top_users,
+      top_users_cached(%{
+        filters: filter_params,
+        scope_member_ids: socket.assigns[:scope_member_ids]
+      })
+    )
   end
 
+  defp export_query(filters, type) do
+    active =
+      filters
+      |> Enum.reject(fn {_k, v} -> v in [nil, ""] end)
+      |> Map.new()
+
+    base =
+      case type do
+        "logs" -> %{"type" => "logs", "period" => "30d"}
+        "errors" -> %{"type" => "errors"}
+      end
+
+    base
+    |> Map.merge(active)
+    |> URI.encode_query()
+  end
+
+  defp any_active_filter?(filters) do
+    Enum.any?(filters, fn {_k, v} -> v not in [nil, ""] end)
+  end
+
+  ## Template helpers ------------------------------------------------------
+
+  defp format_cost(%Decimal{} = d), do: Stats.money(d)
   defp format_cost(nil), do: "—"
 
   defp format_number(n) when is_integer(n) do
@@ -867,8 +916,43 @@ defmodule TokengateWeb.MonitoringLive do
     >
       <div class="space-y-6">
         <.header>
-          Monitoring
+          {gettext("Monitoring")}
           <:subtitle>{gettext("Real-time API request log")}</:subtitle>
+          <:actions>
+            <div class="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                phx-click="toggle_pause"
+                id="monitoring-pause-btn"
+                class={[
+                  "btn btn-sm",
+                  if(@paused, do: "btn-warning", else: "btn-ghost")
+                ]}
+              >
+                <.icon
+                  name={if(@paused, do: "hero-play", else: "hero-pause")}
+                  class="w-4 h-4"
+                />
+                <%= if @paused do %>
+                  {gettext("Resume")}
+                  <span :if={@buffered_count > 0} class="badge badge-xs badge-neutral">
+                    +{@buffered_count}
+                  </span>
+                <% else %>
+                  {gettext("Pause live")}
+                <% end %>
+              </button>
+
+              <.link
+                href={"/stats/export?" <> @filtered_export_query}
+                class="btn btn-sm btn-ghost"
+                id="csv-logs-filtered"
+              >
+                <.icon name="hero-arrow-down-tray" class="w-4 h-4" />
+                {gettext("Export filtered CSV")}
+              </.link>
+            </div>
+          </:actions>
         </.header>
 
         <%!-- KPI strip: summary cards, 4 in a row --%>
@@ -974,99 +1058,127 @@ defmodule TokengateWeb.MonitoringLive do
           for={@form}
           id="logs-filter-form"
           phx-change="filter"
-          class="grid grid-cols-9 gap-3"
+          class="card bg-base-100 border border-base-300 shadow-sm"
         >
-          <.input
-            field={@form[:status_class]}
-            type="select"
-            prompt={gettext("All")}
-            options={[{"2xx", "2xx"}, {"4xx", "4xx"}, {"5xx", "5xx"}]}
-            label={gettext("Status")}
-          />
-          <.input
-            field={@form[:streaming]}
-            type="select"
-            prompt={gettext("All")}
-            options={[{gettext("Yes"), "true"}, {gettext("No"), "false"}]}
-            label="Streaming"
-          />
-          <.input
-            field={@form[:model_search]}
-            type="select"
-            prompt={gettext("All")}
-            options={@model_options}
-            label={gettext("Model")}
-          />
-          <.input
-            field={@form[:group_id]}
-            type="select"
-            prompt={gettext("All")}
-            options={@group_options}
-            label={gettext("Limit profile")}
-          />
-          <.input
-            field={@form[:subject_type]}
-            type="select"
-            prompt={gettext("All")}
-            options={[{gettext("User"), "user"}, {gettext("Service"), "service"}]}
-            label={gettext("Type")}
-          />
-          <.input
-            field={@form[:api_key_id]}
-            type="select"
-            prompt={gettext("All keys")}
-            options={@api_key_options}
-            label="API Key"
-          />
-          <.input
-            field={@form[:error_reason]}
-            type="select"
-            prompt={gettext("All")}
-            options={[
-              {"rate_limited", "rate_limited"},
-              {"timeout", "timeout"},
-              {"server_error", "server_error"},
-              {"auth_error", "auth_error"},
-              {"bad_request", "bad_request"},
-              {"client_error", "client_error"}
-            ]}
-            label="Error"
-          />
-          <.input
-            field={@form[:from]}
-            type="date"
-            label={gettext("From")}
-          />
-          <.input
-            field={@form[:to]}
-            type="date"
-            label={gettext("To")}
-          />
-        </.form>
+          <div class="card-body p-4 space-y-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+              <.input
+                field={@form[:status_class]}
+                type="select"
+                prompt={gettext("All")}
+                options={[{"2xx", "2xx"}, {"4xx", "4xx"}, {"5xx", "5xx"}]}
+                label={gettext("Status")}
+              />
+              <.input
+                field={@form[:streaming]}
+                type="select"
+                prompt={gettext("All")}
+                options={[{gettext("Yes"), "true"}, {gettext("No"), "false"}]}
+                label="Streaming"
+              />
+              <.input
+                field={@form[:model_search]}
+                type="select"
+                prompt={gettext("All")}
+                options={@model_options}
+                label={gettext("Model")}
+              />
+              <.input
+                field={@form[:group_id]}
+                type="select"
+                prompt={gettext("All")}
+                options={@group_options}
+                label={gettext("Limit profile")}
+              />
+              <.input
+                field={@form[:subject_type]}
+                type="select"
+                prompt={gettext("All")}
+                options={[{gettext("User"), "user"}, {gettext("Service"), "service"}]}
+                label={gettext("Type")}
+              />
+              <.input
+                field={@form[:api_key_id]}
+                type="select"
+                prompt={gettext("All keys")}
+                options={@api_key_options}
+                label="API Key"
+              />
+              <.input
+                field={@form[:agent_type]}
+                type="datalist"
+                options={@agent_type_options}
+                placeholder={gettext("Any agent")}
+                label={gettext("Agent")}
+                phx-debounce="300"
+              />
+              <.input
+                field={@form[:error_reason]}
+                type="select"
+                prompt={gettext("All")}
+                options={[
+                  {"rate_limited", "rate_limited"},
+                  {"timeout", "timeout"},
+                  {"server_error", "server_error"},
+                  {"auth_error", "auth_error"},
+                  {"bad_request", "bad_request"},
+                  {"client_error", "client_error"}
+                ]}
+                label="Error"
+              />
+              <.input
+                field={@form[:from]}
+                type="date"
+                label={gettext("From")}
+              />
+              <.input
+                field={@form[:to]}
+                type="date"
+                label={gettext("To")}
+              />
+            </div>
 
-        <div class="flex flex-wrap justify-end gap-2">
-          <.link
-            href="/stats/export?type=logs&period=30d"
-            class="btn btn-sm btn-ghost"
-            id="csv-logs-30d"
-          >
-            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Logs 30d
-          </.link>
-          <.link
-            href="/stats/export?type=logs&period=yesterday"
-            class="btn btn-sm btn-ghost"
-            id="csv-logs-yesterday"
-          >
-            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> {gettext("CSV Logs (yesterday)")}
-          </.link>
-          <.link
-            href="/stats/export?type=errors"
-            class="btn btn-sm btn-ghost"
-            id="csv-errors"
-          >
-            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> {gettext("CSV Errors")}
-          </.link>
-        </div>
+            <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-base-200">
+              <div>
+                <button
+                  :if={any_active_filter?(@filters)}
+                  type="button"
+                  phx-click="clear_filters"
+                  id="monitoring-clear-filters"
+                  class="btn btn-xs btn-ghost"
+                >
+                  <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> {gettext("Clear filters")}
+                </button>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <.link
+                  href="/stats/export?type=logs&period=30d"
+                  class="btn btn-xs btn-ghost"
+                  id="csv-logs-30d"
+                >
+                  <.icon name="hero-arrow-down-tray" class="w-3.5 h-3.5" />
+                  {gettext("CSV Logs (30d)")}
+                </.link>
+                <.link
+                  href="/stats/export?type=logs&period=yesterday"
+                  class="btn btn-xs btn-ghost"
+                  id="csv-logs-yesterday"
+                >
+                  <.icon name="hero-arrow-down-tray" class="w-3.5 h-3.5" />
+                  {gettext("CSV Logs (yesterday)")}
+                </.link>
+                <.link
+                  href={"/stats/export?" <> @errors_export_query}
+                  class="btn btn-xs btn-ghost"
+                  id="csv-errors"
+                >
+                  <.icon name="hero-arrow-down-tray" class="w-3.5 h-3.5" />
+                  {gettext("CSV Errors")}
+                </.link>
+              </div>
+            </div>
+          </div>
+        </.form>
 
         <%!-- Logs feed. El stream está acotado a @max_stream_rows (ver
              prepend_log/2): las filas in-flight llegan por el mismo stream con
@@ -1306,62 +1418,50 @@ defmodule TokengateWeb.MonitoringLive do
 
       <%!-- Error detail modal: el mensaje del upstream llega truncado a 255
            bytes por la columna; aquí se ve entero con su contexto. --%>
-      <div
+      <.modal
         :if={@error_detail}
         id="error-detail-modal"
-        class="modal modal-open"
-        phx-click-away="close_error"
+        title={@error_detail.error_reason || gettext("Error detail")}
+        on_close="close_error"
+        max_w="max-w-2xl"
       >
-        <div class="modal-box max-w-2xl">
-          <div class="flex items-start justify-between gap-4">
-            <div class="min-w-0">
-              <h3 class="text-lg font-bold flex items-center gap-2 flex-wrap">
-                <span class="badge badge-error">{@error_detail.error_reason}</span>
-                <span class="text-base-content/70 font-mono text-sm">
-                  {gettext("client")} {@error_detail.status_code}
-                </span>
-                <span
-                  :if={@error_detail.provider_status_code}
-                  class="text-base-content/50 font-mono text-sm"
-                >
-                  · {gettext("provider")} {@error_detail.provider_status_code}
-                </span>
-              </h3>
-              <p class="text-sm text-base-content/50 mt-1 truncate">
-                {format_datetime(@error_detail.inserted_at, @timezone)} · {model_display(
-                  @error_detail.model_requested,
-                  @error_detail.model_responded
-                )} · {provider_name(@error_detail)}
-              </p>
-            </div>
-            <button
-              type="button"
-              class="btn btn-ghost btn-sm btn-circle"
-              phx-click="close_error"
-              aria-label={gettext("Close")}
+        <div class="space-y-4">
+          <div class="flex flex-wrap items-center gap-2 text-sm">
+            <span class="badge badge-error">{@error_detail.error_reason}</span>
+            <span class="text-base-content/70 font-mono">
+              {gettext("client")} {@error_detail.status_code}
+            </span>
+            <span
+              :if={@error_detail.provider_status_code}
+              class="text-base-content/50 font-mono"
             >
-              <.icon name="hero-x-mark" class="w-4 h-4" />
-            </button>
+              · {gettext("provider")} {@error_detail.provider_status_code}
+            </span>
           </div>
+          <p class="text-sm text-base-content/50 truncate">
+            {format_datetime(@error_detail.inserted_at, @timezone)} · {model_display(
+              @error_detail.model_requested,
+              @error_detail.model_responded
+            )} · {provider_name(@error_detail)}
+          </p>
 
-          <div class="mt-4">
+          <div>
             <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-1.5">
               {gettext("Upstream message")}
             </p>
             <pre
               id="error-detail-message"
-              phx-no-curly-interpolation
               class="text-sm bg-base-200/60 rounded-lg p-3 whitespace-pre-wrap break-words font-mono"
             >{@error_detail.error_message || gettext("No error message recorded")}</pre>
           </div>
 
-          <div class="mt-4 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
             <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
               <span class="text-base-content/50">{gettext("User")}</span>
               <span class="font-medium truncate">{member_display(@error_detail)}</span>
             </div>
             <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
-              <span class="text-base-content/50">{gettext("Group")}</span>
+              <span class="text-base-content/50">{gettext("Limit profile")}</span>
               <span class="font-medium truncate">{member_group(@error_detail)}</span>
             </div>
             <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
@@ -1391,11 +1491,12 @@ defmodule TokengateWeb.MonitoringLive do
             </div>
           </div>
         </div>
-
-        <div phx-click="close_error" class="modal-backdrop cursor-pointer">
-          <button class="cursor-pointer">{gettext("Close")}</button>
-        </div>
-      </div>
+        <:footer>
+          <button type="button" phx-click="close_error" class="btn btn-ghost btn-sm">
+            {gettext("Close")}
+          </button>
+        </:footer>
+      </.modal>
     </Layouts.dashboard>
     """
   end

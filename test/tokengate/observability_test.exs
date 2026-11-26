@@ -45,28 +45,42 @@ defmodule Tokengate.ObservabilityTest do
       {:ok, dest} =
         Observability.create_destination(%{
           name: "Default Dest",
-          type: "otlp_webhook"
+          url: "https://example.com/otlp"
         })
 
       assert dest.type == "otlp_webhook"
+      assert dest.enabled == true
     end
 
     test "validates type inclusion" do
       {:error, changeset} =
         Observability.create_destination(%{
           name: "Bad",
-          type: "invalid_type"
+          type: "invalid_type",
+          url: "https://example.com/otlp"
         })
 
       assert "is invalid" in errors_on(changeset).type
     end
 
-    # Un destino ya no requiere un perfil de límites: es global.
-    # Un destino ya no requiere un perfil de límites: es global.
-    test "requires a name" do
+    test "requires a name and valid http(s) url (private/local hosts allowed)" do
       {:error, changeset} = Observability.create_destination(%{})
 
       assert errors_on(changeset).name
+      assert errors_on(changeset).url
+
+      {:error, bad_url} =
+        Observability.create_destination(%{name: "Bad URL", url: "ftp://example.com/otlp"})
+
+      assert "must be a valid http(s) URL" in errors_on(bad_url).url
+
+      {:ok, local} =
+        Observability.create_destination(%{
+          name: "Local OTel",
+          url: "http://localhost:4318/v1/traces"
+        })
+
+      assert local.url == "http://localhost:4318/v1/traces"
     end
   end
 

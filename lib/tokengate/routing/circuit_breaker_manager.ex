@@ -1,16 +1,15 @@
 defmodule Tokengate.Routing.CircuitBreakerManager do
   @moduledoc """
   `DynamicSupervisor` that owns one `Tokengate.Routing.CircuitBreaker` process per
-  provider credential.
-
-  The breakers are registered via `{:via, Registry, {Tokengate.Routing.CircuitBreakerRegistry, credential_id}}`,
-  so the parent application must start a unique-key registry named
-  `Tokengate.Routing.CircuitBreakerRegistry` alongside this supervisor.
+  provider credential, plus the public ETS fast-path table `:tokengate_breaker_states`.
   """
 
   use DynamicSupervisor
 
+  alias Tokengate.Routing.CircuitBreaker
+
   @registry Tokengate.Routing.CircuitBreakerRegistry
+  @ets_table CircuitBreaker.ets_table()
 
   ## Public API ##############################################################
 
@@ -25,8 +24,7 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
   @doc """
   Ensures a circuit breaker exists for `credential_id`.
 
-  Idempotent: safe to call concurrently. Returns `:ok` once a breaker is running
-  and registered (whether it was just started or already existed).
+  Idempotent: safe to call concurrently.
   """
   @spec ensure_started(credential_id :: term()) :: :ok
   def ensure_started(credential_id) do
@@ -35,20 +33,92 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
         :ok
 
       :error ->
-        child_spec = {Tokengate.Routing.CircuitBreaker, credential_id: credential_id}
+        child_spec = {CircuitBreaker, credential_id: credential_id}
 
-        # The child registers itself in `init/1`, and `DynamicSupervisor.start_child/2`
-        # only returns after that init completed — the Registry entry is already
-        # visible here, so no polling is needed (the old poll burned 200 lookups
-        # in microseconds on every cold credential and still raced the cleanup).
         case DynamicSupervisor.start_child(__MODULE__, child_spec) do
           {:ok, _pid} -> :ok
           {:ok, _pid, _info} -> :ok
-          # A concurrent starter won the race; its breaker is (or is about to
-          # be) registered. The caller treats a subsequent miss as fail-open.
           :ignore -> :ok
           {:error, {:already_started, _pid}} -> :ok
           {:error, {:already_started, _pid, _info}} -> :ok
+        end
+    end
+  end
+
+  @doc """
+  Pure read-only availability check for routing selection (lock-free via ETS).
+
+  Does NOT start a process for unknown credentials and does NOT consume a
+  `:half_open` probe slot.
+  """
+  @spec usable?(credential_id :: term()) :: boolean()
+  def usable?(credential_id) do
+    case read_ets(credential_id) do
+      {:ok, :closed, _probe_in_flight?, _epoch} ->
+        true
+
+      {:ok, :open, _probe_in_flight?, _epoch} ->
+        false
+
+      {:ok, :half_open, probe_in_flight?, _epoch} ->
+        not probe_in_flight?
+
+      :miss ->
+        case lookup(credential_id) do
+          {:ok, pid} -> CircuitBreaker.usable?(pid)
+          :error -> true
+        end
+    end
+  end
+
+  @doc """
+  Claims execution right before an upstream HTTP call:
+
+    * `:closed` -> `{:ok, epoch}` (lock-free via ETS fast-path)
+    * `:open` -> `{:error, :breaker_open}`
+    * `:half_open` -> acquires the single probe slot with monitor + timeout, or
+      returns `{:error, :probe_in_flight}` if another probe is active.
+  """
+  @spec claim_execution(credential_id :: term(), caller_pid :: pid()) ::
+          {:ok, non_neg_integer()} | {:error, :breaker_open | :probe_in_flight}
+  def claim_execution(credential_id, caller_pid \\ self()) when is_pid(caller_pid) do
+    case read_ets(credential_id) do
+      {:ok, :closed, false, epoch} ->
+        {:ok, epoch}
+
+      {:ok, :open, _probe_in_flight?, _epoch} ->
+        {:error, :breaker_open}
+
+      {:ok, :half_open, true, _epoch} ->
+        {:error, :probe_in_flight}
+
+      _ ->
+        ensure_started(credential_id)
+
+        case lookup(credential_id) do
+          {:ok, pid} -> CircuitBreaker.claim_probe(pid, caller_pid)
+          :error -> {:ok, 0}
+        end
+    end
+  end
+
+  @doc """
+  Releases a `:half_open` probe slot without recording success/failure when a
+  request aborts locally before reaching the upstream provider.
+  """
+  @spec release_probe(credential_id :: term(), caller_pid :: pid()) :: :ok
+  def release_probe(credential_id, caller_pid \\ self()) when is_pid(caller_pid) do
+    case read_ets(credential_id) do
+      {:ok, :closed, _, _} ->
+        :ok
+
+      {:ok, :open, _, _} ->
+        :ok
+
+      _ ->
+        case lookup(credential_id) do
+          {:ok, pid} -> CircuitBreaker.release_probe(pid, caller_pid)
+          :error -> :ok
         end
     end
   end
@@ -66,127 +136,129 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
 
   @doc """
   Records a successful request for `credential_id`.
-
-  Ensures a breaker exists first so successes are always tracked.
   """
-  @spec record_success(credential_id :: term()) :: :ok
-  def record_success(credential_id) do
+  @spec record_success(credential_id :: term(), opts :: keyword()) :: :ok
+  def record_success(credential_id, opts \\ []) do
     ensure_started(credential_id)
 
     case lookup(credential_id) do
-      {:ok, pid} -> Tokengate.Routing.CircuitBreaker.record_success(pid)
-      # Fail-open: the breaker is an optimization, never a hard dependency of
-      # the proxy. A miss (restarting breaker, racing cleanup) must not 500.
+      {:ok, pid} -> CircuitBreaker.record_success(pid, opts)
       :error -> :ok
     end
   end
 
   @doc """
   Records a failed request for `credential_id`.
-
-  Ensures a breaker exists first so failures for a new credential are tracked.
-  An optional `error_message` (the upstream provider's error body) is stored in
-  the breaker state for observability — surfaced in `details/1` and the admin UI.
   """
   @spec record_failure(
           credential_id :: term(),
           reason :: atom(),
-          error_message :: String.t() | nil
-        ) ::
-          :ok
-  def record_failure(credential_id, reason, error_message \\ nil) do
+          error_message :: String.t() | nil,
+          opts :: keyword()
+        ) :: :ok
+  def record_failure(credential_id, reason, error_message \\ nil, opts \\ []) do
     ensure_started(credential_id)
 
     case lookup(credential_id) do
-      {:ok, pid} ->
-        Tokengate.Routing.CircuitBreaker.record_failure(pid, reason, error_message)
-
-      :error ->
-        :ok
+      {:ok, pid} -> CircuitBreaker.record_failure(pid, reason, error_message, opts)
+      :error -> :ok
     end
   end
 
   @doc """
   Returns the current state of the breaker for `credential_id`.
-
-  Returns `:closed` for an unknown credential without starting a process.
   """
   @spec status(credential_id :: term()) :: :closed | :open | :half_open
   def status(credential_id) do
-    case lookup(credential_id) do
-      {:ok, pid} -> Tokengate.Routing.CircuitBreaker.status(pid)
-      :error -> :closed
+    case read_ets(credential_id) do
+      {:ok, state, _probe_in_flight?, _epoch} ->
+        state
+
+      :miss ->
+        case lookup(credential_id) do
+          {:ok, pid} -> CircuitBreaker.status(pid)
+          :error -> :closed
+        end
     end
   end
 
   @doc """
-  Returns a details map for `credential_id`'s breaker:
-
-    * `:state` — `:closed`, `:open`, or `:half_open`
-    * `:failures` — consecutive failure count
-    * `:last_reason` — reason of the last failure
-    * `:last_error_message` — upstream error message of the last failure, or `nil`
-    * `:opened_at` — `DateTime` when the breaker opened, or `nil`
-
-  Returns a default closed-state map for unknown credentials.
+  Returns a details map for `credential_id`'s breaker.
   """
   @spec details(credential_id :: term()) :: map()
   def details(credential_id) do
     case lookup(credential_id) do
       {:ok, pid} ->
-        Tokengate.Routing.CircuitBreaker.details(pid)
+        CircuitBreaker.details(pid)
 
       :error ->
-        %{state: :closed, failures: 0, last_reason: nil, last_error_message: nil, opened_at: nil}
+        %{
+          state: :closed,
+          failures: 0,
+          open_streak: 0,
+          probe_in_flight?: false,
+          last_reason: nil,
+          last_error_message: nil,
+          opened_at: nil,
+          next_probe_at: nil
+        }
     end
   end
 
   @doc """
-  Count of circuit breakers currently `:open` (failing credentials cut off
-  from routing). Iterates the registered breakers — cheap for the handful
-  of credentials a gateway manages.
+  Count of circuit breakers currently `:open` or `:half_open` (non-closed
+  credentials needing recovery or attention).
   """
   @spec count_open() :: non_neg_integer()
   def count_open do
     @registry
     |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
-    |> Enum.count(fn {_id, pid} -> Tokengate.Routing.CircuitBreaker.status(pid) == :open end)
+    |> Enum.count(fn {id, pid} ->
+      case read_ets(id) do
+        {:ok, state, _, _} -> state in [:open, :half_open]
+        :miss -> CircuitBreaker.status(pid) in [:open, :half_open]
+      end
+    end)
   end
 
   @doc """
   Returns `%{credential_id => state}` for every registered breaker in one
-  Registry sweep, instead of one lookup + GenServer call per credential
-  (dashboard pages that render a status badge per credential).
+  Registry sweep.
   """
   @spec status_all() :: %{term() => :closed | :open | :half_open}
   def status_all do
     @registry
     |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
-    |> Map.new(fn {id, pid} -> {id, Tokengate.Routing.CircuitBreaker.status(pid)} end)
+    |> Map.new(fn {id, pid} ->
+      state =
+        case read_ets(id) do
+          {:ok, s, _, _} -> s
+          :miss -> CircuitBreaker.status(pid)
+        end
+
+      {id, state}
+    end)
   end
 
   @doc """
-  Returns `%{credential_id => details_map}` only for breakers NOT in
-  `:closed` state. One Registry sweep — avoids loading every credential
-  from the DB just to filter them in memory (AlertsLive).
+  Returns `%{credential_id => details_map}` only for breakers NOT in `:closed` state.
   """
   @spec open_breakers() :: %{term() => map()}
   def open_breakers do
     @registry
     |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
-    |> Map.new(fn {id, pid} -> {id, Tokengate.Routing.CircuitBreaker.details(pid)} end)
+    |> Map.new(fn {id, pid} -> {id, CircuitBreaker.details(pid)} end)
     |> Enum.filter(fn {_id, details} -> details.state != :closed end)
     |> Map.new()
   end
 
   @doc """
   Forces the breaker for `credential_id` back to `:closed` (admin use).
-  Safe to call when no breaker exists.
   """
   @spec reset(credential_id :: term()) :: :ok
   def reset(credential_id) do
     case lookup(credential_id) do
-      {:ok, pid} -> Tokengate.Routing.CircuitBreaker.reset(pid)
+      {:ok, pid} -> CircuitBreaker.reset(pid)
       :error -> :ok
     end
   end
@@ -195,10 +267,31 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
 
   @impl true
   def init(_opts) do
+    ensure_ets_table()
     DynamicSupervisor.init(strategy: :one_for_one)
   end
 
   ## Internal helpers ########################################################
+
+  defp ensure_ets_table do
+    if :ets.whereis(@ets_table) == :undefined do
+      :ets.new(@ets_table, [:set, :public, :named_table, read_concurrency: true])
+    end
+
+    :ok
+  end
+
+  defp read_ets(credential_id) do
+    case :ets.lookup(@ets_table, credential_id) do
+      [{^credential_id, state, probe_in_flight?, epoch}] ->
+        {:ok, state, probe_in_flight?, epoch}
+
+      [] ->
+        :miss
+    end
+  rescue
+    ArgumentError -> :miss
+  end
 
   defp lookup(credential_id) do
     case Registry.lookup(@registry, credential_id) do
@@ -207,14 +300,9 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
     end
   end
 
-  # Fail-open lookup for the hot path: `Registry` visibility is guaranteed once
-  # `start_child/2` returns (the child registers in `init/1`), so a miss means
-  # the breaker died or was never started — allow the request rather than
-  # raising a 500 into the proxy, exactly like the other ETS-backed caches
-  # (`ApiKeyCache`) degrade to their uncached path.
   defp allow_registered(credential_id) do
     case lookup(credential_id) do
-      {:ok, pid} -> Tokengate.Routing.CircuitBreaker.allow?(pid)
+      {:ok, pid} -> CircuitBreaker.allow?(pid)
       :error -> true
     end
   end

@@ -204,6 +204,38 @@ defmodule Tokengate.Auditing.PartitionWorker do
   # Introspection helpers
   # ---------------------------------------------------------------------------
 
+  @doc "Retention window in days for `audit_logs`."
+  @spec retention_days() :: non_neg_integer()
+  def retention_days, do: @retention_days
+
+  @doc """
+  Read-only partition status for the Maintenance page: named monthly partitions,
+  oldest surviving month and rows currently stranded in `audit_logs_default`.
+  """
+  @spec partition_status() :: map()
+  def partition_status do
+    names =
+      list_partition_names()
+      |> Enum.reject(&(&1 == @default_partition))
+
+    months =
+      names
+      |> Enum.map(&partition_month/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.sort(Date)
+
+    %{rows: [[default_rows]]} =
+      Repo.query!("SELECT count(*)::bigint FROM #{@default_partition}")
+
+    %{
+      retention_days: @retention_days,
+      partition_count: length(names),
+      partitions: names,
+      oldest_month: List.first(months),
+      default_rows: default_rows
+    }
+  end
+
   @doc "Names of all partitions attached to `audit_logs` (default included)."
   @spec list_partition_names() :: [String.t()]
   def list_partition_names do

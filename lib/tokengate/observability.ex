@@ -10,6 +10,7 @@ defmodule Tokengate.Observability do
   alias Tokengate.Cache
   alias Tokengate.Repo
   alias Tokengate.Observability.Destination
+  alias Tokengate.Observability.WebhookWorker
 
   # Safety net only — every destination mutation invalidates the key.
   @destinations_ttl_ms :timer.seconds(20)
@@ -33,6 +34,15 @@ defmodule Tokengate.Observability do
     Cache.fetch(@destinations_key, @destinations_ttl_ms, fn ->
       Repo.all(from d in Destination, order_by: [asc: d.name])
     end)
+  end
+
+  @doc """
+  Returns only active (`enabled == true`) destinations, derived from the cached
+  `list_all_destinations/0` list so paused webhooks receive no new jobs without
+  adding a second cache key.
+  """
+  def list_enabled_destinations do
+    Enum.filter(list_all_destinations(), & &1.enabled)
   end
 
   @doc "Gets a single destination. Raises if not found."
@@ -65,6 +75,11 @@ defmodule Tokengate.Observability do
     result
   end
 
+  @doc "Toggles a destination's enabled state."
+  def toggle_destination(%Destination{} = destination) do
+    update_destination(destination, %{enabled: not destination.enabled})
+  end
+
   @doc "Deletes a destination."
   def delete_destination(%Destination{} = destination) do
     result = Repo.delete(destination)
@@ -78,4 +93,80 @@ defmodule Tokengate.Observability do
   def change_destination(%Destination{} = destination, attrs \\ %{}) do
     Destination.changeset(destination, attrs)
   end
+
+  @doc "Sends a synchronous test OTLP payload to a destination."
+  def test_destination(%Destination{} = destination) do
+    WebhookWorker.send_test(destination)
+  end
+
+  @doc """
+  Recent Oban delivery stats (last 24h) grouped by `destination_id`.
+
+  Returns `%{destination_id => %{completed: int, pending: int, failed: int, last_error: String.t() | nil}}`
+  in a single query over `oban_jobs`.
+  """
+  def destination_delivery_stats(hours \\ 24) do
+    cutoff = DateTime.add(DateTime.utc_now(), -hours * 3600, :second)
+    worker = inspect(WebhookWorker)
+
+    rows =
+      from(j in Oban.Job,
+        where: j.worker == ^worker and j.inserted_at >= ^cutoff,
+        select: %{
+          destination_id: fragment("?->>'destination_id'", j.args),
+          state: j.state,
+          errors: j.errors,
+          inserted_at: j.inserted_at
+        },
+        order_by: [desc: j.inserted_at]
+      )
+      |> Repo.all()
+
+    Enum.reduce(rows, %{}, fn row, acc ->
+      dest_id = row.destination_id
+
+      if is_binary(dest_id) and dest_id != "" do
+        entry =
+          Map.get(acc, dest_id, %{completed: 0, pending: 0, failed: 0, last_error: nil})
+
+        entry =
+          case row.state do
+            "completed" ->
+              %{entry | completed: entry.completed + 1}
+
+            s when s in ["available", "executing", "scheduled", "retryable"] ->
+              %{entry | pending: entry.pending + 1}
+
+            s when s in ["discarded", "cancelled"] ->
+              %{entry | failed: entry.failed + 1}
+
+            _ ->
+              entry
+          end
+
+        entry =
+          if is_nil(entry.last_error) and row.state in ["discarded", "retryable"] do
+            %{entry | last_error: extract_last_error(row.errors)}
+          else
+            entry
+          end
+
+        Map.put(acc, dest_id, entry)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp extract_last_error(errors) when is_list(errors) and errors != [] do
+    errors
+    |> List.last()
+    |> case do
+      %{"error" => err} when is_binary(err) -> err
+      %{error: err} when is_binary(err) -> err
+      other -> inspect(other)
+    end
+  end
+
+  defp extract_last_error(_), do: nil
 end

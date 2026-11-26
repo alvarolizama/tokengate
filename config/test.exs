@@ -54,6 +54,10 @@ config :tokengate, :partition_boot_ensure, false
 # Same for audit_logs partitions: tests create/backfill them explicitly.
 config :tokengate, :audit_partition_boot_ensure, false
 
+# Tests use fake/unroutable base URLs in fixtures; disable automatic background
+# health-check probes in :test unless explicitly exercised by RecoveryProberTest.
+config :tokengate, :circuit_breaker_auto_probe, false
+
 # Tests populate the rollup explicitly via HourlyAggregate; the background
 # refresh tick would fight the sandbox.
 config :tokengate, Tokengate.Metrics.RollupWorker, enabled: false

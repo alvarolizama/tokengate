@@ -106,10 +106,15 @@ defmodule Tokengate.Routing.StickyTracker do
   def put(api_key_hash, model_id, model_provider_id, ttl_ms)
       when is_binary(api_key_hash) and is_binary(model_id) and
              is_binary(model_provider_id) do
-    GenServer.cast(
-      __MODULE__,
-      {:put, api_key_hash, model_id, model_provider_id, ttl_ms || @default_ttl_ms}
+    :ets.insert(
+      @table,
+      {{api_key_hash, model_id},
+       {model_provider_id, System.monotonic_time(:millisecond), ttl_ms || @default_ttl_ms}}
     )
+
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   @doc """

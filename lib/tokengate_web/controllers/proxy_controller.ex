@@ -73,7 +73,6 @@ defmodule TokengateWeb.ProxyController do
     AudioMultipart,
     CostCalculator,
     DecisionsTranslator,
-    OpenAIAdapter,
     ProviderAdapter,
     PromptOptimizer,
     RawResponse,
@@ -84,11 +83,11 @@ defmodule TokengateWeb.ProxyController do
     UsageNormalizer
   }
 
-  alias Tokengate.Routing.Router
+  alias Tokengate.Routing.{CircuitBreakerManager, Router}
   alias TokengateWeb.Plugs.MediaBodyParser
 
   @max_attempts 9
-  @max_retries_per_provider 3
+  @max_retries_per_provider 1
 
   # The `response_format` enum of the TTS surface — identical in OpenAI's audio
   # docs and in the OpenAPI of the openai-dialect media cluster (Helmcode/NaN).
@@ -164,6 +163,11 @@ defmodule TokengateWeb.ProxyController do
     # Borrarlo después de reservar descartaba justo el valor nuevo.
     Process.delete(:tg_budget_actual_cost)
     Process.delete(:tg_credit_topup_id)
+    Process.delete(:tg_acquired_credential)
+    Process.delete(:tg_active_probe)
+    Process.delete(:tg_deferred_fallback_logs)
+    Process.delete(:tg_upstream_retry_after_ms)
+    Process.delete(:tg_inflight_id)
 
     with :ok <- require_model(model),
          :ok <- acquire_group_limits(key_id, limits) do
@@ -171,6 +175,7 @@ defmodule TokengateWeb.ProxyController do
         case route_and_acquire(member, payload, affinity_key, limits) do
           {:ok, route, hold} ->
             inflight = register_inflight(conn, member, payload, route)
+            Process.put(:tg_inflight_id, inflight.id)
 
             try do
               if payload["stream"] == true do
@@ -181,7 +186,10 @@ defmodule TokengateWeb.ProxyController do
             after
               settle_budget(member, hold)
               Tokengate.Logs.Inflight.finish_request(inflight.id)
-              release_credential_limits(route.credential, key_id)
+              release_active_probe()
+              release_active_credential_limits()
+              flush_deferred_fallback_logs(conn, member)
+              Process.delete(:tg_inflight_id)
             end
 
           {:error, error} ->
@@ -494,6 +502,11 @@ defmodule TokengateWeb.ProxyController do
     # Borrarlo después de reservar descartaba justo el valor nuevo.
     Process.delete(:tg_budget_actual_cost)
     Process.delete(:tg_credit_topup_id)
+    Process.delete(:tg_acquired_credential)
+    Process.delete(:tg_active_probe)
+    Process.delete(:tg_deferred_fallback_logs)
+    Process.delete(:tg_upstream_retry_after_ms)
+    Process.delete(:tg_inflight_id)
 
     with :ok <- require_model(model),
          :ok <- acquire_group_limits(key_id, limits) do
@@ -505,6 +518,7 @@ defmodule TokengateWeb.ProxyController do
             case prepare_body(conn, route, opts) do
               {:ok, conn, media_opts} ->
                 inflight = register_inflight(conn, member, payload, route)
+                Process.put(:tg_inflight_id, inflight.id)
 
                 try do
                   execute_simple(
@@ -521,14 +535,18 @@ defmodule TokengateWeb.ProxyController do
                 after
                   settle_budget(member, hold)
                   Tokengate.Logs.Inflight.finish_request(inflight.id)
-                  release_credential_limits(route.credential, key_id)
+                  release_active_probe()
+                  release_active_credential_limits()
+                  flush_deferred_fallback_logs(conn, member)
+                  Process.delete(:tg_inflight_id)
                 end
 
               {:error, error} ->
                 # The route is already picked (and its hold taken): release both
                 # before answering, so a body rejected here costs nothing.
                 settle_budget(member, hold)
-                release_credential_limits(route.credential, key_id)
+                release_active_probe()
+                release_active_credential_limits()
 
                 log_and_render_proxy_error(conn, route, member, error,
                   latency_ms: elapsed(request_start)
@@ -644,7 +662,8 @@ defmodule TokengateWeb.ProxyController do
              route: route,
              member: member,
              request_type: to_string(kind)
-           }) do
+           }),
+         {:ok, _epoch} <- claim_probe_for_attempt(route) do
       receive_timeout = receive_timeout(route.credential)
 
       # The media body travels in the route opts: a fallback or a same-key retry
@@ -657,15 +676,17 @@ defmodule TokengateWeb.ProxyController do
         |> Keyword.merge(Keyword.take(route_opts, [:raw_body, :content_type]))
         |> retarget_model(conn.body_params["model"], route.model_responded)
 
+      Process.delete(:tg_upstream_retry_after_ms)
+
       case adapter_fun.(provider, route.credential, payload, adapter_opts) do
         {:ok, body, latency_ms, resp_headers} ->
-          Router.record_outcome(route, :success, latency_ms: latency_ms)
+          record_attempt_outcome(route, :success, latency_ms: latency_ms, streaming: false)
           cache_store(cache_key, body)
           finalize_simple_success(conn, route, body, latency_ms, member, kind, resp_headers)
 
         {:error, :auth_error, status, error_message} ->
           disable_credential_async(route.credential, "auth_error_#{status}", error_message)
-          Router.record_outcome(route, {:failure, :auth_error, error_message})
+          record_attempt_outcome(route, {:failure, :auth_error, error_message})
 
           if attempts_left > 1 do
             retry_simple_with_fallback(
@@ -695,14 +716,7 @@ defmodule TokengateWeb.ProxyController do
           end
 
         {:error, :bad_request, status, error_message} ->
-          # 400: the provider rejected THIS body for its own reasons — often
-          # provider-specific (a field only it refuses, a limit only its model
-          # enforces, a prefix over its context window). The shared policy
-          # (`next_candidate/4`) reemits the body to the SAME credential twice,
-          # back to back, and only then falls back to the next candidate. Either
-          # way the rejection is a NON-counting failure: the credential is NOT
-          # deactivated, stays in the pool, and the breaker does NOT count it.
-          Router.record_outcome(route, {:failure, :bad_request})
+          record_attempt_outcome(route, {:failure, :bad_request})
 
           if attempts_left > 1 do
             retry_simple_with_fallback(
@@ -728,12 +742,7 @@ defmodule TokengateWeb.ProxyController do
           end
 
         {:error, :client_error, status, error_message} ->
-          # 4xx other than 400 (404, 422, …). For a marketplace/aggregator a
-          # 404 ("No available sellers for this model") is ROUTE-specific —
-          # THIS key has no upstream for the model right now — so the cascade
-          # moves to the next credential until the list is exhausted. Still a
-          # NON-counting failure: the breaker never penalizes the key.
-          Router.record_outcome(route, {:failure, :client_error})
+          record_attempt_outcome(route, {:failure, :client_error})
 
           if attempts_left > 1 do
             retry_simple_with_fallback(
@@ -759,7 +768,7 @@ defmodule TokengateWeb.ProxyController do
           end
 
         {:error, reason, status, error_message} ->
-          Router.record_outcome(route, {:failure, breaker_reason(reason), error_message})
+          record_attempt_outcome(route, {:failure, breaker_reason(reason), error_message})
 
           if attempts_left > 1 do
             retry_simple_with_fallback(
@@ -785,11 +794,31 @@ defmodule TokengateWeb.ProxyController do
           end
       end
     else
-      # Acierto de caché: la respuesta (y sus headers) YA salió — `with` sólo
-      # tiene que devolver el conn ya enviado. Devolver el centinela `:handled`
-      # rompía la acción (Plug.Builder la rechaza: "expected action/2 to return
-      # a Plug.Conn … got: :handled") en cada hit.
-      {:hit, sent_conn} -> sent_conn
+      {:hit, sent_conn} ->
+        sent_conn
+
+      {:error, probe_reject} when probe_reject in [:breaker_open, :probe_in_flight] ->
+        if attempts_left > 1 do
+          retry_simple_with_fallback(
+            conn,
+            route,
+            payload,
+            member,
+            attempts_left,
+            exclude,
+            nil,
+            adapter_fun,
+            kind,
+            route_opts,
+            provider_retries: @max_retries_per_provider,
+            reason: :probe_rejected,
+            error_message: nil
+          )
+        else
+          log_and_render_proxy_error(conn, route, member, :all_providers_down,
+            error_reason: "all_providers_down"
+          )
+        end
     end
   end
 
@@ -808,53 +837,47 @@ defmodule TokengateWeb.ProxyController do
          reason: reason,
          error_message: error_message
        ) do
-    log_fallback_attempt(conn, route, member, status, error_message)
+    if reason != :probe_rejected do
+      defer_fallback_log(conn, route, status, error_message)
+    end
 
-    # Per-provider retry: same policy as retry_with_fallback.
-    {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
-
-    case Router.route(route.model.name, member, %{
-           :api_key_hash => conn.assigns.api_key_hash,
-           :exclude_credential_ids => exclude,
-           :capability => Keyword.get(route_opts, :capability, ["llm", "decision"])
-         }) do
-      {:ok, new_route} ->
+    case advance_fallback_route(
+           conn,
+           route,
+           payload,
+           member,
+           exclude,
+           provider_retries,
+           reason,
+           Keyword.get(route_opts, :capability, ["llm", "decision"])
+         ) do
+      {:ok, new_route, new_exclude, new_retries} ->
         execute_simple(
           conn,
           new_route,
           payload,
           member,
           attempts_left - 1,
-          exclude,
+          new_exclude,
           adapter_fun,
           kind,
           route_opts,
-          provider_retries: provider_retries
+          provider_retries: new_retries
         )
 
       {:error, :no_available_provider} when reason in [:model_not_available, :billing_error] ->
-        # A scoped refusal (the model is outside this credential's plan, or the
-        # account is out of balance) with no candidate left: the client gets the
-        # upstream's own 4xx plus the reason, never a 503 — the pool is fine,
-        # this lane simply cannot serve this body.
         log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
           error_reason: safe_reason(reason),
           error_message: error_message
         )
 
       {:error, :no_available_provider} when reason in [:bad_request, :client_error] ->
-        # Every remaining candidate rejected the body with the same 4xx. That is
-        # not a provider outage, so the client gets the upstream 4xx it can act
-        # on instead of a 503.
         log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
           error_reason: safe_reason(reason),
           error_message: error_message
         )
 
       {:error, :no_available_provider} when reason == :lane_not_servable ->
-        # Every lane was dropped for the same local gap (no upstream model id):
-        # the pool is healthy and nothing failed upstream, so the client gets
-        # the gateway's OWN code instead of a 503 "all providers failed".
         log_and_render_proxy_error(
           conn,
           route,
@@ -908,6 +931,8 @@ defmodule TokengateWeb.ProxyController do
       cost_usd: cost,
       streaming: false
     })
+
+    Process.put(:tg_final_client_status, 200)
 
     conn =
       conn
@@ -1138,6 +1163,11 @@ defmodule TokengateWeb.ProxyController do
     {[route.credential.id | exclude], 0}
   end
 
+  defp next_candidate(route, exclude, _provider_retries, reason)
+       when reason in [:rate_limited, :probe_rejected] do
+    {[route.credential.id | exclude], 0}
+  end
+
   # 524: the upstream's own edge gave up on the request (Helmcode/NaN document
   # it for oversized audio). The credential is healthy and the same key would
   # just wait out another gateway timeout, so it is excluded at once — exactly
@@ -1307,6 +1337,7 @@ defmodule TokengateWeb.ProxyController do
     with {:ok, route} <- Router.route(model_requested, member, request_context) do
       case acquire_credential_limits(route.credential, key_id) do
         :ok ->
+          Process.put(:tg_acquired_credential, {route.credential, key_id})
           reserve_or_release(member, limits, route, key_id)
 
         {:error, :provider_concurrency_exceeded} ->
@@ -1371,8 +1402,194 @@ defmodule TokengateWeb.ProxyController do
         {:ok, route, hold}
 
       {:error, error} ->
+        Process.delete(:tg_acquired_credential)
         release_credential_limits(route.credential, key_id)
         {:error, error}
+    end
+  end
+
+  # Advances the cascade during a retry/fallback:
+  #   1. If next_candidate stays on the SAME credential (e.g. 1 fast 5xx retry
+  #      or 400 retry), keeps the currently held Puerta 2 slot.
+  #   2. If next_candidate excludes the current credential, RELEASES its Puerta 2
+  #      slot FIRST, then routes and acquires Puerta 2 for the next healthy
+  #      credential (skipping saturated/rate-limited ones instead of bypassing
+  #      Gate 2), resets `provider_retries` to 0 when the credential changes,
+  #      and refreshes `Inflight` with the new provider/credential.
+  defp advance_fallback_route(
+         conn,
+         route,
+         payload,
+         member,
+         exclude,
+         provider_retries,
+         reason,
+         capability
+       ) do
+    {next_exclude, next_retries} = next_candidate(route, exclude, provider_retries, reason)
+
+    if route.credential.id in next_exclude do
+      release_active_credential_limits()
+      key_id = member.api_key.id
+      affinity_key = conn.assigns[:affinity_key] || conn.assigns.api_key_hash
+
+      case route_and_acquire_fallback(
+             member,
+             route.model.name,
+             payload,
+             affinity_key,
+             key_id,
+             next_exclude,
+             capability,
+             {0, nil}
+           ) do
+        {:ok, new_route, final_exclude} ->
+          update_inflight_route(conn, member, payload, new_route)
+          {:ok, new_route, final_exclude, 0}
+
+        {:error, _} = err ->
+          err
+      end
+    else
+      # Same credential retry — keep the held Gate 2 slot.
+      {:ok, route, next_exclude, next_retries}
+    end
+  end
+
+  defp route_and_acquire_fallback(
+         _member,
+         _model_name,
+         _payload,
+         _affinity_key,
+         _key_id,
+         _exclude,
+         _capability,
+         {attempt, last_reject}
+       )
+       when attempt >= @max_route_retries do
+    {:error, {:cascade_exhausted, last_reject || :provider_concurrency_exceeded}}
+  end
+
+  defp route_and_acquire_fallback(
+         member,
+         model_name,
+         payload,
+         affinity_key,
+         key_id,
+         exclude,
+         capability,
+         {attempt, last_reject}
+       ) do
+    request_context = %{
+      "messages" => payload["messages"] || [],
+      :api_key_hash => affinity_key,
+      :exclude_credential_ids => exclude,
+      :capability => capability
+    }
+
+    with {:ok, new_route} <- Router.route(model_name, member, request_context) do
+      case acquire_credential_limits(new_route.credential, key_id) do
+        :ok ->
+          Process.put(:tg_acquired_credential, {new_route.credential, key_id})
+          {:ok, new_route, exclude}
+
+        {:error, reject} ->
+          norm_reject =
+            case reject do
+              {:provider_rate_limited, _} -> :provider_rate_limited
+              :provider_user_concurrency_exceeded -> :provider_concurrency_exceeded
+              other -> other
+            end
+
+          route_and_acquire_fallback(
+            member,
+            model_name,
+            payload,
+            affinity_key,
+            key_id,
+            [new_route.credential.id | exclude],
+            capability,
+            {attempt + 1, norm_reject}
+          )
+      end
+    else
+      {:error, :no_available_provider} when last_reject != nil ->
+        {:error, {:cascade_exhausted, last_reject}}
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+
+  defp claim_probe_for_attempt(route) do
+    case CircuitBreakerManager.claim_execution(route.credential.id, self()) do
+      {:ok, epoch} ->
+        Process.put(:tg_active_probe, {route.credential.id, epoch})
+        {:ok, epoch}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp record_attempt_outcome(route, outcome, opts \\ []) do
+    epoch =
+      case Process.delete(:tg_active_probe) do
+        {cred_id, ep} when cred_id == route.credential.id -> ep
+        _ -> nil
+      end
+
+    retry_after_ms = Process.delete(:tg_upstream_retry_after_ms)
+
+    full_opts =
+      opts
+      |> then(fn o -> if epoch, do: Keyword.put(o, :epoch, epoch), else: o end)
+      |> then(fn o ->
+        if retry_after_ms != nil and
+             (match?({:failure, _, _}, outcome) or match?({:failure, _}, outcome)),
+           do: Keyword.put(o, :retry_after_ms, retry_after_ms),
+           else: o
+      end)
+
+    Router.record_outcome(route, outcome, full_opts)
+  end
+
+  defp release_active_probe do
+    case Process.delete(:tg_active_probe) do
+      {cred_id, _epoch} -> CircuitBreakerManager.release_probe(cred_id, self())
+      _ -> :ok
+    end
+  end
+
+  defp release_active_credential_limits do
+    case Process.delete(:tg_acquired_credential) do
+      {credential, key_id} -> release_credential_limits(credential, key_id)
+      _ -> :ok
+    end
+  end
+
+  defp update_inflight_route(conn, member, payload, route) do
+    if inflight_id = Process.get(:tg_inflight_id) do
+      Tokengate.Logs.Inflight.start_request(%{
+        id: inflight_id,
+        group_member_id: member.id,
+        subject_type: if(member.user_id == nil, do: "service", else: "user"),
+        service_name: member.service_name,
+        user_email: member.user && member.user.email,
+        group_name: member.group && member.group.name,
+        group_id: member.group_id,
+        model_requested: payload["model"],
+        agent_type: conn.assigns.agent_type,
+        client_agent: conn.assigns.client_agent,
+        streaming: payload["stream"] == true,
+        think: conn.assigns[:think] || false,
+        effort: conn.assigns[:effort],
+        provider_name: route.model_provider.credential.provider.name,
+        api_key_prefix: member.api_key && member.api_key.key_prefix,
+        credential_name: route.credential.name,
+        credential_id: route.credential.id,
+        provider_key_suffix: provider_key_prefix(route.credential)
+      })
     end
   end
 
@@ -1545,6 +1762,8 @@ defmodule TokengateWeb.ProxyController do
   defp cache_lookup(conn, key, body_shape, log_ctx) do
     case ResponseCache.lookup(key) do
       {:ok, body_json, _age} ->
+        Process.put(:tg_final_client_status, 200)
+
         conn =
           conn
           |> put_resp_header("content-type", "application/json")
@@ -1684,23 +1903,24 @@ defmodule TokengateWeb.ProxyController do
              route: route,
              member: member,
              request_type: "chat"
-           }) do
+           }),
+         {:ok, _epoch} <- claim_probe_for_attempt(route) do
       receive_timeout = receive_timeout(route.credential)
+      adapter = ProviderAdapter.dispatch(provider)
+      Process.delete(:tg_upstream_retry_after_ms)
 
-      case adapter_chat_completion(OpenAIAdapter, provider, route.credential, attempt_payload,
+      case adapter_chat_completion(adapter, provider, route.credential, attempt_payload,
              receive_timeout: receive_timeout,
              forwarded_headers: extract_forwarded_headers(conn, route)
            ) do
         {:ok, body, latency_ms, resp_headers} ->
-          Router.record_outcome(route, :success, latency_ms: latency_ms)
+          record_attempt_outcome(route, :success, latency_ms: latency_ms, streaming: false)
           cache_store(cache_key, body)
           finalize_success(conn, route, body, latency_ms, member, resp_headers)
 
         {:error, :auth_error, status, error_message} ->
-          # 401/402/403: the credential is bad (invalid key, insufficient credit,
-          # forbidden). Disable it permanently in the DB and fall back.
           disable_credential_async(route.credential, "auth_error_#{status}", error_message)
-          Router.record_outcome(route, {:failure, :auth_error, error_message})
+          record_attempt_outcome(route, {:failure, :auth_error, error_message})
 
           if attempts_left > 1 do
             retry_with_fallback(
@@ -1727,14 +1947,7 @@ defmodule TokengateWeb.ProxyController do
           end
 
         {:error, :bad_request, status, error_message} ->
-          # 400: the provider rejected THIS body for its own reasons — often
-          # provider-specific (a field only it refuses, a limit only its model
-          # enforces, a prefix over its context window). The shared policy
-          # (`next_candidate/4`) reemits the body to the SAME credential twice,
-          # back to back, and only then falls back to the next candidate. Either
-          # way the rejection is a NON-counting failure: the credential is NOT
-          # deactivated, stays in the pool, and the breaker does NOT count it.
-          Router.record_outcome(route, {:failure, :bad_request})
+          record_attempt_outcome(route, {:failure, :bad_request})
 
           if attempts_left > 1 do
             retry_with_fallback(
@@ -1757,12 +1970,7 @@ defmodule TokengateWeb.ProxyController do
           end
 
         {:error, :client_error, status, error_message} ->
-          # 4xx other than 400 (404, 422, …). For a marketplace/aggregator a
-          # 404 ("No available sellers for this model") is ROUTE-specific —
-          # THIS key has no upstream for the model right now — so the cascade
-          # moves to the next credential until the list is exhausted. Still a
-          # NON-counting failure: the breaker never penalizes the key.
-          Router.record_outcome(route, {:failure, :client_error})
+          record_attempt_outcome(route, {:failure, :client_error})
 
           if attempts_left > 1 do
             retry_with_fallback(
@@ -1785,7 +1993,7 @@ defmodule TokengateWeb.ProxyController do
           end
 
         {:error, reason, status, error_message} ->
-          Router.record_outcome(route, {:failure, breaker_reason(reason), error_message})
+          record_attempt_outcome(route, {:failure, breaker_reason(reason), error_message})
 
           if attempts_left > 1 do
             retry_with_fallback(
@@ -1807,23 +2015,55 @@ defmodule TokengateWeb.ProxyController do
             )
           end
 
-        # `ProviderAdapter.chat_completion/4`'s declared shape
-        # (`{:error, reason, status}`): a dialect adapter that failed before
-        # producing a body. Without this clause a TypeSafe-style adapter answer
-        # crashed the request with a CaseClauseError (500, no log row).
         {:error, reason, status} ->
-          Router.record_outcome(route, {:failure, breaker_reason(reason)})
+          if reason == :auth_error do
+            disable_credential_async(route.credential, "auth_error_#{status}")
+          end
 
-          log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
-            error_reason: safe_reason(reason)
-          )
+          record_attempt_outcome(route, {:failure, breaker_reason(reason)})
+
+          if attempts_left > 1 do
+            retry_with_fallback(
+              conn,
+              route,
+              payload,
+              member,
+              attempts_left,
+              exclude,
+              status,
+              provider_retries,
+              reason,
+              nil
+            )
+          else
+            log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
+              error_reason: safe_reason(reason)
+            )
+          end
       end
     else
-      # Acierto de caché: la respuesta (y sus headers) YA salió — `with` sólo
-      # tiene que devolver el conn ya enviado. Devolver el centinela `:handled`
-      # rompía la acción (Plug.Builder la rechaza: "expected action/2 to return
-      # a Plug.Conn … got: :handled") en cada hit.
-      {:hit, sent_conn} -> sent_conn
+      {:hit, sent_conn} ->
+        sent_conn
+
+      {:error, probe_reject} when probe_reject in [:breaker_open, :probe_in_flight] ->
+        if attempts_left > 1 do
+          retry_with_fallback(
+            conn,
+            route,
+            payload,
+            member,
+            attempts_left,
+            exclude,
+            nil,
+            @max_retries_per_provider,
+            :probe_rejected,
+            nil
+          )
+        else
+          log_and_render_proxy_error(conn, route, member, :all_providers_down,
+            error_reason: "all_providers_down"
+          )
+        end
     end
   end
 
@@ -1877,41 +2117,30 @@ defmodule TokengateWeb.ProxyController do
          reason,
          error_message
        ) do
-    log_fallback_attempt(conn, route, member, status, error_message)
+    if reason != :probe_rejected do
+      defer_fallback_log(conn, route, status, error_message)
+    end
 
-    # A timeout means the provider is hung or saturated — fall back to the
-    # next provider immediately; the condition that hung it won't clear in
-    # the milliseconds a retry takes, and each retry would cost a full
-    # receive_timeout of client-perceived latency. Fast errors (5xx, 429)
-    # are often transient, so those keep the per-provider retries. A 400 goes
-    # through the shared policy too (see `next_candidate/4`): same credential
-    # twice before it is dropped.
-    {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
-
-    request_context = %{
-      "messages" => payload["messages"] || [],
-      :api_key_hash => conn.assigns.api_key_hash,
-      :exclude_credential_ids => exclude
-    }
-
-    case Router.route(route.model.name, member, request_context) do
-      {:ok, new_route} ->
-        execute(conn, new_route, payload, member, attempts_left - 1, exclude, provider_retries)
+    case advance_fallback_route(
+           conn,
+           route,
+           payload,
+           member,
+           exclude,
+           provider_retries,
+           reason,
+           ["llm", "decision"]
+         ) do
+      {:ok, new_route, new_exclude, new_retries} ->
+        execute(conn, new_route, payload, member, attempts_left - 1, new_exclude, new_retries)
 
       {:error, :no_available_provider} when reason in [:model_not_available, :billing_error] ->
-        # A scoped refusal (the model is outside this credential's plan, or the
-        # account is out of balance) with no candidate left: the client gets the
-        # upstream's own 4xx plus the reason, never a 503 — the pool is fine,
-        # this lane simply cannot serve this body.
         log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
           error_reason: safe_reason(reason),
           error_message: error_message
         )
 
       {:error, :no_available_provider} when reason in [:bad_request, :client_error] ->
-        # Every remaining candidate rejected the body with the same 4xx. That is
-        # not a provider outage, so the client gets the upstream 4xx it can act
-        # on instead of a 503.
         log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
           error_reason: safe_reason(reason),
           error_message: error_message
@@ -1962,168 +2191,218 @@ defmodule TokengateWeb.ProxyController do
     request_start = System.monotonic_time(:millisecond)
     receive_timeout = receive_timeout(route.credential)
 
-    case adapter_stream_chat_completion(
-           OpenAIAdapter,
-           provider,
-           route.credential,
-           attempt_payload,
-           receive_timeout: receive_timeout,
-           forwarded_headers: extract_forwarded_headers(conn, route)
-         ) do
-      {:ok, pid} ->
-        ref = Process.monitor(pid)
-
-        case await_first_chunk(pid, ref) do
-          {:ok, first_chunk, resp_headers} ->
-            ttft_ms = System.monotonic_time(:millisecond) - request_start
-            Router.record_outcome(route, :success, latency_ms: ttft_ms)
-
-            conn =
-              conn
-              |> put_resp_content_type("text/event-stream")
-              |> put_resp_header("cache-control", "no-cache")
-              |> send_chunked(200)
-
-            stream_loop(conn, pid, ref, first_chunk, route, member, attempt_payload, %{
-              usage: nil,
-              # Completion deltas accumulate as iodata (a reversed list of
-              # binaries) — O(1) per chunk instead of O(n) binary append.
-              # Materialized once in finish_stream when the provider omits
-              # usage (token-estimator fallback).
-              completion: [],
-              prompt_estimate:
-                TokenEstimator.estimate_messages(attempt_payload["messages"] || []),
-              ttft_ms: ttft_ms,
-              latency_start: System.monotonic_time(:millisecond),
-              resp_headers: resp_headers
-            })
-
-          {:error, reason, status, error_message} ->
-            # Kill the upstream stream FIRST — before any fallback work. The
-            # Finch.stream_while task holds a real HTTP connection open; if we
-            # left it running it would only die after the full receive_timeout,
-            # leaking connections and file descriptors while the provider is
-            # hung. Killing it here closes the socket immediately and frees
-            # the credential's concurrency slot.
-            Process.exit(pid, :kill)
-            Process.demonitor(ref, [:flush])
-
-            if reason == :auth_error do
-              disable_credential_async(route.credential, "auth_error_stream")
-            end
-
-            Router.record_outcome(route, {:failure, breaker_reason(reason)})
-
-            cond do
-              # 400: the provider rejected THIS body. That rejection is often
-              # provider-specific, so the shared policy retries the SAME
-              # credential twice, back to back, and only then moves to the next
-              # candidate. It was already recorded above as a non-counting
-              # failure: no breaker penalty, credential stays enabled.
-              reason == :bad_request and attempts_left > 1 ->
-                log_fallback_attempt(conn, route, member, status, error_message)
-
-                retry_stream_with_fallback(
-                  conn,
-                  route,
-                  payload,
-                  member,
-                  attempts_left,
-                  exclude,
-                  provider_retries,
-                  :bad_request,
-                  status,
-                  error_message
-                )
-
-              # Un 404 de marketplace/aggregator ("No available sellers") es
-              # específico de la RUTA — ESTA key no tiene upstream del modelo
-              # ahora mismo — así que la credencial se excluye y la siguiente
-              # de la lista intenta, como en el camino no-streaming. Sigue
-              # sin contar para el breaker.
-              reason == :client_error and attempts_left > 1 ->
-                log_fallback_attempt(conn, route, member, status, error_message)
-
-                retry_stream_with_fallback(
-                  conn,
-                  route,
-                  payload,
-                  member,
-                  attempts_left,
-                  exclude,
-                  provider_retries,
-                  :client_error,
-                  status,
-                  error_message
-                )
-
-              # Any other non-auth 4xx surfacing here (a 400 whose cascade is
-              # exhausted, a 404/422 with no candidate left) is delivered as
-              # the upstream 4xx the client can act on — never a 503.
-              reason in [:client_error, :bad_request] ->
-                log_and_render_proxy_error(
-                  conn,
-                  route,
-                  member,
-                  {:upstream_client_error, status},
-                  error_reason: safe_reason(reason),
-                  error_message: error_message
-                )
-
-              attempts_left > 1 ->
-                log_fallback_attempt(conn, route, member, status, error_message)
-
-                retry_stream_with_fallback(
-                  conn,
-                  route,
-                  payload,
-                  member,
-                  attempts_left,
-                  exclude,
-                  provider_retries,
-                  reason,
-                  status,
-                  error_message
-                )
-
-              true ->
-                log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
-                  error_reason: safe_reason(reason),
-                  error_message: error_message
-                )
-            end
+    case claim_probe_for_attempt(route) do
+      {:error, probe_reject} when probe_reject in [:breaker_open, :probe_in_flight] ->
+        if attempts_left > 1 do
+          retry_stream_with_fallback(
+            conn,
+            route,
+            payload,
+            member,
+            attempts_left,
+            exclude,
+            @max_retries_per_provider,
+            :probe_rejected,
+            nil,
+            nil
+          )
+        else
+          log_and_render_proxy_error(conn, route, member, :all_providers_down,
+            error_reason: "all_providers_down"
+          )
         end
 
-      # The adapter refused to even start the stream (a dialect that has to
-      # translate the body before opening the socket, a missing required knob).
-      # Nothing was committed to the client yet, so the upstream status is
-      # rendered as JSON — a 4xx/5xx the caller can act on, or 502 when the
-      # adapter carried no status.
-      {:error, reason, status, error_message} ->
-        render_adapter_start_error(conn, route, member, reason, status, error_message)
+      {:ok, _epoch} ->
+        adapter = ProviderAdapter.dispatch(provider)
+        Process.delete(:tg_upstream_retry_after_ms)
 
-      # `ProviderAdapter.stream_chat_completion/4`'s own error shape (no
-      # upstream body to surface).
-      {:error, reason, status} ->
-        render_adapter_start_error(conn, route, member, reason, status, nil)
+        case adapter_stream_chat_completion(
+               adapter,
+               provider,
+               route.credential,
+               attempt_payload,
+               receive_timeout: receive_timeout,
+               forwarded_headers: extract_forwarded_headers(conn, route)
+             ) do
+          {:ok, pid} ->
+            ref = Process.monitor(pid)
+
+            case await_first_chunk(pid, ref) do
+              {:ok, first_chunk, resp_headers} ->
+                ttft_ms = System.monotonic_time(:millisecond) - request_start
+                record_attempt_outcome(route, :success, latency_ms: ttft_ms, streaming: true)
+
+                conn =
+                  conn
+                  |> put_resp_content_type("text/event-stream")
+                  |> put_resp_header("cache-control", "no-cache")
+                  |> send_chunked(200)
+
+                stream_loop(conn, pid, ref, first_chunk, route, member, attempt_payload, %{
+                  usage: nil,
+                  completion: [],
+                  prompt_estimate:
+                    TokenEstimator.estimate_messages(attempt_payload["messages"] || []),
+                  ttft_ms: ttft_ms,
+                  latency_start: System.monotonic_time(:millisecond),
+                  resp_headers: resp_headers
+                })
+
+              {:error, reason, status, error_message} ->
+                Process.exit(pid, :kill)
+                Process.demonitor(ref, [:flush])
+
+                if reason == :auth_error do
+                  disable_credential_async(
+                    route.credential,
+                    "auth_error_stream",
+                    error_message
+                  )
+                end
+
+                record_attempt_outcome(route, {:failure, breaker_reason(reason), error_message})
+
+                cond do
+                  reason == :bad_request and attempts_left > 1 ->
+                    defer_fallback_log(conn, route, status, error_message)
+
+                    retry_stream_with_fallback(
+                      conn,
+                      route,
+                      payload,
+                      member,
+                      attempts_left,
+                      exclude,
+                      provider_retries,
+                      :bad_request,
+                      status,
+                      error_message
+                    )
+
+                  reason == :client_error and attempts_left > 1 ->
+                    defer_fallback_log(conn, route, status, error_message)
+
+                    retry_stream_with_fallback(
+                      conn,
+                      route,
+                      payload,
+                      member,
+                      attempts_left,
+                      exclude,
+                      provider_retries,
+                      :client_error,
+                      status,
+                      error_message
+                    )
+
+                  reason in [:client_error, :bad_request] ->
+                    log_and_render_proxy_error(
+                      conn,
+                      route,
+                      member,
+                      {:upstream_client_error, status},
+                      error_reason: safe_reason(reason),
+                      error_message: error_message
+                    )
+
+                  attempts_left > 1 ->
+                    defer_fallback_log(conn, route, status, error_message)
+
+                    retry_stream_with_fallback(
+                      conn,
+                      route,
+                      payload,
+                      member,
+                      attempts_left,
+                      exclude,
+                      provider_retries,
+                      reason,
+                      status,
+                      error_message
+                    )
+
+                  true ->
+                    log_and_render_proxy_error(
+                      conn,
+                      route,
+                      member,
+                      {:upstream_error, reason, status},
+                      error_reason: safe_reason(reason),
+                      error_message: error_message
+                    )
+                end
+            end
+
+          {:error, reason, status, error_message} ->
+            handle_adapter_start_error(
+              conn,
+              route,
+              payload,
+              member,
+              attempts_left,
+              exclude,
+              provider_retries,
+              reason,
+              status,
+              error_message
+            )
+
+          {:error, reason, status} ->
+            handle_adapter_start_error(
+              conn,
+              route,
+              payload,
+              member,
+              attempts_left,
+              exclude,
+              provider_retries,
+              reason,
+              status,
+              nil
+            )
+        end
     end
   end
 
-  # Terminal handling for an attempt the adapter refused before any bytes were
-  # sent (stream or non-streaming): mirror the first-chunk failure branch — auth
-  # failures disable the credential, every reason feeds the breaker, and the
-  # client gets the upstream status as JSON instead of a CaseClauseError 500.
-  defp render_adapter_start_error(conn, route, member, reason, status, error_message) do
+  defp handle_adapter_start_error(
+         conn,
+         route,
+         payload,
+         member,
+         attempts_left,
+         exclude,
+         provider_retries,
+         reason,
+         status,
+         error_message
+       ) do
     if reason == :auth_error do
       disable_credential_async(route.credential, "auth_error_stream", error_message)
     end
 
-    Router.record_outcome(route, {:failure, breaker_reason(reason)})
+    record_attempt_outcome(route, {:failure, breaker_reason(reason), error_message})
 
-    log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
-      error_reason: safe_reason(reason),
-      error_message: error_message
-    )
+    if attempts_left > 1 do
+      defer_fallback_log(conn, route, status, error_message)
+
+      retry_stream_with_fallback(
+        conn,
+        route,
+        payload,
+        member,
+        attempts_left,
+        exclude,
+        provider_retries,
+        reason,
+        status,
+        error_message
+      )
+    else
+      log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
+        error_reason: safe_reason(reason),
+        error_message: error_message
+      )
+    end
   end
 
   defp retry_stream_with_fallback(
@@ -2138,43 +2417,34 @@ defmodule TokengateWeb.ProxyController do
          status,
          error_message
        ) do
-    # Same shared policy as retry_with_fallback: timeouts fall back
-    # immediately, 400s get their two same-credential attempts, and fast
-    # errors retry the same provider up to @max_retries_per_provider.
-    {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
-
-    request_context = %{
-      "messages" => payload["messages"] || [],
-      :api_key_hash => conn.assigns.api_key_hash,
-      :exclude_credential_ids => exclude
-    }
-
-    case Router.route(route.model.name, member, request_context) do
-      {:ok, new_route} ->
+    case advance_fallback_route(
+           conn,
+           route,
+           payload,
+           member,
+           exclude,
+           provider_retries,
+           reason,
+           ["llm", "decision"]
+         ) do
+      {:ok, new_route, new_exclude, new_retries} ->
         execute_stream(
           conn,
           new_route,
           payload,
           member,
           attempts_left - 1,
-          exclude,
-          provider_retries
+          new_exclude,
+          new_retries
         )
 
       {:error, :no_available_provider} when reason in [:model_not_available, :billing_error] ->
-        # A scoped refusal (the model is outside this credential's plan, or the
-        # account is out of balance) with no candidate left: the client gets the
-        # upstream's own 4xx plus the reason, never a 503 — the pool is fine,
-        # this lane simply cannot serve this body.
         log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
           error_reason: safe_reason(reason),
           error_message: error_message
         )
 
       {:error, :no_available_provider} when reason in [:bad_request, :client_error] ->
-        # Every remaining candidate rejected the body with the same 4xx. That is
-        # not a provider outage, so the client gets the upstream 4xx it can act
-        # on instead of a 503.
         log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
           error_reason: safe_reason(reason),
           error_message: error_message
@@ -2560,12 +2830,18 @@ defmodule TokengateWeb.ProxyController do
 
   defp await_first_chunk(pid, ref) do
     timeout = Application.get_env(:tokengate, :first_token_timeout_ms, 15_000)
+    deadline = System.monotonic_time(:millisecond) + timeout
 
     receive do
       {:sse_headers, headers} ->
-        # Headers arrive before any data chunk — keep waiting for the first
-        # actual content chunk, but stash the headers for the caller to pick up.
-        case await_first_chunk_after_headers(pid, ref, timeout) do
+        case Tokengate.Proxy.ProviderAdapter.parse_retry_after_ms(headers) do
+          nil -> :ok
+          ms -> Process.put(:tg_upstream_retry_after_ms, ms)
+        end
+
+        remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+        case await_first_chunk_after_headers(pid, ref, remaining) do
           {:ok, chunk} -> {:ok, chunk, headers}
           error -> error
         end
@@ -2592,8 +2868,9 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  # Waits for the first data chunk after headers have been received.
-  defp await_first_chunk_after_headers(pid, ref, timeout) do
+  # Waits for the first data chunk after headers have been received, sharing the
+  # single monotonic deadline from await_first_chunk/2.
+  defp await_first_chunk_after_headers(pid, ref, remaining_ms) do
     receive do
       {:sse_chunk, chunk} ->
         {:ok, chunk}
@@ -2613,7 +2890,7 @@ defmodule TokengateWeb.ProxyController do
       {:DOWN, ^ref, :process, ^pid, reason} ->
         {:error, stream_error_reason(reason), nil, nil}
     after
-      timeout -> {:error, :timeout, nil, nil}
+      remaining_ms -> {:error, :timeout, nil, nil}
     end
   end
 
@@ -2637,14 +2914,21 @@ defmodule TokengateWeb.ProxyController do
           {:sse_done} ->
             finish_stream(conn, route, member, acc)
 
-          {:sse_error, _reason} ->
-            # Mid-stream failure: the 200 is already committed — close the
-            # stream and record what we have. The row reports 502: the gateway
-            # may have charged the provider for the emitted partial, but the
-            # upstream stream itself failed.
+          {:sse_error, reason} ->
+            # Mid-stream failure: record against breaker so an upstream that
+            # emits 1 chunk and drops cannot keep resetting failures to 0.
+            Process.demonitor(ref, [:flush])
+            Router.record_outcome(route, {:failure, breaker_reason(stream_error_reason(reason))})
             finish_stream(conn, route, member, acc, 502, "stream_error")
 
-          {:DOWN, ^ref, :process, ^pid, _reason} ->
+          {:DOWN, ^ref, :process, ^pid, reason} ->
+            if reason != :normal do
+              Router.record_outcome(
+                route,
+                {:failure, breaker_reason(stream_error_reason(reason))}
+              )
+            end
+
             finish_stream(conn, route, member, acc, 502, "stream_error")
         after
           stream_idle_timeout_ms() ->
@@ -2789,6 +3073,7 @@ defmodule TokengateWeb.ProxyController do
     # de OpenAI y el costo del request (`stream_cost/4`: lo reportado por el
     # upstream, luego pricing manual, luego $0). Sin esto el cliente se quedaba
     # sin costo justo cuando el upstream callaba.
+    Process.put(:tg_final_client_status, 200)
     conn = maybe_send_usage_frame(conn, acc.usage != nil, route, usage, cost)
     conn = send_stream_frame(conn, "data: [DONE]\n\n")
 
@@ -2968,6 +3253,8 @@ defmodule TokengateWeb.ProxyController do
     # Durable log + webhooks, async via Oban — encolado DESPUÉS de responder
     # (ver `finalize_simple_success/7`: el INSERT corría antes del `json/2`).
     body = inject_usage_costs(body, usage, cost)
+
+    Process.put(:tg_final_client_status, 200)
 
     conn =
       conn
@@ -3295,7 +3582,10 @@ defmodule TokengateWeb.ProxyController do
   # The client never sees this — it is purely for observability. The upstream
   # error message (when present) is persisted so admins can see *why* the
   # provider failed (rate limit, connection limit, etc.), not just the status.
-  defp log_fallback_attempt(conn, route, member, status, error_message) do
+  # Buffers failed provider attempts in memory during the cascade and enqueues
+  # their Oban jobs AFTER the final response has left (inside the caller's
+  # `after` block), avoiding synchronous Postgres INSERT latency mid-failover.
+  defp defer_fallback_log(conn, route, status, error_message) do
     error_reason =
       case status do
         400 -> "provider_bad_request"
@@ -3308,14 +3598,34 @@ defmodule TokengateWeb.ProxyController do
         _ -> "provider_error_#{status}"
       end
 
-    enqueue_error_log(conn, route, member,
-      client_status: 200,
-      provider_status: status,
+    entry = %{
+      route: route,
+      status: status,
       error_reason: error_reason,
       error_message: error_message,
-      latency_ms: 0,
       streaming: conn.body_params["stream"] == true
-    )
+    }
+
+    existing = Process.get(:tg_deferred_fallback_logs, [])
+    Process.put(:tg_deferred_fallback_logs, [entry | existing])
+  end
+
+  defp flush_deferred_fallback_logs(conn, member) do
+    Process.delete(:tg_final_client_status)
+
+    Process.delete(:tg_deferred_fallback_logs)
+    |> List.wrap()
+    |> Enum.reverse()
+    |> Enum.each(fn entry ->
+      enqueue_error_log(conn, entry.route, member,
+        client_status: 200,
+        provider_status: entry.status,
+        error_reason: entry.error_reason,
+        error_message: entry.error_message,
+        latency_ms: 0,
+        streaming: entry.streaming
+      )
+    end)
   end
 
   defp error_reason_string(error) do
@@ -3387,6 +3697,7 @@ defmodule TokengateWeb.ProxyController do
           conn
       end
 
+    Process.put(:tg_final_client_status, status)
     send_resp(conn, status, Jason.encode!(body))
   end
 

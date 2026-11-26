@@ -775,21 +775,17 @@ defmodule TokengateWeb.StatsLiveTest do
     assert html =~ expensive_row
     assert html =~ cheap_row
 
-    # Click the Costo header: new field → desc, expensive first.
-    view
-    |> element("button[phx-click='sort'][phx-value-field='cost_usd']")
-    |> render_click()
-
+    # Default sort is cost_usd desc → expensive first.
     assert row_order.(view) == [expensive_row, cheap_row]
 
-    # Click again → toggles to asc, cheap first.
+    # Click the Costo header → toggles to asc, cheap first.
     view
     |> element("button[phx-click='sort'][phx-value-field='cost_usd']")
     |> render_click()
 
     assert row_order.(view) == [cheap_row, expensive_row]
 
-    # Click once more → back to desc.
+    # Click again → back to desc, expensive first.
     view
     |> element("button[phx-click='sort'][phx-value-field='cost_usd']")
     |> render_click()
@@ -1885,10 +1881,10 @@ defmodule TokengateWeb.StatsLiveTest do
                "#user-ranking table thead th button[phx-click='sort'][phx-value-field='user_email']"
              )
 
-      # Y la flecha ▲/▼ la pinta el componente en el campo activo (request_count desc).
+      # Y la flecha ▲/▼ la pinta el componente en el campo activo (cost_usd desc).
       assert has_element?(
                view,
-               "#user-ranking table thead th button[phx-value-field='request_count'] span",
+               "#user-ranking table thead th button[phx-value-field='cost_usd'] span",
                "▼"
              )
 

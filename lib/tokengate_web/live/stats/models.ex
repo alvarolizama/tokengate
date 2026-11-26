@@ -107,6 +107,26 @@ defmodule TokengateWeb.StatsLive.Models do
                 <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
                   <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
                 </:col>
+                <:col :let={row} label={gettext("Share")} align="right">
+                  <span class="font-mono tabular-nums text-base-content/70">
+                    {Stats.cost_share_pct(row.cost_usd, model_total.cost_usd)}%
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Cost / req")} align="right">
+                  <span class="font-mono tabular-nums text-base-content/70">
+                    {Stats.cost_per_request(row.cost_usd, row.request_count)}
+                  </span>
+                </:col>
+                <:col
+                  :let={row}
+                  label={gettext("Market / 1M")}
+                  align="right"
+                  tooltip={gettext("Reference market price per 1M tokens (in / out)")}
+                >
+                  <span class="font-mono tabular-nums text-xs text-base-content/60">
+                    {market_price_label(row)}
+                  </span>
+                </:col>
                 <:col :let={row} label={gettext("Tokens in")} field={:prompt_tokens} align="right">
                   <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
                 </:col>
@@ -126,6 +146,12 @@ defmodule TokengateWeb.StatsLive.Models do
                 >
                   <span class="font-mono tabular-nums">
                     {Stats.cache_hit_pct(row.prompt_tokens, Map.get(row, :cache_read_tokens, 0))}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Errors")} field={:error_count} align="right">
+                  <% errs = Map.get(row, :error_count, 0) %>
+                  <span class={["font-mono tabular-nums", errs > 0 && "text-warning"]}>
+                    {Stats.format_number(errs)}
                   </span>
                 </:col>
                 <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">
@@ -192,4 +218,13 @@ defmodule TokengateWeb.StatsLive.Models do
     </div>
     """
   end
+
+  defp market_price_label(%{
+         market_input_price_per_1m: %Decimal{} = inp,
+         market_output_price_per_1m: %Decimal{} = out
+       }) do
+    "$#{Stats.format_decimal(Decimal.round(inp, 2))} / $#{Stats.format_decimal(Decimal.round(out, 2))}"
+  end
+
+  defp market_price_label(_), do: "—"
 end

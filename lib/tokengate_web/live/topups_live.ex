@@ -27,9 +27,13 @@ defmodule TokengateWeb.TopupsLive do
   alias Tokengate.Accounts
   alias Tokengate.Credits.{Topup, Topups}
 
+  import TokengateWeb.AdminComponents
+  import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
   import TokengateWeb.TopupHelpers
 
-  @sort_columns ~w(target amount expires_at status inserted_at)a
+  @per_page 30
+  @sort_columns ~w(target amount remaining expires_at status inserted_at)a
+  @expiring_window_days 7
 
   @impl true
   def mount(_params, _session, socket) do
@@ -57,15 +61,43 @@ defmodule TokengateWeb.TopupsLive do
         |> assign(:owner_results, [])
         |> assign(:selected_owner, nil)
         |> assign(:search_query, "")
+        |> assign(:owner_filter, :all)
+        |> assign(:status_filter, :all)
         |> assign(:sort_field, :inserted_at)
         |> assign(:sort_direction, :desc)
         |> assign(:show_archived, false)
         |> assign(:archived_count, 0)
+        |> assign(:page, 1)
+        |> assign(:per_page, @per_page)
+        |> assign(:total_count, 0)
+        |> assign(:total_pages, 1)
         |> load_topups()
 
       {:ok, socket}
     end
   end
+
+  @impl true
+  def handle_params(%{"owner_kind" => kind, "owner_id" => id}, _uri, socket)
+      when kind in ["user", "service"] do
+    case owner_for(kind, id) do
+      nil ->
+        {:noreply, socket}
+
+      owner ->
+        {:noreply,
+         socket
+         |> assign(:editing_topup_id, nil)
+         |> assign(:owner_kind, kind)
+         |> assign(:selected_owner, {kind, owner})
+         |> assign(:owner_query, "")
+         |> assign(:owner_results, [])
+         |> assign(:form_token, Ecto.UUID.generate())
+         |> assign(:form, to_form(Topups.change_topup(%Topup{}), as: :topup))}
+    end
+  end
+
+  def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
   defp require_admin_hook(socket) do
     attach_hook(socket, :require_admin, :handle_event, fn _event, _params, socket ->
@@ -83,21 +115,83 @@ defmodule TokengateWeb.TopupsLive do
     topups = Topups.list_all()
     consumed = Topups.consumed_by_topup_ids(topups)
     archived = Enum.filter(topups, &archived?(&1, consumed))
+    kpis = compute_kpis(topups, consumed)
 
     socket
     |> assign(:consumed, consumed)
     |> assign(:archived_count, length(archived))
+    |> assign(:kpis, kpis)
     |> assign(:all_topups, topups)
     |> stream_topups()
   end
 
-  # Filters and sorts already-loaded top-ups in memory (zero DB queries).
+  defp compute_kpis(topups, consumed) do
+    Enum.reduce(
+      topups,
+      %{
+        active_count: 0,
+        active_users: 0,
+        active_services: 0,
+        active_granted: Decimal.new(0),
+        active_consumed: Decimal.new(0),
+        active_remaining: Decimal.new(0),
+        expiring_count: 0,
+        expiring_remaining: Decimal.new(0),
+        revoked_count: 0,
+        archived_count: 0
+      },
+      fn topup, acc ->
+        state = row_state(topup, consumed)
+        c = row_consumed(topup, consumed)
+        rem = row_remaining(topup, consumed)
+
+        case state do
+          :active ->
+            acc = %{
+              acc
+              | active_count: acc.active_count + 1,
+                active_users: acc.active_users + if(topup.user_id, do: 1, else: 0),
+                active_services: acc.active_services + if(topup.service_id, do: 1, else: 0),
+                active_granted: Decimal.add(acc.active_granted, topup.amount_usd),
+                active_consumed: Decimal.add(acc.active_consumed, c),
+                active_remaining: Decimal.add(acc.active_remaining, rem)
+            }
+
+            if expiring_soon?(topup, consumed) do
+              %{
+                acc
+                | expiring_count: acc.expiring_count + 1,
+                  expiring_remaining: Decimal.add(acc.expiring_remaining, rem)
+              }
+            else
+              acc
+            end
+
+          :revoked ->
+            %{acc | revoked_count: acc.revoked_count + 1}
+
+          _archived ->
+            %{acc | archived_count: acc.archived_count + 1}
+        end
+      end
+    )
+  end
+
+  # Filters, sorts and paginates already-loaded top-ups in memory (zero DB queries).
   defp stream_topups(socket) do
     visible = visible_topups(socket.assigns.all_topups, socket.assigns.consumed, socket)
+    total = length(visible)
+    per_page = socket.assigns.per_page
+    total_pages = max(1, div(total + per_page - 1, per_page))
+    page = socket.assigns.page |> max(1) |> min(total_pages)
+    entries = Enum.slice(visible, (page - 1) * per_page, per_page)
 
     socket
-    |> assign(:topups_empty?, visible == [])
-    |> stream(:topups, visible, reset: true)
+    |> assign(:page, page)
+    |> assign(:total_count, total)
+    |> assign(:total_pages, total_pages)
+    |> assign(:topups_empty?, total == 0)
+    |> stream(:topups, entries, reset: true)
   end
 
   defp visible_topups(topups, consumed, socket) do
@@ -105,27 +199,53 @@ defmodule TokengateWeb.TopupsLive do
 
     topups
     |> Enum.filter(fn t -> assigns.show_archived || not archived?(t, consumed) end)
+    |> filter_by_owner_kind(assigns.owner_filter)
+    |> filter_by_status(assigns.status_filter, consumed)
     |> filter_by_query(assigns.search_query)
     |> sort(assigns.sort_field, assigns.sort_direction, consumed)
   end
 
+  defp filter_by_owner_kind(topups, :all), do: topups
+  defp filter_by_owner_kind(topups, :user), do: Enum.filter(topups, & &1.user_id)
+  defp filter_by_owner_kind(topups, :service), do: Enum.filter(topups, & &1.service_id)
+
+  defp filter_by_status(topups, :all, _consumed), do: topups
+
+  defp filter_by_status(topups, :active, consumed),
+    do: Enum.filter(topups, &(row_state(&1, consumed) == :active))
+
+  defp filter_by_status(topups, :expiring, consumed),
+    do: Enum.filter(topups, &expiring_soon?(&1, consumed))
+
+  defp filter_by_status(topups, :revoked, consumed),
+    do: Enum.filter(topups, &(row_state(&1, consumed) == :revoked))
+
   defp filter_by_query(topups, ""), do: topups
 
   defp filter_by_query(topups, query) do
-    q = String.downcase(query)
+    q = String.downcase(String.trim(query))
 
-    Enum.filter(topups, fn t ->
-      String.contains?(String.downcase(owner_label(t)), q) or
-        String.contains?(String.downcase(t.label || ""), q)
-    end)
+    if q == "" do
+      topups
+    else
+      Enum.filter(topups, fn t ->
+        user_name = if t.user && t.user.name, do: t.user.name, else: ""
+
+        String.contains?(String.downcase(owner_label(t)), q) or
+          String.contains?(String.downcase(user_name), q) or
+          String.contains?(String.downcase(t.label || ""), q) or
+          String.contains?(String.downcase(t.note || ""), q)
+      end)
+    end
   end
 
   defp sort(topups, field, direction, consumed) do
     sorted =
       Enum.sort_by(topups, fn t ->
         case field do
-          :target -> owner_label(t)
+          :target -> String.downcase(owner_label(t))
           :amount -> Decimal.to_float(t.amount_usd)
+          :remaining -> Decimal.to_float(row_remaining(t, consumed))
           :expires_at -> t.expires_at || ~U[9999-12-31 00:00:00Z]
           :status -> state_label(row_state(t, consumed))
           :inserted_at -> t.inserted_at
@@ -156,6 +276,13 @@ defmodule TokengateWeb.TopupsLive do
 
   defp archived?(topup, consumed), do: row_state(topup, consumed) in [:expired, :exhausted]
 
+  defp expiring_soon?(%{expires_at: nil}, _consumed), do: false
+
+  defp expiring_soon?(%{expires_at: %DateTime{} = dt} = topup, consumed) do
+    row_state(topup, consumed) == :active and
+      DateTime.compare(dt, DateTime.add(DateTime.utc_now(), @expiring_window_days, :day)) != :gt
+  end
+
   defp row_pct(topup, consumed) do
     amount = topup.amount_usd
 
@@ -171,11 +298,33 @@ defmodule TokengateWeb.TopupsLive do
     end
   end
 
-  ## Events — búsqueda / orden / archivo -------------------------------------
+  ## Events — búsqueda / filtros / orden / archivo / paginado -----------------
 
   @impl true
   def handle_event("search_topups", %{"q" => query}, socket) do
-    {:noreply, socket |> assign(:search_query, query) |> stream_topups()}
+    {:noreply, socket |> assign(:search_query, query) |> assign(:page, 1) |> stream_topups()}
+  end
+
+  def handle_event("filter_owner_kind", %{"kind" => kind}, socket)
+      when kind in ["all", "user", "service"] do
+    {:noreply,
+     socket
+     |> assign(:owner_filter, String.to_existing_atom(kind))
+     |> assign(:page, 1)
+     |> stream_topups()}
+  end
+
+  def handle_event("filter_status", %{"status" => status}, socket)
+      when status in ["all", "active", "expiring", "revoked"] do
+    {:noreply,
+     socket
+     |> assign(:status_filter, String.to_existing_atom(status))
+     |> assign(:page, 1)
+     |> stream_topups()}
+  end
+
+  def handle_event("go_to_page", %{"page" => page}, socket) do
+    {:noreply, socket |> assign(:page, parse_page(page)) |> stream_topups()}
   end
 
   def handle_event("sort_topups", %{"field" => field}, socket) do
@@ -191,6 +340,7 @@ defmodule TokengateWeb.TopupsLive do
        socket
        |> assign(:sort_field, field)
        |> assign(:sort_direction, direction)
+       |> assign(:page, 1)
        |> stream_topups()}
     else
       _ -> {:noreply, socket}
@@ -201,6 +351,7 @@ defmodule TokengateWeb.TopupsLive do
     {:noreply,
      socket
      |> assign(:show_archived, not socket.assigns.show_archived)
+     |> assign(:page, 1)
      |> stream_topups()}
   end
 
@@ -210,6 +361,7 @@ defmodule TokengateWeb.TopupsLive do
     {:noreply,
      socket
      |> assign(:editing_topup_id, nil)
+     |> assign(:owner_kind, "user")
      |> assign(:selected_owner, nil)
      |> assign(:owner_query, "")
      |> assign(:form_token, Ecto.UUID.generate())
@@ -270,6 +422,21 @@ defmodule TokengateWeb.TopupsLive do
        |> assign(:owner_query, "")
        |> assign(:owner_results, results)
        |> assign(:selected_owner, nil)}
+    end
+  end
+
+  def handle_event("clear_selected_owner", _params, socket) do
+    if socket.assigns.editing_topup_id do
+      {:noreply, socket}
+    else
+      results =
+        if socket.assigns.owner_kind == "user", do: search_users(""), else: search_services("")
+
+      {:noreply,
+       socket
+       |> assign(:selected_owner, nil)
+       |> assign(:owner_query, "")
+       |> assign(:owner_results, results)}
     end
   end
 
@@ -379,6 +546,8 @@ defmodule TokengateWeb.TopupsLive do
   end
 
   def handle_event("revoke_topup", _params, socket), do: {:noreply, socket}
+
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   ## Helpers ----------------------------------------------------------------
 
@@ -491,6 +660,16 @@ defmodule TokengateWeb.TopupsLive do
     end
   end
 
+  defp parse_page(page) when is_binary(page) do
+    case Integer.parse(page) do
+      {i, ""} when i > 0 -> i
+      _ -> 1
+    end
+  end
+
+  defp parse_page(page) when is_integer(page) and page > 0, do: page
+  defp parse_page(_), do: 1
+
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(value), do: value
@@ -498,6 +677,25 @@ defmodule TokengateWeb.TopupsLive do
   defp search_users(query), do: Accounts.search_users_for_picker(query, 8)
 
   defp search_services(query), do: Accounts.search_services_for_picker(query, 8)
+
+  defp owner_path(%{user_id: uid}) when is_binary(uid), do: ~p"/stats/users/#{uid}"
+  defp owner_path(%{service_id: sid}) when is_binary(sid), do: ~p"/stats/services/#{sid}"
+  defp owner_path(_), do: nil
+
+  defp consumed_pct_label(%{active_granted: granted, active_consumed: consumed}) do
+    if Decimal.compare(granted, 0) == :gt do
+      pct =
+        consumed
+        |> Decimal.div(granted)
+        |> Decimal.mult(100)
+        |> Decimal.round(1)
+        |> Decimal.to_string(:normal)
+
+      "#{pct}%"
+    else
+      "0%"
+    end
+  end
 
   # Nombre y línea secundaria de un candidato (usuario o servicio), sin asumir
   # la forma del struct: el selector ofrece ambos.

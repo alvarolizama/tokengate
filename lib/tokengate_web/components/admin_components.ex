@@ -27,10 +27,11 @@ defmodule TokengateWeb.AdminComponents do
   attr :value, :string, default: "", doc: "valor actual del input"
   attr :placeholder, :string, required: true
   attr :input_id, :string, required: true
+  attr :form_id, :string, default: "search-form"
 
   def admin_search(assigns) do
     ~H"""
-    <.form for={%{}} phx-change={@event} phx-submit={@event} id="search-form">
+    <.form for={%{}} phx-change={@event} phx-submit={@event} id={@form_id}>
       <div class="relative">
         <.icon
           name="hero-magnifying-glass"

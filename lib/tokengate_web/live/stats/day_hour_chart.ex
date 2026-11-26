@@ -40,18 +40,43 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
   # llegan. `nil` en el perfil agregado del período, que no tiene "ahora".
   attr :now_hour, :integer, default: nil
   attr :class, :string, default: ""
+  attr :metric, :string, default: "requests", values: ~w(requests cost)
+  attr :toggle_event, :string, default: nil
 
   def day_hour_chart(assigns) do
-    max = Stats.hour_usage_stacked_max(assigns.rows)
-    legend = Stats.provider_legend(assigns.rows)
+    cost_mode? = assigns.metric == "cost"
+
+    max =
+      if cost_mode? do
+        assigns.rows
+        |> Enum.map(&Decimal.to_float(&1.total_cost_usd))
+        |> Enum.max(fn -> 0.0 end)
+      else
+        Stats.hour_usage_stacked_max(assigns.rows)
+      end
+
+    legend = Stats.provider_legend(assigns.rows, if(cost_mode?, do: :cost, else: :requests))
+
+    scale_max =
+      if cost_mode? do
+        nice_cost_ceiling(max)
+      else
+        Stats.nice_ceiling(max)
+      end
+
+    ticks =
+      if cost_mode? do
+        cost_y_ticks(scale_max)
+      else
+        Stats.y_axis_ticks(max)
+      end
 
     assigns =
       assigns
+      |> assign(:cost_mode?, cost_mode?)
       |> assign(:max, max)
-      # Escala por el techo "nice" y no por el pico: los ticks se calculan
-      # sobre el techo, así que con el pico como denominador el tick más alto
-      # quedaría por encima del área de la gráfica.
-      |> assign(:scale_max, Stats.nice_ceiling(max))
+      |> assign(:scale_max, scale_max)
+      |> assign(:ticks, ticks)
       |> assign(:legend, legend)
       |> assign(:has_data?, max > 0)
       |> assign(:total_requests, Enum.reduce(assigns.rows, 0, &(&1.total_requests + &2)))
@@ -70,9 +95,32 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
             <.icon name="hero-clock" class="w-5 h-5 text-base-content/60" />
             {@title}
           </h2>
-          <span class="text-xs text-base-content/40 tabular-nums" id={"#{@id}-total"}>
-            {total_label(@total_requests, @total_cost)}
-          </span>
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-xs text-base-content/40 tabular-nums" id={"#{@id}-total"}>
+              {total_label(@total_requests, @total_cost)}
+            </span>
+            <div :if={@toggle_event} class="join" id={"#{@id}-metric-toggle"}>
+              <button
+                type="button"
+                phx-click={@toggle_event}
+                phx-value-metric="requests"
+                class={[
+                  "btn btn-xs join-item",
+                  if(!@cost_mode?, do: "btn-primary", else: "btn-ghost")
+                ]}
+              >
+                {gettext("Requests")}
+              </button>
+              <button
+                type="button"
+                phx-click={@toggle_event}
+                phx-value-metric="cost"
+                class={["btn btn-xs join-item", if(@cost_mode?, do: "btn-primary", else: "btn-ghost")]}
+              >
+                {gettext("Cost")}
+              </button>
+            </div>
+          </div>
         </div>
 
         <%!-- Tipo de gráfica, unidad y ventana explícitos, como en las
@@ -86,14 +134,14 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
           <%= if @has_data? do %>
             <div class="relative h-40 w-12 shrink-0">
               <span
-                :for={tick <- Stats.y_axis_ticks(@max)}
+                :for={tick <- @ticks}
                 class="absolute right-0 text-[9px] leading-none text-base-content/50 tabular-nums -translate-y-1/2"
                 style={"bottom: #{y_tick_pct(tick, @scale_max)}%"}
               >
-                {Stats.format_number(tick)}
+                {format_tick(tick, @cost_mode?)}
               </span>
               <span class="absolute right-0 bottom-0 text-[9px] leading-none text-base-content/50 tabular-nums translate-y-1/2">
-                0
+                {if @cost_mode?, do: "$0", else: "0"}
               </span>
             </div>
           <% else %>
@@ -105,7 +153,7 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
           <div class="relative flex-1">
             <div :if={@has_data?} class="absolute inset-0 pointer-events-none">
               <div
-                :for={tick <- Stats.y_axis_ticks(@max)}
+                :for={tick <- @ticks}
                 class="absolute left-0 right-0 border-t border-base-300/50 border-dashed"
                 style={"bottom: #{y_tick_pct(tick, @scale_max)}%"}
               />
@@ -123,14 +171,14 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
                     "w-full rounded-t overflow-hidden",
                     row.hour == @now_hour && row.total_requests > 0 && "ring-1 ring-primary/70"
                   ]}
-                  style={"height: #{bar_height_pct(row.total_requests, @scale_max)}%"}
+                  style={"height: #{row_bar_height_pct(row, @scale_max, @cost_mode?)}%"}
                 >
-                  <%= if bar_segments(row, @legend) == [] do %>
+                  <%= if bar_segments(row, @legend, @cost_mode?) == [] do %>
                     <div class="w-full h-full bg-base-300/20" />
                   <% else %>
                     <div class="flex flex-col-reverse h-full w-full">
                       <div
-                        :for={seg <- bar_segments(row, @legend)}
+                        :for={seg <- bar_segments(row, @legend, @cost_mode?)}
                         class={["w-full", seg.color]}
                         style={"height: #{seg.height_pct}%"}
                       />
@@ -192,7 +240,9 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
               {Stats.provider_label(entry.provider_name)}
             </span>
             <span class="text-[10px] text-base-content/40 tabular-nums">
-              {Stats.format_number(entry.requests)}
+              {if @cost_mode?,
+                do: "$" <> Stats.format_decimal(Decimal.round(entry.cost_usd, 2)),
+                else: Stats.format_number(entry.requests)}
             </span>
           </div>
           <span :if={length(@legend) > 6} class="text-[10px] text-base-content/40">
@@ -223,6 +273,20 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
   defp axis_end(_suffix, nil), do: "23:00"
   defp axis_end(suffix, now_hour), do: "ahora #{Stats.hour_label(now_hour)} #{suffix}"
 
+  defp row_bar_height_pct(row, scale_max, true) do
+    val = Decimal.to_float(row.total_cost_usd)
+
+    if val <= 0 or scale_max <= 0 do
+      0
+    else
+      pct = :math.sqrt(val / scale_max) * 100
+      max(Float.round(pct, 1), 8.0)
+    end
+  end
+
+  defp row_bar_height_pct(row, scale_max, false),
+    do: bar_height_pct(row.total_requests, scale_max)
+
   # Altura de la barra de una hora: como `Stats.hour_usage_bar_height/2` pero
   # sin el piso del 8% para las horas SIN tráfico — con el piso, una hora
   # vacía se dibujaría con la misma altura mínima que una con una request, es
@@ -230,6 +294,36 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
   defp bar_height_pct(0, _max), do: 0
   defp bar_height_pct(_requests, 0), do: 0
   defp bar_height_pct(requests, max), do: Stats.hour_usage_bar_height(requests, max)
+
+  defp nice_cost_ceiling(value) when value <= 0, do: 1.0
+
+  defp nice_cost_ceiling(value) do
+    exp = :math.log10(value) |> Float.floor()
+    base = :math.pow(10, exp)
+    fraction = value / base
+
+    nice_fraction =
+      cond do
+        fraction <= 1 -> 1.0
+        fraction <= 2 -> 2.0
+        fraction <= 5 -> 5.0
+        true -> 10.0
+      end
+
+    nice_fraction * base
+  end
+
+  defp cost_y_ticks(scale_max) do
+    for i <- 1..3, do: scale_max * i / 3
+  end
+
+  defp format_tick(tick, false), do: Stats.format_number(tick)
+
+  defp format_tick(tick, true) when tick >= 1.0,
+    do: "$#{:erlang.float_to_binary(tick, [:compact, {:decimals, 2}])}"
+
+  defp format_tick(tick, true),
+    do: "$#{:erlang.float_to_binary(tick, [{:decimals, 3}])}"
 
   # Posición (%) de un tick del eje Y en la misma escala √ que las barras.
   defp y_tick_pct(tick, scale_max) when scale_max > 0 do
@@ -240,7 +334,26 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
   # total de la hora (la altura total de la barra ya viene escalada) y toma
   # el color de su índice global en la leyenda, para que barra y leyenda
   # coincidan.
-  defp bar_segments(%{total_requests: total} = row, legend) when total > 0 do
+  defp bar_segments(%{total_cost_usd: total} = row, legend, true) do
+    total_f = Decimal.to_float(total)
+
+    if total_f > 0 do
+      Enum.map(row.providers, fn provider ->
+        p_f = Decimal.to_float(provider.cost_usd)
+
+        %{
+          provider_name: provider.provider_name,
+          provider_logo_url: Map.get(provider, :provider_logo_url),
+          height_pct: Float.round(p_f / total_f * 100, 1),
+          color: Stats.provider_legend_color(provider.provider_name, legend)
+        }
+      end)
+    else
+      []
+    end
+  end
+
+  defp bar_segments(%{total_requests: total} = row, legend, false) when total > 0 do
     Enum.map(row.providers, fn provider ->
       %{
         provider_name: provider.provider_name,
@@ -251,7 +364,7 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
     end)
   end
 
-  defp bar_segments(_row, _legend), do: []
+  defp bar_segments(_row, _legend, _cost_mode?), do: []
 
   defp bar_title(%{hour: hour, total_requests: 0}, suffix) do
     gettext("%{hour} %{suffix} · no traffic", hour: Stats.hour_label(hour), suffix: suffix)

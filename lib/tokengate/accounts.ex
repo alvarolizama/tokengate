@@ -249,9 +249,9 @@ defmodule Tokengate.Accounts do
     monthly_spend_limit_usd unlimited_spend default_concurrency_limit default_rpm_limit
     inserted_at updated_at)a
 
-  # Minimum size before the free-text search hits the DB: shorter queries match
-  # half the table and read as a full rescan per keystroke.
-  @user_search_min_chars 3
+  # Minimum size before the free-text search hits the DB (1 = any non-empty
+  # query, matching list_services_page/1 and list_groups_page/1).
+  @user_search_min_chars 1
   @user_page_default_per_page 30
   @user_page_max_per_page 100
 
@@ -309,6 +309,7 @@ defmodule Tokengate.Accounts do
       base
       |> maybe_user_search(Map.get(opts, :search))
       |> maybe_user_spent_since(Map.get(opts, :spent_since))
+      |> maybe_user_filter(Map.get(opts, :filter))
 
     total = Repo.aggregate(base, :count, :id, timeout: :timer.seconds(15))
     total_pages = max(1, div(total + per_page - 1, per_page))
@@ -391,6 +392,29 @@ defmodule Tokengate.Accounts do
   end
 
   defp maybe_user_spent_since(query, _), do: query
+
+  defp maybe_user_filter(query, role) when role in ~w(admin user) do
+    where(query, [u], u.global_role == ^role)
+  end
+
+  defp maybe_user_filter(query, status) when status in ~w(active suspended) do
+    where(query, [u], u.status == ^status)
+  end
+
+  defp maybe_user_filter(query, "no_budget") do
+    where(
+      query,
+      [u],
+      u.unlimited_spend == false and is_nil(u.monthly_spend_limit_usd) and
+        not exists(
+          from gm in GroupMember,
+            where: gm.user_id == parent_as(:user).id,
+            select: 1
+        )
+    )
+  end
+
+  defp maybe_user_filter(query, _), do: query
 
   # Nils sort last in both directions (users without a role/status read as the
   # end of the list, matching the in-memory comparator this replaced). Ties
@@ -1840,9 +1864,13 @@ defmodule Tokengate.Accounts do
 
     base =
       from s in Service,
+        as: :service,
         select: map(s, ^@service_page_fields)
 
-    base = maybe_service_search(base, Map.get(opts, :search))
+    base =
+      base
+      |> maybe_service_search(Map.get(opts, :search))
+      |> maybe_service_filter(Map.get(opts, :filter))
 
     total = Repo.aggregate(base, :count, :id, timeout: :timer.seconds(15))
     total_pages = max(1, div(total + per_page - 1, per_page))
@@ -1898,6 +1926,34 @@ defmodule Tokengate.Accounts do
   end
 
   defp maybe_service_search(query, _), do: query
+
+  defp maybe_service_filter(query, "budgeted") do
+    where(query, [s], s.unlimited_spend == false and not is_nil(s.monthly_spend_limit_usd))
+  end
+
+  defp maybe_service_filter(query, "unlimited") do
+    where(query, [s], s.unlimited_spend == true)
+  end
+
+  defp maybe_service_filter(query, "no_budget") do
+    where(query, [s], s.unlimited_spend == false and is_nil(s.monthly_spend_limit_usd))
+  end
+
+  defp maybe_service_filter(query, "no_keys") do
+    where(
+      query,
+      [s],
+      not exists(
+        from k in ApiKey,
+          where:
+            k.service_id == parent_as(:service).id and k.status == "active" and
+              is_nil(k.hidden_at),
+          select: 1
+      )
+    )
+  end
+
+  defp maybe_service_filter(query, _), do: query
 
   # Nils sort last in both directions; ties fall back to the lowercased name and
   # then the id, so the order is stable across pages.

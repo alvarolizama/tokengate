@@ -270,18 +270,21 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
     assert has_element?(view, "#model-breakdown-gpt-4o-svc")
     refute html =~ "Uso diario por modelo"
 
-    # Status breakdown + top models (never dropped by the shared body)
+    # Status breakdown (top models unified in the hierarchical breakdown)
     assert render(element(view, "#status-breakdown")) =~ "badge-error"
-    assert render(element(view, "#top-models")) =~ "gpt-4o-svc"
+    assert render(element(view, "#service-model-breakdown-table")) =~ "gpt-4o-svc"
 
-    # Supervisor roster + read-only config stay on the page
-    assert render(element(view, "#service-supervisors")) =~ user.email
-    assert render(element(view, "#service-config")) =~ service.api_key.key_prefix
-    assert has_element?(view, "#model-badge-#{service.id}-#{model_.id}")
+    # Config + supervisores viven en el tab Config (read-only)
+    {:ok, view_config, _html} = live(conn, ~p"/services/supervised/#{service.id}?tab=config")
+    assert render(element(view_config, "#service-supervisors")) =~ user.email
+    assert render(element(view_config, "#service-config")) =~ service.api_key.key_prefix
+    assert has_element?(view_config, "#model-badge-#{service.id}-#{model_.id}")
 
-    # Recent requests: both of them, including the failed one
-    assert Enum.count(log_rows(view)) == 2
-    assert render(view) =~ "502"
+    # Recent requests: both of them, including the failed one (Live logs tab)
+    {:ok, view_logs, _html} = live(conn, ~p"/services/supervised/#{service.id}?tab=logs")
+    wait_loaded(view_logs)
+    assert Enum.count(log_rows(view_logs)) == 2
+    assert render(view_logs) =~ "502"
   end
 
   test "logs from another service never show up in the detail", %{conn: conn} do
@@ -293,7 +296,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
     {:ok, _} = log_for(other, %{model_requested: "otro-servicio"})
 
     conn = login(conn, user, password)
-    {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}?tab=logs")
     wait_loaded(view)
 
     html = render(view)
@@ -308,7 +311,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
     service = service() |> supervised(user) |> supervised(peer.user)
 
     conn = login(conn, user, password)
-    {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}?tab=config")
     wait_loaded(view)
 
     assert has_element?(view, "#service-supervisor-#{user.id}")
@@ -403,7 +406,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
     end
 
     conn = login(conn, user, password)
-    {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+    {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}?tab=logs")
     wait_loaded(view)
 
     assert Enum.count(log_rows(view)) == 25
@@ -542,7 +545,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
       {:ok, boom_log} = log_for(service, %{model_requested: "boom-model", status_code: 500})
 
       conn = login(conn, user, password)
-      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}?tab=logs")
       wait_loaded(view)
 
       assert has_element?(view, "#logs-#{ok_log.id}")
@@ -576,7 +579,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
       {:ok, ok_log} = log_for(service, %{model_requested: "date-model", status_code: 200})
 
       conn = login(conn, user, password)
-      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}?tab=logs")
       wait_loaded(view)
 
       assert has_element?(view, "#logs-#{ok_log.id}")
@@ -608,16 +611,15 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
       service = service() |> supervised(user)
 
       conn = login(conn, user, password)
-      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}?tab=logs")
       wait_loaded(view)
-
-      assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*0\s*</
 
       {:ok, log_one} = log_for(service, %{model_requested: "live-one"})
       {:ok, log_two} = log_for(service, %{model_requested: "live-two"})
 
       # El proxy publica `logs:new` por cada request; el summary se recomputa
-      # como mucho una vez por ventana de coalescing (2 s).
+      # como mucho una vez por ventana de coalescing (2 s). Esto pasa con el
+      # tab Live logs abierto (del stream no se lee nada si nadie lo mira).
       Phoenix.PubSub.broadcast(Tokengate.PubSub, "logs:new", {:new_log, log_one})
       Phoenix.PubSub.broadcast(Tokengate.PubSub, "logs:new", {:new_log, log_two})
 
@@ -633,7 +635,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
       wait_for_assign(view, fn assigns -> assigns.summary.request_count == 2 end)
 
-      assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*2\s*</
+      assert assigns_of(view).summary.request_count == 2
       refute assigns_of(view).summary_refresh_scheduled
     end
 

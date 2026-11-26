@@ -14,6 +14,7 @@ defmodule TokengateWeb.MaintenanceLive do
 
   use TokengateWeb, :live_view
 
+  alias Tokengate.Auditing.PartitionWorker, as: AuditPartitionWorker
   alias Tokengate.Logs
   alias Tokengate.Providers
   alias Tokengate.Providers.CatalogRefreshWorker
@@ -23,24 +24,42 @@ defmodule TokengateWeb.MaintenanceLive do
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
 
-    if connected?(socket) do
-      Phoenix.PubSub.subscribe(Tokengate.PubSub, CatalogRefreshWorker.topic())
-    end
-
     socket =
       socket
       |> assign(:page_title, gettext("Maintenance") <> " · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:confirm_full_reset, false)
+      |> assign(:full_reset_phrase, "")
       |> assign(:confirm_sticky_reset, false)
       |> assign(:confirm_purge, false)
       |> assign(:purge_preview, nil)
       |> assign(:purge_retention_days, Tokengate.Logs.PartitionWorker.retention_days())
-      |> assign(:sticky_count, sticky_count())
-      |> assign_catalog()
+      |> assign(:sticky_count, 0)
+      |> assign(:catalog_state, nil)
+      |> assign(:catalog_warnings, [])
+      |> assign(:catalog_refreshing, false)
+      |> assign(:catalog_active_count, 0)
+      |> assign(:catalog_stale_count, 0)
+      |> assign(:lab_active_count, 0)
+      |> assign(:audit_status, %{
+        retention_days: AuditPartitionWorker.retention_days(),
+        partition_count: 0,
+        oldest_month: nil,
+        default_rows: 0
+      })
       |> require_admin_hook()
 
-    {:ok, socket}
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, CatalogRefreshWorker.topic())
+
+      {:ok,
+       socket
+       |> assign(:sticky_count, sticky_count())
+       |> assign(:audit_status, AuditPartitionWorker.partition_status())
+       |> assign_catalog()}
+    else
+      {:ok, socket}
+    end
   end
 
   # Catalog state for the "models.dev" card: last refresh outcome (including
@@ -57,14 +76,12 @@ defmodule TokengateWeb.MaintenanceLive do
     |> assign(:lab_active_count, Providers.count_labs("active"))
   end
 
-  defp fmt_dt(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
-
   defp require_admin_hook(socket) do
     attach_hook(socket, :require_admin, :handle_event, fn _event, _params, socket ->
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "No autorizado.")}
+        {:halt, put_flash(socket, :error, gettext("Not authorized."))}
       end
     end)
   end
@@ -76,27 +93,40 @@ defmodule TokengateWeb.MaintenanceLive do
   # con despliegue y proveedores con credencial.
   @impl true
   def handle_event("reset_all_usage", _params, socket) do
-    Logs.truncate_request_logs()
-    purged = Providers.purge_unused_catalog()
-    StickyTracker.clear_all()
+    if String.trim(socket.assigns[:full_reset_phrase] || "") == "RESET" do
+      Logs.truncate_request_logs()
+      purged = Providers.purge_unused_catalog()
+      StickyTracker.clear_all()
 
-    Tokengate.Auditing.audit(
-      socket.assigns.current_user,
-      "settings.reset_all_usage",
-      "usage",
-      "all",
-      %{"models_purged" => purged.models, "providers_purged" => purged.providers}
-    )
+      audit(
+        socket,
+        "settings.reset_all_usage",
+        "usage",
+        "all",
+        %{"models_purged" => purged.models, "providers_purged" => purged.providers}
+      )
 
-    {:noreply,
-     socket
-     |> assign(:confirm_full_reset, false)
-     |> assign(:sticky_count, 0)
-     |> put_flash(
-       :info,
-       "Uso reseteado: logs y métricas a cero, #{purged.models} modelo(s) y " <>
-         "#{purged.providers} proveedor(es) sin uso eliminados, rutas sticky liberadas."
-     )}
+      {:noreply,
+       socket
+       |> assign(:confirm_full_reset, false)
+       |> assign(:full_reset_phrase, "")
+       |> assign(:sticky_count, 0)
+       |> put_flash(
+         :info,
+         gettext(
+           "Usage reset: logs and metrics zeroed, %{models} unused model(s) and %{providers} unused provider(s) removed, sticky routes cleared.",
+           models: purged.models,
+           providers: purged.providers
+         )
+       )}
+    else
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         gettext("Type RESET to confirm the full usage reset.")
+       )}
+    end
   end
 
   # Purga manual de historia: el preview se calcula AL ABRIR el modal (no en
@@ -122,12 +152,8 @@ defmodule TokengateWeb.MaintenanceLive do
   def handle_event("purge_expired", _params, socket) do
     {:ok, result} = Tokengate.Logs.Retention.purge()
 
-    # `entity_id` is required by the audit changeset: passing nil here (as the
-    # reset below used to) made `Auditing.log` return an invalid changeset and
-    # the audit row was silently LOST. "history" is the stable label for this
-    # whole-table action.
-    Tokengate.Auditing.log(
-      socket.assigns.current_user,
+    audit(
+      socket,
       "settings.purge_expired_logs",
       "usage",
       "history",
@@ -162,12 +188,19 @@ defmodule TokengateWeb.MaintenanceLive do
 
   @impl true
   def handle_event("show_full_reset_confirm", _params, socket) do
-    {:noreply, assign(socket, :confirm_full_reset, true)}
+    {:noreply, socket |> assign(:confirm_full_reset, true) |> assign(:full_reset_phrase, "")}
   end
 
   @impl true
+  def handle_event("validate_full_reset", %{"phrase" => phrase}, socket) do
+    {:noreply, assign(socket, :full_reset_phrase, phrase)}
+  end
+
+  def handle_event("validate_full_reset", _params, socket), do: {:noreply, socket}
+
+  @impl true
   def handle_event("cancel_full_reset", _params, socket) do
-    {:noreply, assign(socket, :confirm_full_reset, false)}
+    {:noreply, socket |> assign(:confirm_full_reset, false) |> assign(:full_reset_phrase, "")}
   end
 
   @impl true
@@ -179,8 +212,8 @@ defmodule TokengateWeb.MaintenanceLive do
   def handle_event("reset_sticky_sessions", _params, socket) do
     StickyTracker.clear_all()
 
-    Tokengate.Auditing.audit(
-      socket.assigns.current_user,
+    audit(
+      socket,
       "settings.reset_sticky_sessions",
       "sticky_sessions",
       "all"
@@ -190,7 +223,7 @@ defmodule TokengateWeb.MaintenanceLive do
      socket
      |> assign(:confirm_sticky_reset, false)
      |> assign(:sticky_count, 0)
-     |> put_flash(:info, "Sticky sessions reiniciadas.")}
+     |> put_flash(:info, gettext("Sticky sessions reset."))}
   end
 
   # Enqueues the models.dev refresh. The download and the mirror upsert run in
@@ -201,8 +234,8 @@ defmodule TokengateWeb.MaintenanceLive do
   def handle_event("refresh_catalog", _params, socket) do
     case Providers.request_catalog_refresh() do
       {:ok, _job} ->
-        Tokengate.Auditing.audit(
-          socket.assigns.current_user,
+        audit(
+          socket,
           "settings.catalog_refresh",
           "catalog_providers",
           "global"
@@ -241,19 +274,62 @@ defmodule TokengateWeb.MaintenanceLive do
       impersonator={@impersonator}
       current_path={@current_path}
     >
-      <div class="max-w-3xl mx-auto space-y-8">
-        <div>
-          <h1 class="text-2xl font-bold text-base-content">{gettext("Maintenance")}</h1>
-          <p class="text-sm text-base-content/60 mt-1">
+      <div class="space-y-6">
+        <.header>
+          {gettext("Maintenance")}
+          <:subtitle>
             {gettext("Manage advanced settings and destructive actions.")}
-          </p>
-        </div>
+          </:subtitle>
+        </.header>
+
+        <%!-- Estado de particiones y retención --%>
+        <.section
+          id="retention-status-card"
+          title={gettext("Partitions and retention")}
+          icon="hero-circle-stack"
+          caption={gettext("Daily request log partitions and monthly audit partitions.")}
+        >
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+            <div class="rounded-lg border border-base-300 bg-base-200/40 p-3 space-y-1">
+              <div class="flex items-center justify-between">
+                <span class="font-medium text-base-content">{gettext("Request logs")}</span>
+                <span class="badge badge-sm badge-ghost font-mono">
+                  {gettext("%{days}d retention", days: @purge_retention_days)}
+                </span>
+              </div>
+              <p class="text-xs text-base-content/60">
+                {gettext("Daily partitions managed at 00:05 UTC; hourly rollup pruned symmetrically.")}
+              </p>
+            </div>
+
+            <div class="rounded-lg border border-base-300 bg-base-200/40 p-3 space-y-1">
+              <div class="flex items-center justify-between">
+                <span class="font-medium text-base-content">{gettext("Audit logs")}</span>
+                <span class="badge badge-sm badge-ghost font-mono">
+                  {gettext("%{days}d retention", days: @audit_status.retention_days)}
+                </span>
+              </div>
+              <p class="text-xs text-base-content/60">
+                <span class="font-mono">{@audit_status.partition_count}</span>
+                {gettext("monthly partition(s)")}
+                <span :if={@audit_status.oldest_month}>
+                  · {gettext("oldest:")}
+                  <span class="font-mono">{Calendar.strftime(@audit_status.oldest_month, "%Y-%m")}</span>
+                </span>
+                <span :if={@audit_status.default_rows > 0} class="text-warning">
+                  · <span class="font-mono">{@audit_status.default_rows}</span>
+                  {gettext("in default")}
+                </span>
+              </p>
+            </div>
+          </div>
+        </.section>
 
         <%!-- Zona de precaución: acciones repetibles o reversibles --%>
-        <div class="card bg-base-100 border border-warning/30" id="caution-zone-card">
+        <div class="card bg-base-100 border border-warning/30 shadow-sm" id="caution-zone-card">
           <div class="card-body">
-            <h2 class="card-title text-warning flex items-center gap-2">
-              <.icon name="hero-shield-exclamation" class="w-5 h-5" /> {gettext("Caution zone")}
+            <h2 class="card-title text-base text-warning flex items-center gap-2">
+              <.icon name="hero-shield-exclamation" class="size-5" /> {gettext("Caution zone")}
             </h2>
             <p class="text-sm text-base-content/60">
               {gettext("Repeatable or reversible actions: they do not erase data permanently.")}
@@ -262,8 +338,8 @@ defmodule TokengateWeb.MaintenanceLive do
 
             <div class="divider my-2"></div>
 
-            <div class="flex items-center justify-between">
-              <div>
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div class="min-w-0">
                 <h3 class="font-semibold text-base-content">{gettext("Reset sticky sessions")}</h3>
                 <p class="text-sm text-base-content/60">
                   {gettext("Deletes every sticky API key → provider assignment.")}
@@ -277,7 +353,7 @@ defmodule TokengateWeb.MaintenanceLive do
               <button
                 type="button"
                 phx-click="show_sticky_reset_confirm"
-                class="btn btn-warning btn-outline btn-sm"
+                class="btn btn-warning btn-outline btn-sm shrink-0"
                 id="reset-sticky-btn"
               >
                 {gettext("Reset stickies")}
@@ -289,8 +365,11 @@ defmodule TokengateWeb.MaintenanceLive do
             <%!-- External data, not user data: the refresh upserts the mirror
                  from models.dev and re-materializes provider identity. Nothing
                  is deleted, so it belongs in the caution zone. --%>
-            <div class="flex items-start justify-between gap-4" id="catalog-refresh-card">
-              <div>
+            <div
+              class="flex flex-col sm:flex-row sm:items-start justify-between gap-4"
+              id="catalog-refresh-card"
+            >
+              <div class="min-w-0">
                 <h3 class="font-semibold text-base-content">{gettext("models.dev catalog")}</h3>
                 <p class="text-sm text-base-content/60">
                   {gettext(
@@ -304,7 +383,9 @@ defmodule TokengateWeb.MaintenanceLive do
                   )}
                   <span :if={@catalog_state && @catalog_state.synced_at}>
                     {gettext("Last update:")}
-                    <span class="font-mono">{fmt_dt(@catalog_state.synced_at)}</span>
+                    <span class="font-mono">
+                      {format_datetime_short(@catalog_state.synced_at, @timezone)}
+                    </span>
                     ({@catalog_state.source || "—"}).
                   </span>
                   <span :if={@catalog_state && @catalog_state.error} class="text-error">
@@ -358,10 +439,10 @@ defmodule TokengateWeb.MaintenanceLive do
         </div>
 
         <%!-- Zona de peligro: acciones irreversibles, siempre al final de la página --%>
-        <div class="card bg-base-100 border border-error/30" id="danger-zone-card">
+        <div class="card bg-base-100 border border-error/30 shadow-sm" id="danger-zone-card">
           <div class="card-body">
-            <h2 class="card-title text-error flex items-center gap-2">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> {gettext("Danger zone")}
+            <h2 class="card-title text-base text-error flex items-center gap-2">
+              <.icon name="hero-exclamation-triangle" class="size-5" /> {gettext("Danger zone")}
             </h2>
             <p class="text-sm text-base-content/60">
               {gettext("The actions in this section are irreversible. Use them with caution.")}
@@ -370,8 +451,8 @@ defmodule TokengateWeb.MaintenanceLive do
             <div class="divider my-2"></div>
 
             <%!-- Reset total: uso + registros de catálogo sin uso --%>
-            <div class="flex items-center justify-between gap-4">
-              <div>
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div class="min-w-0">
                 <h3 class="font-semibold text-base-content">
                   {gettext("Leave everything at zero")}
                 </h3>
@@ -387,7 +468,7 @@ defmodule TokengateWeb.MaintenanceLive do
               <button
                 type="button"
                 phx-click="show_full_reset_confirm"
-                class="btn btn-error btn-outline btn-sm"
+                class="btn btn-error btn-outline btn-sm shrink-0"
                 id="reset-all-usage-btn"
               >
                 {gettext("Full reset")}
@@ -401,8 +482,8 @@ defmodule TokengateWeb.MaintenanceLive do
                  usuarios, keys, catálogo, presupuestos del mes ni contadores de
                  consumo — sólo los logs viejos, sus filas varadas en la
                  partición default y el rollup de esos días. --%>
-            <div class="flex items-center justify-between gap-4">
-              <div>
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div class="min-w-0">
                 <h3 class="font-semibold text-base-content">
                   {gettext("Purge history past the retention window")}
                 </h3>
@@ -419,7 +500,7 @@ defmodule TokengateWeb.MaintenanceLive do
               <button
                 type="button"
                 phx-click="show_purge_confirm"
-                class="btn btn-error btn-outline btn-sm"
+                class="btn btn-error btn-outline btn-sm shrink-0"
                 id="purge-expired-btn"
               >
                 {gettext("Purge history")}
@@ -491,6 +572,7 @@ defmodule TokengateWeb.MaintenanceLive do
             phx-click="purge_expired"
             class="btn btn-error btn-sm"
             id="confirm-purge-btn"
+            phx-disable-with={gettext("Purging…")}
             disabled={
               @purge_preview.partition_count == 0 and
                 @purge_preview.default_expired_rows == 0 and @purge_preview.rollup_rows == 0
@@ -511,7 +593,7 @@ defmodule TokengateWeb.MaintenanceLive do
       >
         <div class="flex items-start gap-2 text-sm text-base-content/70">
           <.icon name="hero-exclamation-triangle" class="w-5 h-5 text-error shrink-0" />
-          <div class="space-y-2">
+          <div class="space-y-3">
             <p>
               {gettext("Deletes")} <strong>{gettext("permanently")}</strong>
               {gettext(
@@ -524,6 +606,17 @@ defmodule TokengateWeb.MaintenanceLive do
                 "Users, services, API keys, limit profiles, models with deployments and providers with credentials are kept."
               )}
             </p>
+            <.form for={%{}} id="full-reset-confirm-form" phx-change="validate_full_reset">
+              <.input
+                name="phrase"
+                id="full-reset-confirm-input"
+                type="text"
+                value={@full_reset_phrase}
+                label={gettext("Type RESET to confirm")}
+                placeholder="RESET"
+                autocomplete="off"
+              />
+            </.form>
           </div>
         </div>
         <:footer>
@@ -535,6 +628,8 @@ defmodule TokengateWeb.MaintenanceLive do
             phx-click="reset_all_usage"
             class="btn btn-error btn-sm"
             id="confirm-reset-all-usage-btn"
+            disabled={String.trim(@full_reset_phrase || "") != "RESET"}
+            phx-disable-with={gettext("Resetting…")}
           >
             {gettext("Yes, leave everything at zero")}
           </button>

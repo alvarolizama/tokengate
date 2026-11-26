@@ -221,12 +221,18 @@ defmodule TokengateWeb.SettingsLiveTest do
       refute has_element?(view, "#reset-logs-btn")
       refute has_element?(view, "#confirm-reset-logs-btn")
 
-      # El borrado de TODO sigue ocurriendo dentro del reset total.
+      # El borrado de TODO sigue ocurriendo dentro del reset total, pero exige
+      # confirmar escribiendo RESET antes de habilitar el botón.
       view |> element("#reset-all-usage-btn") |> render_click()
       # El contenedor es el .modal único: su id va en el div raíz.
       assert has_element?(view, "#confirm-full-reset-modal")
-      assert has_element?(view, "#confirm-reset-all-usage-btn")
+      assert has_element?(view, "#confirm-reset-all-usage-btn[disabled]")
 
+      view
+      |> form("#full-reset-confirm-form", %{"phrase" => "RESET"})
+      |> render_change()
+
+      assert has_element?(view, "#confirm-reset-all-usage-btn:not([disabled])")
       view |> element("#confirm-reset-all-usage-btn") |> render_click()
 
       assert render(view) =~ "Uso reseteado"
@@ -393,6 +399,16 @@ defmodule TokengateWeb.SettingsLiveTest do
         )
 
       assert log.entity_id == "all"
+      assert log.origin == "web"
+    end
+
+    test "renders retention status card with request_logs and audit_logs info", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
+
+      assert has_element?(view, "#retention-status-card")
+      assert has_element?(view, "#retention-status-card", "90d")
     end
   end
 end

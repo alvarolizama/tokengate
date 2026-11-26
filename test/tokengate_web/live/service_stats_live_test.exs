@@ -151,7 +151,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       {:ok, _} = log_for(service, %{model_requested: "gpt-4o-svc", status_code: 200})
       {:ok, _} = log_for(service, %{model_requested: "gpt-4o-svc", status_code: 503})
 
-      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}?tab=logs")
       html = render(wait_loaded(view))
 
       assert html =~ "gpt-4o-svc"
@@ -168,7 +168,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       {:ok, _} = log_for(service, %{model_requested: "only-this-one"})
       {:ok, _} = log_for(other, %{model_requested: "other-service-model"})
 
-      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}?tab=logs")
       html = render(wait_loaded(view))
 
       assert html =~ "only-this-one"
@@ -280,11 +280,17 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*1\s*</
       assert cell_text(view, "#api-key-row-#{key_b.id} td:nth-child(3)") == "1"
 
-      # La lista de logs también quedó scopeada a la key elegida.
+      # La lista de logs quedó scopeada a la key elegida (Live logs tab).
+      view |> element("#tab-logs") |> render_click()
+      wait_loaded(view)
+
       assert render(view) =~ "beta-model"
       refute render(view) =~ "alpha-model"
 
-      # De vuelta a todas: KPI = 2.
+      # De vuelta a todas: la tabla de keys se lee en Overview.
+      view |> element("#tab-overview") |> render_click()
+      wait_loaded(view)
+
       view
       |> form("#key-filter-form", %{"key_filter" => %{"key_id" => "all"}})
       |> render_change()

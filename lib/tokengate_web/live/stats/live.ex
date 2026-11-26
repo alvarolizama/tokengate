@@ -27,6 +27,9 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   attr :pulse, :any, required: true
   attr :today_metrics, :any, required: true
   attr :org_budget, :any, default: nil
+  attr :live_drivers, :any, default: nil
+  attr :yesterday_pace, :any, default: nil
+  attr :chart_metric, :string, default: "requests"
   attr :minute_series, :any, required: true
   attr :minute_series_max, :any, required: true
   attr :minute_tokens_max, :any, required: true
@@ -46,6 +49,9 @@ defmodule TokengateWeb.StatsLive.LiveSection do
            Un solo card de gasto UTC del día (`#live-today-cost`, preservando
            `#live-org-budget-spend`), junto a Tokens y Requests con latencia. --%>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <% today_cost =
+          (@org_budget && @org_budget.daily_spend_usd) || @today_metrics.cost_usd %>
+        <% pace_delta = pace_delta_pct(today_cost, @yesterday_pace) %>
         <.kpi_card
           id="live-today-cost"
           label={gettext("Today · cost (UTC)")}
@@ -54,11 +60,26 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           title={gettext("UTC day spend (00:00–24:00 UTC)")}
         >
           <span id="live-org-budget-spend">
-            ${Stats.format_decimal(
-              (@org_budget && @org_budget.daily_spend_usd) || @today_metrics.cost_usd
-            )}
+            ${Stats.format_decimal(today_cost)}
           </span>
-          <:sub>{gettext("all subjects · 00:00–24:00 UTC window")}</:sub>
+          <:sub>
+            {gettext("all subjects · 00:00–24:00 UTC window")}
+            <span :if={@today_metrics.requests_total > 0} class="tabular-nums">
+              · {Stats.cost_per_request(today_cost, @today_metrics.requests_total)}/req
+            </span>
+            <span
+              :if={pace_delta != nil}
+              id="live-yesterday-pace"
+              class={[
+                "font-medium tabular-nums",
+                if(pace_delta > 0, do: "text-warning", else: "text-success")
+              ]}
+            >
+              · {gettext("vs yesterday at this hour")}: {if(pace_delta >= 0, do: "+", else: "")}{pace_delta}% (${Stats.format_decimal(
+                @yesterday_pace.cost_usd
+              )})
+            </span>
+          </:sub>
         </.kpi_card>
 
         <.kpi_card
@@ -188,6 +209,194 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         />
       </div>
 
+      <%!-- Qué cuesta ahorita (últimos 15 min): modelos, consumidores y agentes
+           ordenados por gasto real para responder "¿qué está quemando presupuesto
+           ahora mismo?" con un clic al detalle. --%>
+      <% drivers =
+        @live_drivers || %{window_minutes: 15, top_models: [], top_consumers: [], top_agents: []} %>
+      <% drivers_total_cost =
+        Enum.reduce(drivers.top_models, Decimal.new(0), fn m, acc ->
+          Decimal.add(acc, m.cost_usd)
+        end) %>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4" id="live-cost-drivers">
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-drivers-models">
+          <div class="card-body p-4 gap-2">
+            <div class="flex items-center justify-between gap-2">
+              <h2 class="card-title text-sm font-semibold">
+                <.icon name="hero-rectangle-stack" class="w-4 h-4 text-base-content/60" />
+                {gettext("Active models · %{mins} min", mins: drivers.window_minutes)}
+              </h2>
+              <span class="text-[10px] text-base-content/40">{gettext("by cost")}</span>
+            </div>
+            <%= if drivers.top_models != [] do %>
+              <ul class="divide-y divide-base-200/60">
+                <li
+                  :for={row <- drivers.top_models}
+                  class="py-1.5 flex items-center justify-between gap-2 text-xs"
+                >
+                  <div class="min-w-0 flex-1">
+                    <%= if row.model_id do %>
+                      <.link
+                        patch={~p"/stats/models/#{row.model_id}?period=today"}
+                        class="link link-hover font-medium truncate block"
+                        title={row.model_name}
+                      >
+                        {row.model_name}
+                      </.link>
+                    <% else %>
+                      <span class="font-medium truncate block" title={row.model_name}>
+                        {row.model_name}
+                      </span>
+                    <% end %>
+                    <span class="text-[10px] text-base-content/50 tabular-nums">
+                      {Stats.format_number(row.request_count)} req · {Stats.cache_hit_pct(
+                        Map.get(row, :prompt_tokens, 0),
+                        Map.get(row, :cache_read_tokens, 0)
+                      )} cache
+                    </span>
+                  </div>
+                  <div class="text-right shrink-0 font-mono tabular-nums">
+                    <div class="font-semibold text-warning">
+                      ${Stats.format_decimal(row.cost_usd)}
+                    </div>
+                    <div class="text-[10px] text-base-content/50">
+                      {Stats.cost_share_pct(row.cost_usd, drivers_total_cost)}%
+                    </div>
+                  </div>
+                </li>
+              </ul>
+            <% else %>
+              <p class="text-xs text-base-content/40 py-4 text-center">
+                {gettext("No spend in the last %{mins} min", mins: drivers.window_minutes)}
+              </p>
+            <% end %>
+          </div>
+        </div>
+
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-drivers-consumers">
+          <div class="card-body p-4 gap-2">
+            <div class="flex items-center justify-between gap-2">
+              <h2 class="card-title text-sm font-semibold">
+                <.icon name="hero-users" class="w-4 h-4 text-base-content/60" />
+                {gettext("Active consumers · %{mins} min", mins: drivers.window_minutes)}
+              </h2>
+              <span class="text-[10px] text-base-content/40">{gettext("by cost")}</span>
+            </div>
+            <%= if drivers.top_consumers != [] do %>
+              <ul class="divide-y divide-base-200/60">
+                <li
+                  :for={row <- drivers.top_consumers}
+                  class="py-1.5 flex items-center justify-between gap-2 text-xs"
+                >
+                  <div class="min-w-0 flex-1">
+                    <%= cond do %>
+                      <% row.subject_type == "user" and row.subject_id -> %>
+                        <.link
+                          navigate={~p"/stats/users/#{row.subject_id}"}
+                          class="link link-hover font-medium truncate block"
+                          title={row.sublabel || row.label}
+                        >
+                          {row.label}
+                        </.link>
+                      <% row.subject_type == "service" and row.subject_id -> %>
+                        <.link
+                          navigate={~p"/stats/services/#{row.subject_id}"}
+                          class="link link-hover font-medium truncate inline-flex items-center gap-1"
+                          title={row.label}
+                        >
+                          <span class="truncate">{row.label}</span>
+                          <span class="badge badge-xs badge-ghost shrink-0">{gettext("Service")}</span>
+                        </.link>
+                      <% true -> %>
+                        <span class="font-medium truncate block">{row.label}</span>
+                    <% end %>
+                    <span class="text-[10px] text-base-content/50 tabular-nums">
+                      {Stats.format_number(row.request_count)} req
+                      <span :if={row.error_count > 0} class="text-warning">
+                        · {row.error_count} err
+                      </span>
+                    </span>
+                  </div>
+                  <div class="text-right shrink-0 font-mono tabular-nums">
+                    <div class="font-semibold text-warning">
+                      ${Stats.format_decimal(row.cost_usd)}
+                    </div>
+                    <div class="text-[10px] text-base-content/50">
+                      {Stats.cost_per_request(row.cost_usd, row.request_count)}/req
+                    </div>
+                  </div>
+                </li>
+              </ul>
+            <% else %>
+              <p class="text-xs text-base-content/40 py-4 text-center">
+                {gettext("No spend in the last %{mins} min", mins: drivers.window_minutes)}
+              </p>
+            <% end %>
+          </div>
+        </div>
+
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-drivers-agents">
+          <div class="card-body p-4 gap-2">
+            <div class="flex items-center justify-between gap-2">
+              <h2 class="card-title text-sm font-semibold">
+                <.icon name="hero-command-line" class="w-4 h-4 text-base-content/60" />
+                {gettext("Active agents · %{mins} min", mins: drivers.window_minutes)}
+              </h2>
+              <span class="text-[10px] text-base-content/40">{gettext("by cost")}</span>
+            </div>
+            <%= if drivers.top_agents != [] do %>
+              <ul class="divide-y divide-base-200/60">
+                <li
+                  :for={row <- drivers.top_agents}
+                  class="py-1.5 flex items-center justify-between gap-2 text-xs"
+                >
+                  <div class="min-w-0 flex-1 flex items-center gap-2">
+                    <img
+                      :if={row.logo}
+                      src={row.logo}
+                      alt=""
+                      class="w-4 h-4 object-contain shrink-0"
+                    />
+                    <.icon
+                      :if={!row.logo}
+                      name={row.icon}
+                      class="w-4 h-4 text-base-content/60 shrink-0"
+                    />
+                    <div class="min-w-0">
+                      <.link
+                        patch={~p"/stats/agents/#{row.key}?period=today"}
+                        class="link link-hover font-medium truncate block"
+                        title={row.label}
+                      >
+                        {row.label}
+                      </.link>
+                      <span class="text-[10px] text-base-content/50 tabular-nums">
+                        {Stats.format_number(row.request_count)} req
+                        <span :if={row.error_count > 0} class="text-warning">
+                          · {row.error_count} err
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                  <div class="text-right shrink-0 font-mono tabular-nums">
+                    <div class="font-semibold text-warning">
+                      ${Stats.format_decimal(row.cost_usd)}
+                    </div>
+                    <div class="text-[10px] text-base-content/50">
+                      {Stats.cost_per_request(row.cost_usd, row.request_count)}/req
+                    </div>
+                  </div>
+                </li>
+              </ul>
+            <% else %>
+              <p class="text-xs text-base-content/40 py-4 text-center">
+                {gettext("No spend in the last %{mins} min", mins: drivers.window_minutes)}
+              </p>
+            <% end %>
+          </div>
+        </div>
+      </div>
+
       <%!-- Día en curso por hora y proveedor. Ocupa el sitio del desglose
            "en vuelo por modelo": esa tarjeta estaba vacía casi siempre (el
            registry ETS sólo tiene filas mientras hay una request en curso,
@@ -211,6 +420,8 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           hour_suffix="UTC"
           empty_note={gettext("no traffic in the UTC day yet")}
           now_hour={DateTime.utc_now().hour}
+          metric={@chart_metric}
+          toggle_event="set_chart_metric"
         />
 
         <%!-- Feed: últimos requests. La tarjeta no aporta alto propio en el
@@ -281,6 +492,12 @@ defmodule TokengateWeb.StatsLive.LiveSection do
                   title={gettext("Status returned to the client")}
                 >
                   {log.status_code}
+                </span>
+                <span class="hidden sm:inline shrink-0 font-mono text-base-content/40 tabular-nums">
+                  {Stats.format_ms(log.latency_ms)}
+                </span>
+                <span class="hidden md:inline shrink-0 font-mono text-base-content/40 tabular-nums">
+                  {Stats.format_compact((log.prompt_tokens || 0) + (log.completion_tokens || 0))} tok
                 </span>
                 <span class="shrink-0 font-mono text-base-content/60 tabular-nums">
                   {feed_cost(log)}
@@ -483,4 +700,21 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   end
 
   defp feed_cost(_log), do: "$0"
+
+  defp pace_delta_pct(_today_cost, nil), do: nil
+
+  defp pace_delta_pct(%Decimal{} = today_cost, %{cost_usd: %Decimal{} = prev_cost}) do
+    if Decimal.compare(prev_cost, Decimal.new(0)) == :gt do
+      today_cost
+      |> Decimal.sub(prev_cost)
+      |> Decimal.div(prev_cost)
+      |> Decimal.mult(Decimal.new(100))
+      |> Decimal.round(1, :half_up)
+      |> Decimal.to_float()
+    else
+      nil
+    end
+  end
+
+  defp pace_delta_pct(_, _), do: nil
 end

@@ -16,10 +16,13 @@ defmodule TokengateWeb.StatsLive.Provider do
   import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
 
   alias TokengateWeb.StatsHelpers, as: Stats
+  alias TokengateWeb.StatsLive.DailyStackedChart
 
   attr :provider, :any, required: true
   attr :provider_ranking, :any, required: true
   attr :provider_metrics, :any, required: true
+  attr :drilldown_series, :any, default: []
+  attr :chart_metric, :string, default: "requests"
   attr :breakdown_model, :any, required: true
   attr :breakdown_user, :any, required: true
   attr :breakdown_service, :any, required: true
@@ -86,6 +89,18 @@ defmodule TokengateWeb.StatsLive.Provider do
             accent="accent"
           >
             ${Stats.format_decimal(@provider_metrics.total_cost_usd)}
+            <:sub>
+              <span :if={@provider_metrics.request_count > 0} class="tabular-nums">
+                {Stats.cost_per_request(
+                  @provider_metrics.total_cost_usd,
+                  @provider_metrics.request_count
+                )}/req · {Stats.effective_cost_per_1m(
+                  @provider_metrics.total_cost_usd,
+                  @provider_metrics.total_prompt_tokens,
+                  @provider_metrics.total_completion_tokens
+                )}/1M
+              </span>
+            </:sub>
           </.kpi_card>
 
           <.kpi_card
@@ -139,6 +154,20 @@ defmodule TokengateWeb.StatsLive.Provider do
             {Stats.format_ms(@provider_metrics.avg_latency_ms)}
           </.kpi_card>
         </div>
+
+        <%!-- Tendencia diaria por modelo servido por este proveedor --%>
+        <% provider_series_labels =
+          @drilldown_series |> Enum.map(& &1.label) |> Enum.uniq() |> Enum.sort() %>
+        <DailyStackedChart.daily_stacked_chart
+          :if={@drilldown_series != []}
+          id="provider-daily-chart"
+          title={gettext("Daily usage per model")}
+          period={@period}
+          series={@drilldown_series}
+          labels={provider_series_labels}
+          metric={@chart_metric}
+          toggle_event="set_chart_metric"
+        />
 
         <%!-- Modelos que sirve este proveedor --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm">

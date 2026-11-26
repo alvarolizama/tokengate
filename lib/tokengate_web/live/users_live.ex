@@ -34,41 +34,86 @@ defmodule TokengateWeb.UsersLive do
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
 
-    socket =
-      socket
-      |> assign(:page_title, gettext("Users") <> " · Tokengate")
-      |> stream_configure(:users, dom_id: &"user-#{&1.id}")
-      |> assign(:form, nil)
-      |> assign(:editing_user_id, nil)
-      |> assign(:reset_user_id, nil)
-      |> assign(:form_mode, nil)
-      |> assign(:delete_target_id, nil)
-      |> assign(:delete_target_email, nil)
-      |> assign(:all_groups, Accounts.list_groups())
-      |> assign(:is_admin, user && user.global_role == "admin")
-      |> assign(:search_query, "")
-      |> assign(:sort_field, :name)
-      |> assign(:sort_direction, :asc)
-      |> assign(:filter_today_spend, false)
-      |> assign(:editing_groups_user_id, nil)
-      |> assign(:editing_groups_user_name, nil)
-      |> assign(:editing_group_ids, [])
-      |> assign(:editing_user_sub_id, nil)
-      |> assign(:keys_user_id, nil)
-      |> assign(:keys_user_name, nil)
-      |> assign(:keys, [])
-      |> assign(:keys_spend, %{})
-      |> assign(:keys_counts, %{})
-      |> assign(:editing_key_id, nil)
-      |> assign(:new_key_token, nil)
-      |> assign(:page, 1)
-      |> assign(:per_page, @per_page)
-      |> assign(:total_count, 0)
-      |> assign(:total_pages, 1)
-      |> require_admin_hook()
-      |> load_users()
+    if is_nil(user) or user.global_role != "admin" do
+      {:ok,
+       socket
+       |> put_flash(:error, gettext("You do not have permission to access this section."))
+       |> redirect(to: "/dashboard")}
+    else
+      socket =
+        socket
+        |> assign(:page_title, gettext("Users") <> " · Tokengate")
+        |> stream_configure(:users, dom_id: &"user-#{&1.id}")
+        |> assign(:form, nil)
+        |> assign(:editing_user_id, nil)
+        |> assign(:reset_user_id, nil)
+        |> assign(:form_mode, nil)
+        |> assign(:delete_target_id, nil)
+        |> assign(:delete_target_email, nil)
+        |> assign(:all_groups, [])
+        |> assign(:is_admin, true)
+        |> assign(:search_query, "")
+        |> assign(:filter_status, "all")
+        |> assign(:sort_field, :name)
+        |> assign(:sort_direction, :asc)
+        |> assign(:filter_today_spend, false)
+        |> assign(:editing_groups_user_id, nil)
+        |> assign(:editing_groups_user_name, nil)
+        |> assign(:editing_group_ids, [])
+        |> assign(:editing_user_sub_id, nil)
+        |> assign(:keys_user_id, nil)
+        |> assign(:keys_user_name, nil)
+        |> assign(:keys, [])
+        |> assign(:keys_spend, %{})
+        |> assign(:keys_counts, %{})
+        |> assign(:editing_key_id, nil)
+        |> assign(:new_key_token, nil)
+        |> assign(:page, 1)
+        |> assign(:per_page, @per_page)
+        |> assign(:total_count, 0)
+        |> assign(:total_pages, 1)
+        |> assign(:loaded?, false)
+        |> require_admin_hook()
 
-    {:ok, socket}
+      {:ok, socket}
+    end
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    if socket.assigns[:is_admin] do
+      q = Map.get(params, "q", "") |> to_string()
+      filter = parse_filter(Map.get(params, "filter"))
+      today? = Map.get(params, "today") == "1"
+      {sort_field, sort_direction} = parse_sort_params(params)
+      page = parse_page(Map.get(params, "page"))
+
+      changed? =
+        not socket.assigns.loaded? or
+          socket.assigns.search_query != q or
+          socket.assigns.filter_status != filter or
+          socket.assigns.filter_today_spend != today? or
+          socket.assigns.sort_field != sort_field or
+          socket.assigns.sort_direction != sort_direction or
+          socket.assigns.page != page
+
+      if changed? do
+        {:noreply,
+         socket
+         |> assign(:search_query, q)
+         |> assign(:filter_status, filter)
+         |> assign(:filter_today_spend, today?)
+         |> assign(:sort_field, sort_field)
+         |> assign(:sort_direction, sort_direction)
+         |> assign(:page, page)
+         |> assign(:loaded?, true)
+         |> load_users()}
+      else
+        {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
+    end
   end
 
   # Defense-in-depth: the router already gates this LiveView behind
@@ -79,7 +124,7 @@ defmodule TokengateWeb.UsersLive do
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "No autorizado.")}
+        {:halt, put_flash(socket, :error, gettext("Not authorized."))}
       end
     end)
   end
@@ -120,6 +165,7 @@ defmodule TokengateWeb.UsersLive do
     page =
       Accounts.list_users_page(
         search: socket.assigns[:search_query] || "",
+        filter: socket.assigns[:filter_status] || "all",
         page: socket.assigns.page,
         per_page: socket.assigns.per_page,
         sort_field: sort_field,
@@ -380,29 +426,45 @@ defmodule TokengateWeb.UsersLive do
   ## Events — search -------------------------------------------------------
   @impl true
   def handle_event("search_users", %{"q" => query}, socket) do
-    {:noreply,
-     socket
-     |> assign(:search_query, query)
-     |> assign(:page, 1)
-     |> load_users()}
+    socket =
+      socket
+      |> assign(:search_query, query)
+      |> assign(:page, 1)
+      |> load_users()
+
+    {:noreply, push_patch(socket, to: users_path(socket), replace: true)}
   end
 
   ## Events — filter --------------------------------------------------------
   def handle_event("toggle_today_spend", _params, socket) do
-    {:noreply,
-     socket
-     |> update(:filter_today_spend, &(!&1))
-     |> assign(:page, 1)
-     |> load_users()}
+    socket =
+      socket
+      |> update(:filter_today_spend, &(!&1))
+      |> assign(:page, 1)
+      |> load_users()
+
+    {:noreply, push_patch(socket, to: users_path(socket), replace: true)}
+  end
+
+  def handle_event("filter_users", %{"filter" => filter}, socket) do
+    socket =
+      socket
+      |> assign(:filter_status, parse_filter(filter))
+      |> assign(:page, 1)
+      |> load_users()
+
+    {:noreply, push_patch(socket, to: users_path(socket), replace: true)}
   end
 
   ## Events — paginado ------------------------------------------------------
 
   def handle_event("go_to_page", %{"page" => page}, socket) do
-    {:noreply,
-     socket
-     |> assign(:page, parse_page(page))
-     |> load_users()}
+    socket =
+      socket
+      |> assign(:page, parse_page(page))
+      |> load_users()
+
+    {:noreply, push_patch(socket, to: users_path(socket), replace: true)}
   end
 
   ## Events — sort ----------------------------------------------------------
@@ -416,12 +478,14 @@ defmodule TokengateWeb.UsersLive do
           {field, default_direction_for(field)}
         end
 
-      {:noreply,
-       socket
-       |> assign(:sort_field, sort_field)
-       |> assign(:sort_direction, sort_direction)
-       |> assign(:page, 1)
-       |> load_users()}
+      socket =
+        socket
+        |> assign(:sort_field, sort_field)
+        |> assign(:sort_direction, sort_direction)
+        |> assign(:page, 1)
+        |> load_users()
+
+      {:noreply, push_patch(socket, to: users_path(socket), replace: true)}
     else
       _ -> {:noreply, socket}
     end
@@ -440,6 +504,7 @@ defmodule TokengateWeb.UsersLive do
 
         {:noreply,
          socket
+         |> ensure_groups_loaded()
          |> assign(:editing_groups_user_id, user.id)
          |> assign(:editing_groups_user_name, user.name || user.email)
          |> assign(:editing_group_ids, group_ids)}
@@ -659,8 +724,10 @@ defmodule TokengateWeb.UsersLive do
 
     {:noreply,
      socket
+     |> ensure_groups_loaded()
      |> assign(:form, to_form(changeset, as: :user))
      |> assign(:editing_user_id, :new)
+     |> assign(:editing_user_sub_id, nil)
      |> assign(:form_mode, :create)}
   end
 
@@ -674,10 +741,40 @@ defmodule TokengateWeb.UsersLive do
 
         {:noreply,
          socket
+         |> ensure_groups_loaded()
          |> assign(:form, to_form(Map.put(changeset, :params, %{}), as: :user))
          |> assign(:editing_user_id, user.id)
          |> assign(:editing_user_sub_id, current_sub_id(user.id))
          |> assign(:form_mode, :edit)}
+    end
+  end
+
+  def handle_event("validate_user", %{"user" => user_params}, socket) do
+    {sub_id, clean_params} = Map.pop(user_params, "sub_id")
+    sub_id = if sub_id in ["", nil], do: nil, else: sub_id
+
+    changeset =
+      case socket.assigns.form_mode do
+        :create ->
+          User.admin_create_changeset(%User{}, clean_params)
+
+        :edit ->
+          case fetch_user(socket.assigns.editing_user_id) do
+            %User{} = user -> User.admin_update_changeset(user, clean_params)
+            nil -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    if changeset do
+      {:noreply,
+       socket
+       |> assign(:form, to_form(Map.put(changeset, :action, :validate), as: :user))
+       |> assign(:editing_user_sub_id, sub_id)}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -715,6 +812,21 @@ defmodule TokengateWeb.UsersLive do
          |> assign(:form, to_form(changeset, as: :user))
          |> assign(:reset_user_id, user.id)
          |> assign(:form_mode, :reset_password)}
+    end
+  end
+
+  def handle_event("validate_password", %{"user" => user_params}, socket) do
+    case fetch_user(socket.assigns.reset_user_id) do
+      %User{} = user ->
+        changeset =
+          user
+          |> User.reset_password_changeset(user_params)
+          |> Map.put(:action, :validate)
+
+        {:noreply, assign(socket, :form, to_form(changeset, as: :user))}
+
+      nil ->
+        {:noreply, socket}
     end
   end
 
@@ -989,7 +1101,10 @@ defmodule TokengateWeb.UsersLive do
         end
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :user))}
+        {:noreply,
+         socket
+         |> assign(:form, to_form(changeset, as: :user))
+         |> assign(:editing_user_sub_id, sub_id)}
     end
   end
 
@@ -1027,8 +1142,6 @@ defmodule TokengateWeb.UsersLive do
               "name",
               "global_role",
               "status",
-              "monthly_spend_limit_usd",
-              "unlimited_spend",
               "default_concurrency_limit",
               "default_rpm_limit"
             ])
@@ -1065,7 +1178,10 @@ defmodule TokengateWeb.UsersLive do
         end
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :user))}
+        {:noreply,
+         socket
+         |> assign(:form, to_form(changeset, as: :user))
+         |> assign(:editing_user_sub_id, sub_id)}
     end
   end
 
@@ -1091,7 +1207,7 @@ defmodule TokengateWeb.UsersLive do
            "subject_type" => "member",
            "user_id" => user.id,
            "group_member_id" => member.id,
-           "label" => "inicial",
+           "label" => gettext("initial"),
            "key_hash" => key_hash,
            "key_prefix" => key_prefix,
            "status" => "active"
@@ -1100,6 +1216,65 @@ defmodule TokengateWeb.UsersLive do
       {:error, changeset} -> {:error, changeset}
     end
   end
+
+  defp ensure_groups_loaded(%{assigns: %{all_groups: [_ | _]}} = socket), do: socket
+  defp ensure_groups_loaded(socket), do: assign(socket, :all_groups, Accounts.list_groups())
+
+  @valid_filters ~w(all admin user active suspended no_budget)
+
+  defp parse_filter(filter) when filter in @valid_filters, do: filter
+  defp parse_filter(_), do: "all"
+
+  defp parse_sort_params(params) do
+    field =
+      case params["sort"] do
+        nil ->
+          :name
+
+        raw ->
+          case to_sort_field(raw) do
+            {:ok, atom} when atom in @sort_columns -> atom
+            _ -> :name
+          end
+      end
+
+    direction =
+      case params["dir"] do
+        "asc" -> :asc
+        "desc" -> :desc
+        _ -> default_direction_for(field)
+      end
+
+    {field, direction}
+  end
+
+  defp users_path(socket) do
+    params =
+      []
+      |> maybe_put_param("q", socket.assigns.search_query, "")
+      |> maybe_put_param("filter", socket.assigns.filter_status, "all")
+      |> maybe_put_today(socket.assigns.filter_today_spend)
+      |> maybe_put_param("sort", Atom.to_string(socket.assigns.sort_field), "name")
+      |> maybe_put_dir(socket.assigns.sort_field, socket.assigns.sort_direction)
+      |> maybe_put_page(socket.assigns.page)
+
+    case params do
+      [] -> ~p"/access/users"
+      _ -> ~p"/access/users?#{params}"
+    end
+  end
+
+  defp maybe_put_param(acc, _key, val, default) when val in [nil, default], do: acc
+  defp maybe_put_param(acc, key, val, _default), do: [{key, val} | acc]
+
+  defp maybe_put_today(acc, true), do: [{"today", "1"} | acc]
+  defp maybe_put_today(acc, _), do: acc
+
+  defp maybe_put_dir(acc, :name, :asc), do: acc
+  defp maybe_put_dir(acc, _field, dir), do: [{"dir", Atom.to_string(dir)} | acc]
+
+  defp maybe_put_page(acc, page) when page <= 1, do: acc
+  defp maybe_put_page(acc, page), do: [{"page", Integer.to_string(page)} | acc]
 
   # Opens the keys panel of a freshly created user with its initial token.
   # Without a membership there is no key, so there is nothing to show.
@@ -1131,8 +1306,12 @@ defmodule TokengateWeb.UsersLive do
   def role_badge("admin"), do: "badge-primary"
   def role_badge(_), do: "badge-ghost"
 
+  defp role_label("admin"), do: gettext("Administrator")
+  defp role_label(_), do: gettext("User")
+
   def status_badge("active"), do: "badge-success"
   def status_badge("suspended"), do: "badge-error"
+  def status_badge(_), do: "badge-ghost"
 
   def google_badge(%User{google_id: nil}), do: nil
   def google_badge(%User{google_id: _}), do: "Google"
@@ -1153,7 +1332,7 @@ defmodule TokengateWeb.UsersLive do
           {gettext("Users")}
           <:subtitle>{gettext("System user management")}</:subtitle>
           <:actions>
-            <div class="flex items-center gap-3">
+            <div class="flex flex-wrap items-center gap-3">
               <.admin_search
                 event="search_users"
                 value={@search_query}
@@ -1178,6 +1357,31 @@ defmodule TokengateWeb.UsersLive do
           </:actions>
         </.header>
 
+        <div class="flex flex-wrap items-center gap-1.5" id="user-filter-pills">
+          <button
+            :for={
+              {filter, label} <- [
+                {"all", gettext("All")},
+                {"admin", gettext("Admins")},
+                {"user", gettext("Users")},
+                {"active", gettext("Active")},
+                {"suspended", gettext("Suspended")},
+                {"no_budget", gettext("No budget")}
+              ]
+            }
+            type="button"
+            phx-click="filter_users"
+            phx-value-filter={filter}
+            id={"filter-user-#{filter}"}
+            class={[
+              "btn btn-xs",
+              if(@filter_status == filter, do: "btn-primary", else: "btn-ghost")
+            ]}
+          >
+            {label}
+          </button>
+        </div>
+
         <%!-- User form — create (modal) --%>
         <.modal
           :if={@form && @form_mode == :create}
@@ -1185,7 +1389,7 @@ defmodule TokengateWeb.UsersLive do
           title={gettext("New user")}
           on_close="cancel_form"
         >
-          <.form for={@form} id="user-form" phx-submit="save_user">
+          <.form for={@form} id="user-form" phx-change="validate_user" phx-submit="save_user">
             <.input
               field={@form[:email]}
               type="email"
@@ -1211,27 +1415,47 @@ defmodule TokengateWeb.UsersLive do
               options={[{gettext("User"), "user"}, {gettext("Administrator"), "admin"}]}
               prompt={gettext("Pick a role")}
             />
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <.input
+                field={@form[:default_concurrency_limit]}
+                type="number"
+                label={gettext("Concurrency")}
+                hint={gettext("Absolute cap; empty = inherits from the limit profile.")}
+              />
+              <.input
+                field={@form[:default_rpm_limit]}
+                type="number"
+                label="RPM"
+                hint={gettext("Absolute cap; empty = inherits from the limit profile.")}
+              />
+            </div>
             <.input
               field={@form[:sub_id]}
               type="select"
               label={gettext("Monthly budget")}
               options={Enum.map(@all_groups, fn t -> {t.name, t.id} end)}
               prompt={gettext("No monthly budget")}
+              value={@editing_user_sub_id}
               hint={
                 gettext(
                   "A user belongs to ONE monthly budget: the inherited spending cap comes from here."
                 )
               }
             />
-            <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">{gettext(
-                "Cancel"
-              )}</button>
-              <button type="submit" class="btn btn-primary btn-sm" id="save-user-btn">{gettext(
-                "Create"
-              )}</button>
-            </div>
           </.form>
+          <:footer>
+            <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
+              {gettext("Cancel")}
+            </button>
+            <button
+              type="submit"
+              form="user-form"
+              class="btn btn-primary btn-sm"
+              id="save-user-btn"
+            >
+              {gettext("Create")}
+            </button>
+          </:footer>
         </.modal>
 
         <%!-- User form — edit (modal) --%>
@@ -1241,7 +1465,12 @@ defmodule TokengateWeb.UsersLive do
           title={gettext("Edit user")}
           on_close="cancel_form"
         >
-          <.form for={@form} id="user-edit-form" phx-submit="save_user">
+          <.form
+            for={@form}
+            id="user-edit-form"
+            phx-change="validate_user"
+            phx-submit="save_user"
+          >
             <.input field={@form[:name]} type="text" label={gettext("Name")} />
             <.input
               field={@form[:global_role]}
@@ -1288,15 +1517,20 @@ defmodule TokengateWeb.UsersLive do
                 )
               }
             />
-            <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">{gettext(
-                "Cancel"
-              )}</button>
-              <button type="submit" class="btn btn-primary btn-sm" id="update-user-btn">{gettext(
-                "Save"
-              )}</button>
-            </div>
           </.form>
+          <:footer>
+            <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
+              {gettext("Cancel")}
+            </button>
+            <button
+              type="submit"
+              form="user-edit-form"
+              class="btn btn-primary btn-sm"
+              id="update-user-btn"
+            >
+              {gettext("Save")}
+            </button>
+          </:footer>
         </.modal>
 
         <%!-- User form — reset password (modal) --%>
@@ -1306,22 +1540,32 @@ defmodule TokengateWeb.UsersLive do
           title={gettext("Reset password")}
           on_close="cancel_form"
         >
-          <.form for={@form} id="user-reset-form" phx-submit="save_password">
+          <.form
+            for={@form}
+            id="user-reset-form"
+            phx-change="validate_password"
+            phx-submit="save_password"
+          >
             <.input
               field={@form[:password]}
               type="password"
               label={gettext("New password")}
               hint={gettext("At least 12 characters, with letters and digits.")}
             />
-            <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">{gettext(
-                "Cancel"
-              )}</button>
-              <button type="submit" class="btn btn-primary btn-sm" id="reset-pwd-btn">{gettext(
-                "Reset"
-              )}</button>
-            </div>
           </.form>
+          <:footer>
+            <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
+              {gettext("Cancel")}
+            </button>
+            <button
+              type="submit"
+              form="user-reset-form"
+              class="btn btn-primary btn-sm"
+              id="reset-pwd-btn"
+            >
+              {gettext("Reset")}
+            </button>
+          </:footer>
         </.modal>
 
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
@@ -1339,7 +1583,22 @@ defmodule TokengateWeb.UsersLive do
             empty?={@users_empty?}
           >
             <:col :let={user} label={gettext("User")} field={:name}>
-              <.admin_identity initials={initials(user)} title={user.name} subtitle={user.email} />
+              <div class="flex items-center gap-2 min-w-0">
+                <.admin_identity
+                  initials={initials(user)}
+                  title={user.name || user.email}
+                  subtitle={user.email}
+                  truncate
+                />
+                <span
+                  :if={google_badge(user)}
+                  class="badge badge-xs badge-ghost shrink-0"
+                  title={gettext("Google OAuth")}
+                  id={"google-badge-#{user.id}"}
+                >
+                  Google
+                </span>
+              </div>
             </:col>
             <:col :let={user} label={gettext("Keys")}>
               <.keys_badge
@@ -1365,7 +1624,7 @@ defmodule TokengateWeb.UsersLive do
             </:col>
             <:col :let={user} label={gettext("Role")} field={:role}>
               <span class={["badge", "badge-sm", role_badge(user.global_role)]}>
-                {user.global_role}
+                {role_label(user.global_role)}
               </span>
             </:col>
             <:col :let={user} label={gettext("Status")} field={:status}>
@@ -1389,21 +1648,21 @@ defmodule TokengateWeb.UsersLive do
                 </button>
               </div>
             </:col>
-            <:col :let={user} label="Google">
-              <%= if google_badge(user) do %>
-                <span class="badge badge-sm badge-ghost">
-                  <.icon name="hero-globe-alt" class="w-3 h-3" /> Google
-                </span>
-              <% else %>
-                <span class="text-xs text-base-content/30">—</span>
-              <% end %>
-            </:col>
             <:col :let={user} label={gettext("Created")} field={:inserted_at}>
               <span class="text-xs text-base-content/50">
                 {format_date(user.inserted_at, @timezone)}
               </span>
             </:col>
             <:action :let={user}>
+              <.link
+                navigate={~p"/budget/topups?owner_kind=user&owner_id=#{user.id}"}
+                class="btn btn-xs btn-ghost"
+                id={"topup-#{user.id}"}
+                title={gettext("Grant top-up")}
+                aria-label={gettext("Grant top-up")}
+              >
+                <.icon name="hero-arrow-up-circle" class="w-3 h-3" />
+              </.link>
               <.link
                 navigate={~p"/stats/users/#{user.id}"}
                 class="btn btn-xs btn-ghost"
@@ -1421,7 +1680,7 @@ defmodule TokengateWeb.UsersLive do
                 title={gettext("Edit user")}
                 aria-label={gettext("Edit user")}
               >
-                <.icon name="hero-pencil" class="w-3 h-3" />
+                <.icon name="hero-pencil-square" class="w-3 h-3" />
               </button>
               <button
                 phx-click="reset_password"
@@ -1498,128 +1757,143 @@ defmodule TokengateWeb.UsersLive do
             total_pages={@total_pages}
           />
         </div>
-      </div>
 
-      <%!-- Keys modal — N claves con etiqueta (mismo panel que Servicios) --%>
-      <.modal
-        :if={@keys_user_id}
-        id="user-keys-modal"
-        title={gettext("API keys of %{name}", name: @keys_user_name)}
-        on_close="cancel_manage_keys"
-        max_w="max-w-2xl"
-      >
-        <p class="text-xs text-base-content/50 mb-4">
-          {gettext("A user can have several active keys, each with its own label.")}
-        </p>
+        <%!-- Keys modal — N claves con etiqueta (mismo panel que Servicios) --%>
+        <.modal
+          :if={@keys_user_id}
+          id="user-keys-modal"
+          title={gettext("API keys of %{name}", name: @keys_user_name)}
+          on_close="cancel_manage_keys"
+          max_w="max-w-2xl"
+        >
+          <p class="text-xs text-base-content/50 mb-4">
+            {gettext("A user can have several active keys, each with its own label.")}
+          </p>
 
-        <.keys_panel
-          subject_kind="user"
-          subject_id={@keys_user_id}
-          keys={@keys}
-          spend={@keys_spend}
-          new_token={@new_key_token}
-          create_event="create_key"
-          revoke_event="revoke_user_key"
-          dismiss_event="dismiss_new_key_token"
-          sticky_event="clear_user_sticky_routes"
-          rename_event="rename_user_key"
-          cancel_rename_event="cancel_rename_user_key"
-          editing_key_id={@editing_key_id}
-          hide_event="hide_user_key"
-          empty_text={gettext("This user has no active keys.")}
-        />
+          <.keys_panel
+            subject_kind="user"
+            subject_id={@keys_user_id}
+            keys={@keys}
+            spend={@keys_spend}
+            new_token={@new_key_token}
+            create_event="create_key"
+            revoke_event="revoke_user_key"
+            dismiss_event="dismiss_new_key_token"
+            sticky_event="clear_user_sticky_routes"
+            rename_event="rename_user_key"
+            cancel_rename_event="cancel_rename_user_key"
+            editing_key_id={@editing_key_id}
+            hide_event="hide_user_key"
+            empty_text={gettext("This user has no active keys.")}
+          />
 
-        <div class="flex gap-2 mt-4 justify-end">
-          <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
-            {gettext("Close")}
-          </button>
-        </div>
-      </.modal>
+          <:footer>
+            <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
+              {gettext("Close")}
+            </button>
+          </:footer>
+        </.modal>
 
-      <%!-- Groups view modal — read-only; memberships are managed in Perfiles de límites → Miembros --%>
-      <.modal
-        :if={@editing_groups_user_id}
-        id="user-groups-modal"
-        title={gettext("Limit profiles of %{name}", name: @editing_groups_user_name)}
-        on_close="cancel_edit_groups"
-        max_w="max-w-md"
-      >
-        <div class="space-y-2">
-          <%= for group <- @all_groups do %>
-            <div class="flex items-center justify-between p-2 rounded-lg bg-base-200/50">
-              <div class="flex items-center gap-2">
-                <.icon
-                  name={
-                    if group.id in @editing_group_ids,
-                      do: "hero-check-circle",
-                      else: "hero-minus-circle"
-                  }
-                  class={
-                    if group.id in @editing_group_ids,
-                      do: "w-4 h-4 text-success",
-                      else: "w-4 h-4 text-base-content/30"
-                  }
-                />
-                <span class={[
-                  "text-sm",
-                  if(group.id in @editing_group_ids, do: "", else: "text-base-content/40")
-                ]}>
-                  {group.name}
-                </span>
+        <%!-- Groups view modal — read-only; memberships are managed in Perfiles de límites → Miembros --%>
+        <.modal
+          :if={@editing_groups_user_id}
+          id="user-groups-modal"
+          title={gettext("Limit profiles of %{name}", name: @editing_groups_user_name)}
+          on_close="cancel_edit_groups"
+          max_w="max-w-md"
+        >
+          <div class="space-y-2">
+            <%= for group <- @all_groups do %>
+              <div class="flex items-center justify-between p-2 rounded-lg bg-base-200/50">
+                <div class="flex items-center gap-2">
+                  <.icon
+                    name={
+                      if group.id in @editing_group_ids,
+                        do: "hero-check-circle",
+                        else: "hero-minus-circle"
+                    }
+                    class={
+                      if group.id in @editing_group_ids,
+                        do: "w-4 h-4 text-success",
+                        else: "w-4 h-4 text-base-content/30"
+                    }
+                  />
+                  <span class={[
+                    "text-sm",
+                    if(group.id in @editing_group_ids, do: "", else: "text-base-content/40")
+                  ]}>
+                    {group.name}
+                  </span>
+                </div>
+                <%= if group.id in @editing_group_ids do %>
+                  <.link
+                    navigate={~p"/budget/profiles/#{group}/members"}
+                    class="btn btn-xs btn-ghost"
+                    title={gettext("Manage the limit profile memberships")}
+                  >
+                    {gettext("Members")}
+                  </.link>
+                <% end %>
               </div>
-              <%= if group.id in @editing_group_ids do %>
-                <.link
-                  navigate={~p"/budget/profiles/#{group}/members"}
-                  class="btn btn-xs btn-ghost"
-                  title={gettext("Manage the limit profile memberships")}
-                >
-                  {gettext("Members")}
-                </.link>
-              <% end %>
-            </div>
-          <% end %>
-          <%= if @all_groups == [] do %>
-            <p class="text-sm text-base-content/50 py-2">
-              {gettext("No limit profiles created yet.")}
-            </p>
-          <% end %>
-        </div>
-        <p class="text-xs text-base-content/40 mt-3">
-          {gettext("Memberships are managed from")}
-          <strong>{gettext("Limit profiles")} → {gettext("Members")}</strong>
-          {gettext("of each profile.")}
-        </p>
-        <div class="flex gap-2 mt-2 justify-end">
-          <button type="button" phx-click="cancel_edit_groups" class="btn btn-primary btn-sm">
-            {gettext("Close")}
-          </button>
-        </div>
-      </.modal>
+            <% end %>
+            <%= if @all_groups == [] do %>
+              <p class="text-sm text-base-content/50 py-2">
+                {gettext("No limit profiles created yet.")}
+              </p>
+            <% end %>
+          </div>
+          <p class="text-xs text-base-content/40 mt-3">
+            {gettext("Memberships are managed from")}
+            <strong>{gettext("Limit profiles")} → {gettext("Members")}</strong>
+            {gettext("of each profile.")}
+          </p>
+          <:footer>
+            <button type="button" phx-click="cancel_edit_groups" class="btn btn-primary btn-sm">
+              {gettext("Close")}
+            </button>
+          </:footer>
+        </.modal>
 
-      <%!-- Delete confirmation modal — warns about irreversible data loss --%>
-      <.admin_delete_modal
-        :if={@delete_target_id}
-        id="delete-user-modal"
-        on_close="cancel_delete"
-        title={gettext("Delete user")}
-        target_label={@delete_target_email}
-        target_span_id="delete-user-email"
-        confirm_event="confirm_delete_user"
-        confirm_value={@delete_target_id}
-        confirm_button_id="confirm-delete-user"
-        cancel_button_id="cancel-delete-user"
-        warning_intro={gettext("All their data will be permanently erased:")}
-        warning_items={[
-          gettext("Limit profile memberships"),
-          gettext("API keys"),
-          gettext(
-            "Consumption history (request_logs) is NOT deleted: it is kept without attribution to the user"
-          ),
-          gettext("Audit logs will lose the user attribution")
-        ]}
-      />
+        <%!-- Delete confirmation modal — warns about irreversible data loss --%>
+        <.admin_delete_modal
+          :if={@delete_target_id}
+          id="delete-user-modal"
+          on_close="cancel_delete"
+          title={gettext("Delete user")}
+          target_label={@delete_target_email}
+          target_span_id="delete-user-email"
+          confirm_event="confirm_delete_user"
+          confirm_value={@delete_target_id}
+          confirm_button_id="confirm-delete-user"
+          cancel_button_id="cancel-delete-user"
+          warning_intro={gettext("All their data will be permanently erased:")}
+          warning_items={[
+            gettext("Limit profile memberships"),
+            gettext("API keys"),
+            gettext(
+              "Consumption history (request_logs) is NOT deleted: it is kept without attribution to the user"
+            ),
+            gettext("Audit logs will lose the user attribution")
+          ]}
+        />
+      </div>
     </Layouts.dashboard>
     """
+  end
+
+  defp initials(%User{name: name}) when is_binary(name) and byte_size(name) > 0 do
+    trimmed = String.trim(name)
+
+    if trimmed == "" do
+      "—"
+    else
+      trimmed
+      |> String.split(~r/\s+/)
+      |> Enum.take(2)
+      |> Enum.map(&String.slice(&1, 0, 1))
+      |> Enum.join()
+      |> String.upcase()
+    end
   end
 
   defp initials(%User{email: email}) when is_binary(email) do

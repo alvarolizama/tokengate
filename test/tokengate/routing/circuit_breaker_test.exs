@@ -329,6 +329,97 @@ defmodule Tokengate.Routing.CircuitBreakerTest do
     end
   end
 
+  describe "recovery and probe leasing" do
+    test "late failures while :open never reset the cooldown timer", %{breaker: breaker} do
+      trip_to_open(breaker)
+      assert CircuitBreaker.status(breaker) == :open
+
+      # Flood late counting failures while already open.
+      for _ <- 1..10 do
+        CircuitBreaker.record_failure(breaker, :server_error, "late in-flight error")
+      end
+
+      # Still transitions to :half_open on schedule instead of remaining wedged.
+      assert_eventually(fn -> CircuitBreaker.status(breaker) == :half_open end)
+    end
+
+    test "claim_probe admits one probe and auto-releases when the owner crashes", %{
+      breaker: breaker
+    } do
+      trip_to_open(breaker)
+      assert_eventually(fn -> CircuitBreaker.status(breaker) == :half_open end)
+
+      # Spawn a probe owner process that claims the slot, then gets killed.
+      parent = self()
+
+      owner =
+        spawn(fn ->
+          res = CircuitBreaker.claim_probe(breaker, self())
+          send(parent, {:claimed, res})
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert_receive {:claimed, {:ok, epoch}}
+      assert is_integer(epoch)
+
+      # Concurrent caller is rejected while probe is active.
+      assert {:error, :probe_in_flight} = CircuitBreaker.claim_probe(breaker, self())
+
+      # Kill the probe owner -> monitor releases the probe slot automatically.
+      ref = Process.monitor(owner)
+      Process.exit(owner, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^owner, :killed}
+
+      assert_eventually(fn ->
+        match?({:ok, _}, CircuitBreaker.claim_probe(breaker, self()))
+      end)
+    end
+
+    test "release_probe frees the :half_open slot without reopening", %{breaker: breaker} do
+      trip_to_open(breaker)
+      assert_eventually(fn -> CircuitBreaker.status(breaker) == :half_open end)
+
+      assert {:ok, _epoch} = CircuitBreaker.claim_probe(breaker, self())
+      assert {:error, :probe_in_flight} = CircuitBreaker.claim_probe(breaker, self())
+
+      CircuitBreaker.release_probe(breaker, self())
+      assert CircuitBreaker.status(breaker) == :half_open
+      assert {:ok, _epoch} = CircuitBreaker.claim_probe(breaker, self())
+    end
+
+    test "non-counting failure in :half_open releases probe without reopening", %{
+      breaker: breaker
+    } do
+      trip_to_open(breaker)
+      assert_eventually(fn -> CircuitBreaker.status(breaker) == :half_open end)
+
+      assert {:ok, epoch} = CircuitBreaker.claim_probe(breaker, self())
+      CircuitBreaker.record_failure(breaker, :bad_request, "400 invalid param", epoch: epoch)
+
+      assert CircuitBreaker.status(breaker) == :half_open
+      assert CircuitBreaker.details(breaker).probe_in_flight? == false
+    end
+
+    test "stale-epoch failure cannot reopen a recovered breaker", %{breaker: breaker} do
+      trip_to_open(breaker)
+      assert_eventually(fn -> CircuitBreaker.status(breaker) == :half_open end)
+
+      assert {:ok, epoch} = CircuitBreaker.claim_probe(breaker, self())
+      stale_epoch = epoch - 1
+
+      # Stale failure from an earlier epoch is ignored in :half_open.
+      CircuitBreaker.record_failure(breaker, :server_error, "stale", epoch: stale_epoch)
+      assert CircuitBreaker.status(breaker) == :half_open
+
+      # Current probe succeeds -> :closed.
+      CircuitBreaker.record_success(breaker, epoch: epoch)
+      assert CircuitBreaker.status(breaker) == :closed
+    end
+  end
+
   ## Helpers ##################################################################
 
   defp trip_to_open(breaker) do

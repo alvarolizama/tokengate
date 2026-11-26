@@ -32,9 +32,11 @@ defmodule TokengateWeb.ServiceStatsBody do
 
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
+  alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
   alias TokengateWeb.KpiHelpers
   alias TokengateWeb.StatsHelpers
+  alias TokengateWeb.StatsHelpers, as: Stats
 
   @page_size 50
   @stats_task_timeout_ms 125_000
@@ -70,48 +72,71 @@ defmodule TokengateWeb.ServiceStatsBody do
   attr :show_service_summary, :boolean, default: true
   attr :compact_numbers, :boolean, default: false
   attr :stats_loading, :boolean, default: false
+  attr :tab, :string, default: "overview"
+  attr :usage_series, :list, default: []
+  slot :config, doc: "contenidos extra del tab `Config` (config read-only del supervisado)"
 
   def panel(assigns) do
     ~H"""
     <div class="space-y-6">
-      <%!-- Key selector + period selector --%>
-      <div class="flex flex-wrap items-end justify-between gap-4">
-        <div class="flex items-center gap-2">
-          <span
-            :if={@stats_loading}
-            id="service-stats-loading"
-            class="inline-flex items-center gap-1.5 text-xs text-base-content/60"
-          >
-            <span class="loading loading-spinner loading-xs" />
-            {gettext("Loading metrics…")}
-          </span>
-        </div>
-        <div class="flex flex-wrap items-end justify-end gap-3">
-          <.form
-            :if={@service_api_keys != []}
-            for={@key_filter_form}
-            id="key-filter-form"
-            phx-change="set_key"
-            class="w-48 [&_.fieldset]:mb-0"
-          >
-            <.input
-              field={@key_filter_form[:key_id]}
-              type="select"
-              label={gettext("API key")}
-              class="w-full select select-sm"
-              options={[
-                {gettext("All API keys"), "all"}
-                | Enum.map(@service_api_keys, fn key ->
-                    label =
-                      (key.label || key.key_prefix) <>
-                        if(key.status == "revoked", do: " · " <> gettext("Revoked"), else: "")
+      <%!-- Toolbar: scope de key + periodo en una línea, tabs debajo del borde
+           del mismo card. Ambos controles comparten eje central (`items-center`)
+           así que el label del select ya no crea el escalón del layout viejo. --%>
+      <div class="card bg-base-100 border border-base-300 shadow-sm" id="service-stats-toolbar">
+        <div class="card-body p-3 gap-1">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center gap-3">
+              <span
+                :if={@stats_loading}
+                id="service-stats-loading"
+                class="inline-flex items-center gap-1.5 text-xs text-base-content/60"
+              >
+                <span class="loading loading-spinner loading-xs" />
+                {gettext("Loading metrics…")}
+              </span>
+              <.form
+                :if={@service_api_keys != []}
+                for={@key_filter_form}
+                id="key-filter-form"
+                phx-change="set_key"
+                class="w-48 [&_.fieldset]:mb-0"
+              >
+                <.input
+                  field={@key_filter_form[:key_id]}
+                  type="select"
+                  label={gettext("API key")}
+                  class="w-full select select-sm"
+                  options={[
+                    {gettext("All API keys"), "all"}
+                    | Enum.map(@service_api_keys, fn key ->
+                        label =
+                          (key.label || key.key_prefix) <>
+                            if(key.status == "revoked", do: " · " <> gettext("Revoked"), else: "")
 
-                    {label, key.id}
-                  end)
-              ]}
+                        {label, key.id}
+                      end)
+                  ]}
+                />
+              </.form>
+            </div>
+            <.period_selector
+              target={@period_target}
+              period={@period}
+              id="period-selector"
+              extra_query={tab_extra_query(@tab)}
             />
-          </.form>
-          <.period_selector target={@period_target} period={@period} id="period-selector" />
+          </div>
+          <div class="mt-2 -mb-1.5 tabs tabs-bordered" id="service-stats-tabs" role="tablist">
+            <.link
+              :for={{value, label} <- panel_tabs(@config != [])}
+              id={"tab-#{value}"}
+              patch={"#{@period_target}?tab=#{value}&period=#{@period}"}
+              role="tab"
+              class={["tab tab-sm font-medium", tab_active?(@tab, value) && "tab-active"]}
+            >
+              {label}
+            </.link>
+          </div>
         </div>
       </div>
 
@@ -125,330 +150,406 @@ defmodule TokengateWeb.ServiceStatsBody do
         <div class="h-2.5 rounded bg-base-300" />
       </div>
 
-      <%!-- KPI cards (selected period) --%>
-      <div class={[
-        "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 transition-opacity duration-150",
-        @stats_loading && "opacity-60"
-      ]}>
-        <.kpi_card
-          id="kpi-requests"
-          label={gettext("Requests")}
-          icon="hero-squares-2x2"
-          accent="primary"
-        >
-          {number(@summary.request_count, @compact_numbers)}
-          <:sub>
-            {safe_sub_count(@summary.realtime_5min.request_count, " " <> gettext("in 5 min"))}
-          </:sub>
-        </.kpi_card>
-        <.kpi_card
-          id="kpi-cost"
-          label={gettext("Cost")}
-          icon="hero-currency-dollar"
-          accent="accent"
-        >
-          {fmt_money(@summary.total_cost_usd)}
-          <:sub>{safe_sub_count(@summary.request_count, " " <> gettext("reqs"))}</:sub>
-        </.kpi_card>
-        <.kpi_card
-          id="kpi-input"
-          label={gettext("Input tokens")}
-          icon="hero-arrow-down-on-square-stack"
-          accent="primary"
-        >
-          {number(@summary.total_prompt_tokens, @compact_numbers)}
-          <:sub>
-            {"cached " <>
-              format_number(@summary.total_cache_read_tokens) <>
-              " · hit " <>
-              KpiHelpers.format_hit_rate(
-                KpiHelpers.cache_hit_rate(
-                  @summary.total_cache_read_tokens,
-                  @summary.total_prompt_tokens
-                )
-              )}
-          </:sub>
-        </.kpi_card>
-        <.kpi_card
-          id="kpi-output"
-          label={gettext("Output tokens")}
-          icon="hero-arrow-up-on-square-stack"
-          accent="primary"
-        >
-          {number(@summary.total_completion_tokens, @compact_numbers)}
-          <:sub>{gettext("avg TPS:") <> " " <> fmt_tps(@summary.avg_tps)}</:sub>
-        </.kpi_card>
-        <.kpi_card
-          id="kpi-errors"
-          label={gettext("Errors")}
-          icon="hero-exclamation-triangle"
-          accent={error_accent(@summary.status_breakdown)}
-        >
-          {Integer.to_string(@summary.status_breakdown["4xx"] + @summary.status_breakdown["5xx"])}
-          <:sub>{safe_sub_count(@summary.realtime_5min.error_rate, "% (5 min)")}</:sub>
-        </.kpi_card>
-        <.kpi_card
-          id="kpi-latency"
-          label={gettext("Last request")}
-          icon="hero-clock"
-          accent="neutral"
-        >
-          {last_request_label(@summary.last_request_at, @timezone)}
-          <:sub>{gettext("avg latency:") <> " " <> fmt_ms(@summary.avg_latency_ms)}</:sub>
-        </.kpi_card>
-      </div>
-
-      <%!-- Service + Status breakdown + Top models. show_service_summary
-           hides only the Service card (its budget/config info is duplicated
-           by #service-config in the supervised view); the status and top
-           models cards are always rendered. --%>
-      <div class={[
-        if(@show_service_summary,
-          do: "grid grid-cols-1 lg:grid-cols-3 gap-3",
-          else: "grid grid-cols-1 lg:grid-cols-2 gap-3"
-        ),
-        "transition-opacity duration-150",
-        @stats_loading && "opacity-60"
-      ]}>
-        <div :if={@show_service_summary} class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-4">
-            <h3 class="text-sm font-semibold mb-2">{gettext("Service")}</h3>
-
-            <ul class="space-y-1 text-sm">
-              <li class="flex items-center justify-between">
-                <span class="text-base-content/60">{gettext("Monthly cap")}</span>
-                <span>{limit_label(@service)}</span>
-              </li>
-              <li class="flex items-center justify-between">
-                <span class="text-base-content/60">{gettext("Extra concurrency")}</span>
-                <span>{@service.concurrency_limit || 0}</span>
-              </li>
-              <li class="flex items-center justify-between">
-                <span class="text-base-content/60">{gettext("Extra RPM")}</span>
-                <span>{@service.rpm_limit || 0}</span>
-              </li>
-            </ul>
-          </div>
+      <%!-- ============ TAB: Overview (default) ============ --%>
+      <div :if={@tab == "overview"} class="space-y-6" id="service-stats-overview">
+        <%!-- KPI cards (selected period) --%>
+        <div class={[
+          "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 transition-opacity duration-150",
+          @stats_loading && "opacity-60"
+        ]}>
+          <.kpi_card
+            id="kpi-requests"
+            label={gettext("Requests")}
+            icon="hero-squares-2x2"
+            accent="primary"
+          >
+            {number(@summary.request_count, @compact_numbers)}
+            <:sub>
+              {safe_sub_count(@summary.realtime_5min.request_count, " " <> gettext("in 5 min"))}
+            </:sub>
+          </.kpi_card>
+          <.kpi_card
+            id="kpi-cost"
+            label={gettext("Cost")}
+            icon="hero-currency-dollar"
+            accent="accent"
+          >
+            {fmt_money(@summary.total_cost_usd)}
+            <:sub>{cost_sub_text(@summary, @service)}</:sub>
+          </.kpi_card>
+          <.kpi_card
+            id="kpi-input"
+            label={gettext("Input tokens")}
+            icon="hero-arrow-down-on-square-stack"
+            accent="primary"
+          >
+            {number(@summary.total_prompt_tokens, @compact_numbers)}
+            <:sub>
+              {"cached " <>
+                format_number(@summary.total_cache_read_tokens) <>
+                " · hit " <>
+                KpiHelpers.format_hit_rate(
+                  KpiHelpers.cache_hit_rate(
+                    @summary.total_cache_read_tokens,
+                    @summary.total_prompt_tokens
+                  )
+                )}
+            </:sub>
+          </.kpi_card>
+          <.kpi_card
+            id="kpi-output"
+            label={gettext("Output tokens")}
+            icon="hero-arrow-up-on-square-stack"
+            accent="primary"
+          >
+            {number(@summary.total_completion_tokens, @compact_numbers)}
+            <:sub>{gettext("avg TPS:") <> " " <> fmt_tps(@summary.avg_tps)}</:sub>
+          </.kpi_card>
+          <.kpi_card
+            id="kpi-errors"
+            label={gettext("Errors")}
+            icon="hero-exclamation-triangle"
+            accent={error_accent(@summary.status_breakdown)}
+          >
+            {Integer.to_string(@summary.status_breakdown["4xx"] + @summary.status_breakdown["5xx"])}
+            <:sub>{period_error_sub(@summary)}</:sub>
+          </.kpi_card>
+          <.kpi_card
+            id="kpi-latency"
+            label={gettext("Last request")}
+            icon="hero-clock"
+            accent="neutral"
+          >
+            {last_request_label(@summary.last_request_at, @timezone)}
+            <:sub>{gettext("avg latency:") <> " " <> fmt_ms(@summary.avg_latency_ms)}</:sub>
+          </.kpi_card>
         </div>
-        <div id="status-breakdown" class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-4">
-            <h3 class="text-sm font-semibold mb-2">{gettext("Status breakdown")}</h3>
-            <div class="space-y-2">
-              <.status_row class_label="2xx" count={@summary.status_breakdown["2xx"]} tone="success" />
-              <.status_row class_label="4xx" count={@summary.status_breakdown["4xx"]} tone="warning" />
-              <.status_row class_label="5xx" count={@summary.status_breakdown["5xx"]} tone="error" />
+
+        <%!-- Period summary: Service (admin-only) + Status breakdown. El card
+           "Top models" unificó con #service-model-breakdown-table (misma
+           agregación con share % y desglose por key). --%>
+        <div class={[
+          "grid gap-3 transition-opacity duration-150",
+          if(@show_service_summary, do: "lg:grid-cols-2", else: ""),
+          @stats_loading && "opacity-60"
+        ]}>
+          <div :if={@show_service_summary} class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body p-4">
+              <h3 class="text-sm font-semibold mb-2">{gettext("Service")}</h3>
+
+              <ul class="space-y-1 text-sm">
+                <li class="flex items-center justify-between">
+                  <span class="text-base-content/60">{gettext("Monthly cap")}</span>
+                  <span>{limit_label(@service)}</span>
+                </li>
+                <li class="flex items-center justify-between">
+                  <span class="text-base-content/60">{gettext("Extra concurrency")}</span>
+                  <span>{@service.concurrency_limit || 0}</span>
+                </li>
+                <li class="flex items-center justify-between">
+                  <span class="text-base-content/60">{gettext("Extra RPM")}</span>
+                  <span>{@service.rpm_limit || 0}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <div id="status-breakdown" class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body p-4">
+              <h3 class="text-sm font-semibold mb-2">{gettext("Status breakdown")}</h3>
+              <div class="space-y-2">
+                <.status_row
+                  class_label="2xx"
+                  count={@summary.status_breakdown["2xx"]}
+                  tone="success"
+                />
+                <.status_row
+                  class_label="4xx"
+                  count={@summary.status_breakdown["4xx"]}
+                  tone="warning"
+                />
+                <.status_row class_label="5xx" count={@summary.status_breakdown["5xx"]} tone="error" />
+              </div>
             </div>
           </div>
         </div>
-        <div id="top-models" class="card bg-base-100 border border-base-300 shadow-sm">
+
+        <%!-- Spend & requests timeline: por hora (today/yesterday) o por día
+           (week/30d), apilado por modelo, con el costo por modelo en tooltip. --%>
+        <.service_usage_trend
+          id="service-usage-trend"
+          rows={@usage_series}
+          granularity={period_granularity(@period)}
+          period={@period}
+          total_cost={@summary.total_cost_usd}
+        />
+
+        <%!-- API keys (selected period, full universe: every key ∪ traffic ids ∪ NULL) --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body p-4">
-            <h3 class="text-sm font-semibold mb-2">{gettext("Top models")}</h3>
-            <%= if @summary.top_models == [] do %>
-              <p class="text-xs text-base-content/40">
-                {gettext("No requests in this period.")}
-              </p>
-            <% else %>
-              <ol class="space-y-1">
-                <li
-                  :for={row <- @summary.top_models}
-                  class="flex items-center justify-between text-sm"
+            <h3 class="text-sm font-semibold mb-2">{gettext("API keys")}</h3>
+            <div class="overflow-x-auto">
+              <.table
+                id="service-api-keys-table"
+                rows={@key_rows}
+                row_id={fn row -> row.dom_id end}
+              >
+                <:col :let={row} label={gettext("Key")}>
+                  <span class="font-mono text-sm">{row.label}</span>
+                </:col>
+                <:col :let={row} label={gettext("Status")}>
+                  <%= if row.status do %>
+                    <span class={[
+                      "badge badge-sm",
+                      if(row.status == "active", do: "badge-success", else: "badge-error")
+                    ]}>
+                      {row.status}
+                    </span>
+                  <% else %>
+                    <span class="text-base-content/40">—</span>
+                  <% end %>
+                </:col>
+                <:col :let={row} label={gettext("Requests")} align="right">
+                  <span class="text-sm font-mono">{format_number(row.stats.request_count)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Input")} align="right">
+                  <span class="text-sm">{format_number(row.stats.total_prompt_tokens)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Output")} align="right">
+                  <span class="text-sm">{format_number(row.stats.total_completion_tokens)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Cost")} align="right">
+                  <span class="text-sm font-mono">{fmt_money(row.stats.total_cost_usd)}</span>
+                </:col>
+                <:col :let={row} label={gettext("% of spend")} align="right">
+                  <span class="text-xs tabular-nums text-base-content/60">
+                    {spend_share(row.stats.total_cost_usd, key_rows_total_cost(@key_rows))}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Last request")}>
+                  <span class="text-sm">{last_request_label(row.stats.last_request_at, @timezone)}</span>
+                </:col>
+                <:empty>
+                  <div id="service-api-keys-empty">
+                    <.icon name="hero-key" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                    <p>{gettext("This service has no API keys.")}</p>
+                  </div>
+                </:empty>
+              </.table>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Spend per model → desglose por API key debajo de cada modelo
+           (selected period). <details>/<summary> = acordeón nativo, sin JS.
+           Los primeros 5 modelos abren por defecto; cada sub-fila muestra el
+           impacto de una key en ese modelo (reqs, tokens y costo con share). --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-4">
+            <h3 class="text-sm font-semibold mb-2">
+              {gettext("Spend per model")} · {gettext("by API key")}
+            </h3>
+
+            <div class="overflow-x-auto">
+              <div
+                id="service-model-breakdown-table"
+                class="min-w-[640px] divide-y divide-base-300/60"
+              >
+                <%!-- Column header (u-ish) del desglose --%>
+                <div class="hidden md:grid grid-cols-[1.5rem_1fr_7rem_8rem_12rem] gap-3 px-2 pt-1 text-[10px] uppercase tracking-wide text-base-content/45">
+                  <span />
+                  <span>{gettext("Model")}</span>
+                  <span class="text-right">{gettext("Requests")}</span>
+                  <span class="text-right">{gettext("Cost")}</span>
+                  <span class="text-right">{gettext("% of period spend")}</span>
+                </div>
+
+                <details
+                  :for={{row, idx} <- Enum.with_index(@model_breakdown.rows)}
+                  id={"model-breakdown-#{model_row_slug(row.model)}"}
+                  class="group"
+                  open={idx < 5}
                 >
-                  <span class="font-mono">{row.model_requested || "—"}</span>
-                  <span class="flex items-center gap-2">
-                    <span class="font-mono text-xs text-base-content/60">
-                      {fmt_money(row.total_cost_usd)}
+                  <summary class="list-none cursor-pointer grid grid-cols-[1.5rem_1fr_7rem_8rem_12rem] gap-3 items-center px-2 py-2 rounded-lg hover:bg-base-200/40">
+                    <.icon
+                      name="hero-chevron-right"
+                      class="w-3.5 h-3.5 text-base-content/40 transition-transform t-breakdown-chevron"
+                    />
+                    <span class="font-mono text-sm truncate" title={row.model || "—"}>
+                      {row.model || "—"}
                     </span>
-                    <span class="badge badge-sm badge-ghost">
-                      {Integer.to_string(row.count)}
+                    <span class="text-sm tabular-nums text-right">
+                      {format_number(row.request_count)}
                     </span>
-                  </span>
-                </li>
-              </ol>
-            <% end %>
-          </div>
-        </div>
-      </div>
+                    <span class="font-mono text-sm text-right">{fmt_money(row.total_cost_usd)}</span>
+                    <span class="flex items-center justify-end gap-2">
+                      <span class="hidden sm:flex w-24 h-1.5 rounded-full bg-base-300 overflow-hidden">
+                        <span
+                          class="block h-full rounded-full bg-primary transition-all"
+                          style={
+                          "width: #{spend_share_pct(row.total_cost_usd, model_breakdown_total(@model_breakdown))}%"
+                        }
+                          aria-hidden="true"
+                        />
+                      </span>
+                      <span class="text-xs tabular-nums text-base-content/60 w-12 text-right">
+                        {spend_share(row.total_cost_usd, model_breakdown_total(@model_breakdown))}
+                      </span>
+                    </span>
+                  </summary>
 
-      <%!-- API keys (selected period, full universe: every key ∪ traffic ids ∪ NULL) --%>
-      <div class="card bg-base-100 border border-base-300 shadow-sm">
-        <div class="card-body p-4">
-          <h3 class="text-sm font-semibold mb-2">{gettext("API keys")}</h3>
-          <div class="overflow-x-auto">
-            <.table
-              id="service-api-keys-table"
-              rows={@key_rows}
-              row_id={fn row -> row.dom_id end}
-            >
-              <:col :let={row} label={gettext("Key")}>
-                <span class="font-mono text-sm">{row.label}</span>
-              </:col>
-              <:col :let={row} label={gettext("Status")}>
-                <%= if row.status do %>
-                  <span class={[
-                    "badge badge-sm",
-                    if(row.status == "active", do: "badge-success", else: "badge-error")
-                  ]}>
-                    {row.status}
-                  </span>
-                <% else %>
-                  <span class="text-base-content/40">—</span>
+                  <%!-- Sub-filas: una por API key con tráfico en este modelo --%>
+                  <div class="pl-10 pr-2 pb-3 space-y-1.5">
+                    <div
+                      :for={sub <- row.keys}
+                      id={"model-breakdown-key-#{model_row_slug(row.model)}-#{sub.api_key_id || "unattributed"}"}
+                      class="grid grid-cols-[2fr_3rem_6rem_6rem] sm:grid-cols-[6rem_1fr_3.5rem_6rem_5.5rem] gap-2 sm:gap-3 items-center px-2 py-1.5 rounded-lg bg-base-200/30 text-sm"
+                    >
+                      <span class="flex items-center gap-1.5 min-w-0">
+                        <span class="font-mono text-xs truncate" title={sub.label}>
+                          {sub.label}
+                        </span>
+                        <%= if sub.status == "revoked" do %>
+                          <span class="badge badge-xs badge-error shrink-0">
+                            {gettext("Revoked")}
+                          </span>
+                        <% end %>
+                      </span>
+                      <span class="tabular-nums text-xs text-base-content/70 hidden sm:inline">
+                        {format_number(sub.request_count)}
+                      </span>
+                      <span class="text-xs tabular-nums text-base-content/60">
+                        {Stats.format_compact(sub.total_prompt_tokens)} / {Stats.format_compact(
+                          sub.total_completion_tokens
+                        )}
+                      </span>
+                      <span class="font-mono text-xs">{fmt_money(sub.total_cost_usd)}</span>
+                      <span class="text-xs tabular-nums text-base-content/50 text-right">
+                        {spend_share(sub.total_cost_usd, row.total_cost_usd)}
+                      </span>
+                    </div>
+                  </div>
+                </details>
+
+                <%= if @model_breakdown.rows != [] do %>
+                  <%!-- Totales del período: la suma de los model rows arriba --%>
+                  <div class="grid grid-cols-[1.5rem_1fr_7rem_8rem_12rem] gap-3 px-2 pt-2 text-sm font-medium">
+                    <span />
+                    <span>{gettext("Total")}</span>
+                    <span class="tabular-nums text-right">
+                      {format_number(model_breakdown_total_requests(@model_breakdown))}
+                    </span>
+                    <span class="font-mono">
+                      {fmt_money(model_breakdown_total(@model_breakdown))}
+                    </span>
+                    <span class="text-xs tabular-nums text-base-content/50 text-right">100%</span>
+                  </div>
                 <% end %>
-              </:col>
-              <:col :let={row} label={gettext("Requests")} align="right">
-                <span class="text-sm font-mono">{format_number(row.stats.request_count)}</span>
-              </:col>
-              <:col :let={row} label={gettext("Input")} align="right">
-                <span class="text-sm">{format_number(row.stats.total_prompt_tokens)}</span>
-              </:col>
-              <:col :let={row} label={gettext("Output")} align="right">
-                <span class="text-sm">{format_number(row.stats.total_completion_tokens)}</span>
-              </:col>
-              <:col :let={row} label={gettext("Cost")} align="right">
-                <span class="text-sm font-mono">{fmt_money(row.stats.total_cost_usd)}</span>
-              </:col>
-              <:col :let={row} label={gettext("Last request")}>
-                <span class="text-sm">{last_request_label(row.stats.last_request_at, @timezone)}</span>
-              </:col>
-              <:empty>
-                <div id="service-api-keys-empty">
-                  <.icon name="hero-key" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-                  <p>{gettext("This service has no API keys.")}</p>
-                </div>
-              </:empty>
-            </.table>
-          </div>
-        </div>
-      </div>
 
-      <%!-- Spend per model × API key (selected period) --%>
-      <div class="card bg-base-100 border border-base-300 shadow-sm">
-        <div class="card-body p-4">
-          <h3 class="text-sm font-semibold mb-2">
-            {gettext("Spend per model")} · {gettext("by API key")}
-          </h3>
-          <div class="overflow-x-auto">
-            <% key_cols = Enum.sort_by(@model_breakdown.key_labels, fn {_id, label} -> label end) %>
-            <.table
-              id="service-model-breakdown-table"
-              rows={@model_breakdown.rows}
-              row_id={
-                fn row ->
-                  "model-breakdown-#{String.replace(row.model || "unknown", "/", "-")}"
-                end
-              }
-            >
-              <:col :let={row} label={gettext("Model")}>
-                <span class="font-mono text-sm">{row.model || "—"}</span>
-              </:col>
-              <:col :let={row} label={gettext("Requests")} align="right">
-                <span class="text-sm">{format_number(row.request_count)}</span>
-              </:col>
-              <:col :let={row} label={gettext("Cost")} align="right">
-                <span class="text-sm font-mono">{fmt_money(row.total_cost_usd)}</span>
-              </:col>
-              <:col :let={row} :for={{key_id, label} <- key_cols} label={label} align="right">
-                <span class="text-sm font-mono">
-                  {case Map.get(row.by_key, key_id) do
-                    nil -> "—"
-                    cell -> fmt_money(cell.total_cost_usd)
-                  end}
-                </span>
-              </:col>
-              <:empty>
-                <div id="service-model-breakdown-empty">
+                <div
+                  :if={@model_breakdown.rows == []}
+                  id="service-model-breakdown-empty"
+                  class="py-6 text-center"
+                >
                   <.icon name="hero-chart-bar" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-                  <p>{gettext("No requests in this period.")}</p>
+                  <p class="text-sm text-base-content/40">{gettext("No requests in this period.")}</p>
                 </div>
-              </:empty>
-            </.table>
+              </div>
+            </div>
           </div>
         </div>
       </div>
-
-      <%!-- Filter form --%>
-      <.form
-        for={@form}
-        id="service-stats-filter-form"
-        phx-change="filter"
-        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3"
-      >
-        <.input
-          field={@form[:status_class]}
-          type="select"
-          prompt={gettext("All")}
-          options={[{"2xx", "2xx"}, {"4xx", "4xx"}, {"5xx", "5xx"}]}
-          label={gettext("Status")}
-        />
-        <.input
-          field={@form[:streaming]}
-          type="select"
-          prompt={gettext("All")}
-          options={[{gettext("Yes"), "true"}, {gettext("No"), "false"}]}
-          label={gettext("Streaming")}
-        />
-        <.input
-          field={@form[:model_search]}
-          type="text"
-          label={gettext("Model")}
-          phx-debounce="400"
-        />
-        <.input field={@form[:from]} type="date" label={gettext("From")} />
-        <.input field={@form[:to]} type="date" label={gettext("To")} />
-      </.form>
-
-      <%!-- Logs table (stream) --%>
-      <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
-        <.table
-          id={@logs_id}
-          rows={@streams.logs}
-          row_item={fn {_id, log} -> log end}
-          empty?={@logs_empty?}
+      <%!-- ============ TAB: Live logs ============ --%>
+      <div :if={@tab == "logs"} class="space-y-6" id="service-stats-logs-tab">
+        <%!-- Filter form --%>
+        <.form
+          for={@form}
+          id="service-stats-filter-form"
+          phx-change="filter"
+          class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3"
         >
-          <:col :let={log} label={gettext("Date")}>
-            <span class="whitespace-nowrap text-sm">
-              {TokengateWeb.TimezoneHelper.format_datetime(log.inserted_at, @timezone)}
-            </span>
-          </:col>
-          <:col :let={log} label={gettext("Model")}>
-            <span class="text-sm">{model_display(log.model_requested, log.model_responded)}</span>
-          </:col>
-          <:col :let={log} label={gettext("Agent")}>
-            <span class="text-sm">{log.client_agent || "—"}</span>
-          </:col>
-          <:col :let={log} label={gettext("Streaming")}>
-            {if log.streaming, do: gettext("Yes"), else: gettext("No")}
-          </:col>
-          <:col :let={log} label={gettext("Status")}>
-            <span class={["badge badge-sm", status_badge(log.status_code)]}>
-              {Integer.to_string(log.status_code)}
-            </span>
-          </:col>
-          <:col :let={log} label={gettext("Input")} align="right">
-            <span class="text-sm">{format_number(log.prompt_tokens || 0)}</span>
-          </:col>
-          <:col :let={log} label={gettext("Output")} align="right">
-            <span class="text-sm">{format_number(log.completion_tokens || 0)}</span>
-          </:col>
-          <:col :let={log} label={gettext("Cost")} align="right">
-            <span class="text-sm font-mono">${format_cost(log.provider_cost_usd)}</span>
-          </:col>
-          <:col :let={log} label={gettext("Latency")} align="right">
-            <span class="text-sm">{format_number(log.latency_ms || 0)} ms</span>
-          </:col>
-          <:empty>
-            <.icon name="hero-inbox" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>{@logs_empty_text || gettext("No requests with the current filters.")}</p>
-          </:empty>
-        </.table>
+          <.input
+            field={@form[:status_class]}
+            type="select"
+            prompt={gettext("All")}
+            options={[{"2xx", "2xx"}, {"4xx", "4xx"}, {"5xx", "5xx"}]}
+            label={gettext("Status")}
+          />
+          <.input
+            field={@form[:streaming]}
+            type="select"
+            prompt={gettext("All")}
+            options={[{gettext("Yes"), "true"}, {gettext("No"), "false"}]}
+            label={gettext("Streaming")}
+          />
+          <.input
+            field={@form[:model_search]}
+            type="text"
+            label={gettext("Model")}
+            phx-debounce="400"
+          />
+          <.input field={@form[:from]} type="date" label={gettext("From")} />
+          <.input field={@form[:to]} type="date" label={gettext("To")} />
+        </.form>
+
+        <%!-- Logs table (stream) --%>
+        <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
+          <.table
+            id={@logs_id}
+            rows={@streams.logs}
+            row_item={fn {_id, log} -> log end}
+            empty?={@logs_empty?}
+          >
+            <:col :let={log} label={gettext("Date")}>
+              <span class="whitespace-nowrap text-sm">
+                {TokengateWeb.TimezoneHelper.format_datetime(log.inserted_at, @timezone)}
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("Model")}>
+              <span class="text-sm">{model_display(log.model_requested, log.model_responded)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Agent")}>
+              <span class="text-sm">{log.client_agent || "—"}</span>
+            </:col>
+            <:col :let={log} label={gettext("Streaming")}>
+              {if log.streaming, do: gettext("Yes"), else: gettext("No")}
+            </:col>
+            <:col :let={log} label={gettext("Status")}>
+              <span class={["badge badge-sm", status_badge(log.status_code)]}>
+                {Integer.to_string(log.status_code)}
+              </span>
+            </:col>
+            <:col :let={log} label={gettext("Input")} align="right">
+              <span class="text-sm">{format_number(log.prompt_tokens || 0)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Output")} align="right">
+              <span class="text-sm">{format_number(log.completion_tokens || 0)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Cost")} align="right">
+              <span class="text-sm font-mono">${format_cost(log.provider_cost_usd)}</span>
+            </:col>
+            <:col :let={log} label={gettext("Latency")} align="right">
+              <span class="text-sm">{format_number(log.latency_ms || 0)} ms</span>
+            </:col>
+            <:empty>
+              <.icon name="hero-inbox" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+              <p>{@logs_empty_text || gettext("No requests with the current filters.")}</p>
+            </:empty>
+          </.table>
+        </div>
+
+        <%= if @has_more do %>
+          <div class="flex justify-center">
+            <button phx-click="load_more" class="btn btn-ghost btn-sm" id={@load_more_id}>
+              {gettext("Load more")}
+            </button>
+          </div>
+        <% end %>
       </div>
 
-      <%= if @has_more do %>
-        <div class="flex justify-center">
-          <button phx-click="load_more" class="btn btn-ghost btn-sm" id={@load_more_id}>
-            {gettext("Load more")}
-          </button>
-        </div>
-      <% end %>
+      <%!-- ============ TAB: Config (solo la vista supervisada lo llena) --%>
+      <div :if={@tab == "config" and @config != []} id="service-stats-config-tab">
+        {render_slot(@config)}
+      </div>
     </div>
     """
   end
@@ -536,9 +637,14 @@ defmodule TokengateWeb.ServiceStatsBody do
         )
       end)
 
-    [key_stats, model_key_stats, summary_core] =
+    usage_series_task =
+      Task.async(fn ->
+        usage_series_rows(service_id, period, timezone, range, key_filter)
+      end)
+
+    [key_stats, model_key_stats, summary_core, usage_series] =
       Task.await_many(
-        [key_stats_task, model_key_stats_task, summary_core_task],
+        [key_stats_task, model_key_stats_task, summary_core_task, usage_series_task],
         @stats_task_timeout_ms
       )
 
@@ -572,17 +678,48 @@ defmodule TokengateWeb.ServiceStatsBody do
       end
 
     summary =
-      Map.put(
-        summary_core,
-        :top_models,
-        top_models_from_model_key_stats(model_key_stats, key_filter)
-      )
+      summary_core
+      |> Map.put(:top_models, top_models_from_model_key_stats(model_key_stats, key_filter))
+      |> Map.merge(cost_pacing(summary_core, from, to))
 
     %{
       summary: summary,
       key_rows: key_rows,
-      model_breakdown: build_model_breakdown(model_key_stats, key_rows, key_filter)
+      model_breakdown: build_model_breakdown(model_key_stats, key_rows, key_filter),
+      usage_series: usage_series
     }
+  end
+
+  # Promedio diario y days/bounds del período, para el sub de la KPI de costo
+  # ("$X/day avg · proj Y/30d" con crédito ilimitado, "% of cap" con techo).
+  defp cost_pacing(summary_core, from, to) do
+    days = max(DateTime.diff(to, from), 3600) / 86_400
+
+    avg_daily =
+      summary_core.total_cost_usd
+      |> Decimal.div(Decimal.from_float(days))
+      |> Decimal.round(4)
+
+    %{period_days: days, avg_daily_cost_usd: avg_daily}
+  end
+
+  defp usage_series_rows(service_id, period, timezone, range, key_filter) do
+    granularity = if period in ["today", "yesterday"], do: :hour, else: :day
+
+    opts =
+      Keyword.merge(range, granularity: granularity, timezone: timezone)
+
+    # Coherencia de las tres lecturas: con una key seleccionada la tendencia
+    # se scopia igual que summary/pivote/tabla (el PM no comparte ventanas).
+    opts =
+      if key_filter == "all", do: opts, else: Keyword.put(opts, :api_key_id, key_filter)
+
+    DashboardCache.fetch_or_compute(
+      {:service_usage_series, service_id, period, timezone, key_filter},
+      fn ->
+        Rollup.usage_series_by_model_for_service(service_id, opts)
+      end
+    )
   end
 
   defp top_models_from_model_key_stats(model_key_stats, key_filter) do
@@ -614,16 +751,21 @@ defmodule TokengateWeb.ServiceStatsBody do
   end
 
   @doc """
-  Pivote modelo × API key en memoria: una fila por modelo (ordenado por gasto)
-  con el total del período y una celda por key. La lista de columnas es la misma
-  del universo de keys de la tabla de arriba (preload ∪ ids con tráfico ∪ NULL)
-  — el pivote no inventa columnas.
+  Desglose jerárquico modelo → API key en memoria: una fila por modelo
+  (ordenado por gasto) con su total del período y su lista `keys` — las
+  sub-filas del acordeón, ordenadas por gasto desc, con label/status y
+  shares de requests ya precalculados. `key_labels` queda como mapa
+  `id → %{label, status}` del universo de keys de la tabla de arriba
+  (preload ∪ ids con tráfico ∪ NULL) — el pivote no inventa keys.
 
   Con una key seleccionada el selector ya scopea el summary; la matriz se
   recorta a esa key para que las tres lecturas digan lo mismo.
   """
   def build_model_breakdown(model_key_stats, key_rows, key_filter) do
-    key_labels = Map.new(key_rows, fn row -> {row.stats.api_key_id, row.label} end)
+    key_labels =
+      Map.new(key_rows, fn row ->
+        {row.stats.api_key_id, %{label: row.label, status: row.status}}
+      end)
 
     stats =
       case key_filter do
@@ -631,17 +773,39 @@ defmodule TokengateWeb.ServiceStatsBody do
         key_id -> Enum.filter(model_key_stats, &(&1.api_key_id == key_id))
       end
 
+    total_model_cost = fn rows ->
+      Enum.reduce(rows, Decimal.new(0), &Decimal.add(&1.total_cost_usd, &2))
+    end
+
     rows =
       stats
       |> Enum.group_by(& &1.model_requested)
       |> Enum.map(fn {model, rows} ->
-        by_key = Map.new(rows, &{&1.api_key_id, &1})
+        model_cost = total_model_cost.(rows)
+        model_requests = Enum.sum_by(rows, & &1.request_count)
+
+        keys =
+          rows
+          |> Enum.map(fn r ->
+            info = key_labels[r.api_key_id] || %{label: r[:api_key_prefix] || "—", status: nil}
+
+            %{
+              api_key_id: r.api_key_id,
+              label: info.label,
+              status: info.status,
+              request_count: r.request_count,
+              total_prompt_tokens: r.total_prompt_tokens,
+              total_completion_tokens: r.total_completion_tokens,
+              total_cost_usd: r.total_cost_usd
+            }
+          end)
+          |> Enum.sort_by(&Decimal.to_float(&1.total_cost_usd), :desc)
 
         %{
           model: model,
-          request_count: Enum.sum_by(rows, & &1.request_count),
-          total_cost_usd: Enum.reduce(rows, Decimal.new(0), &Decimal.add(&1.total_cost_usd, &2)),
-          by_key: by_key
+          request_count: model_requests,
+          total_cost_usd: model_cost,
+          keys: keys
         }
       end)
       |> Enum.sort_by(&Decimal.to_float(&1.total_cost_usd), :desc)
@@ -722,6 +886,187 @@ defmodule TokengateWeb.ServiceStatsBody do
     }
   end
 
+  ## Usage trend (Overview) --------------------------------------------------
+
+  attr :id, :string, required: true
+  attr :rows, :list, required: true
+  attr :granularity, :atom, required: true
+  attr :period, :string, required: true
+  attr :total_cost, :any, required: true
+
+  @doc """
+  "Spend & requests" del Overview: barras apiladas por modelo (altura
+  proporcional a las requests del bucket) con el costo por modelo en tooltip
+  y una leyenda ordenada por gasto descendente. `granularity` es `:hour`
+  (today/yesterday) o `:day` (week/30d) — lo decide el panel con el período.
+  """
+  def service_usage_trend(assigns) do
+    rows = assigns.rows
+
+    days =
+      rows
+      |> Enum.map(& &1.date)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    {labels, label_totals} =
+      rows
+      |> Enum.group_by(& &1.label)
+      |> Enum.map(fn {label, rs} ->
+        {label,
+         %{
+           requests: Enum.sum_by(rs, & &1.request_count),
+           cost: Enum.reduce(rs, Decimal.new(0), &Decimal.add(&1.total_cost_usd, &2))
+         }}
+      end)
+      |> Enum.sort(fn {la, ta}, {lb, tb} ->
+        case Decimal.compare(ta.cost, tb.cost) do
+          :gt -> true
+          :eq -> la >= lb
+          :lt -> false
+        end
+      end)
+      |> Enum.unzip()
+
+    cells = Map.new(rows, fn r -> {{r.date, r.label}, r} end)
+
+    spark_max =
+      days
+      |> Enum.map(fn d -> bucket_total(cells, d, labels) end)
+      |> Enum.max(fn -> 1 end)
+
+    assigns =
+      assigns
+      |> assign(:pivoted_days, days)
+      |> assign(:pivoted_labels, labels)
+      |> assign(:label_totals, Map.new(Enum.zip(labels, label_totals)))
+      |> assign(:cells, cells)
+      |> assign(:spark_max, spark_max)
+
+    ~H"""
+    <div :if={@rows != []} class="card bg-base-100 border border-base-300 shadow-sm" id={@id}>
+      <div class="card-body p-4 gap-2">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="card-title text-base">
+            <.icon name="hero-chart-bars-square-left" class="w-5 h-5 text-base-content/60" />
+            {gettext("Spend & requests")}
+          </h2>
+          <div class="flex items-center gap-3">
+            <span class="text-[10px] text-base-content/40 hidden sm:inline">
+              {if @granularity == :hour, do: gettext("by hour"), else: gettext("by day")} · {Stats.period_label(
+                @period
+              )}
+            </span>
+            <span class="font-mono text-sm font-semibold tabular-nums">
+              {Stats.money(@total_cost)}
+            </span>
+          </div>
+        </div>
+
+        <div class="mt-2">
+          <div class="flex items-end gap-px h-32 relative">
+            <div
+              :for={day <- @pivoted_days}
+              class="flex-1 flex flex-col items-center justify-end h-full group relative"
+            >
+              <%!-- Tooltip: cada modelo del bucket con sus requests y su costo --%>
+              <div class="hidden group-hover:block absolute -top-1 -translate-y-full left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+                <div class="bg-base-300 text-base-content text-[10px] rounded-md px-2 py-1 shadow-lg whitespace-nowrap">
+                  <div class="font-semibold">{bucket_title(day, @granularity)}</div>
+                  <div :for={label <- @pivoted_labels} class="flex justify-between gap-2">
+                    <span class="truncate max-w-[130px]">{label}</span>
+                    <span class="tabular-nums">{bucket_cell_text(@cells, day, label)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <%!-- Stacked bar --%>
+              <div class="w-full flex flex-col-reverse rounded-t overflow-hidden">
+                <div
+                  :for={{label, idx} <- Enum.with_index(@pivoted_labels)}
+                  class={["w-full", Stats.sparkline_color(idx)]}
+                  style={"height: #{trend_bar_height(@cells, day, label, @spark_max)}%"}
+                  title={"#{label}: #{bucket_cell_text(@cells, day, label)}"}
+                />
+              </div>
+            </div>
+          </div>
+
+          <%!-- Bucket labels (eje X) --%>
+          <% bucket_count = length(@pivoted_days) %>
+          <% label_step = if bucket_count > 16, do: div(bucket_count, 10) + 1, else: 1 %>
+          <div class="flex gap-px mt-1">
+            <span
+              :for={{day, idx} <- Enum.with_index(@pivoted_days)}
+              class="flex-1 text-center text-[9px] text-base-content/40 tabular-nums"
+            >
+              <span :if={rem(idx, label_step) == 0 or idx == bucket_count - 1}>
+                {bucket_x_label(day, @granularity)}
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <%!-- Legend: modelos ordenados por gasto --%>
+        <div
+          :if={@pivoted_labels != []}
+          class="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-2 pt-2 border-t border-base-300/60"
+          id={"#{@id}-legend"}
+        >
+          <div
+            :for={{label, idx} <- Enum.with_index(@pivoted_labels)}
+            class="flex items-center gap-1.5"
+          >
+            <span class={["w-2 h-2 rounded-sm shrink-0", Stats.sparkline_color(idx)]} />
+            <span class="text-[10px] text-base-content/70 truncate max-w-[140px]" title={label}>
+              {label}
+            </span>
+            <span class="text-[10px] text-base-content/50 tabular-nums">
+              {Stats.money(Map.get(@label_totals, label).cost)} · {Stats.format_compact(
+                Map.get(@label_totals, label).requests
+              )}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp bucket_total(cells, day, labels) do
+    labels
+    |> Enum.map(&Map.get(cells, {day, &1}))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.sum_by(& &1.request_count)
+  end
+
+  defp trend_bar_height(cells, day, label, spark_max) do
+    case Map.get(cells, {day, label}) do
+      nil -> 0
+      row -> Stats.sparkline_bar_height(row.request_count, spark_max)
+    end
+  end
+
+  defp bucket_cell_text(cells, day, label) do
+    case Map.get(cells, {day, label}) do
+      nil ->
+        "0 · $0"
+
+      row ->
+        "#{Stats.format_compact(row.request_count)} · #{Stats.money(row.total_cost_usd)}"
+    end
+  end
+
+  defp bucket_title(day, :hour), do: Calendar.strftime(day, "%H:00")
+  defp bucket_title(day, _), do: Calendar.strftime(day, "%d %b")
+
+  defp bucket_x_label(day, :hour), do: Calendar.strftime(day, "%H:00")
+  defp bucket_x_label(day, _), do: Calendar.strftime(day, "%d")
+
+  # today/yesterday → buckets por hora; week/30d → por día.
+  defp period_granularity(period) when period in ["today", "yesterday"], do: :hour
+  defp period_granularity(_period), do: :day
+
   ## Logs ------------------------------------------------------------------
 
   @doc """
@@ -801,10 +1146,18 @@ defmodule TokengateWeb.ServiceStatsBody do
   @doc false
   # Bundle completo de la página (stats + primera página de logs) calculado
   # como valores planos: es lo que corre dentro de `start_async/3`.
+  #
+  # `logs_params` en `nil` = no refrescar logs: el tab Overview no baja logs
+  # en su carga inicial (los trae el tab Live logs bajo demanda) y la tarea
+  # de stats no se ensucia con queries que nadie está mirando.
   def compute_bundle(stats_params, logs_params) do
-    logs_task = Task.async(fn -> compute_logs(logs_params, :reset, nil) end)
+    logs_task =
+      if logs_params do
+        Task.async(fn -> compute_logs(logs_params, :reset, nil) end)
+      end
+
     stats = compute_stats_assigns(stats_params)
-    logs = Task.await(logs_task, @stats_task_timeout_ms)
+    logs = if logs_task, do: Task.await(logs_task, @stats_task_timeout_ms)
 
     %{
       stats: stats,
@@ -813,6 +1166,13 @@ defmodule TokengateWeb.ServiceStatsBody do
   end
 
   @doc false
+  # Aplica el resultado de `compute_bundle/2`. Sin logs el stream queda como
+  # está (vacío o con lo que quedó del último tab de logs) — el empty-state
+  # de la tabla de logs solo significa algo cuando el tab está visible.
+  def apply_bundle(socket, %{stats: stats, logs: nil}) do
+    assign(socket, stats)
+  end
+
   def apply_bundle(socket, %{stats: stats, logs: logs}) do
     socket
     |> assign(stats)
@@ -1087,7 +1447,7 @@ defmodule TokengateWeb.ServiceStatsBody do
   def last_request_label(%DateTime{} = dt, tz),
     do: TokengateWeb.TimezoneHelper.format_datetime(dt, tz)
 
-  defp safe_sub_count(n, suffix) when is_integer(n), do: Integer.to_string(n) <> suffix
+  defp safe_sub_count(n, suffix) when is_integer(n), do: format_number(n) <> suffix
 
   defp safe_sub_count(f, suffix) when is_float(f),
     do: :erlang.float_to_binary(f, [:compact, {:decimals, 1}]) <> suffix
@@ -1104,4 +1464,124 @@ defmodule TokengateWeb.ServiceStatsBody do
     do: gettext("Cap $%{amount}/month", amount: Decimal.to_string(limit))
 
   def limit_label(_), do: gettext("No budget")
+
+  ## Tabs ------------------------------------------------------------------
+
+  defp tab_extra_query("overview"), do: ""
+  defp tab_extra_query(tab) when is_binary(tab), do: "&tab=#{tab}"
+
+  defp panel_tabs(true),
+    do: [
+      {"overview", gettext("Overview")},
+      {"logs", gettext("Live logs")},
+      {"config", gettext("Config")}
+    ]
+
+  defp panel_tabs(false),
+    do: [
+      {"overview", gettext("Overview")},
+      {"logs", gettext("Live logs")}
+    ]
+
+  defp tab_active?(tab, value), do: tab == value
+
+  ## KPI subs ---------------------------------------------------------------
+
+  # Sub de la KPI de costo: para un PM la pregunta es "¿cada cuánto va?" —
+  # promedio diario y proyección a 30d (gasto ilimitado) o % del techo
+  # mensual (budget acotado). Ventanas cerradas (yesterday) o de un día
+  # (today) no proyectan: conservan el conteo de requests.
+  defp cost_sub_text(summary, %{unlimited_spend: true}) do
+    if summary[:avg_daily_cost_usd] && summary[:period_days] && summary.period_days >= 1 do
+      proj = Decimal.mult(summary.avg_daily_cost_usd, Decimal.new(30))
+
+      gettext("$%{daily}/day avg · proj %{proj}/30d",
+        daily: fmt_money(summary.avg_daily_cost_usd),
+        proj: fmt_money(proj)
+      )
+    else
+      safe_sub_count(summary.request_count, " " <> gettext("reqs"))
+    end
+  end
+
+  defp cost_sub_text(summary, %{monthly_spend_limit_usd: %Decimal{} = cap}) do
+    if summary[:avg_daily_cost_usd] && Decimal.compare(cap, Decimal.new(0)) == :gt do
+      pct =
+        Decimal.mult(Decimal.div(summary.total_cost_usd, cap), Decimal.new(100))
+        |> Decimal.round(1)
+        |> Decimal.to_string()
+
+      gettext("%{pct}% of monthly cap · %{daily}/day",
+        pct: pct,
+        daily: fmt_money(summary.avg_daily_cost_usd)
+      )
+    else
+      safe_sub_count(summary.request_count, " " <> gettext("reqs"))
+    end
+  end
+
+  defp cost_sub_text(summary, _service),
+    do: safe_sub_count(summary.request_count, " " <> gettext("reqs"))
+
+  # Sub de la KPI de errores: la tasa del período (4xx+5xx / requests), no la
+  # de los últimos 5 min — el PM compara ventanas, no instantes.
+  defp period_error_sub(summary) do
+    total = summary.request_count
+
+    errors = summary.status_breakdown["4xx"] + summary.status_breakdown["5xx"]
+
+    if total > 0 do
+      rate =
+        (errors / total * 100)
+        |> Float.round(1)
+        |> :erlang.float_to_binary([:compact, {:decimals, 1}])
+
+      "#{rate}% " <> gettext("error rate")
+    else
+      safe_sub_count(summary.realtime_5min.error_rate, "% (5 min)")
+    end
+  end
+
+  # "441,896 reqs": el sub nunca suelta el separador de miles (el entero
+  # compacto solo aplica al valor grande de la tarjeta).
+
+  ## Shares ------------------------------------------------------------------
+
+  defp model_row_slug(nil), do: "unknown"
+
+  defp model_row_slug(model) when is_binary(model),
+    do: String.replace(model, "/", "-")
+
+  defp model_row_slug(other), do: to_string(other)
+
+  @doc false
+  def model_breakdown_total(%{rows: rows}) do
+    Enum.reduce(rows, Decimal.new(0), &Decimal.add(&1.total_cost_usd, &2))
+  end
+
+  defp model_breakdown_total_requests(%{rows: rows}) do
+    Enum.sum_by(rows, & &1.request_count)
+  end
+
+  defp key_rows_total_cost(key_rows) do
+    Enum.reduce(key_rows, Decimal.new(0), &Decimal.add(&1.stats.total_cost_usd, &2))
+  end
+
+  # "53.5%" del gasto total; sin total (período vacío) → "—" para no leer
+  # como gasto cero.
+  defp spend_share(%Decimal{} = cost, %Decimal{} = total) do
+    if Decimal.compare(total, Decimal.new(0)) == :gt do
+      spend_share_pct(cost, total) <> "%"
+    else
+      "—"
+    end
+  end
+
+  defp spend_share(_, _), do: "—"
+
+  defp spend_share_pct(%Decimal{} = cost, %Decimal{} = total) do
+    Decimal.mult(Decimal.div(cost, total), Decimal.new(100))
+    |> Decimal.round(1)
+    |> Decimal.to_string()
+  end
 end

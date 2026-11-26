@@ -526,6 +526,14 @@ defmodule Tokengate.Budgets do
     }
   end
 
+  @doc "Monthly spend per member in the UTC month (one hybrid rollup+raw read)."
+  @spec monthly_spend_by_member_ids([term()]) :: %{term() => Decimal.t()}
+  def monthly_spend_by_member_ids([]), do: %{}
+
+  def monthly_spend_by_member_ids(member_ids) do
+    member_spend_map(member_ids, Periods.start_of_month_utc("Etc/UTC"))
+  end
+
   @doc "Monthly spend for a single member in the UTC month (display)."
   def monthly_spend_for_member(member_id) do
     member_spend_map([member_id], Periods.start_of_month_utc("Etc/UTC"))

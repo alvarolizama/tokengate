@@ -333,4 +333,70 @@ defmodule Tokengate.Providers.ServiceModelsTest do
       assert ServiceModels.discoverable_provider_keys() == ["openrouter"]
     end
   end
+
+  describe "classify/2 — Mistral y SteadyRouter" do
+    test "mistral clasifica voxtral-mini-tts como tts, voxtral-mini como stt y deja voxtral-small en llm" do
+      assert ServiceModels.classify("mistral", "voxtral-mini-tts-latest") == "tts"
+      assert ServiceModels.classify("mistral", "voxtral-mini-latest") == "stt"
+      assert ServiceModels.classify("mistral", "voxtral-small-latest") == nil
+      assert ServiceModels.type_of("mistral", "voxtral-small-latest") == "llm"
+    end
+
+    test "steadyrouter clasifica modelos de imagen" do
+      assert ServiceModels.classify("steadyrouter", "gpt-image-2-c") == "image"
+      assert ServiceModels.type_of("steadyrouter", "gpt-6.1-sol") == "llm"
+    end
+  end
+
+  describe "classify/2 — proveedores multimedia del catálogo" do
+    test "openai, xai, vercel, nvidia, digitalocean, poe, kenari, stepfun y zenmux clasifican sus familias sin falsos positivos" do
+      assert ServiceModels.classify("openai", "gpt-image-2") == "image"
+      assert ServiceModels.classify("openai", "whisper-1") == "stt"
+      assert ServiceModels.classify("openai", "tts-1-hd") == "tts"
+      assert ServiceModels.classify("openai", "gpt-audio") == nil
+
+      assert ServiceModels.classify("xai", "grok-imagine-image") == "image"
+      assert ServiceModels.classify("xai", "grok-4") == nil
+
+      assert ServiceModels.classify("vercel", "bytedance/seedream-5.0-pro") == "image"
+      assert ServiceModels.classify("vercel", "fish-audio/s2-pro") == "tts"
+      assert ServiceModels.classify("vercel", "spacexai/grok-stt") == "stt"
+      assert ServiceModels.classify("vercel", "bfl/flux-3-video") == nil
+      assert ServiceModels.classify("vercel", "meta/muse-wonder-1.0") == nil
+
+      assert ServiceModels.classify("nvidia", "nvidia/magpie-tts-zeroshot") == "tts"
+      assert ServiceModels.classify("nvidia", "nvidia/nemotron-voicechat") == nil
+      assert ServiceModels.classify("nvidia", "nvidia/studiovoice") == nil
+
+      assert ServiceModels.classify("poe", "elevenlabs/elevenlabs-v3") == "tts"
+      assert ServiceModels.classify("poe", "elevenlabs/elevenlabs-music") == nil
+      assert ServiceModels.classify("poe", "google/imagen-4") == "image"
+
+      assert ServiceModels.classify("digitalocean", "fal-ai/stable-audio-25/text-to-audio") ==
+               "tts"
+
+      assert ServiceModels.classify("digitalocean", "fal-ai/fast-sdxl") == "image"
+      assert ServiceModels.classify("kenari", "gemini-3-8-flash-lite-tts") == "tts"
+      assert ServiceModels.classify("stepfun", "stepaudio-2.5-asr") == "stt"
+      assert ServiceModels.classify("zenmux", "x-ai/grok-voice-tts-1.0") == "tts"
+    end
+
+    test "familias de embedding sin token `embed` clasifican como embedding y excluyen rerankers" do
+      for id <- ~w(
+        voyage/voyage-4
+        BAAI/bge-m3
+        bge_multilingual_gemma2
+        intfloat/multilingual-e5-large-instruct
+        gte-large-en-v1.5
+        all-mini-lm-l6-v2
+        multi-qa-mpnet-base-dot-v1
+      ) do
+        assert ServiceModels.type_of("stepping-stone", id) == "embedding",
+               "expected #{id} to classify as embedding"
+      end
+
+      assert ServiceModels.type_of(nil, "bge-reranker-v2-m3") == "llm"
+      assert ServiceModels.type_of("vercel", "voyage/rerank-3") == "llm"
+    end
+  end
 end

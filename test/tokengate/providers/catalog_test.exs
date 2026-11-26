@@ -96,6 +96,13 @@ defmodule Tokengate.Providers.CatalogTest do
 
       assert Catalog.capabilities("anthropic") == []
       assert Catalog.capabilities(nil) == []
+
+      # Auditoría contra models.dev live: Mistral suma `tts` (voxtral-mini-tts-latest),
+      # y los nuevos proveedores tipados declaran sus capabilities servidas.
+      assert Catalog.capabilities("mistral") == ~w(llm embedding stt tts)
+      assert Catalog.capabilities("doubleword") == ~w(llm embedding)
+      assert Catalog.capabilities("steadyrouter") == ~w(llm image)
+      assert Catalog.capabilities("stepping-stone") == ~w(llm embedding)
     end
 
     # F21 — una capability es una promesa que solo es honesta si el gateway

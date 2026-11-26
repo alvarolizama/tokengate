@@ -67,14 +67,21 @@ defmodule Tokengate.Credits.Topup do
     |> assoc_constraint(:service)
   end
 
-  # Si `expires_in_days` viene, debe estar en la lista permitida y fija
-  # `expires_at` = ahora + N días (salvo que `expires_at` ya venga).
+  # Si `expires_in_days` viene en los cambios:
+  #   - `nil` (el usuario eligió "Sin expiración") limpia `expires_at` (salvo que
+  #     venga explícito), porque `get_change/2` no distingue «sin cambio» de «nil».
+  #   - entero positivo: valida la lista permitida y recalcula `expires_at`.
   defp validate_expiration(changeset) do
-    case get_change(changeset, :expires_in_days) do
-      nil ->
+    case fetch_change(changeset, :expires_in_days) do
+      :error ->
         changeset
 
-      days ->
+      {:ok, nil} ->
+        if get_change(changeset, :expires_at),
+          do: changeset,
+          else: put_change(changeset, :expires_at, nil)
+
+      {:ok, days} ->
         changeset
         |> validate_inclusion(:expires_in_days, @valid_days)
         |> put_expires_at(days)

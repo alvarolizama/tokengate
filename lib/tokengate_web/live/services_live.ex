@@ -12,7 +12,9 @@ defmodule TokengateWeb.ServicesLive do
   import Ecto.Query, only: [from: 2]
   import TokengateWeb.AdminComponents
   import TokengateWeb.KeysPanel
+  import TokengateWeb.KpiHelpers, only: [metric_tile: 1]
   import TokengateWeb.StatsHelpers, only: [budget_cell: 1, format_usd: 1]
+  alias TokengateWeb.StatsHelpers, as: Stats
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Service
   alias Tokengate.Credits
@@ -42,7 +44,7 @@ defmodule TokengateWeb.ServicesLive do
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
 
-    if user.global_role != "admin" do
+    if is_nil(user) or user.global_role != "admin" do
       {:ok,
        socket
        |> put_flash(:error, gettext("You do not have permission to access this section."))
@@ -67,19 +69,56 @@ defmodule TokengateWeb.ServicesLive do
         |> assign(:delete_target_name, nil)
         |> assign(:detail_service_id, nil)
         |> assign(:models_service_id, nil)
+        |> assign(:models, [])
+        |> assign(:models_search_query, "")
         |> assign(:supervisor_search_service_id, nil)
         |> assign(:supervisor_search_query, "")
         |> assign(:supervisor_search_results, [])
         |> assign(:search_query, "")
+        |> assign(:filter_status, "all")
         |> assign(:sort_field, :name)
         |> assign(:sort_direction, :asc)
         |> assign(:page, 1)
         |> assign(:per_page, @per_page)
         |> assign(:total_count, 0)
         |> assign(:total_pages, 1)
-        |> load_services()
+        |> assign(:loaded?, false)
 
       {:ok, socket}
+    end
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    if socket.assigns[:is_admin] do
+      q = Map.get(params, "q", "") |> to_string()
+      filter = parse_filter(Map.get(params, "filter"))
+      {sort_field, sort_direction} = parse_sort_params(params)
+      page = parse_page(Map.get(params, "page"))
+
+      changed? =
+        not socket.assigns.loaded? or
+          socket.assigns.search_query != q or
+          socket.assigns.filter_status != filter or
+          socket.assigns.sort_field != sort_field or
+          socket.assigns.sort_direction != sort_direction or
+          socket.assigns.page != page
+
+      if changed? do
+        {:noreply,
+         socket
+         |> assign(:search_query, q)
+         |> assign(:filter_status, filter)
+         |> assign(:sort_field, sort_field)
+         |> assign(:sort_direction, sort_direction)
+         |> assign(:page, page)
+         |> assign(:loaded?, true)
+         |> load_services()}
+      else
+        {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
     end
   end
 
@@ -91,7 +130,7 @@ defmodule TokengateWeb.ServicesLive do
       if socket.assigns[:is_admin] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "No autorizado.")}
+        {:halt, put_flash(socket, :error, gettext("Not authorized."))}
       end
     end)
   end
@@ -107,6 +146,7 @@ defmodule TokengateWeb.ServicesLive do
     page =
       Accounts.list_services_page(
         search: socket.assigns[:search_query] || "",
+        filter: socket.assigns[:filter_status] || "all",
         page: socket.assigns.page,
         per_page: socket.assigns.per_page,
         sort_field: socket.assigns.sort_field,
@@ -282,6 +322,7 @@ defmodule TokengateWeb.ServicesLive do
   defp sort_services(services, field, direction, socket) do
     ctx = %{
       stats: socket.assigns.service_stats,
+      credit: socket.assigns.service_credit,
       monthly_spend: socket.assigns.monthly_spend_by_service,
       total_spend: socket.assigns.total_spend_by_service
     }
@@ -298,7 +339,18 @@ defmodule TokengateWeb.ServicesLive do
     )
   end
 
-  defp sort_value(s, :limit, _ctx), do: limit_search_text(s)
+  # Consumo contra el techo mensual (nil = ilimitado o sin presupuesto, siempre al final).
+  # Mismo criterio numérico que la columna equivalente en UsersLive.
+  defp sort_value(s, :limit, ctx) do
+    case Map.get(ctx.credit, s.id) do
+      %{limit_usd: limit, limit_spend_usd: %Decimal{} = spent} when not is_nil(limit) ->
+        Decimal.to_float(spent)
+
+      _ ->
+        nil
+    end
+  end
+
   defp sort_value(s, :name, _ctx), do: String.downcase(s.name || "")
 
   defp sort_value(s, :requests, ctx), do: stat_value(s, ctx.stats, :total_requests)
@@ -312,13 +364,6 @@ defmodule TokengateWeb.ServicesLive do
       stat -> Map.get(stat, key) || Decimal.new(0)
     end
   end
-
-  defp limit_search_text(%{unlimited_spend: true}), do: "ilimitado"
-
-  defp limit_search_text(%{monthly_spend_limit_usd: %Decimal{} = limit}),
-    do: Decimal.to_string(limit)
-
-  defp limit_search_text(_), do: String.downcase(gettext("No budget"))
 
   defp compare_vals(%Decimal{} = a, %Decimal{} = b), do: Decimal.compare(a, b)
 
@@ -361,15 +406,29 @@ defmodule TokengateWeb.ServicesLive do
     end
   end
 
-  ## Events — search / sort ------------------------------------------------
+  ## Events — search / filter / sort ---------------------------------------
 
   @impl true
   def handle_event("search_services", %{"q" => query}, socket) do
-    {:noreply,
-     socket
-     |> assign(:search_query, query)
-     |> assign(:page, 1)
-     |> load_services()}
+    socket =
+      socket
+      |> assign(:search_query, query)
+      |> assign(:page, 1)
+      |> load_services()
+
+    {:noreply, push_patch(socket, to: services_path(socket), replace: true)}
+  end
+
+  def handle_event("filter_services", %{"filter" => filter}, socket) do
+    filter = parse_filter(filter)
+
+    socket =
+      socket
+      |> assign(:filter_status, filter)
+      |> assign(:page, 1)
+      |> load_services()
+
+    {:noreply, push_patch(socket, to: services_path(socket), replace: true)}
   end
 
   ## Events — paginado ------------------------------------------------------
@@ -377,10 +436,12 @@ defmodule TokengateWeb.ServicesLive do
   # Read-only navigation: the DB clamps an out-of-range page and reports the
   # effective one back (mirror of the Users table).
   def handle_event("go_to_page", %{"page" => page}, socket) do
-    {:noreply,
-     socket
-     |> assign(:page, parse_page(page))
-     |> load_services()}
+    socket =
+      socket
+      |> assign(:page, parse_page(page))
+      |> load_services()
+
+    {:noreply, push_patch(socket, to: services_path(socket), replace: true)}
   end
 
   def handle_event("sort_services", %{"field" => field}, socket) do
@@ -393,12 +454,14 @@ defmodule TokengateWeb.ServicesLive do
           {field, default_direction_for(field)}
         end
 
-      {:noreply,
-       socket
-       |> assign(:sort_field, sort_field)
-       |> assign(:sort_direction, sort_direction)
-       |> assign(:page, 1)
-       |> load_services()}
+      socket =
+        socket
+        |> assign(:sort_field, sort_field)
+        |> assign(:sort_direction, sort_direction)
+        |> assign(:page, 1)
+        |> load_services()
+
+      {:noreply, push_patch(socket, to: services_path(socket), replace: true)}
     else
       _ -> {:noreply, socket}
     end
@@ -437,6 +500,28 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   def handle_event("edit_service", _params, socket), do: {:noreply, socket}
+
+  def handle_event("validate_service", %{"service" => service_params}, socket) do
+    changeset =
+      case socket.assigns.editing_service_id do
+        :new ->
+          Accounts.change_service(%Service{}, service_params)
+
+        id when is_binary(id) ->
+          (Accounts.get_service(id) || %Service{})
+          |> Accounts.change_service(service_params)
+
+        _ ->
+          nil
+      end
+
+    if changeset do
+      {:noreply,
+       assign(socket, :form, to_form(Map.put(changeset, :action, :validate), as: :service))}
+    else
+      {:noreply, socket}
+    end
+  end
 
   def handle_event("save_service", %{"service" => service_params}, socket) do
     save_service(socket, socket.assigns.editing_service_id, service_params)
@@ -495,7 +580,11 @@ defmodule TokengateWeb.ServicesLive do
         from(ma in Model, order_by: [asc: ma.name])
         |> Repo.all()
 
-      {:noreply, socket |> assign(:models, models) |> assign(:models_service_id, service_id)}
+      {:noreply,
+       socket
+       |> assign(:models, models)
+       |> assign(:models_search_query, "")
+       |> assign(:models_service_id, service_id)}
     else
       _ -> {:noreply, socket}
     end
@@ -503,8 +592,15 @@ defmodule TokengateWeb.ServicesLive do
 
   def handle_event("edit_models", _params, socket), do: {:noreply, socket}
 
+  def handle_event("search_models_modal", %{"q" => query}, socket) do
+    {:noreply, assign(socket, :models_search_query, query)}
+  end
+
   def handle_event("close_models", _params, socket) do
-    {:noreply, assign(socket, :models_service_id, nil)}
+    {:noreply,
+     socket
+     |> assign(:models_service_id, nil)
+     |> assign(:models_search_query, "")}
   end
 
   ## Events — API keys (N keys con etiqueta, igual que un usuario) ---------
@@ -815,7 +911,7 @@ defmodule TokengateWeb.ServicesLive do
 
         query
         |> String.trim()
-        |> Accounts.search_users(25)
+        |> Accounts.search_users_for_picker(25)
         |> Enum.reject(fn user -> user.id in supervisor_ids end)
       else
         []
@@ -886,11 +982,20 @@ defmodule TokengateWeb.ServicesLive do
           "granted" => granted?
         })
 
-        # Surgical refresh: only granted_models changes here.
+        # Surgical refresh: only granted_models for the visible page changes here.
+        page_service_ids = Enum.map(socket.assigns.all_services, & &1.id)
+
         granted_models =
-          from(sma in ServiceModel, select: {sma.service_id, sma.model_id})
-          |> Repo.all()
-          |> Enum.group_by(fn {sid, _} -> sid end, fn {_, mid} -> mid end)
+          if page_service_ids == [] do
+            %{}
+          else
+            from(sma in ServiceModel,
+              where: sma.service_id in ^page_service_ids,
+              select: {sma.service_id, sma.model_id}
+            )
+            |> Repo.all()
+            |> Enum.group_by(fn {sid, _} -> sid end, fn {_, mid} -> mid end)
+          end
 
         {:noreply,
          socket
@@ -988,32 +1093,76 @@ defmodule TokengateWeb.ServicesLive do
 
   # Numeric columns start desc (biggest spenders / most requests first).
   defp default_direction_for(field)
-       when field in [:requests, :monthly_spend, :total_spend, :inserted_at],
+       when field in [:limit, :requests, :monthly_spend, :total_spend, :inserted_at],
        do: :desc
 
   defp default_direction_for(_), do: :asc
+
+  @valid_filters ~w(all budgeted unlimited no_budget no_keys)
+
+  defp parse_filter(filter) when filter in @valid_filters, do: filter
+  defp parse_filter(_), do: "all"
+
+  defp parse_sort_params(params) do
+    field =
+      case params["sort"] do
+        nil ->
+          :name
+
+        raw ->
+          case to_sort_field(raw) do
+            {:ok, atom} when atom in @sort_columns -> atom
+            _ -> :name
+          end
+      end
+
+    direction =
+      case params["dir"] do
+        "asc" -> :asc
+        "desc" -> :desc
+        _ -> default_direction_for(field)
+      end
+
+    {field, direction}
+  end
+
+  defp services_path(socket) do
+    params =
+      []
+      |> maybe_put_param("q", socket.assigns.search_query, "")
+      |> maybe_put_param("filter", socket.assigns.filter_status, "all")
+      |> maybe_put_param("sort", Atom.to_string(socket.assigns.sort_field), "name")
+      |> maybe_put_dir(socket.assigns.sort_field, socket.assigns.sort_direction)
+      |> maybe_put_page(socket.assigns.page)
+
+    case params do
+      [] -> ~p"/access/services"
+      _ -> ~p"/access/services?#{params}"
+    end
+  end
+
+  defp maybe_put_param(acc, _key, val, default) when val in [nil, default], do: acc
+  defp maybe_put_param(acc, key, val, _default), do: [{key, val} | acc]
+
+  defp maybe_put_dir(acc, :name, :asc), do: acc
+  defp maybe_put_dir(acc, _field, dir), do: [{"dir", Atom.to_string(dir)} | acc]
+
+  defp maybe_put_page(acc, page) when page <= 1, do: acc
+  defp maybe_put_page(acc, page), do: [{"page", Integer.to_string(page)} | acc]
 
   def granted_alias_ids(granted_models, service_id) do
     Map.get(granted_models, service_id, [])
   end
 
-  def format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
-  def format_decimal(nil), do: "—"
-  def format_decimal(value), do: to_string(value)
+  defp filtered_modal_models(models, query) do
+    needle = query |> to_string() |> String.trim() |> String.downcase()
 
-  def format_number(n) when is_integer(n) do
-    n
-    |> Integer.to_string()
-    |> String.reverse()
-    |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
-    |> String.reverse()
+    if needle == "" do
+      models
+    else
+      Enum.filter(models, &String.contains?(String.downcase(&1.name || ""), needle))
+    end
   end
-
-  def format_number(%Decimal{} = d),
-    do: d |> Decimal.round(0) |> Decimal.to_string() |> format_number()
-
-  def format_number(nil), do: "0"
-  def format_number(n), do: to_string(n)
 
   defp stats_for(assigns, service_id) do
     Map.get(
@@ -1051,11 +1200,11 @@ defmodule TokengateWeb.ServicesLive do
           {gettext("Services")}
           <:subtitle>{gettext("API keys for services without an associated user")}</:subtitle>
           <:actions>
-            <div class="flex items-center gap-3">
+            <div class="flex flex-wrap items-center gap-3">
               <.admin_search
                 event="search_services"
                 value={@search_query}
-                placeholder={gettext("Search by name or limit profile…")}
+                placeholder={gettext("Search by name or budget…")}
                 input_id="service-search"
               />
               <.button phx-click="new_service" id="new-service-btn">
@@ -1064,6 +1213,30 @@ defmodule TokengateWeb.ServicesLive do
             </div>
           </:actions>
         </.header>
+
+        <div class="flex flex-wrap items-center gap-1.5" id="service-filter-pills">
+          <button
+            :for={
+              {filter, label} <- [
+                {"all", gettext("All")},
+                {"budgeted", gettext("With budget")},
+                {"unlimited", gettext("Unlimited")},
+                {"no_budget", gettext("No budget")},
+                {"no_keys", gettext("No keys")}
+              ]
+            }
+            type="button"
+            phx-click="filter_services"
+            phx-value-filter={filter}
+            id={"filter-service-#{filter}"}
+            class={[
+              "btn btn-xs",
+              if(@filter_status == filter, do: "btn-primary", else: "btn-ghost")
+            ]}
+          >
+            {label}
+          </button>
+        </div>
 
         <%!-- Service form (create / edit) — modal --%>
         <.modal
@@ -1074,7 +1247,12 @@ defmodule TokengateWeb.ServicesLive do
           }
           on_close="cancel_form"
         >
-          <.form for={@form} id="service-form" phx-submit="save_service">
+          <.form
+            for={@form}
+            id="service-form"
+            phx-change="validate_service"
+            phx-submit="save_service"
+          >
             <.input
               field={@form[:name]}
               type="text"
@@ -1101,7 +1279,7 @@ defmodule TokengateWeb.ServicesLive do
                 hint={gettext("The only path to unlimited; it wins over the cap.")}
               />
             </div>
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
               <.input
                 field={@form[:concurrency_limit]}
                 type="number"
@@ -1115,15 +1293,20 @@ defmodule TokengateWeb.ServicesLive do
                 hint={gettext("Absolute cap (defaults to 60 when empty).")}
               />
             </div>
-            <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">{gettext(
-                "Cancel"
-              )}</button>
-              <button type="submit" class="btn btn-primary btn-sm" id="save-service-btn">{gettext(
-                "Save"
-              )}</button>
-            </div>
           </.form>
+          <:footer>
+            <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
+              {gettext("Cancel")}
+            </button>
+            <button
+              type="submit"
+              form="service-form"
+              class="btn btn-primary btn-sm"
+              id="save-service-btn"
+            >
+              {gettext("Save")}
+            </button>
+          </:footer>
         </.modal>
 
         <%!-- Keys modal — N claves con etiqueta (mismo panel que Usuarios) --%>
@@ -1155,11 +1338,11 @@ defmodule TokengateWeb.ServicesLive do
             empty_text={gettext("This service has no active keys.")}
           />
 
-          <div class="flex gap-2 mt-4 justify-end">
+          <:footer>
             <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
               {gettext("Close")}
             </button>
-          </div>
+          </:footer>
         </.modal>
 
         <%!-- Models modal — manage model grants per service --%>
@@ -1168,15 +1351,33 @@ defmodule TokengateWeb.ServicesLive do
           id={"models-modal-#{@models_service_id}"}
           title={gettext("Service models")}
           on_close="close_models"
+          max_w="max-w-2xl"
         >
+          <form
+            id="models-modal-search-form"
+            phx-change="search_models_modal"
+            phx-submit="search_models_modal"
+            class="mb-3"
+          >
+            <input
+              type="text"
+              name="q"
+              value={@models_search_query}
+              placeholder={gettext("Filter models by name…")}
+              phx-debounce="200"
+              autocomplete="off"
+              class="input input-sm input-bordered w-full"
+              id="models-modal-search"
+            />
+          </form>
           <.model_picker
             id={"model-picker-#{@models_service_id}"}
-            models={@models}
+            models={filtered_modal_models(@models, @models_search_query)}
             granted_ids={granted_alias_ids(@granted_models, @models_service_id)}
             toggle_event="toggle_model"
             target_value={@models_service_id}
           />
-          <div class="flex justify-end mt-4">
+          <:footer>
             <button
               type="button"
               phx-click="close_models"
@@ -1185,7 +1386,7 @@ defmodule TokengateWeb.ServicesLive do
             >
               {gettext("Done")}
             </button>
-          </div>
+          </:footer>
         </.modal>
 
         <%!-- Detail modal — stats + supervisores (las claves viven en su propio modal) --%>
@@ -1204,37 +1405,39 @@ defmodule TokengateWeb.ServicesLive do
 
           <%!-- Stats 30d --%>
           <% stats = stats_for(assigns, @detail_service_id) %>
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div class="card bg-base-100 border border-base-300 shadow-sm">
-              <div class="card-body p-4">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">{gettext(
-                  "Actual spend"
-                )}</span>
-                <p class="text-lg font-bold">${format_decimal(stats.total_cost)}</p>
-                <p class="text-xs text-base-content/40">{gettext("30 days")}</p>
-              </div>
-            </div>
-            <div class="card bg-base-100 border border-base-300 shadow-sm">
-              <div class="card-body p-4">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
-                <p class="text-lg font-bold">{format_number(stats.total_requests)}</p>
-                <p class="text-xs text-base-content/40">{gettext("30 days")}</p>
-              </div>
-            </div>
-            <div class="card bg-base-100 border border-base-300 shadow-sm">
-              <div class="card-body p-4">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens In</span>
-                <p class="text-lg font-bold">{format_number(stats.total_input_tokens)}</p>
-                <p class="text-xs text-base-content/40">{gettext("30 days")}</p>
-              </div>
-            </div>
-            <div class="card bg-base-100 border border-base-300 shadow-sm">
-              <div class="card-body p-4">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens Out</span>
-                <p class="text-lg font-bold">{format_number(stats.total_output_tokens)}</p>
-                <p class="text-xs text-base-content/40">{gettext("30 days")}</p>
-              </div>
-            </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <.metric_tile
+              id="detail-stat-cost"
+              label={gettext("Actual spend")}
+              value={Stats.money(stats.total_cost)}
+              icon="hero-currency-dollar"
+              accent="success"
+              sub={gettext("30 days")}
+            />
+            <.metric_tile
+              id="detail-stat-requests"
+              label="Requests"
+              value={Stats.format_number(stats.total_requests)}
+              icon="hero-bolt"
+              accent="primary"
+              sub={gettext("30 days")}
+            />
+            <.metric_tile
+              id="detail-stat-tokens-in"
+              label="Tokens In"
+              value={Stats.format_number(stats.total_input_tokens)}
+              icon="hero-arrow-down-tray"
+              accent="accent"
+              sub={gettext("30 days")}
+            />
+            <.metric_tile
+              id="detail-stat-tokens-out"
+              label="Tokens Out"
+              value={Stats.format_number(stats.total_output_tokens)}
+              icon="hero-arrow-up-tray"
+              accent="neutral"
+              sub={gettext("30 days")}
+            />
           </div>
 
           <%!-- Supervisores --%>
@@ -1340,7 +1543,7 @@ defmodule TokengateWeb.ServicesLive do
             </div>
           </div>
 
-          <div class="flex gap-2 mt-4 justify-end">
+          <:footer>
             <button
               type="button"
               phx-click="close_detail"
@@ -1349,7 +1552,7 @@ defmodule TokengateWeb.ServicesLive do
             >
               {gettext("Close")}
             </button>
-          </div>
+          </:footer>
         </.modal>
 
         <%!-- Delete confirmation modal --%>
@@ -1442,7 +1645,7 @@ defmodule TokengateWeb.ServicesLive do
             </:col>
             <:col :let={service} label={gettext("Requests 30d")} field={:requests} align="right">
               <span class="text-xs font-mono">
-                {format_number(stat_for(@service_stats, service.id, :total_requests))}
+                {Stats.format_number(stat_for(@service_stats, service.id, :total_requests))}
               </span>
             </:col>
             <:col :let={service} label={gettext("Created")} field={:inserted_at}>
@@ -1462,6 +1665,15 @@ defmodule TokengateWeb.ServicesLive do
                 <span>{length(Map.get(@supervisors_map, service.id, []))}</span>
               </.link>
               <.link
+                navigate={~p"/budget/topups?owner_kind=service&owner_id=#{service.id}"}
+                class="btn btn-xs btn-ghost"
+                id={"topup-#{service.id}"}
+                title={gettext("Grant top-up")}
+                aria-label={gettext("Grant top-up")}
+              >
+                <.icon name="hero-arrow-up-circle" class="w-3 h-3" />
+              </.link>
+              <.link
                 navigate={~p"/stats/services/#{service.id}"}
                 class="btn btn-xs btn-ghost"
                 id={"stats-#{service.id}"}
@@ -1478,7 +1690,7 @@ defmodule TokengateWeb.ServicesLive do
                 title={gettext("Edit service")}
                 aria-label={gettext("Edit service")}
               >
-                <.icon name="hero-pencil" class="w-3 h-3" />
+                <.icon name="hero-pencil-square" class="w-3 h-3" />
               </button>
               <button
                 phx-click="view_detail"

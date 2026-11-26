@@ -508,5 +508,29 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
       assert sql =~ ~s("inserted_at" >=)
       refute_received {:webhook_query, ^ref, _, _}
     end
+
+    test "paused destination is skipped by dispatch/1 and discarded by perform/1" do
+      {tm, _group} = group_member_fixture()
+      log = log_fixture(tm.id)
+      dest = destination_fixture(base_url(), %{"enabled" => false})
+
+      assert {:ok, 0} = WebhookWorker.dispatch(log)
+
+      assert {:discard, "destination disabled"} =
+               perform_job(WebhookWorker, %{
+                 "destination_id" => dest.id,
+                 "request_log_ids" => [to_string(log.id)]
+               })
+    end
+
+    test "send_test/1 posts an OTLP payload with x-tokengate-test header" do
+      :persistent_term.put({TestPlug, :test_pid}, self())
+      dest = destination_fixture(base_url() <> "/test")
+
+      assert {:ok, %{status: 200, latency_ms: ms}} = WebhookWorker.send_test(dest)
+      assert is_integer(ms)
+      assert_received {:captured, %{path: "/test", body: body}}
+      assert Jason.decode!(body) |> Map.has_key?("resourceSpans")
+    end
   end
 end

@@ -22,8 +22,11 @@ defmodule TokengateWeb.StatsLive.Model do
   attr :breakdown_provider, :any, required: true
   attr :breakdown_group, :any, required: true
   attr :breakdown_member, :any, required: true
+  attr :breakdown_service, :any, default: []
+  attr :breakdown_agent, :any, default: []
   attr :drilldown_series, :any, required: true
   attr :drilldown_series_labels, :any, required: true
+  attr :chart_metric, :string, default: "requests"
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
@@ -94,6 +97,23 @@ defmodule TokengateWeb.StatsLive.Model do
             accent="accent"
           >
             ${Stats.format_decimal(@metrics.cost_usd)}
+            <:sub>
+              <span :if={@metrics.requests_total > 0} class="tabular-nums">
+                {Stats.cost_per_request(@metrics.cost_usd, @metrics.requests_total)}/req · {Stats.effective_cost_per_1m(
+                  @metrics.cost_usd,
+                  @metrics.prompt_tokens,
+                  @metrics.completion_tokens
+                )}/1M
+              </span>
+              <span
+                :if={@model.market_input_price_per_1m && @model.market_output_price_per_1m}
+                class="block text-[10px] text-base-content/50 tabular-nums"
+              >
+                {gettext("market")}: ${Stats.format_decimal(
+                  Decimal.round(@model.market_input_price_per_1m, 2)
+                )}/${Stats.format_decimal(Decimal.round(@model.market_output_price_per_1m, 2))}/1M
+              </span>
+            </:sub>
           </.kpi_card>
 
           <.kpi_card
@@ -130,6 +150,8 @@ defmodule TokengateWeb.StatsLive.Model do
           series={@drilldown_series}
           labels={@drilldown_series_labels}
           show_logos={true}
+          metric={@chart_metric}
+          toggle_event="set_chart_metric"
         />
 
         <div class="card bg-base-100 border border-base-300 shadow-sm">
@@ -176,6 +198,22 @@ defmodule TokengateWeb.StatsLive.Model do
                   </:col>
                   <:col :let={{row, _idx}} label={gettext("Cost")} field={:cost_usd} align="right">
                     <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  </:col>
+                  <:col :let={{row, _idx}} label={gettext("Cost / req")} align="right">
+                    <span class="font-mono tabular-nums text-base-content/70">
+                      {Stats.cost_per_request(row.cost_usd, row.request_count)}
+                    </span>
+                  </:col>
+                  <:col :let={{row, _idx}} label={gettext("Latency")} align="right">
+                    <span class="font-mono tabular-nums text-base-content/70">
+                      {Stats.format_ms(Map.get(row, :avg_latency_ms))}
+                    </span>
+                  </:col>
+                  <:col :let={{row, _idx}} label={gettext("Errors")} align="right">
+                    <% err_rate = Map.get(row, :error_rate, 0.0) %>
+                    <span class={["font-mono tabular-nums", err_rate > 0 && "text-warning"]}>
+                      {Stats.format_percent(err_rate)}
+                    </span>
                   </:col>
                   <:col
                     :let={{row, _idx}}
@@ -403,6 +441,121 @@ defmodule TokengateWeb.StatsLive.Model do
                 {gettext("No data for this period.")}
               </p>
             <% end %>
+          </div>
+        </div>
+
+        <%!-- Services & Agents that use this model --%>
+        <div
+          :if={@breakdown_service != []}
+          class="card bg-base-100 border border-base-300 shadow-sm"
+          id="model-services-card"
+        >
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-wrench-screwdriver" class="w-5 h-5 text-base-content/60" />
+              {gettext("Services that use it")}
+            </h2>
+            <% svc_rows =
+              Stats.shown_rows(@breakdown_service, "model-services", @shown_counts, @per_page) %>
+            <div class="mt-3 overflow-x-auto">
+              <.table
+                id="model-services"
+                rows={svc_rows}
+                row_id={fn row -> "bd-model-service-#{row.service_id}" end}
+              >
+                <:col :let={row} label={gettext("Service")}>
+                  <.link
+                    navigate={~p"/stats/services/#{row.service_id}"}
+                    class="link link-hover font-medium"
+                  >
+                    {row.service_name}
+                  </.link>
+                </:col>
+                <:col :let={row} label={gettext("Requests")} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Cost")} align="right">
+                  <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Share")} align="right">
+                  <span class="font-mono tabular-nums">
+                    {Stats.cost_share_pct(row.cost_usd, @metrics.cost_usd)}%
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Cache %")} align="right">
+                  <span class="font-mono tabular-nums">
+                    {Stats.cache_hit_pct(row.prompt_tokens, row.cache_read_tokens)}
+                  </span>
+                </:col>
+              </.table>
+            </div>
+            <Stats.show_more
+              key="model-services"
+              id="model-services-more"
+              top={length(svc_rows)}
+              total={length(@breakdown_service)}
+            />
+          </div>
+        </div>
+
+        <div
+          :if={@breakdown_agent != []}
+          class="card bg-base-100 border border-base-300 shadow-sm"
+          id="model-agents-card"
+        >
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-command-line" class="w-5 h-5 text-base-content/60" />
+              {gettext("Agents that use it")}
+            </h2>
+            <% agent_rows =
+              Stats.shown_rows(@breakdown_agent, "model-agents", @shown_counts, @per_page) %>
+            <div class="mt-3 overflow-x-auto">
+              <.table
+                id="model-agents"
+                rows={agent_rows}
+                row_id={fn row -> "bd-model-agent-#{row.key}" end}
+              >
+                <:col :let={row} label={gettext("Agent")}>
+                  <div class="flex items-center gap-2">
+                    <img :if={row.logo} src={row.logo} alt="" class="w-4 h-4 object-contain shrink-0" />
+                    <.icon
+                      :if={!row.logo}
+                      name={row.icon}
+                      class="w-4 h-4 text-base-content/60 shrink-0"
+                    />
+                    <.link
+                      patch={~p"/stats/agents/#{row.key}?period=#{@period}"}
+                      class="link link-hover font-medium"
+                    >
+                      {row.label}
+                    </.link>
+                  </div>
+                </:col>
+                <:col :let={row} label={gettext("Requests")} align="right">
+                  <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Cost")} align="right">
+                  <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Share")} align="right">
+                  <span class="font-mono tabular-nums">
+                    {Stats.cost_share_pct(row.cost_usd, @metrics.cost_usd)}%
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Cache %")} align="right">
+                  <span class="font-mono tabular-nums">
+                    {Stats.cache_hit_pct(row.prompt_tokens, row.cache_read_tokens)}
+                  </span>
+                </:col>
+              </.table>
+            </div>
+            <Stats.show_more
+              key="model-agents"
+              id="model-agents-more"
+              top={length(agent_rows)}
+              total={length(@breakdown_agent)}
+            />
           </div>
         </div>
       <% end %>

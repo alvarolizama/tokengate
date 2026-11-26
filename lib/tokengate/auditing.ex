@@ -137,6 +137,7 @@ defmodule Tokengate.Auditing do
     |> maybe_where(:action, filters)
     |> maybe_where(:target_label, filters)
     |> maybe_where(:ip, filters)
+    |> maybe_search(filters)
     |> maybe_between(:inserted_at, get_filter(filters, :from), get_filter(filters, :to))
     |> order_by([al], desc: al.inserted_at, desc: al.id)
   end
@@ -154,8 +155,51 @@ defmodule Tokengate.Auditing do
     |> maybe_where(:action, filters)
     |> maybe_where(:target_label, filters)
     |> maybe_where(:ip, filters)
+    |> maybe_search(filters)
     |> maybe_between(:inserted_at, get_filter(filters, :from), get_filter(filters, :to))
     |> Repo.aggregate(:count, :id)
+  end
+
+  @doc "Fetches one audit log entry by UUID (returns nil for invalid/missing ids)."
+  def get_audit_log(id) when is_binary(id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(id) do
+      Repo.one(from al in AuditLog, where: al.id == ^uuid, limit: 1)
+    else
+      _ -> nil
+    end
+  end
+
+  def get_audit_log(_), do: nil
+
+  @doc "Common audited actions for UI autocomplete suggestions."
+  def known_actions do
+    ~w(
+      auth.login auth.login_failed auth.logout
+      impersonate.start impersonate.stop
+      user.create user.update user.toggle_status user.delete
+      service.create service.update service.delete
+      api_key.create api_key.revoke
+      group.create group.update group.delete
+      topup.create topup.revoke topup.toggle_status
+      provider.create provider.update provider.toggle_status provider.delete
+      credential.create credential.reactivate credential.delete
+      model.create model.update model.delete
+      destination.create destination.update destination.delete destination.toggle
+      notification.token_set notification.token_clear notification.events_update
+      notification.quiet_hours_update notification.link_add notification.link_remove
+      notification.resend
+      settings.reset_all_usage settings.purge_expired_logs
+      settings.reset_sticky_sessions settings.catalog_refresh
+    )
+  end
+
+  @doc "Common audited entity types for UI autocomplete suggestions."
+  def known_entity_types do
+    ~w(
+      session user service api_key group group_member topup
+      provider credential model destination notification notification_settings
+      telegram_link usage sticky_sessions catalog_providers
+    )
   end
 
   defp get_filter(filters, field) do
@@ -178,6 +222,29 @@ defmodule Tokengate.Auditing do
       nil -> query
       "" -> query
       value -> where(query, [al], field(al, ^field) == ^value)
+    end
+  end
+
+  defp maybe_search(query, filters) do
+    case get_filter(filters, :q) do
+      nil ->
+        query
+
+      "" ->
+        query
+
+      q ->
+        pattern = "%#{String.trim(q)}%"
+
+        where(
+          query,
+          [al],
+          ilike(al.actor_email, ^pattern) or
+            ilike(al.target_label, ^pattern) or
+            ilike(al.action, ^pattern) or
+            ilike(al.entity_type, ^pattern) or
+            ilike(al.ip, ^pattern)
+        )
     end
   end
 

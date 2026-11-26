@@ -181,6 +181,7 @@ defmodule TokengateWeb.Router do
       # Ranking de agentes de código (identidad normalizada en lectura desde
       # client_agent/agent_type): mismo scope, live_session y pipe_through.
       live "/stats/agents", StatsLive, :agents
+      live "/stats/agents/:agent_key", StatsLive, :agent
       live "/stats/services", StatsLive, :services
       live "/stats/services/:service_id", ServiceStatsLive
       # El sujeto del techo mensual se llama «perfil de límites»: la página

@@ -244,10 +244,62 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   def classify_response(402, _error), do: :billing_error
 
   def classify_response(status, error) when status in [401, 403] do
-    if scoped_rejection?(error), do: :model_not_available, else: classify_status(status)
+    cond do
+      scoped_rejection?(error) -> :model_not_available
+      status == 403 and waf_challenge?(error) -> :server_error
+      true -> classify_status(status)
+    end
   end
 
   def classify_response(status, _error), do: classify_status(status)
+
+  # Un HTML de CDN/WAF (Cloudflare "Just a moment…", nginx/edge 403) NO es una
+  # API key revocada ni un fallo permanente del proveedor; tratarlo como
+  # :server_error evita desactivar credenciales sanas en Postgres por un hipo
+  # temporal del borde.
+  defp waf_challenge?(body) when is_binary(body) do
+    downcased = String.downcase(body)
+
+    (String.contains?(downcased, "<html") or String.contains?(downcased, "<!doctype html")) and
+      (String.contains?(downcased, "cloudflare") or
+         String.contains?(downcased, "just a moment") or
+         String.contains?(downcased, "attention required") or
+         String.contains?(downcased, "access denied") or
+         String.contains?(downcased, "cf-ray"))
+  end
+
+  defp waf_challenge?(_), do: false
+
+  @doc """
+  Extracts `Retry-After` from normalized lowercase response headers into
+  milliseconds, or `nil` when absent / unparseable.
+  Supports numeric delta-seconds (e.g. `"5"`, `"12.5"`).
+  """
+  @spec parse_retry_after_ms([{String.t(), String.t()}] | nil) :: pos_integer() | nil
+  def parse_retry_after_ms(headers) when is_list(headers) do
+    case List.keyfind(headers, "retry-after", 0) do
+      {"retry-after", raw} when is_binary(raw) ->
+        trimmed = String.trim(raw)
+
+        cond do
+          match?({secs, ""} when secs > 0, Float.parse(trimmed)) ->
+            {secs, ""} = Float.parse(trimmed)
+            max(round(secs * 1_000), 1_000)
+
+          match?({secs, ""} when secs > 0, Integer.parse(trimmed)) ->
+            {secs, ""} = Integer.parse(trimmed)
+            secs * 1_000
+
+          true ->
+            nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  def parse_retry_after_ms(_), do: nil
 
   defp scoped_rejection?(%{} = error) do
     scoped_text?(Map.get(error, "code")) or scoped_text?(Map.get(error, "message"))

@@ -117,3 +117,15 @@
     animation: none;
   }
 }
+
+/* Acordeón del desglose "Spend per model · by API key" (#service-model-
+   breakdown-table): se esconde el triángulo nativo de <summary> y el chevron
+   de la fila gira al abrir el modelo (rotación sin transición en la carga). */
+#service-model-breakdown-table summary::-webkit-details-marker,
+#service-model-breakdown-table summary::marker {
+  display: none;
+}
+
+#service-model-breakdown-table details[open] > summary .t-breakdown-chevron {
+  transform: rotate(90deg);
+}

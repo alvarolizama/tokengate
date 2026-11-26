@@ -11,6 +11,7 @@ defmodule TokengateWeb.AuditExportController do
 
   alias Tokengate.Auditing
   alias Tokengate.Repo
+  alias TokengateWeb.TimezoneHelper
 
   @header [
     "inserted_at",
@@ -28,7 +29,9 @@ defmodule TokengateWeb.AuditExportController do
   ]
 
   def export(conn, params) do
-    query = Auditing.audit_logs_query(parse_filters(params))
+    user = conn.assigns[:current_user]
+    timezone = (user && user.timezone) || "Etc/UTC"
+    query = Auditing.audit_logs_query(parse_filters(params, timezone))
 
     conn =
       conn
@@ -64,28 +67,30 @@ defmodule TokengateWeb.AuditExportController do
     conn
   end
 
-  defp parse_filters(params) do
+  defp parse_filters(params, timezone) do
     params
-    |> Map.take(~w(actor_email entity_type action target_label ip))
+    |> Map.take(~w(actor_email entity_type action target_label ip q))
     |> Enum.reject(fn {_k, v} -> v in [nil, ""] end)
     |> Map.new()
-    |> put_from(params["from"])
-    |> put_to(params["to"])
+    |> put_from(params["from"], timezone)
+    |> put_to(params["to"], timezone)
   end
 
-  defp put_from(filters, value) do
+  defp put_from(filters, value, timezone) do
     with v when v not in [nil, ""] <- value,
-         {:ok, date} <- Date.from_iso8601(v) do
-      Map.put(filters, :from, DateTime.new!(date, ~T[00:00:00], "Etc/UTC"))
+         %DateTime{} = dt <- TimezoneHelper.parse_local_date(v, timezone, :start_of_day) do
+      Map.put(filters, :from, dt)
     else
       _ -> filters
     end
   end
 
-  defp put_to(filters, value) do
+  defp put_to(filters, value, timezone) do
     with v when v not in [nil, ""] <- value,
-         {:ok, date} <- Date.from_iso8601(v) do
-      Map.put(filters, :to, DateTime.new!(Date.add(date, 1), ~T[00:00:00], "Etc/UTC"))
+         {:ok, date} <- Date.from_iso8601(v),
+         %DateTime{} = dt <-
+           TimezoneHelper.local_time_to_utc(Date.add(date, 1), ~T[00:00:00], timezone) do
+      Map.put(filters, :to, dt)
     else
       _ -> filters
     end

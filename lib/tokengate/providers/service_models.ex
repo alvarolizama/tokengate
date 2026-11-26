@@ -123,7 +123,100 @@ defmodule Tokengate.Providers.ServiceModels do
       {~r/whisper|transcri/i, "stt"},
       {~r/kokoro|tts/i, "tts"},
       {~r/flux|qwen-image|image/i, "image"}
-    ]
+    ],
+    # Mistral: voxtral-mini-tts-* es TTS (va antes de voxtral-mini), mientras
+    # voxtral-mini-* / *transcribe* son STT; voxtral-small-* es chat multimodal
+    # y queda como llm.
+    "mistral" => [
+      {~r/tts/i, "tts"},
+      {~r/voxtral-mini|transcribe/i, "stt"}
+    ],
+    # SteadyRouter publica generación de imágenes (`gpt-image-*`, etc.).
+    "steadyrouter" => [
+      {~r/image|flux|seedream|recraft/i, "image"}
+    ],
+    # OpenAI: whisper/transcribe para STT, tts/mini-tts para TTS, gpt-image/
+    # chatgpt-image/dall-e para imagen. `gpt-audio` y `gpt-realtime` quedan en llm.
+    "openai" => [
+      {~r/tts/i, "tts"},
+      {~r/whisper|transcribe/i, "stt"},
+      {~r/gpt-image|chatgpt-image|dall-e/i, "image"}
+    ],
+    # xAI: grok-imagine-image / grok-2-image.
+    "xai" => [
+      {~r/image/i, "image"}
+    ],
+    # Vercel AI Gateway: sirve todo el espectro multimodal. `topaz\/wonder` y
+    # `flux(?!.*video)` evitan falsos positivos con `meta/muse-wonder-1.0` y
+    # `bfl/flux-3-video`.
+    "vercel" => [
+      {~r/(^|\/)(tts-|.*-tts|mai-voice|grok-tts|fish-audio\/(s\d|drama))/i, "tts"},
+      {~r/whisper|transcribe|grok-stt/i, "stt"},
+      {~r/image|flux(?!.*video)|seedream|recraft|nano-banana|topaz\/wonder/i, "image"}
+    ],
+    # NVIDIA NIM: magpie-tts para voz (`nemotron-voicechat` y `studiovoice` son
+    # chat/audio), whisper para STT, flux/qwen-image para imagen.
+    "nvidia" => [
+      {~r/magpie-tts|tts/i, "tts"},
+      {~r/whisper|transcribe/i, "stt"},
+      {~r/flux|qwen-image|image/i, "image"}
+    ],
+    # DigitalOcean GenAI: fal-ai TTS/audio + imagen (flux, sdxl, sd3.5, gpt-image).
+    "digitalocean" => [
+      {~r/tts|text-to-audio|stable-audio/i, "tts"},
+      {~r/image|flux|sdxl|stable-diffusion/i, "image"}
+    ],
+    # Poe: elevenlabs v2.5/v3 para TTS (excluye `elevenlabs-music`), imagen
+    # (imagen-*, nano-banana, ideogram, dall-e, gpt-image, stablediffusionxl, topaz).
+    "poe" => [
+      {~r/elevenlabs(?!.*music)|tts|speech/i, "tts"},
+      {~r/image|imagen|nano-banana|ideogram|dall-e|stablediffusion|topaz/i, "image"}
+    ],
+    # Kenari: gemini-tts, whisper/gpt-transcribe, gpt-image/grok-imagine-image/nano-banana.
+    "kenari" => [
+      {~r/tts/i, "tts"},
+      {~r/whisper|transcribe/i, "stt"},
+      {~r/image|nano-banana/i, "image"}
+    ],
+    # StepFun (global y alias .ai): step-tts / stepaudio-*-tts y stepaudio-*-asr.
+    "stepfun" => [
+      {~r/tts/i, "tts"},
+      {~r/asr|transcribe/i, "stt"}
+    ],
+    "stepfun-ai" => [
+      {~r/tts/i, "tts"},
+      {~r/asr|transcribe/i, "stt"}
+    ],
+    # ZenMux: grok-voice-stt/tts y grok-imagine-image / glm-image.
+    "zenmux" => [
+      {~r/tts/i, "tts"},
+      {~r/stt|whisper|transcribe/i, "stt"},
+      {~r/image|flux/i, "image"}
+    ],
+    # Resto de agregadores y proveedores especializados del catálogo con media
+    # declarada en `Catalog.@customizations` (verificado contra models.dev).
+    "302ai" => [{~r/image|flux|dall-e/i, "image"}],
+    "abacus" => [{~r/image|flux|dall-e/i, "image"}],
+    "aimlapi" => [{~r/image|flux|dall-e/i, "image"}],
+    "edenai" => [{~r/image|nano-banana|flux|dall-e/i, "image"}],
+    "evroc" => [{~r/whisper|voxtral-small|transcribe/i, "stt"}],
+    "fastrouter" => [{~r/image|lucid|flux/i, "image"}],
+    "greenpt" => [{~r/^green-s|whisper|transcribe/i, "stt"}],
+    "kilo" => [{~r/image|nano-banana|flux/i, "image"}],
+    "llmgateway" => [{~r/transcribe|whisper/i, "stt"}],
+    "llmgateway-providers" => [{~r/transcribe|whisper/i, "stt"}],
+    "nearai" => [
+      {~r/whisper|transcribe/i, "stt"},
+      {~r/flux|image/i, "image"}
+    ],
+    "privatemode-ai" => [{~r/whisper|voxtral-mini|transcribe/i, "stt"}],
+    "qiniu-ai" => [{~r/image|flux/i, "image"}],
+    "regolo-ai" => [
+      {~r/whisper|transcribe/i, "stt"},
+      {~r/image|flux/i, "image"}
+    ],
+    "requesty" => [{~r/image|flux/i, "image"}],
+    "scaleway" => [{~r/whisper|transcribe/i, "stt"}]
   }
 
   # Catálogos POR SERVICIO que el proveedor publica y el gateway puede listar en

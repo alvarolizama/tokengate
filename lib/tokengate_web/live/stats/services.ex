@@ -83,6 +83,16 @@ defmodule TokengateWeb.StatsLive.Services do
                 <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
                   <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
                 </:col>
+                <:col :let={row} label={gettext("Share")} align="right">
+                  <span class="font-mono tabular-nums text-base-content/70">
+                    {Stats.cost_share_pct(row.cost_usd, service_total.cost_usd)}%
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Cost / req")} align="right">
+                  <span class="font-mono tabular-nums text-base-content/70">
+                    {Stats.cost_per_request(row.cost_usd, row.request_count)}
+                  </span>
+                </:col>
                 <:col :let={row} label={gettext("Tokens in")} field={:prompt_tokens} align="right">
                   <span class="font-mono tabular-nums">{Stats.format_number(row.prompt_tokens)}</span>
                 </:col>
@@ -102,6 +112,12 @@ defmodule TokengateWeb.StatsLive.Services do
                 >
                   <span class="font-mono tabular-nums">
                     {Stats.cache_hit_pct(row.prompt_tokens, Map.get(row, :cache_read_tokens, 0))}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Errors")} field={:error_count} align="right">
+                  <% errs = Map.get(row, :error_count, 0) %>
+                  <span class={["font-mono tabular-nums", errs > 0 && "text-warning"]}>
+                    {Stats.format_number(errs)}
                   </span>
                 </:col>
                 <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">

@@ -31,7 +31,9 @@ defmodule Tokengate.Routing.Supervisor do
       {Tokengate.Routing.CredentialHealth, name: Tokengate.Routing.CredentialHealth},
       {Tokengate.Routing.PoolCounters, name: Tokengate.Routing.PoolCounters},
       {Registry, keys: :unique, name: Tokengate.Routing.CircuitBreakerRegistry},
-      Tokengate.Routing.CircuitBreakerManager
+      Tokengate.Routing.CircuitBreakerManager,
+      {Task.Supervisor, name: Tokengate.Routing.RecoveryTaskSupervisor},
+      Tokengate.Routing.RecoveryProber
     ]
 
     Supervisor.init(children, strategy: :one_for_one)

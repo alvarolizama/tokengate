@@ -37,8 +37,6 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   alias Tokengate.Providers
   alias TokengateWeb.ServiceStatsBody
 
-  import TokengateWeb.StatsHelpers, only: [period_label: 1]
-
   @default_period "30d"
   @page_size 25
   @summary_refresh_interval_ms 2_000
@@ -48,6 +46,9 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   # of the shared stats body (key scope + log filters). Everything else is
   # halted by the hook.
   @allowed_events ["load_more", "set-timezone", "set_key", "filter"]
+
+  # Tabs del detalle: overview (default), logs en vivo y config read-only.
+  @tabs ["overview", "logs", "config"]
 
   @impl true
   def mount(%{"service_id" => service_id}, _session, socket) do
@@ -104,6 +105,8 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
            |> assign(:summary_refresh_scheduled, false)
            |> assign(:load_error, nil)
            |> assign(:stats_loading, false)
+           |> assign(:tab, "overview")
+           |> assign(:usage_series, [])
            # El cuerpo compartido lee `@streams.logs`: la carga async llega
            # después del primer render (estático y conectado), así que el
            # stream se registra vacío aquí y `apply_bundle/2` lo rellena.
@@ -158,6 +161,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
       {:noreply,
        socket
        |> assign(:period, parse_period(params["period"]))
+       |> assign(:tab, parse_tab(params["tab"]))
        |> load_bundle()}
     end
   end
@@ -165,6 +169,9 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   defp parse_period(period) do
     if period in TokengateWeb.StatsHelpers.canonical_periods(), do: period, else: @default_period
   end
+
+  # Deep-link (?tab=): un tab desconocido cae a overview, nunca explota.
+  defp parse_tab(tab), do: if(tab in @tabs, do: tab, else: "overview")
 
   ## Revocation -----------------------------------------------------------
 
@@ -279,7 +286,12 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   ## aplica — acá sólo se arma el viaje.
   defp load_bundle(socket) do
     stats_params = ServiceStatsBody.stats_params(socket.assigns)
-    logs_params = ServiceStatsBody.logs_params(socket.assigns)
+
+    # Los logs solo se leen desde el tab Live logs: el Overview carga
+    # KPIs/desglose/tendencia sin la query de logs que nadie está mirando.
+    # Volver al tab de logs siempre refresca (siempre fresco, nunca stale).
+    logs_params =
+      if socket.assigns.tab == "logs", do: ServiceStatsBody.logs_params(socket.assigns)
 
     socket
     |> assign(:load_error, nil)
@@ -384,7 +396,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
               </span>
             </h1>
             <p class="text-sm text-base-content/70">
-              {gettext("Budget:")} {limit_label(@service)} · {period_label(@period)}
+              {gettext("Budget:")} {limit_label(@service)}
             </p>
           </div>
         </header>
@@ -404,8 +416,10 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           </span>
         </div>
 
-        <%!-- Stats body shared with the admin view: key selector, KPIs, per-key
-        table, model × key pivot, log filters and the request stream. --%>
+        <%!-- Stats body shared with the admin view: tabs (overview / logs en
+        vivo / config), key selector, KPIs, per-key table, desglose jerárquico
+        modelo → key y la gráfica de tendencia. La config read-only y el
+        roster de supervisores viven en el slot :config (tab Config). --%>
         <ServiceStatsBody.panel
           service={@service}
           service_api_keys={@service_api_keys}
@@ -413,6 +427,8 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           summary={@summary}
           key_rows={@key_rows}
           model_breakdown={@model_breakdown}
+          usage_series={@usage_series}
+          tab={@tab}
           period={@period}
           period_target={~p"/services/supervised/#{@service.id}"}
           timezone={@timezone}
@@ -426,96 +442,98 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           show_service_summary={false}
           compact_numbers={true}
           stats_loading={@stats_loading}
-        />
+        >
+          <:config>
+            <%!-- Read-only configuration --%>
+            <div class="card bg-base-100 border border-base-300 shadow-sm" id="service-config">
+              <div class="card-body p-4 gap-3">
+                <h2 class="card-title text-base">
+                  <.icon name="hero-wrench-screwdriver" class="w-5 h-5 text-base-content/60" />
+                  {gettext("Configuration (read-only)")}
+                </h2>
 
-        <%!-- Read-only configuration --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm" id="service-config">
-          <div class="card-body p-4 gap-3">
-            <h2 class="card-title text-base">
-              <.icon name="hero-wrench-screwdriver" class="w-5 h-5 text-base-content/60" />
-              {gettext("Configuration (read-only)")}
-            </h2>
+                <dl class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                  <div class="rounded-xl border border-base-300 px-3 py-2">
+                    <dt class="text-[10px] uppercase tracking-wide text-base-content/60">API key</dt>
+                    <dd class="mt-1 flex flex-wrap items-center gap-2">
+                      <% active_keys = Enum.filter(@service_api_keys, &(&1.status == "active")) %>
+                      <%= if active_keys != [] do %>
+                        <div :for={key <- active_keys} class="inline-flex items-center gap-1.5">
+                          <span class="font-mono">{key.key_prefix}…</span>
+                          <span class="badge badge-xs badge-success">{key.status}</span>
+                        </div>
+                      <% else %>
+                        <span class="text-base-content/40">{gettext("No key")}</span>
+                      <% end %>
+                    </dd>
+                  </div>
 
-            <dl class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-              <div class="rounded-xl border border-base-300 px-3 py-2">
-                <dt class="text-[10px] uppercase tracking-wide text-base-content/60">API key</dt>
-                <dd class="mt-1 flex flex-wrap items-center gap-2">
-                  <% active_keys = Enum.filter(@service_api_keys, &(&1.status == "active")) %>
-                  <%= if active_keys != [] do %>
-                    <div :for={key <- active_keys} class="inline-flex items-center gap-1.5">
-                      <span class="font-mono">{key.key_prefix}…</span>
-                      <span class="badge badge-xs badge-success">{key.status}</span>
-                    </div>
-                  <% else %>
-                    <span class="text-base-content/40">{gettext("No key")}</span>
-                  <% end %>
-                </dd>
-              </div>
+                  <div class="rounded-xl border border-base-300 px-3 py-2">
+                    <dt class="text-[10px] uppercase tracking-wide text-base-content/60">
+                      {gettext("Concurrency")}
+                    </dt>
+                    <dd class="mt-1 font-mono">{@service.concurrency_limit || 5}</dd>
+                  </div>
 
-              <div class="rounded-xl border border-base-300 px-3 py-2">
-                <dt class="text-[10px] uppercase tracking-wide text-base-content/60">
-                  {gettext("Concurrency")}
-                </dt>
-                <dd class="mt-1 font-mono">{@service.concurrency_limit || 5}</dd>
-              </div>
+                  <div class="rounded-xl border border-base-300 px-3 py-2">
+                    <dt class="text-[10px] uppercase tracking-wide text-base-content/60">
+                      {gettext("RPM")}
+                    </dt>
+                    <dd class="mt-1 font-mono">{@service.rpm_limit || 60}</dd>
+                  </div>
 
-              <div class="rounded-xl border border-base-300 px-3 py-2">
-                <dt class="text-[10px] uppercase tracking-wide text-base-content/60">
-                  {gettext("RPM")}
-                </dt>
-                <dd class="mt-1 font-mono">{@service.rpm_limit || 60}</dd>
-              </div>
+                  <div class="rounded-xl border border-base-300 px-3 py-2">
+                    <dt class="text-[10px] uppercase tracking-wide text-base-content/60">
+                      {gettext("Credit")}
+                    </dt>
+                    <dd class="mt-1">{limit_label(@service)}</dd>
+                  </div>
+                </dl>
 
-              <div class="rounded-xl border border-base-300 px-3 py-2">
-                <dt class="text-[10px] uppercase tracking-wide text-base-content/60">
-                  {gettext("Credit")}
-                </dt>
-                <dd class="mt-1">{limit_label(@service)}</dd>
-              </div>
-            </dl>
-
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                {gettext("Allowed models")}
-              </span>
-              <div class="flex flex-wrap gap-2" id={"models-#{@service.id}"}>
-                <%= if model_names_for(@granted_models, @service.id, @models) == [] do %>
-                  <span class="text-xs text-base-content/40">
-                    {gettext("This service has no models assigned.")}
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                    {gettext("Allowed models")}
                   </span>
-                <% else %>
-                  <span
-                    :for={model <- model_names_for(@granted_models, @service.id, @models)}
-                    id={"model-badge-#{@service.id}-#{model.id}"}
-                    class="badge badge-primary badge-sm"
-                  >
-                    {model.name}
-                  </span>
-                <% end %>
+                  <div class="flex flex-wrap gap-2" id={"models-#{@service.id}"}>
+                    <%= if model_names_for(@granted_models, @service.id, @models) == [] do %>
+                      <span class="text-xs text-base-content/40">
+                        {gettext("This service has no models assigned.")}
+                      </span>
+                    <% else %>
+                      <span
+                        :for={model <- model_names_for(@granted_models, @service.id, @models)}
+                        id={"model-badge-#{@service.id}-#{model.id}"}
+                        class="badge badge-primary badge-sm"
+                      >
+                        {model.name}
+                      </span>
+                    <% end %>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
 
-        <%!-- Who else supervises it --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm" id="service-supervisors">
-          <div class="card-body p-4 gap-2">
-            <h3 class="card-title text-sm">{gettext("Service supervisors")}</h3>
-            <ul class="space-y-1">
-              <li
-                :for={supervisor <- @supervisors}
-                id={"service-supervisor-#{supervisor.user_id}"}
-                class="flex items-center gap-2 text-sm"
-              >
-                <.icon name="hero-user" class="w-4 h-4 text-base-content/40" />
-                <span class="truncate">{supervisor_label(supervisor)}</span>
-              </li>
-            </ul>
-            <p class="text-xs text-base-content/40">
-              {gettext("The assignment is managed by an administrator from Services.")}
-            </p>
-          </div>
-        </div>
+            <%!-- Who else supervises it --%>
+            <div class="card bg-base-100 border border-base-300 shadow-sm" id="service-supervisors">
+              <div class="card-body p-4 gap-2">
+                <h3 class="card-title text-sm">{gettext("Service supervisors")}</h3>
+                <ul class="space-y-1">
+                  <li
+                    :for={supervisor <- @supervisors}
+                    id={"service-supervisor-#{supervisor.user_id}"}
+                    class="flex items-center gap-2 text-sm"
+                  >
+                    <.icon name="hero-user" class="w-4 h-4 text-base-content/40" />
+                    <span class="truncate">{supervisor_label(supervisor)}</span>
+                  </li>
+                </ul>
+                <p class="text-xs text-base-content/40">
+                  {gettext("The assignment is managed by an administrator from Services.")}
+                </p>
+              </div>
+            </div>
+          </:config>
+        </ServiceStatsBody.panel>
       </div>
     </Layouts.dashboard>
     """

@@ -388,12 +388,14 @@ defmodule Tokengate.Credits.Topups do
 
   def change_topup(%Topup{} = topup, attrs \\ %{}), do: Topup.changeset(topup, attrs)
 
-  @doc "Actualiza un top-up (label, nota, expiración)."
+  @doc "Actualiza un top-up (monto, label, nota, expiración)."
   def edit_topup(%Topup{} = topup, attrs) do
-    result =
+    changeset =
       topup
       |> Topup.changeset(attrs)
-      |> Repo.update()
+      |> validate_amount_covers_consumed(topup)
+
+    result = Repo.update(changeset)
 
     with {:ok, updated} <- result do
       invalidate_for(subject_of(updated))
@@ -401,6 +403,30 @@ defmodule Tokengate.Credits.Topups do
 
     result
   end
+
+  defp validate_amount_covers_consumed(%{valid?: true} = changeset, %Topup{} = topup) do
+    case Ecto.Changeset.fetch_change(changeset, :amount_usd) do
+      {:ok, new_amount} ->
+        consumed = consumed_usd(topup)
+
+        if Decimal.compare(new_amount, consumed) == :lt do
+          rounded = consumed |> Decimal.round(2, :ceiling) |> Decimal.to_string(:normal)
+
+          Ecto.Changeset.add_error(
+            changeset,
+            :amount_usd,
+            "must be at least $#{rounded} (already consumed)"
+          )
+        else
+          changeset
+        end
+
+      :error ->
+        changeset
+    end
+  end
+
+  defp validate_amount_covers_consumed(changeset, _topup), do: changeset
 
   @doc "Revoca un top-up: deja de otorgar; lo ya consumido vive en los logs."
   def revoke(%Topup{} = topup) do

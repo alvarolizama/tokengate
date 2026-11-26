@@ -251,6 +251,9 @@ defmodule TokengateWeb.KpiHelpers do
         ${format_decimal(@metrics.cost_usd)}
         <:sub>
           {gettext("Reported by the provider")}
+          <span :if={@metrics.requests_total > 0} class="tabular-nums">
+            · {avg_cost_per_req(@metrics.cost_usd, @metrics.requests_total)}/req
+          </span>
           <span
             :if={@deltas && @deltas[:cost_usd] != nil}
             class={["font-medium tabular-nums", delta_color(@deltas[:cost_usd])]}
@@ -361,6 +364,14 @@ defmodule TokengateWeb.KpiHelpers do
   def format_tps(nil), do: "—"
   def format_tps(n) when is_float(n), do: Float.round(n, 1) |> Float.to_string()
   def format_tps(n) when is_integer(n), do: to_string(n)
+
+  defp avg_cost_per_req(%Decimal{} = cost, count) when is_integer(count) and count > 0 do
+    cost
+    |> Decimal.div(Decimal.new(count))
+    |> TokengateWeb.StatsHelpers.money()
+  end
+
+  defp avg_cost_per_req(_, _), do: "—"
 
   @doc "Color class for a delta value: green for up, red for down."
   def delta_color(nil), do: ""

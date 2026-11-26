@@ -9,29 +9,14 @@
       Top-ups
       <:subtitle>{gettext("One-off credit, per user or service")}</:subtitle>
       <:actions>
-        <div class="flex items-center gap-3">
-          <.form
-            for={%{}}
-            phx-change="search_topups"
-            phx-submit="search_topups"
-            id="topup-search-form"
-          >
-            <div class="relative">
-              <.icon
-                name="hero-magnifying-glass"
-                class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
-              />
-              <input
-                type="text"
-                name="q"
-                placeholder={gettext("Search by user or service…")}
-                value={@search_query}
-                phx-debounce="300"
-                class="input input-sm input-bordered pl-9 w-64"
-                id="topup-search"
-              />
-            </div>
-          </.form>
+        <div class="flex flex-wrap items-center gap-3">
+          <.admin_search
+            event="search_topups"
+            form_id="topup-search-form"
+            value={@search_query}
+            placeholder={gettext("Search by owner, label or note…")}
+            input_id="topup-search"
+          />
           <.button phx-click="new_topup" id="new-topup-btn">
             <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New top-up")}
           </.button>
@@ -51,6 +36,112 @@
         </div>
       </:actions>
     </.header>
+
+    <%!-- KPIs de top-ups --%>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="topups-kpis">
+      <.kpi_card
+        id="topups-kpi-remaining"
+        label={gettext("Active remaining")}
+        icon="hero-arrow-up-circle"
+        accent="primary"
+      >
+        {usd(@kpis.active_remaining)}
+        <:sub>
+          {gettext("%{active} active (%{users} users · %{services} services)",
+            active: @kpis.active_count,
+            users: @kpis.active_users,
+            services: @kpis.active_services
+          )}
+        </:sub>
+      </.kpi_card>
+
+      <.kpi_card
+        id="topups-kpi-consumed"
+        label={gettext("Active consumed")}
+        icon="hero-fire"
+        accent="accent"
+      >
+        {usd(@kpis.active_consumed)}
+        <:sub>
+          {gettext("%{pct} of active granted", pct: consumed_pct_label(@kpis))}
+        </:sub>
+      </.kpi_card>
+
+      <.kpi_card
+        id="topups-kpi-expiring"
+        label={gettext("Expiring in ≤7d")}
+        icon="hero-clock"
+        accent={if(@kpis.expiring_count > 0, do: "warning", else: "neutral")}
+      >
+        {@kpis.expiring_count}
+        <:sub>
+          {gettext("%{amount} at risk of expiring", amount: usd(@kpis.expiring_remaining))}
+        </:sub>
+      </.kpi_card>
+
+      <.kpi_card
+        id="topups-kpi-granted"
+        label={gettext("Active granted")}
+        icon="hero-banknotes"
+        accent="neutral"
+      >
+        {usd(@kpis.active_granted)}
+        <:sub>
+          {gettext("%{revoked} revoked · %{archived} archived",
+            revoked: @kpis.revoked_count,
+            archived: @kpis.archived_count
+          )}
+        </:sub>
+      </.kpi_card>
+    </div>
+
+    <%!-- Filtros rápidos por tipo de dueño y estado --%>
+    <div class="flex flex-wrap items-center justify-between gap-3" id="topups-filters">
+      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label={gettext("Owner")}>
+        <button
+          :for={
+            {kind, label} <- [
+              {:all, gettext("All subjects")},
+              {:user, gettext("Users")},
+              {:service, gettext("Services")}
+            ]
+          }
+          type="button"
+          phx-click="filter_owner_kind"
+          phx-value-kind={kind}
+          id={"filter-owner-#{kind}"}
+          class={[
+            "btn btn-xs",
+            if(@owner_filter == kind, do: "btn-primary", else: "btn-ghost")
+          ]}
+        >
+          {label}
+        </button>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label={gettext("Status")}>
+        <button
+          :for={
+            {status, label} <- [
+              {:all, gettext("All statuses")},
+              {:active, gettext("Active")},
+              {:expiring, gettext("Expiring soon")},
+              {:revoked, gettext("Revoked")}
+            ]
+          }
+          type="button"
+          phx-click="filter_status"
+          phx-value-status={status}
+          id={"filter-status-#{status}"}
+          class={[
+            "btn btn-xs",
+            if(@status_filter == status, do: "btn-primary", else: "btn-ghost")
+          ]}
+        >
+          {label}
+        </button>
+      </div>
+    </div>
 
     <%!-- Form modal --%>
     <.modal
@@ -101,6 +192,16 @@
           <div :if={@selected_owner} class="mb-2" id="selected-owner">
             <span class="badge badge-primary badge-sm gap-1">
               {owner_badge(@selected_owner)}
+              <button
+                :if={is_nil(@editing_topup_id)}
+                type="button"
+                phx-click="clear_selected_owner"
+                id="clear-selected-owner-btn"
+                class="hover:opacity-75 cursor-pointer"
+                title={gettext("Clear selection")}
+              >
+                <.icon name="hero-x-mark" class="w-3 h-3" />
+              </button>
             </span>
           </div>
 
@@ -137,7 +238,7 @@
                 id={"select-owner-#{o.id}"}
                 phx-click="select_owner"
                 phx-value-id={o.id}
-                class="w-full text-left px-3 py-2 text-sm hover:bg-base-100 border-b border-base-300 last:border-b-0"
+                class="w-full text-left px-3 py-2 text-sm hover:bg-base-200 transition-colors border-b border-base-300 last:border-b-0"
               >
                 <div class="font-medium">{subject_primary(o)}</div>
                 <div :if={subject_secondary(o)} class="text-xs text-base-content/60">
@@ -197,8 +298,34 @@
         empty?={@topups_empty?}
       >
         <:col :let={topup} label={gettext("Owner")} field={:target}>
-          <div class="font-medium">{owner_label(topup)}</div>
-          <div class="text-[10px] text-base-content/50">{owner_type(topup)}</div>
+          <div class="min-w-0 max-w-xs">
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <%= if path = owner_path(topup) do %>
+                <.link navigate={path} class="font-medium link link-hover truncate">
+                  {owner_label(topup)}
+                </.link>
+              <% else %>
+                <span class="font-medium truncate">{owner_label(topup)}</span>
+              <% end %>
+              <span
+                :if={topup.label && topup.label != ""}
+                class="badge badge-xs badge-outline"
+                id={"topup-label-#{topup.id}"}
+              >
+                {topup.label}
+              </span>
+            </div>
+            <div class="text-[10px] text-base-content/50 flex items-center gap-1.5">
+              <span>{owner_type(topup)}</span>
+              <span
+                :if={topup.note && topup.note != ""}
+                class="truncate max-w-48"
+                title={topup.note}
+              >
+                · {topup.note}
+              </span>
+            </div>
+          </div>
         </:col>
         <:col :let={topup} label={gettext("Amount")} field={:amount} align="right">
           <span class="font-mono">{usd(topup.amount_usd)}</span>
@@ -219,8 +346,36 @@
             </div>
           </div>
         </:col>
+        <:col :let={topup} label={gettext("Remaining")} field={:remaining} align="right">
+          <% rem = row_remaining(topup, @consumed) %>
+          <span
+            id={"topup-remaining-#{topup.id}"}
+            class={[
+              "font-mono font-medium",
+              if(row_state(topup, @consumed) == :active and Decimal.compare(rem, 0) == :gt,
+                do: "text-success",
+                else: "text-base-content/40"
+              )
+            ]}
+          >
+            {usd(rem)}
+          </span>
+        </:col>
         <:col :let={topup} label={gettext("Expires")} field={:expires_at}>
-          <span class="text-xs">{expires_label(topup.expires_at)}</span>
+          <div class="flex items-center gap-1.5 whitespace-nowrap">
+            <span class="text-xs">{expires_label(topup.expires_at)}</span>
+            <span
+              :if={expiring_soon?(topup, @consumed)}
+              class="badge badge-xs badge-warning badge-outline"
+            >
+              {gettext("soon")}
+            </span>
+          </div>
+        </:col>
+        <:col :let={topup} label={gettext("Created")} field={:inserted_at}>
+          <span class="text-xs text-base-content/50 whitespace-nowrap">
+            {format_date(topup.inserted_at, @timezone)}
+          </span>
         </:col>
         <:col :let={topup} label={gettext("Status")} field={:status}>
           <span class={["badge badge-sm", state_badge_class(row_state(topup, @consumed))]}>
@@ -228,6 +383,7 @@
           </span>
         </:col>
         <:action :let={topup}>
+          <% state = row_state(topup, @consumed) %>
           <button
             phx-click="edit_topup"
             phx-value-id={topup.id}
@@ -238,6 +394,7 @@
             <.icon name="hero-pencil-square" class="w-4 h-4" />
           </button>
           <button
+            :if={state in [:active, :revoked]}
             phx-click="toggle_topup_status"
             phx-value-id={topup.id}
             class="btn btn-ghost btn-xs"
@@ -252,6 +409,7 @@
             />
           </button>
           <button
+            :if={state == :active}
             phx-click="revoke_topup"
             phx-value-id={topup.id}
             data-confirm={
@@ -269,6 +427,13 @@
           <p>{gettext("No top-ups — no subject has one-off credit.")}</p>
         </:empty>
       </.table>
+      <.admin_pagination
+        id="topups-pagination"
+        page={@page}
+        per_page={@per_page}
+        total={@total_count}
+        total_pages={@total_pages}
+      />
     </div>
   </div>
 </Layouts.dashboard>

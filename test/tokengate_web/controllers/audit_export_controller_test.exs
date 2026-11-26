@@ -131,4 +131,31 @@ defmodule TokengateWeb.AuditExportControllerTest do
     # 1 header + 1005 data rows (no 1000-row cap)
     assert length(lines) == 1006
   end
+
+  test "date bounds respect the signed-in admin's timezone", %{conn: conn} do
+    %{admin: admin, password: password} = admin_fixture()
+    {:ok, admin} = Accounts.update_user_timezone(admin, "Europe/Madrid")
+
+    # 2026-11-24 23:30 UTC == 2026-11-25 00:30 CET (Europe/Madrid).
+    {:ok, _} =
+      %Tokengate.Auditing.AuditLog{}
+      |> Tokengate.Auditing.AuditLog.changeset(%{
+        user_id: admin.id,
+        actor_email: admin.email,
+        actor_role: admin.global_role,
+        action: "probe.tz_match",
+        entity_type: "model",
+        entity_id: "m-tz-csv",
+        inserted_at: ~U[2026-11-24 23:30:00Z]
+      })
+      |> Tokengate.Repo.insert()
+
+    csv =
+      conn
+      |> login(admin, password)
+      |> get(~p"/operations/audit/export?from=2026-11-25&to=2026-11-25")
+      |> Map.fetch!(:resp_body)
+
+    assert csv =~ "probe.tz_match"
+  end
 end

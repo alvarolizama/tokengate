@@ -610,4 +610,58 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     html = render_async(view)
     assert html =~ "Alto"
   end
+
+  test "group summary card shows cap and real total spend across search/pagination, and member rows show budget_cell and top-up shortcut",
+       %{conn: conn} do
+    {:ok, group} =
+      Accounts.create_group(%{
+        name: "Budgeted Profile #{unique()}",
+        monthly_spend_limit_usd: "50.00"
+      })
+
+    %{user: admin, password: password} = register("admin")
+    %{user: u1} = register("user")
+    %{user: u2} = register("user")
+    {:ok, m1} = Accounts.create_group_member(%{user_id: u1.id, group_id: group.id})
+    {:ok, m2} = Accounts.create_group_member(%{user_id: u2.id, group_id: group.id})
+
+    {:ok, _} =
+      Tokengate.Logs.log_request(%{
+        group_member_id: m1.id,
+        user_id: u1.id,
+        subject_type: "user",
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("10.00"),
+        latency_ms: 100
+      })
+
+    {:ok, _} =
+      Tokengate.Logs.log_request(%{
+        group_member_id: m2.id,
+        user_id: u2.id,
+        subject_type: "user",
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("15.00"),
+        latency_ms: 100
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    assert has_element?(view, "#group-config-cap", "$50.00")
+    assert has_element?(view, "#group-config", "$25.00")
+    assert has_element?(view, "#group-config-stats-link[href=\"/stats/profiles/#{group.id}\"]")
+    assert has_element?(view, "#credit-#{m1.id}", "OK")
+
+    assert has_element?(
+             view,
+             "#topup-#{m1.id}[href=\"/budget/topups?owner_kind=user&owner_id=#{u1.id}\"]"
+           )
+
+    # Even when searching for u1 only, #group-config keeps the profile's full $25.00 spend.
+    view |> element("#search-form") |> render_change(%{"q" => u1.email})
+    assert has_element?(view, "#members-#{m1.id}")
+    refute has_element?(view, "#members-#{m2.id}")
+    assert has_element?(view, "#group-config", "$25.00")
+  end
 end

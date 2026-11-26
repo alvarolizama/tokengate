@@ -34,6 +34,10 @@ defmodule TokengateWeb.ServiceStatsLive do
   # Periods.period_bounds/2 (fuente única — nada de period_from local).
   @default_period "week"
 
+  # Tabs del detalle (admin): overview y logs en vivo. Sin tab de config:
+  # la administración del servicio vive en /access/services.
+  @tabs ["overview", "logs"]
+
   @impl true
   def mount(%{"service_id" => service_id} = params, _session, socket) do
     case fetch_service(service_id) do
@@ -81,6 +85,8 @@ defmodule TokengateWeb.ServiceStatsLive do
       |> assign(:summary_refresh_scheduled, false)
       |> assign(:load_error, nil)
       |> assign(:stats_loading, false)
+      |> assign(:tab, "overview")
+      |> assign(:usage_series, [])
       |> stream(:logs, [], reset: true)
       |> require_admin_hook()
 
@@ -212,12 +218,20 @@ defmodule TokengateWeb.ServiceStatsLive do
     {:noreply,
      socket
      |> assign(:period, parse_period(params["period"]))
+     |> assign(:tab, parse_tab(params["tab"]))
      |> load_bundle()}
   end
 
+  # Deep-link (?tab=): desconocido cae a overview, nunca explota.
+  defp parse_tab(tab), do: if(tab in @tabs, do: tab, else: "overview")
+
   defp load_bundle(socket) do
     stats_params = ServiceStatsBody.stats_params(socket.assigns)
-    logs_params = ServiceStatsBody.logs_params(socket.assigns)
+
+    # Los logs solo se leen desde el tab Live logs (ver el detalle supervisado:
+    # misma regla del cuerpo compartido).
+    logs_params =
+      if socket.assigns.tab == "logs", do: ServiceStatsBody.logs_params(socket.assigns)
 
     socket
     |> assign(:load_error, nil)
@@ -318,6 +332,8 @@ defmodule TokengateWeb.ServiceStatsLive do
           summary={@summary}
           key_rows={@key_rows}
           model_breakdown={@model_breakdown}
+          usage_series={@usage_series}
+          tab={@tab}
           period={@period}
           period_target={~p"/stats/services/#{@service.id}"}
           timezone={@timezone}

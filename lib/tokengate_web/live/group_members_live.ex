@@ -23,10 +23,12 @@ defmodule TokengateWeb.GroupMembersLive do
   import Ecto.Query, only: [from: 2]
   import TokengateWeb.AdminComponents
   alias Tokengate.Accounts
+  alias Tokengate.Credits
   alias Tokengate.Metrics.{DashboardCache, Rollup}
   alias Tokengate.Providers
   alias Tokengate.Providers.{Model, GroupMemberExtraModel, GroupMemberDeniedModel, GroupModel}
   alias Tokengate.Repo
+  alias TokengateWeb.StatsHelpers, as: Stats
 
   @per_page 30
   @sort_columns ~w(email name status spend inserted_at)a
@@ -99,7 +101,6 @@ defmodule TokengateWeb.GroupMembersLive do
 
   defp load_data(socket) do
     group = socket.assigns.group
-    timezone = socket.assigns[:timezone] || "Etc/UTC"
 
     page =
       Accounts.list_group_members_page(
@@ -113,6 +114,7 @@ defmodule TokengateWeb.GroupMembersLive do
 
     members = page.entries
     member_ids = Enum.map(members, & &1.id)
+    all_member_ids = Accounts.list_member_ids_for_group(group.id)
 
     # Get all available models
     org_alias_ids =
@@ -156,25 +158,24 @@ defmodule TokengateWeb.GroupMembersLive do
         |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
       end
 
-    # Member budgets with spend — scoped ONLY to the active page's member IDs.
-    monthly_spend_by_member =
-      member_ids
-      |> Tokengate.Budgets.spend_by_member_ids(timezone)
-      |> Map.get(:monthly)
+    # Gasto mensual UTC real de TODO el perfil de límites (no sólo la página visible).
+    all_monthly_spend = Tokengate.Budgets.monthly_spend_by_member_ids(all_member_ids)
 
     member_budgets =
       Map.new(members, fn m ->
         {m.id,
          %{
            member_id: m.id,
-           monthly_spend: Map.get(monthly_spend_by_member, m.id, Decimal.new(0))
+           monthly_spend: Map.get(all_monthly_spend, m.id, Decimal.new(0))
          }}
       end)
 
     group_monthly_spend =
-      Enum.reduce(monthly_spend_by_member, Decimal.new(0), fn {_id, spend}, acc ->
+      Enum.reduce(all_monthly_spend, Decimal.new(0), fn {_id, spend}, acc ->
         Decimal.add(acc, spend)
       end)
+
+    member_credits = Credits.summaries(members, cached: true)
 
     # Límites EFECTIVOS por miembro — la misma regla única que el proxy usa
     # (`propio del usuario || default del perfil de límites || default del módulo`).
@@ -201,6 +202,8 @@ defmodule TokengateWeb.GroupMembersLive do
     |> assign(:members_by_id, Map.new(sorted_members, &{&1.id, &1}))
     |> assign(:member_limits, member_limits)
     |> assign(:member_budgets, member_budgets)
+    |> assign(:member_credits, member_credits)
+    |> assign(:group_total_members, length(all_member_ids))
     |> assign(:members_empty?, page.total == 0)
     |> assign(:page, page.page)
     |> assign(:total_count, page.total)
@@ -817,26 +820,65 @@ defmodule TokengateWeb.GroupMembersLive do
         <%!-- Resumen del perfil de límites — fila compacta --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="group-config">
           <div class="card-body p-4">
-            <div class="flex flex-wrap items-center gap-x-8 gap-y-3">
-              <div>
-                <p class="text-[10px] uppercase tracking-wide text-base-content/40">
-                  {gettext("Concurrency")}
-                </p>
-                <p class="text-lg font-bold">{@group.default_concurrency_limit}</p>
-                <p class="text-xs text-base-content/40">{gettext("per user")}</p>
+            <div class="flex flex-wrap items-center justify-between gap-4">
+              <div class="flex flex-wrap items-center gap-x-8 gap-y-3">
+                <div>
+                  <p class="text-[10px] uppercase tracking-wide text-base-content/40">
+                    {gettext("Concurrency")}
+                  </p>
+                  <p class="text-lg font-bold">{@group.default_concurrency_limit}</p>
+                  <p class="text-xs text-base-content/40">{gettext("per user")}</p>
+                </div>
+                <div>
+                  <p class="text-[10px] uppercase tracking-wide text-base-content/40">RPM</p>
+                  <p class="text-lg font-bold">{@group.default_rpm_limit}</p>
+                  <p class="text-xs text-base-content/40">{gettext("per user")}</p>
+                </div>
+                <div id="group-config-cap">
+                  <p class="text-[10px] uppercase tracking-wide text-base-content/40">
+                    {gettext("Monthly cap")}
+                  </p>
+                  <%= cond do %>
+                    <% @group.unlimited_spend -> %>
+                      <p class="text-lg font-bold text-success">{gettext("Unlimited")}</p>
+                      <p class="text-xs text-base-content/40">{gettext("no monthly ceiling")}</p>
+                    <% not is_nil(@group.monthly_spend_limit_usd) -> %>
+                      <p class="text-lg font-bold">
+                        ${format_decimal(@group.monthly_spend_limit_usd)}
+                      </p>
+                      <p class="text-xs text-base-content/40">{gettext("per user")}</p>
+                    <% true -> %>
+                      <p class="text-lg font-bold text-warning">{gettext("No budget")}</p>
+                      <p class="text-xs text-base-content/40">{gettext("top-ups only")}</p>
+                  <% end %>
+                </div>
+                <div>
+                  <p class="text-[10px] uppercase tracking-wide text-base-content/40">
+                    {gettext("Members")}
+                  </p>
+                  <p class="text-lg font-bold">{@group_total_members}</p>
+                  <p class="text-xs text-base-content/40">
+                    {gettext("%{count} models", count: MapSet.size(@group_alias_ids))}
+                  </p>
+                </div>
+                <div>
+                  <p class="text-[10px] uppercase tracking-wide text-base-content/40">
+                    {gettext("Spend/month")}
+                  </p>
+                  <p class="text-lg font-bold text-success">
+                    ${format_decimal(@group_monthly_spend)}
+                  </p>
+                  <p class="text-xs text-base-content/40">{gettext("UTC month")}</p>
+                </div>
               </div>
-              <div>
-                <p class="text-[10px] uppercase tracking-wide text-base-content/40">RPM</p>
-                <p class="text-lg font-bold">{@group.default_rpm_limit}</p>
-                <p class="text-xs text-base-content/40">{gettext("per user")}</p>
-              </div>
-              <div>
-                <p class="text-[10px] uppercase tracking-wide text-base-content/40">
-                  {gettext("Spend/month")}
-                </p>
-                <p class="text-lg font-bold text-success">${format_decimal(@group_monthly_spend)}</p>
-                <p class="text-xs text-base-content/40">{gettext("current")}</p>
-              </div>
+              <.link
+                navigate={~p"/stats/profiles/#{@group.id}"}
+                class="btn btn-sm btn-ghost gap-1.5"
+                id="group-config-stats-link"
+              >
+                <.icon name="hero-chart-bar" class="w-4 h-4" />
+                {gettext("View stats")}
+              </.link>
             </div>
           </div>
         </div>
@@ -909,6 +951,11 @@ defmodule TokengateWeb.GroupMembersLive do
                   </span>
                 </div>
               </:col>
+              <:col :let={member} label={gettext("Monthly cap (UTC month)")}>
+                <div id={"credit-#{member.id}"} class="min-w-[150px]">
+                  <Stats.budget_cell credit={Map.get(@member_credits, member.id)} />
+                </div>
+              </:col>
               <:col :let={member} label={gettext("Spend/month")} field={:spend} align="right">
                 <% mb = Map.get(@member_budgets, member.id, %{monthly_spend: Decimal.new(0)}) %>
                 <span class="font-mono text-sm">${format_decimal(mb.monthly_spend)}</span>
@@ -937,6 +984,15 @@ defmodule TokengateWeb.GroupMembersLive do
                 <% end %>
               </:col>
               <:action :let={member}>
+                <.link
+                  navigate={~p"/budget/topups?owner_kind=user&owner_id=#{member.user_id}"}
+                  class="btn btn-xs btn-ghost"
+                  id={"topup-#{member.id}"}
+                  title={gettext("Grant top-up")}
+                  aria-label={gettext("Grant top-up")}
+                >
+                  <.icon name="hero-arrow-up-circle" class="w-3.5 h-3.5" />
+                </.link>
                 <.link
                   navigate={~p"/stats/users/#{member.user_id}"}
                   class="btn btn-xs btn-ghost"
