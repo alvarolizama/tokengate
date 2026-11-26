@@ -207,6 +207,7 @@ defmodule TokengateWeb.Router do
       # Acceso — quién puede usar qué.
       live "/access/users", UsersLive
       live "/access/services", ServicesLive
+      live "/access/services/:id/members", ServiceMembersLive
       # Presupuesto — qué techo mensual tiene cada sujeto y qué crédito extra
       # lleva encima. Los perfiles de límites (antes «subs» / «grupos») son el
       # sujeto del que cada usuario hereda su techo; los top-ups son crédito

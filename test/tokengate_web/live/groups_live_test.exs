@@ -77,13 +77,12 @@ defmodule TokengateWeb.GroupsLiveTest do
     # Type a search term that matches no group → triggers empty state deterministically
     no_match_term = "zzz-no-match-#{System.unique_integer([:positive])}"
 
-    # El binding vive en el FORM: un `phx-change` suelto en el input revienta
-    # en el cliente ("form events require the input to be inside a form").
-    assert has_element?(view, "#groups-search-form input[name='group_search']")
+    # El binding vive en el FORM (`admin_search` -> `#search-form` con `name="q"`).
+    assert has_element?(view, "#search-form input[name='q']")
 
     view
-    |> element("#groups-search-form")
-    |> render_change(%{group_search: no_match_term})
+    |> element("#search-form")
+    |> render_change(%{"q" => no_match_term})
 
     assert has_element?(view, "#groups-empty")
   end
@@ -214,10 +213,30 @@ defmodule TokengateWeb.GroupsLiveTest do
 
     assert has_element?(view, "#delete-#{group.id}")
 
-    html = view |> element("#delete-#{group.id}") |> render_click()
+    view |> element("#delete-#{group.id}") |> render_click()
+    assert has_element?(view, "#delete-group-modal")
+    assert has_element?(view, "#delete-group-name", group.name)
+    assert has_element?(view, "#confirm-delete-group")
+
+    html = view |> element("#confirm-delete-group") |> render_click()
 
     assert html =~ "Perfil de límites eliminado"
     refute has_element?(view, "#delete-#{group.id}")
+  end
+
+  test "cancel delete closes confirmation modal without deleting", %{conn: conn} do
+    %{group: group} = group_fixture()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/budget/profiles")
+
+    view |> element("#delete-#{group.id}") |> render_click()
+    assert has_element?(view, "#delete-group-modal")
+
+    view |> element("#cancel-delete-group") |> render_click()
+    refute has_element?(view, "#delete-group-modal")
+    assert Accounts.get_group(group.id) != nil
   end
 
   # --------------------------------------------------------------------------
@@ -381,5 +400,111 @@ defmodule TokengateWeb.GroupsLiveTest do
     render_hook(view, "toggle_model", %{"target-id" => group.id, "model-id" => model_.id})
 
     assert has_element?(view, "#groups-#{group.id}", "1 modelos")
+  end
+
+  # --------------------------------------------------------------------------
+  # Pagination, sorting, canonical budget & navigation links
+  # --------------------------------------------------------------------------
+
+  test "paginates limit profiles in DB with 30 per page", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    prefix = "000 Paged Profile #{unique()}"
+    baseline = length(Accounts.list_groups())
+    to_create = max(31 - baseline, 1)
+
+    groups =
+      for i <- 1..to_create do
+        pad = i |> Integer.to_string() |> String.pad_leading(3, "0")
+        {:ok, g} = Accounts.create_group(%{name: "#{prefix} #{pad}"})
+        g
+      end
+
+    total = baseline + to_create
+    first = hd(groups)
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/budget/profiles")
+
+    assert has_element?(view, "#groups-pagination")
+    assert has_element?(view, "#groups-pagination-range", "1–30 de #{total}")
+    assert has_element?(view, "#groups-#{first.id}")
+
+    view |> element("#groups-pagination-page-2") |> render_click()
+
+    assert has_element?(view, "#groups-pagination-range", "31–#{total} de #{total}")
+    refute has_element?(view, "#groups-#{first.id}")
+  end
+
+  test "sorts by name, members, and spend", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {:ok, g_low} = Accounts.create_group(%{name: "Alpha Low"})
+    {:ok, g_high} = Accounts.create_group(%{name: "Zeta High"})
+
+    %{user: u1} = register("user")
+    %{user: u2} = register("user")
+    {:ok, m1} = Accounts.create_group_member(%{user_id: u1.id, group_id: g_high.id})
+    {:ok, _m2} = Accounts.create_group_member(%{user_id: u2.id, group_id: g_low.id})
+
+    {:ok, _} =
+      Tokengate.Logs.log_request(%{
+        group_member_id: m1.id,
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("25.00"),
+        latency_ms: 100
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/budget/profiles")
+
+    assert has_element?(view, "th button[phx-click='sort_groups'][phx-value-field='name']")
+    assert has_element?(view, "th button[phx-click='sort_groups'][phx-value-field='members']")
+    assert has_element?(view, "th button[phx-click='sort_groups'][phx-value-field='spend']")
+
+    html = view |> element("th button[phx-value-field='spend']") |> render_click()
+    assert html =~ "▼"
+
+    ids =
+      Regex.scan(~r/<tr[^>]+id="groups-([^"]+)"/, html)
+      |> Enum.map(&Enum.at(&1, 1))
+      |> Enum.filter(&(&1 in [g_high.id, g_low.id]))
+
+    assert ids == [g_high.id, g_low.id]
+  end
+
+  test "members count cell and stats icon link to members and stats pages, and credit renders canonical badges/bar",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{group: budgeted} = group_fixture(%{monthly_spend_limit_usd: "100.00"})
+    %{group: unlimited} = group_fixture(%{unlimited_spend: true})
+    %{group: no_budget} = group_fixture()
+
+    %{user: u1} = register("user")
+    {:ok, m1} = Accounts.create_group_member(%{user_id: u1.id, group_id: budgeted.id})
+
+    {:ok, _} =
+      Tokengate.Logs.log_request(%{
+        group_member_id: m1.id,
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("10.00"),
+        latency_ms: 100
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/budget/profiles")
+
+    assert has_element?(
+             view,
+             "#members-count-link-#{budgeted.id}[href=\"/budget/profiles/#{budgeted.id}/members\"]",
+             "1"
+           )
+
+    assert has_element?(
+             view,
+             "#stats-#{budgeted.id}[href=\"/stats/profiles/#{budgeted.id}\"]"
+           )
+
+    assert has_element?(view, "#group-credit-#{budgeted.id}", "OK")
+    assert has_element?(view, "#group-credit-#{unlimited.id}", "Ilimitado")
+    assert has_element?(view, "#group-credit-#{no_budget.id}", "Sin presupuesto")
   end
 end

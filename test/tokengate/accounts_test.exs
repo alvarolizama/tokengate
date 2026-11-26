@@ -1193,4 +1193,142 @@ defmodule Tokengate.AccountsTest do
       {key, token}
     end
   end
+
+  describe "list_groups_page/1" do
+    test "paginates, searches by name, escapes LIKE wildcards, clamps page, and sorts" do
+      prefix = "GrpPage-#{System.unique_integer([:positive])}"
+      g1 = group_fixture(%{"name" => "#{prefix} Alpha"})
+      g2 = group_fixture(%{"name" => "#{prefix} Beta"})
+      g3 = group_fixture(%{"name" => "#{prefix} Gamma"})
+
+      page1 =
+        Accounts.list_groups_page(
+          search: prefix,
+          page: 1,
+          per_page: 2,
+          sort_field: :name,
+          sort_direction: :asc
+        )
+
+      assert page1.total == 3
+      assert page1.total_pages == 2
+      assert page1.page == 1
+      assert page1.per_page == 2
+      assert Enum.map(page1.entries, & &1.id) == [g1.id, g2.id]
+
+      page2 =
+        Accounts.list_groups_page(
+          search: prefix,
+          page: 2,
+          per_page: 2,
+          sort_field: :name,
+          sort_direction: :asc
+        )
+
+      assert Enum.map(page2.entries, & &1.id) == [g3.id]
+
+      clamped = Accounts.list_groups_page(search: prefix, page: 99, per_page: 2)
+      assert clamped.page == 2
+
+      found = Accounts.list_groups_page(search: "#{prefix} BETA")
+      assert Enum.map(found.entries, & &1.id) == [g2.id]
+
+      assert Accounts.list_groups_page(search: "%_%").total == 0
+
+      desc = Accounts.list_groups_page(search: prefix, sort_field: :name, sort_direction: :desc)
+      assert Enum.map(desc.entries, & &1.id) == [g3.id, g2.id, g1.id]
+    end
+  end
+
+  describe "list_group_members_page/2" do
+    test "paginates, searches by user email/name, and sorts for the target group only" do
+      group = group_fixture(%{"name" => "Target"})
+      other_group = group_fixture(%{"name" => "Other"})
+
+      u1 = user_fixture(%{"email" => "alpha@example.com", "name" => "Zed"})
+      u2 = user_fixture(%{"email" => "beta@example.com", "name" => "Amy"})
+      u_other = user_fixture(%{"email" => "gamma@example.com", "name" => "Other"})
+
+      {:ok, m1} = Accounts.create_group_member(valid_group_member_attrs(u1, group))
+
+      {:ok, m2} =
+        Accounts.create_group_member(
+          valid_group_member_attrs(u2, group, %{"status" => "suspended"})
+        )
+
+      {:ok, _m_other} =
+        Accounts.create_group_member(valid_group_member_attrs(u_other, other_group))
+
+      page1 =
+        Accounts.list_group_members_page(group.id,
+          page: 1,
+          per_page: 1,
+          sort_field: :email,
+          sort_direction: :asc
+        )
+
+      assert page1.total == 2
+      assert page1.total_pages == 2
+      assert [entry] = page1.entries
+      assert entry.id == m1.id
+      assert entry.user.email == "alpha@example.com"
+
+      by_name =
+        Accounts.list_group_members_page(group.id, sort_field: :name, sort_direction: :asc)
+
+      assert Enum.map(by_name.entries, & &1.id) == [m2.id, m1.id]
+
+      by_status =
+        Accounts.list_group_members_page(group.id, sort_field: :status, sort_direction: :desc)
+
+      assert Enum.map(by_status.entries, & &1.id) == [m2.id, m1.id]
+
+      by_search = Accounts.list_group_members_page(group.id, search: "amy")
+      assert Enum.map(by_search.entries, & &1.id) == [m2.id]
+
+      assert Accounts.list_group_members_page(group.id, search: "%_%").total == 0
+    end
+  end
+
+  describe "list_service_supervisors_page/2" do
+    test "paginates, searches by user email/name, and sorts for the target service only" do
+      service = service_fixture()
+      other_service = service_fixture()
+
+      u1 = user_fixture(%{"email" => "alice@example.com", "name" => "Zelda"})
+      u2 = user_fixture(%{"email" => "bob@example.com", "name" => "Aaron"})
+      u3 = user_fixture(%{"email" => "carol@example.com", "name" => "Carol"})
+
+      {:ok, s1} = Accounts.add_service_supervisor(service.id, u1.id)
+      {:ok, s2} = Accounts.add_service_supervisor(service.id, u2.id)
+      {:ok, _s3} = Accounts.add_service_supervisor(other_service.id, u3.id)
+
+      page1 =
+        Accounts.list_service_supervisors_page(service.id,
+          page: 1,
+          per_page: 1,
+          sort_field: :email,
+          sort_direction: :asc
+        )
+
+      assert page1.total == 2
+      assert page1.total_pages == 2
+      assert [entry] = page1.entries
+      assert entry.id == s1.id
+      assert entry.user.email == "alice@example.com"
+
+      by_name =
+        Accounts.list_service_supervisors_page(service.id,
+          sort_field: :name,
+          sort_direction: :asc
+        )
+
+      assert Enum.map(by_name.entries, & &1.id) == [s2.id, s1.id]
+
+      by_search = Accounts.list_service_supervisors_page(service.id, search: "bob")
+      assert Enum.map(by_search.entries, & &1.id) == [s2.id]
+
+      assert Accounts.list_service_supervisors_page(service.id, search: "%_%").total == 0
+    end
+  end
 end

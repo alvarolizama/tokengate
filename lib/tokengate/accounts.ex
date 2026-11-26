@@ -146,6 +146,88 @@ defmodule Tokengate.Accounts do
     Group.changeset(group, attrs)
   end
 
+  @group_page_default_per_page 30
+  @group_page_max_per_page 100
+  @group_page_sql_sorts ~w(name inserted_at)a
+
+  def group_page_sql_sorts, do: @group_page_sql_sorts
+
+  @doc """
+  Paginated limit-profile listing, resolved in the database.
+
+  Returns `%{entries: [Group.t()], total: integer, page: integer,
+  total_pages: integer, per_page: integer}`.
+
+  ## Options
+
+    * `:search` — free text matched case-insensitively as a substring of `name`
+      (`%` and `_` are escaped so they match literally).
+    * `:page` / `:per_page` — 1-based page and page size (default
+      #{@group_page_default_per_page}, capped at #{@group_page_max_per_page}).
+    * `:sort_field` — one of `#{inspect(@group_page_sql_sorts)}` is ordered in
+      SQL. Any other value falls back to name order.
+    * `:sort_direction` — `:asc` (default) or `:desc`.
+  """
+  def list_groups_page(opts \\ []) do
+    opts = Map.new(opts)
+
+    per_page =
+      opts
+      |> Map.get(:per_page, @group_page_default_per_page)
+      |> clamp_per_page_limit(@group_page_default_per_page, @group_page_max_per_page)
+
+    sort_field = Map.get(opts, :sort_field)
+    sort_direction = Map.get(opts, :sort_direction, :asc)
+
+    base =
+      from(g in Group)
+      |> maybe_group_search(Map.get(opts, :search))
+
+    total = Repo.aggregate(base, :count, :id, timeout: :timer.seconds(15))
+    total_pages = max(1, div(total + per_page - 1, per_page))
+    page = opts |> Map.get(:page, 1) |> parse_page() |> min(total_pages)
+
+    entries =
+      base
+      |> order_groups_page(sort_field, sort_direction)
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all(timeout: :timer.seconds(15))
+
+    %{entries: entries, total: total, page: page, total_pages: total_pages, per_page: per_page}
+  end
+
+  defp maybe_group_search(query, search) when is_binary(search) do
+    search = search |> String.trim() |> String.downcase()
+
+    if search == "" do
+      query
+    else
+      pattern = "%" <> escape_like(search) <> "%"
+      where(query, [g], ilike(g.name, ^pattern))
+    end
+  end
+
+  defp maybe_group_search(query, _), do: query
+
+  defp order_groups_page(query, :inserted_at, :desc),
+    do: order_by(query, [g], desc: g.inserted_at, desc: g.id)
+
+  defp order_groups_page(query, :inserted_at, _direction),
+    do: order_by(query, [g], asc: g.inserted_at, asc: g.id)
+
+  defp order_groups_page(query, :name, direction) do
+    dir = if direction == :desc, do: :desc_nulls_last, else: :asc_nulls_last
+
+    query
+    |> order_by([g], [{^dir, fragment("lower(coalesce(?, ''))", g.name)}])
+    |> order_by([g], asc: g.id)
+  end
+
+  defp order_groups_page(query, _field, _direction) do
+    order_by(query, [g], asc: fragment("lower(coalesce(?, ''))", g.name), asc: g.id)
+  end
+
   # ---------------------------------------------------------------------------
   # Users
   # ---------------------------------------------------------------------------
@@ -245,6 +327,27 @@ defmodule Tokengate.Accounts do
 
   defp clamp_per_page(n) when is_integer(n) and n > 0, do: min(n, @user_page_max_per_page)
   defp clamp_per_page(_), do: @user_page_default_per_page
+
+  defp clamp_per_page_limit(n, _default, max) when is_integer(n) and n > 0, do: min(n, max)
+  defp clamp_per_page_limit(_, default, _max), do: default
+
+  defp maybe_joined_user_search(query, search) when is_binary(search) do
+    search = search |> String.trim() |> String.downcase()
+
+    if search == "" do
+      query
+    else
+      pattern = "%" <> escape_like(search) <> "%"
+
+      where(
+        query,
+        [user: u],
+        ilike(u.email, ^pattern) or ilike(fragment("coalesce(?, '')", u.name), ^pattern)
+      )
+    end
+  end
+
+  defp maybe_joined_user_search(query, _), do: query
 
   defp parse_page(n) when is_integer(n) and n > 0, do: n
 
@@ -746,6 +849,111 @@ defmodule Tokengate.Accounts do
 
   def list_group_members_for_group(group_id) do
     Repo.all(from tm in GroupMember, where: tm.group_id == ^group_id, preload: [:user, :api_key])
+  end
+
+  @group_member_page_default_per_page 30
+  @group_member_page_max_per_page 100
+  @group_member_page_sql_sorts ~w(email name status inserted_at)a
+
+  def group_member_page_sql_sorts, do: @group_member_page_sql_sorts
+
+  @doc """
+  Paginated group-member listing for a limit profile (`group_id`), resolved in
+  the database with `:user` preloaded.
+
+  Returns `%{entries: [GroupMember.t()], total: integer, page: integer,
+  total_pages: integer, per_page: integer}`.
+
+  ## Options
+
+    * `:search` — free text matched case-insensitively as a substring of
+      `user.email` or `user.name` (`%` and `_` are escaped).
+    * `:page` / `:per_page` — 1-based page and page size (default
+      #{@group_member_page_default_per_page}, capped at
+      #{@group_member_page_max_per_page}).
+    * `:sort_field` — one of `#{inspect(@group_member_page_sql_sorts)}` is
+      ordered in SQL. Any other value falls back to email order.
+    * `:sort_direction` — `:asc` (default) or `:desc`.
+  """
+  def list_group_members_page(group_id, opts \\ []) when is_binary(group_id) do
+    opts = Map.new(opts)
+
+    per_page =
+      opts
+      |> Map.get(:per_page, @group_member_page_default_per_page)
+      |> clamp_per_page_limit(
+        @group_member_page_default_per_page,
+        @group_member_page_max_per_page
+      )
+
+    sort_field = Map.get(opts, :sort_field)
+    sort_direction = Map.get(opts, :sort_direction, :asc)
+
+    base =
+      from(gm in GroupMember,
+        as: :member,
+        join: u in assoc(gm, :user),
+        as: :user,
+        where: gm.group_id == ^group_id
+      )
+      |> maybe_joined_user_search(Map.get(opts, :search))
+
+    total = Repo.aggregate(base, :count, :id, timeout: :timer.seconds(15))
+    total_pages = max(1, div(total + per_page - 1, per_page))
+    page = opts |> Map.get(:page, 1) |> parse_page() |> min(total_pages)
+
+    entries =
+      base
+      |> order_group_members_page(sort_field, sort_direction)
+      |> preload([user: u], user: u)
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all(timeout: :timer.seconds(15))
+
+    %{entries: entries, total: total, page: page, total_pages: total_pages, per_page: per_page}
+  end
+
+  defp order_group_members_page(query, :inserted_at, :desc),
+    do: order_by(query, [member: gm], desc: gm.inserted_at, desc: gm.id)
+
+  defp order_group_members_page(query, :inserted_at, _direction),
+    do: order_by(query, [member: gm], asc: gm.inserted_at, asc: gm.id)
+
+  defp order_group_members_page(query, :status, direction) do
+    dir = if direction == :desc, do: :desc_nulls_last, else: :asc_nulls_last
+
+    query
+    |> order_by([member: gm], [{^dir, gm.status}])
+    |> order_by([member: gm, user: u],
+      asc: fragment("lower(coalesce(?, ''))", u.email),
+      asc: gm.id
+    )
+  end
+
+  defp order_group_members_page(query, :name, direction) do
+    dir = if direction == :desc, do: :desc_nulls_last, else: :asc_nulls_last
+
+    query
+    |> order_by([user: u], [{^dir, fragment("lower(coalesce(?, ''))", u.name)}])
+    |> order_by([member: gm, user: u],
+      asc: fragment("lower(coalesce(?, ''))", u.email),
+      asc: gm.id
+    )
+  end
+
+  defp order_group_members_page(query, :email, direction) do
+    dir = if direction == :desc, do: :desc_nulls_last, else: :asc_nulls_last
+
+    query
+    |> order_by([user: u], [{^dir, fragment("lower(coalesce(?, ''))", u.email)}])
+    |> order_by([member: gm], asc: gm.id)
+  end
+
+  defp order_group_members_page(query, _field, _direction) do
+    order_by(query, [member: gm, user: u],
+      asc: fragment("lower(coalesce(?, ''))", u.email),
+      asc: gm.id
+    )
   end
 
   @doc "Returns just the IDs of group members for a group (lightweight, no preloads)."
@@ -2009,6 +2217,100 @@ defmodule Tokengate.Accounts do
       from ss in ServiceSupervisor,
         where: ss.service_id == ^service_id,
         preload: [:user]
+    )
+  end
+
+  @service_supervisor_page_default_per_page 30
+  @service_supervisor_page_max_per_page 100
+  @service_supervisor_page_sql_sorts ~w(email name inserted_at)a
+
+  def service_supervisor_page_sql_sorts, do: @service_supervisor_page_sql_sorts
+
+  @doc """
+  Paginated supervisor listing for a service (`service_id`), resolved in the
+  database with `:user` preloaded.
+
+  Returns `%{entries: [ServiceSupervisor.t()], total: integer, page: integer,
+  total_pages: integer, per_page: integer}`.
+
+  ## Options
+
+    * `:search` — free text matched case-insensitively as a substring of
+      `user.email` or `user.name` (`%` and `_` are escaped).
+    * `:page` / `:per_page` — 1-based page and page size (default
+      #{@service_supervisor_page_default_per_page}, capped at
+      #{@service_supervisor_page_max_per_page}).
+    * `:sort_field` — one of `#{inspect(@service_supervisor_page_sql_sorts)}`
+      is ordered in SQL. Any other value falls back to email order.
+    * `:sort_direction` — `:asc` (default) or `:desc`.
+  """
+  def list_service_supervisors_page(service_id, opts \\ []) when is_binary(service_id) do
+    opts = Map.new(opts)
+
+    per_page =
+      opts
+      |> Map.get(:per_page, @service_supervisor_page_default_per_page)
+      |> clamp_per_page_limit(
+        @service_supervisor_page_default_per_page,
+        @service_supervisor_page_max_per_page
+      )
+
+    sort_field = Map.get(opts, :sort_field)
+    sort_direction = Map.get(opts, :sort_direction, :asc)
+
+    base =
+      from(ss in ServiceSupervisor,
+        as: :supervisor,
+        join: u in assoc(ss, :user),
+        as: :user,
+        where: ss.service_id == ^service_id
+      )
+      |> maybe_joined_user_search(Map.get(opts, :search))
+
+    total = Repo.aggregate(base, :count, :id, timeout: :timer.seconds(15))
+    total_pages = max(1, div(total + per_page - 1, per_page))
+    page = opts |> Map.get(:page, 1) |> parse_page() |> min(total_pages)
+
+    entries =
+      base
+      |> order_service_supervisors_page(sort_field, sort_direction)
+      |> preload([user: u], user: u)
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all(timeout: :timer.seconds(15))
+
+    %{entries: entries, total: total, page: page, total_pages: total_pages, per_page: per_page}
+  end
+
+  defp order_service_supervisors_page(query, :inserted_at, :desc),
+    do: order_by(query, [supervisor: ss], desc: ss.inserted_at, desc: ss.id)
+
+  defp order_service_supervisors_page(query, :inserted_at, _direction),
+    do: order_by(query, [supervisor: ss], asc: ss.inserted_at, asc: ss.id)
+
+  defp order_service_supervisors_page(query, :name, direction) do
+    dir = if direction == :desc, do: :desc_nulls_last, else: :asc_nulls_last
+
+    query
+    |> order_by([user: u], [{^dir, fragment("lower(coalesce(?, ''))", u.name)}])
+    |> order_by([supervisor: ss, user: u],
+      asc: fragment("lower(coalesce(?, ''))", u.email),
+      asc: ss.id
+    )
+  end
+
+  defp order_service_supervisors_page(query, :email, direction) do
+    dir = if direction == :desc, do: :desc_nulls_last, else: :asc_nulls_last
+
+    query
+    |> order_by([user: u], [{^dir, fragment("lower(coalesce(?, ''))", u.email)}])
+    |> order_by([supervisor: ss], asc: ss.id)
+  end
+
+  defp order_service_supervisors_page(query, _field, _direction) do
+    order_by(query, [supervisor: ss, user: u],
+      asc: fragment("lower(coalesce(?, ''))", u.email),
+      asc: ss.id
     )
   end
 

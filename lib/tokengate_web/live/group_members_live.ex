@@ -7,10 +7,11 @@ defmodule TokengateWeb.GroupMembersLive do
     - user: denied — redirected to /dashboard.
 
   Supports:
+    - DB-backed search, sorting, and pagination via `Accounts.list_group_members_page/2`.
     - Add member by email.
-    - Remove member.
-    - Per-member extra model grants (individual grants beyond the budget's
-      models) with the 3-state picker in the details modal.
+    - Remove member (with `data-confirm`).
+    - Per-member extra/denied model grants (3-state picker in the details modal).
+    - Async 30-day usage tiers via `start_async` + `DashboardCache`.
 
   Las API keys y los extras de concurrencia/RPM NO se gestionan aquí: las keys
   cuelgan del usuario y el techo lo aporta el perfil de límites (o el propio sujeto en su
@@ -20,11 +21,16 @@ defmodule TokengateWeb.GroupMembersLive do
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
+  import TokengateWeb.AdminComponents
   alias Tokengate.Accounts
-  alias Tokengate.Metrics.Rollup
+  alias Tokengate.Metrics.{DashboardCache, Rollup}
   alias Tokengate.Providers
   alias Tokengate.Providers.{Model, GroupMemberExtraModel, GroupMemberDeniedModel, GroupModel}
   alias Tokengate.Repo
+
+  @per_page 30
+  @sort_columns ~w(email name status spend inserted_at)a
+  @usage_tiers_ttl_ms 30_000
 
   @impl true
   def mount(%{"id" => group_id}, _session, socket) do
@@ -56,9 +62,18 @@ defmodule TokengateWeb.GroupMembersLive do
           |> assign(:add_form, add_member_form())
           |> assign(:add_member_error, nil)
           |> assign(:email_suggestions, [])
+          |> assign(:search_query, "")
+          |> assign(:sort_field, :email)
+          |> assign(:sort_direction, :asc)
+          |> assign(:page, 1)
+          |> assign(:per_page, @per_page)
+          |> assign(:total_count, 0)
+          |> assign(:total_pages, 1)
+          |> assign(:current_members, [])
           |> stream_configure(:members, dom_id: &"members-#{&1.id}")
           |> assign(:usage_tiers, [])
           |> assign(:usage_tiers_by_member, %{})
+          |> assign(:usage_tiers_loading, false)
           |> load_data()
           |> maybe_load_usage_tiers()
 
@@ -85,7 +100,19 @@ defmodule TokengateWeb.GroupMembersLive do
   defp load_data(socket) do
     group = socket.assigns.group
     timezone = socket.assigns[:timezone] || "Etc/UTC"
-    members = Accounts.list_group_members_for_group(group.id)
+
+    page =
+      Accounts.list_group_members_page(
+        group.id,
+        search: socket.assigns[:search_query] || "",
+        page: socket.assigns.page,
+        per_page: socket.assigns.per_page,
+        sort_field: socket.assigns.sort_field,
+        sort_direction: socket.assigns.sort_direction
+      )
+
+    members = page.entries
+    member_ids = Enum.map(members, & &1.id)
 
     # Get all available models
     org_alias_ids =
@@ -103,41 +130,45 @@ defmodule TokengateWeb.GroupMembersLive do
       |> Repo.all()
       |> MapSet.new()
 
-    # Preload extra model ids per member (access grants only, no budget)
-    extra_models =
-      from(tmea in GroupMemberExtraModel,
-        where: tmea.group_member_id in ^Enum.map(members, & &1.id),
-        select: {tmea.group_member_id, tmea.model_id}
-      )
-      |> Repo.all()
-
+    # Preload extra model ids ONLY for the active page's member IDs
     extra_aliases_simple =
-      extra_models
-      |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
+      if member_ids == [] do
+        %{}
+      else
+        from(tmea in GroupMemberExtraModel,
+          where: tmea.group_member_id in ^member_ids,
+          select: {tmea.group_member_id, tmea.model_id}
+        )
+        |> Repo.all()
+        |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
+      end
 
-    # Per-member denied model ids (3rd picker state: "quitado")
+    # Per-member denied model ids ONLY for the active page's member IDs
     denied_models =
-      from(tmda in GroupMemberDeniedModel,
-        where: tmda.group_member_id in ^Enum.map(members, & &1.id),
-        select: {tmda.group_member_id, tmda.model_id}
-      )
-      |> Repo.all()
-      |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
+      if member_ids == [] do
+        %{}
+      else
+        from(tmda in GroupMemberDeniedModel,
+          where: tmda.group_member_id in ^member_ids,
+          select: {tmda.group_member_id, tmda.model_id}
+        )
+        |> Repo.all()
+        |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
+      end
 
-    # Member budgets with spend — one batched query for every member instead
-    # of one SUM per member (N+1).
+    # Member budgets with spend — scoped ONLY to the active page's member IDs.
     monthly_spend_by_member =
-      members
-      |> Enum.map(& &1.id)
+      member_ids
       |> Tokengate.Budgets.spend_by_member_ids(timezone)
       |> Map.get(:monthly)
 
     member_budgets =
-      Enum.map(members, fn m ->
-        %{
-          member_id: m.id,
-          monthly_spend: Map.get(monthly_spend_by_member, m.id, Decimal.new(0))
-        }
+      Map.new(members, fn m ->
+        {m.id,
+         %{
+           member_id: m.id,
+           monthly_spend: Map.get(monthly_spend_by_member, m.id, Decimal.new(0))
+         }}
       end)
 
     group_monthly_spend =
@@ -147,19 +178,33 @@ defmodule TokengateWeb.GroupMembersLive do
 
     # Límites EFECTIVOS por miembro — la misma regla única que el proxy usa
     # (`propio del usuario || default del perfil de límites || default del módulo`).
-    # `@group` ya está en memoria y `:user` viene preloadeado por
-    # `list_group_members_for_group/1`: sin query extra ni N+1.
     member_limits =
       Map.new(members, fn m -> {m.id, Accounts.effective_limits(%{m | group: group})} end)
 
+    sorted_members =
+      if socket.assigns.sort_field in Accounts.group_member_page_sql_sorts() do
+        members
+      else
+        sort_members_in_memory(
+          members,
+          socket.assigns.sort_field,
+          socket.assigns.sort_direction,
+          member_budgets
+        )
+      end
+
     socket
-    |> stream(:members, members, reset: true)
+    |> assign(:current_members, sorted_members)
+    |> stream(:members, sorted_members, reset: true)
     # The details modal needs one row by id; streams are not enumerable, so the
     # lookup lives in its own map instead of an Enum.find over the stream.
-    |> assign(:members_by_id, Map.new(members, &{&1.id, &1}))
+    |> assign(:members_by_id, Map.new(sorted_members, &{&1.id, &1}))
     |> assign(:member_limits, member_limits)
-    |> assign(:member_budgets, Map.new(member_budgets, fn b -> {b.member_id, b} end))
-    |> assign(:members_empty?, members == [])
+    |> assign(:member_budgets, member_budgets)
+    |> assign(:members_empty?, page.total == 0)
+    |> assign(:page, page.page)
+    |> assign(:total_count, page.total)
+    |> assign(:total_pages, page.total_pages)
     |> assign(:org_models, org_alias_ids)
     |> assign(:group_alias_ids, group_alias_ids)
     |> assign(:extra_models, extra_aliases_simple)
@@ -167,32 +212,146 @@ defmodule TokengateWeb.GroupMembersLive do
     |> assign(:group_monthly_spend, group_monthly_spend)
   end
 
-  defp maybe_load_usage_tiers(socket) do
-    if connected?(socket), do: load_usage_tiers(socket), else: socket
+  defp sort_members_in_memory(members, :spend, direction, member_budgets) do
+    Enum.sort_by(
+      members,
+      fn m ->
+        spend =
+          member_budgets
+          |> Map.get(m.id, %{monthly_spend: Decimal.new(0)})
+          |> Map.get(:monthly_spend, Decimal.new(0))
+
+        {spend, String.downcase(m.user.email || "")}
+      end,
+      fn {spend_a, email_a}, {spend_b, email_b} ->
+        case {Decimal.compare(spend_a, spend_b), direction} do
+          {:eq, _} -> email_a <= email_b
+          {:lt, :asc} -> true
+          {:gt, :desc} -> true
+          _ -> false
+        end
+      end
+    )
   end
 
-  # Usage tiers for this group (last 30 days). The heaviest aggregate of
-  # the page (member × minute buckets over 30 days) — NOT on the search
-  # path: `search_members` re-filters the member list but cannot change
-  # the tiers, so this runs on mount and when the membership set actually
-  # changes (add/remove member).
-  defp load_usage_tiers(socket) do
-    group = socket.assigns.group
+  defp sort_members_in_memory(members, _field, _direction, _member_budgets), do: members
 
-    usage_tiers = Rollup.member_usage_tiers(group.id, from: days_ago(30))
+  # Usage tiers for this group (last 30 days). Dispatched asynchronously via
+  # `start_async/3` + `DashboardCache` so `mount` never blocks on the heavy
+  # 30d rollup query.
+  defp maybe_load_usage_tiers(socket) do
+    group_id = socket.assigns.group.id
+    cache_key = usage_tiers_cache_key(group_id)
 
+    case cached_usage_tiers_fetch(cache_key) do
+      {:ok, usage_tiers} ->
+        apply_usage_tiers(socket, usage_tiers)
+
+      :miss ->
+        if connected?(socket) do
+          use_cache? = structural_cache_enabled?() and DashboardCache.available?()
+
+          socket
+          |> assign(:usage_tiers_loading, true)
+          |> start_async(:usage_tiers, fn ->
+            compute = fn -> Rollup.member_usage_tiers(group_id, from: days_ago(30)) end
+
+            if use_cache? do
+              DashboardCache.fetch_or_compute(cache_key, compute, ttl: @usage_tiers_ttl_ms)
+            else
+              compute.()
+            end
+          end)
+        else
+          socket
+        end
+    end
+  end
+
+  defp usage_tiers_cache_key(group_id), do: {:group_member_usage_tiers, group_id}
+
+  defp structural_cache_enabled? do
+    Application.get_env(:tokengate, :stats_structural_cache, enabled: true)[:enabled] != false
+  end
+
+  defp cached_usage_tiers_fetch(key) do
+    if structural_cache_enabled?() and DashboardCache.available?() do
+      DashboardCache.fetch(key)
+    else
+      :miss
+    end
+  end
+
+  defp invalidate_usage_tiers_cache(group_id) do
+    if DashboardCache.available?() do
+      DashboardCache.invalidate(usage_tiers_cache_key(group_id))
+    end
+  end
+
+  defp apply_usage_tiers(socket, usage_tiers) do
     socket
     |> assign(:usage_tiers, usage_tiers)
     |> assign(:usage_tiers_by_member, Map.new(usage_tiers, &{&1.group_member_id, &1}))
+  end
+
+  @impl true
+  def handle_async(:usage_tiers, {:ok, usage_tiers}, socket) do
+    {:noreply,
+     socket
+     |> apply_usage_tiers(usage_tiers)
+     |> assign(:usage_tiers_loading, false)
+     |> stream(:members, socket.assigns.current_members, reset: true)}
+  end
+
+  def handle_async(:usage_tiers, {:exit, _reason}, socket) do
+    {:noreply, assign(socket, :usage_tiers_loading, false)}
   end
 
   defp days_ago(n) do
     DateTime.add(DateTime.utc_now(), -n * 86400, :second)
   end
 
-  ## Events — add member --------------------------------------------------
+  ## Events — search / sort / pagination -----------------------------------
 
   @impl true
+  def handle_event("search_members", %{"q" => query}, socket) do
+    {:noreply,
+     socket
+     |> assign(:search_query, query)
+     |> assign(:page, 1)
+     |> load_data()}
+  end
+
+  def handle_event("go_to_page", %{"page" => page}, socket) do
+    {:noreply,
+     socket
+     |> assign(:page, parse_page(page))
+     |> load_data()}
+  end
+
+  def handle_event("sort_members", %{"field" => field}, socket) do
+    with {:ok, field} <- to_sort_field(field),
+         true <- field in @sort_columns do
+      {sort_field, sort_direction} =
+        if socket.assigns.sort_field == field do
+          {field, toggle_sort_direction(socket.assigns.sort_direction)}
+        else
+          {field, default_direction_for(field)}
+        end
+
+      {:noreply,
+       socket
+       |> assign(:sort_field, sort_field)
+       |> assign(:sort_direction, sort_direction)
+       |> assign(:page, 1)
+       |> load_data()}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  ## Events — add member --------------------------------------------------
+
   def handle_event("new_member", _params, socket) do
     {:noreply,
      socket
@@ -201,7 +360,6 @@ defmodule TokengateWeb.GroupMembersLive do
      |> assign(:add_member_error, nil)}
   end
 
-  @impl true
   def handle_event("cancel_add_member", _params, socket) do
     {:noreply,
      socket
@@ -211,7 +369,6 @@ defmodule TokengateWeb.GroupMembersLive do
      |> assign(:email_suggestions, [])}
   end
 
-  @impl true
   def handle_event("search_email", %{"add_member" => %{"email" => query}}, socket) do
     suggestions =
       case String.trim(query) do
@@ -223,7 +380,6 @@ defmodule TokengateWeb.GroupMembersLive do
     {:noreply, assign(socket, :email_suggestions, suggestions)}
   end
 
-  @impl true
   def handle_event("select_email", %{"email" => email}, socket) do
     form =
       socket.assigns.add_form
@@ -235,7 +391,6 @@ defmodule TokengateWeb.GroupMembersLive do
      |> assign(:email_suggestions, [])}
   end
 
-  @impl true
   def handle_event("add_member", %{"add_member" => params}, socket) do
     group = socket.assigns.group
 
@@ -251,6 +406,8 @@ defmodule TokengateWeb.GroupMembersLive do
             "email" => user.email
           })
 
+          invalidate_usage_tiers_cache(group.id)
+
           {:noreply,
            socket
            |> put_flash(:info, gettext("Member added."))
@@ -258,7 +415,7 @@ defmodule TokengateWeb.GroupMembersLive do
            |> assign(:add_form, add_member_form())
            |> assign(:add_member_error, nil)
            |> load_data()
-           |> load_usage_tiers()}
+           |> maybe_load_usage_tiers()}
 
         {:error, changeset} ->
           {:noreply,
@@ -283,7 +440,6 @@ defmodule TokengateWeb.GroupMembersLive do
 
   ## Events — remove member ----------------------------------------------
 
-  @impl true
   def handle_event("remove_member", %{"id" => member_id}, socket) do
     case fetch_group_member(member_id) do
       {:ok, member} ->
@@ -297,7 +453,6 @@ defmodule TokengateWeb.GroupMembersLive do
 
   ## Events — details modal (modelos del miembro) ---------------------------
 
-  @impl true
   def handle_event("open_details", %{"id" => member_id}, socket) do
     case fetch_group_member(member_id) do
       {:ok, %{group_id: group_id} = member} when group_id == socket.assigns.group.id ->
@@ -309,14 +464,12 @@ defmodule TokengateWeb.GroupMembersLive do
     end
   end
 
-  @impl true
   def handle_event("close_details", _params, socket) do
     {:noreply, assign(socket, :editing_details_member_id, nil)}
   end
 
   ## Events — extra model grants / denies (picker de 3 estados) ------------
 
-  @impl true
   def handle_event(
         "toggle_extra_model",
         %{"target-id" => member_id, "model-id" => model_id},
@@ -371,11 +524,13 @@ defmodule TokengateWeb.GroupMembersLive do
             "user_id" => member.user_id
           })
 
+          invalidate_usage_tiers_cache(member.group_id)
+
           {:noreply,
            socket
            |> put_flash(:info, gettext("Member removed."))
            |> load_data()
-           |> load_usage_tiers()}
+           |> maybe_load_usage_tiers()}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, gettext("Could not remove the member."))}
@@ -427,8 +582,8 @@ defmodule TokengateWeb.GroupMembersLive do
 
           {:noreply,
            socket
-           |> put_flash(:info, "Modelos actualizados.")
-           |> refresh_member_model_overrides()}
+           |> put_flash(:info, gettext("Models updated."))
+           |> refresh_member_model_overrides(member_id)}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
@@ -443,7 +598,7 @@ defmodule TokengateWeb.GroupMembersLive do
     end
   end
 
-  defp refresh_member_model_overrides(socket) do
+  defp refresh_member_model_overrides(socket, updated_member_id) do
     member_ids = Map.keys(socket.assigns.members_by_id)
 
     extra_models =
@@ -470,9 +625,15 @@ defmodule TokengateWeb.GroupMembersLive do
         |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
       end
 
-    socket
-    |> assign(:extra_models, extra_models)
-    |> assign(:denied_models, denied_models)
+    socket =
+      socket
+      |> assign(:extra_models, extra_models)
+      |> assign(:denied_models, denied_models)
+
+    case Map.get(socket.assigns.members_by_id, updated_member_id) do
+      nil -> socket
+      member -> stream_insert(socket, :members, member)
+    end
   end
 
   defp add_member_form do
@@ -507,6 +668,28 @@ defmodule TokengateWeb.GroupMembersLive do
     Enum.join(errors, ", ")
   end
 
+  defp to_sort_field(field) when is_binary(field) do
+    {:ok, String.to_existing_atom(field)}
+  rescue
+    ArgumentError -> :error
+  end
+
+  defp parse_page(page) when is_binary(page) do
+    case Integer.parse(page) do
+      {i, ""} when i > 0 -> i
+      _ -> 1
+    end
+  end
+
+  defp parse_page(page) when is_integer(page) and page > 0, do: page
+  defp parse_page(_), do: 1
+
+  defp toggle_sort_direction(:asc), do: :desc
+  defp toggle_sort_direction(:desc), do: :asc
+
+  defp default_direction_for(field) when field in [:spend, :inserted_at], do: :desc
+  defp default_direction_for(_), do: :asc
+
   defp extra_model_ids(extra_models, member_id) do
     Map.get(extra_models, member_id, [])
   end
@@ -537,20 +720,29 @@ defmodule TokengateWeb.GroupMembersLive do
     >
       <div class="space-y-6">
         <.header>
-          Miembros de {@group.name}
+          {gettext("Members of %{name}", name: @group.name)}
           <:subtitle>{gettext("Add and remove limit profile members")}</:subtitle>
           <:actions>
-            <.link navigate={~p"/budget/profiles"} class="btn btn-ghost" id="back-to-groups">
-              <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver
-            </.link>
+            <div class="flex flex-wrap items-center gap-3">
+              <.admin_search
+                event="search_members"
+                value={@search_query}
+                placeholder={gettext("Search by email or name…")}
+                input_id="member-search"
+              />
+              <.button phx-click="new_member" id="new-member-btn">
+                <.icon name="hero-plus" class="w-4 h-4" /> {gettext("Add member")}
+              </.button>
+              <.link
+                navigate={~p"/budget/profiles"}
+                class="btn btn-ghost btn-sm"
+                id="back-to-groups"
+              >
+                <.icon name="hero-arrow-left" class="w-4 h-4" /> {gettext("Back")}
+              </.link>
+            </div>
           </:actions>
         </.header>
-
-        <div class="flex justify-end">
-          <button phx-click="new_member" class="btn btn-primary btn-sm" id="new-member-btn">
-            <.icon name="hero-plus" class="w-4 h-4" /> Añadir miembro
-          </button>
-        </div>
 
         <%!-- Add member modal --%>
         <.modal
@@ -656,9 +848,12 @@ defmodule TokengateWeb.GroupMembersLive do
               rows={@streams.members}
               row_item={fn {_id, member} -> member end}
               row_class="align-top"
+              sort_field={@sort_field}
+              sort_direction={@sort_direction}
+              sort_event="sort_members"
               empty?={@members_empty?}
             >
-              <:col :let={member} label={gettext("Member")}>
+              <:col :let={member} label={gettext("Member")} field={:email}>
                 <p class="font-medium text-sm">{member.user.email}</p>
                 <p class="text-xs text-base-content/50">{member.user.name}</p>
                 <div class="flex items-center gap-1.5 mt-1 flex-wrap">
@@ -676,7 +871,7 @@ defmodule TokengateWeb.GroupMembersLive do
                       class="badge badge-xs badge-accent"
                       title={gettext("The user's own override over the limit profile default")}
                     >
-                      propio
+                      {gettext("own")}
                     </span>
                   </p>
                   <p class="flex items-center gap-1">
@@ -687,7 +882,7 @@ defmodule TokengateWeb.GroupMembersLive do
                       class="badge badge-xs badge-accent"
                       title={gettext("The user's own override over the limit profile default")}
                     >
-                      propio
+                      {gettext("own")}
                     </span>
                   </p>
                 </div>
@@ -702,7 +897,9 @@ defmodule TokengateWeb.GroupMembersLive do
                     title={gettext("Member models")}
                   >
                     <.icon name="hero-rectangle-stack" class="w-3 h-3" />
-                    {length(MapSet.to_list(@group_alias_ids))} del perfil de límites
+                    {gettext("%{count} from limit profile",
+                      count: length(MapSet.to_list(@group_alias_ids))
+                    )}
                   </button>
                   <span
                     :if={extra_model_ids(@extra_models, member.id) != []}
@@ -712,7 +909,7 @@ defmodule TokengateWeb.GroupMembersLive do
                   </span>
                 </div>
               </:col>
-              <:col :let={member} label={gettext("Spend/month")} align="right">
+              <:col :let={member} label={gettext("Spend/month")} field={:spend} align="right">
                 <% mb = Map.get(@member_budgets, member.id, %{monthly_spend: Decimal.new(0)}) %>
                 <span class="font-mono text-sm">${format_decimal(mb.monthly_spend)}</span>
               </:col>
@@ -734,7 +931,9 @@ defmodule TokengateWeb.GroupMembersLive do
                     {String.capitalize(tier.tier)}
                   </span>
                 <% else %>
-                  <span class="badge badge-sm badge-ghost" title={gettext("No activity in 30 days")}>—</span>
+                  <span class="badge badge-sm badge-ghost" title={gettext("No activity in 30 days")}>
+                    —
+                  </span>
                 <% end %>
               </:col>
               <:action :let={member}>
@@ -752,6 +951,11 @@ defmodule TokengateWeb.GroupMembersLive do
                   class="btn btn-xs btn-ghost text-error"
                   id={"remove-#{member.id}"}
                   title={gettext("Remove member")}
+                  data-confirm={
+                    gettext(
+                      "Remove this member from the limit profile? This action cannot be undone."
+                    )
+                  }
                 >
                   <.icon name="hero-trash" class="w-3.5 h-3.5" />
                 </button>
@@ -763,6 +967,13 @@ defmodule TokengateWeb.GroupMembersLive do
                 </div>
               </:empty>
             </.table>
+            <.admin_pagination
+              id="members-pagination"
+              page={@page}
+              per_page={@per_page}
+              total={@total_count}
+              total_pages={@total_pages}
+            />
           </div>
         </div>
 

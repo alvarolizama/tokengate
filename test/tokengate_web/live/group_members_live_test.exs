@@ -1,5 +1,6 @@
 defmodule TokengateWeb.GroupMembersLiveTest do
   use TokengateWeb.ConnCase, async: false
+  use Gettext, backend: TokengateWeb.Gettext
 
   import Phoenix.LiveViewTest
   alias Tokengate.{Accounts, Providers}
@@ -98,9 +99,21 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, group_url(group))
 
-    assert html =~ "Miembros de #{group.name}"
+    expected_title =
+      Gettext.with_locale(TokengateWeb.Gettext, "es", fn ->
+        gettext("Members of %{name}", name: group.name)
+      end)
+
+    assert html =~ expected_title
     assert html =~ owner.email
     assert has_element?(view, "#new-member-btn")
+    assert has_element?(view, "#member-search")
+    assert has_element?(view, "#back-to-groups[href=\"/budget/profiles\"]")
+    assert has_element?(view, "#remove-#{owner_member_id(group, owner)}[data-confirm]")
+  end
+
+  defp owner_member_id(group, owner) do
+    Repo.get_by!(Tokengate.Accounts.GroupMember, group_id: group.id, user_id: owner.id).id
   end
 
   # --------------------------------------------------------------------------
@@ -490,5 +503,111 @@ defmodule TokengateWeb.GroupMembersLiveTest do
 
     refute extra_model.id in Providers.list_extra_model_ids_for_member(member.id)
     refute extra_model.id in Providers.list_denied_model_ids_for_member(member.id)
+  end
+
+  # --------------------------------------------------------------------------
+  # Search, sorting, pagination, and async usage tiers
+  # --------------------------------------------------------------------------
+
+  test "search filters members by email or name and sort reorders rows", %{conn: conn} do
+    %{group: group, owner: owner1, member: m1} = group_with_member()
+    %{user: admin, password: password} = register("admin")
+    %{user: owner2} = register("user")
+
+    {:ok, owner2} =
+      Accounts.admin_update_user(owner2, %{
+        "name" => "Zed Searchable"
+      })
+
+    {:ok, m2} = Accounts.create_group_member(%{user_id: owner2.id, group_id: group.id})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    assert has_element?(view, "#members-#{m1.id}")
+    assert has_element?(view, "#members-#{m2.id}")
+
+    view |> element("#search-form") |> render_change(%{"q" => "Zed Searchable"})
+
+    assert has_element?(view, "#members-#{m2.id}")
+    refute has_element?(view, "#members-#{m1.id}")
+
+    # Clear search and sort by email desc
+    view |> element("#search-form") |> render_change(%{"q" => ""})
+    assert has_element?(view, "#members-#{m1.id}")
+
+    html = view |> element("th button[phx-value-field='email']") |> render_click()
+    assert html =~ "▼"
+
+    expected_first = if owner1.email > owner2.email, do: m1.id, else: m2.id
+    expected_second = if expected_first == m1.id, do: m2.id, else: m1.id
+
+    ids =
+      Regex.scan(~r/<tr[^>]+id="members-([^"]+)"/, html)
+      |> Enum.map(&Enum.at(&1, 1))
+      |> Enum.filter(&(&1 in [m1.id, m2.id]))
+
+    assert ids == [expected_first, expected_second]
+  end
+
+  test "paginates members in DB with 30 per page", %{conn: conn} do
+    {:ok, group} = Accounts.create_group(%{name: "Paged Members #{unique()}"})
+    %{user: admin, password: password} = register("admin")
+
+    members =
+      for i <- 1..31 do
+        pad = i |> Integer.to_string() |> String.pad_leading(3, "0")
+
+        user =
+          %Tokengate.Accounts.User{}
+          |> Ecto.Changeset.change(%{
+            email: "member-#{pad}-#{unique()}@example.com",
+            name: "Member #{pad}",
+            password_hash: "not-a-real-hash",
+            global_role: "user"
+          })
+          |> Repo.insert!()
+
+        {:ok, m} = Accounts.create_group_member(%{user_id: user.id, group_id: group.id})
+        m
+      end
+
+    first = hd(members)
+    last = List.last(members)
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    assert has_element?(view, "#members-pagination")
+    assert has_element?(view, "#members-pagination-range", "1–30 de 31")
+    assert has_element?(view, "#members-#{first.id}")
+    refute has_element?(view, "#members-#{last.id}")
+
+    view |> element("#members-pagination-page-2") |> render_click()
+
+    assert has_element?(view, "#members-pagination-range", "31–31 de 31")
+    assert has_element?(view, "#members-#{last.id}")
+    refute has_element?(view, "#members-#{first.id}")
+  end
+
+  test "loads 30-day usage tiers asynchronously via start_async", %{conn: conn} do
+    %{group: group, member: member} = group_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    {:ok, _} =
+      Tokengate.Logs.log_request(%{
+        group_member_id: member.id,
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("12.00"),
+        prompt_tokens: 1000,
+        completion_tokens: 500,
+        latency_ms: 100
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    html = render_async(view)
+    assert html =~ "Alto"
   end
 end

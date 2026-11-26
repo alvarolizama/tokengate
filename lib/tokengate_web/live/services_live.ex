@@ -751,24 +751,12 @@ defmodule TokengateWeb.ServicesLive do
      |> assign(:supervisor_search_results, [])}
   end
 
+  def handle_event("search_supervisor_users", %{"supervisor_query" => query}, socket) do
+    do_search_supervisor_users(query, socket)
+  end
+
   def handle_event("search_supervisor_users", %{"value" => query}, socket) do
-    results =
-      if is_binary(query) and String.trim(query) != "" do
-        service_id = socket.assigns.supervisor_search_service_id
-        supervisor_ids = service_supervisor_user_ids(socket, service_id)
-
-        query
-        |> String.trim()
-        |> Accounts.search_users(25)
-        |> Enum.reject(fn user -> user.id in supervisor_ids end)
-      else
-        []
-      end
-
-    {:noreply,
-     socket
-     |> assign(:supervisor_search_query, query || "")
-     |> assign(:supervisor_search_results, results)}
+    do_search_supervisor_users(query, socket)
   end
 
   def handle_event("add_supervisor", %{"service-id" => service_id, "user-id" => user_id}, socket) do
@@ -818,6 +806,26 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   def handle_event("remove_supervisor", _params, socket), do: {:noreply, socket}
+
+  defp do_search_supervisor_users(query, socket) do
+    results =
+      if is_binary(query) and String.trim(query) != "" do
+        service_id = socket.assigns.supervisor_search_service_id
+        supervisor_ids = service_supervisor_user_ids(socket, service_id)
+
+        query
+        |> String.trim()
+        |> Accounts.search_users(25)
+        |> Enum.reject(fn user -> user.id in supervisor_ids end)
+      else
+        []
+      end
+
+    {:noreply,
+     socket
+     |> assign(:supervisor_search_query, query || "")
+     |> assign(:supervisor_search_results, results)}
+  end
 
   defp service_supervisor_user_ids(socket, service_id) do
     case Map.get(socket.assigns.supervisors_map, service_id, []) do
@@ -1157,7 +1165,7 @@ defmodule TokengateWeb.ServicesLive do
         <%!-- Models modal — manage model grants per service --%>
         <.modal
           :if={@models_service_id}
-          id="models-modal-#{@models_service_id}"
+          id={"models-modal-#{@models_service_id}"}
           title={gettext("Service models")}
           on_close="close_models"
         >
@@ -1243,15 +1251,24 @@ defmodule TokengateWeb.ServicesLive do
                   {gettext("revokes the access immediately.")}
                 </p>
               </div>
-              <button
-                phx-click="toggle_supervisor_form"
-                phx-value-service-id={@detail_service_id}
-                class="btn btn-ghost btn-xs"
-              >
-                {if @supervisor_search_service_id == @detail_service_id,
-                  do: gettext("Close"),
-                  else: gettext("Add supervisor")}
-              </button>
+              <div class="flex items-center gap-2 shrink-0">
+                <.link
+                  navigate={~p"/access/services/#{@detail_service_id}/members"}
+                  class="btn btn-ghost btn-xs"
+                  id="manage-service-members-link"
+                >
+                  {gettext("Manage members")}
+                </.link>
+                <button
+                  phx-click="toggle_supervisor_form"
+                  phx-value-service-id={@detail_service_id}
+                  class="btn btn-ghost btn-xs"
+                >
+                  {if @supervisor_search_service_id == @detail_service_id,
+                    do: gettext("Close"),
+                    else: gettext("Add supervisor")}
+                </button>
+              </div>
             </div>
 
             <div :if={supervisors == []} class="text-xs text-base-content/40">
@@ -1283,18 +1300,21 @@ defmodule TokengateWeb.ServicesLive do
             </div>
 
             <div :if={@supervisor_search_service_id == @detail_service_id} class="mt-3">
-              <%!-- `phx-keyup` es el mecanismo de este buscador (el handler
-                   recibe %{"value" => q}); el `phx-change` que estaba aquí
-                   sobraba y reventaba en el cliente en cada tecla (un
-                   phx-change exige un <form> alrededor). --%>
-              <.input
-                type="text"
-                name="supervisor_query"
-                value={@supervisor_search_query}
-                placeholder={gettext("Search by email or name…")}
-                phx-keyup="search_supervisor_users"
-                id="supervisor-search"
-              />
+              <form
+                id="supervisor-search-form"
+                phx-change="search_supervisor_users"
+                phx-submit="search_supervisor_users"
+              >
+                <.input
+                  type="text"
+                  name="supervisor_query"
+                  value={@supervisor_search_query}
+                  placeholder={gettext("Search by email or name…")}
+                  phx-debounce="250"
+                  autocomplete="off"
+                  id="supervisor-search"
+                />
+              </form>
               <div
                 :if={@supervisor_search_query != "" and @supervisor_search_results == []}
                 class="text-xs text-base-content/40 mt-2"
@@ -1431,6 +1451,16 @@ defmodule TokengateWeb.ServicesLive do
               </span>
             </:col>
             <:action :let={service}>
+              <.link
+                navigate={~p"/access/services/#{service.id}/members"}
+                class="btn btn-xs btn-ghost gap-1"
+                id={"members-link-#{service.id}"}
+                title={gettext("Members")}
+                aria-label={gettext("Members")}
+              >
+                <.icon name="hero-users" class="w-3 h-3" />
+                <span>{length(Map.get(@supervisors_map, service.id, []))}</span>
+              </.link>
               <.link
                 navigate={~p"/stats/services/#{service.id}"}
                 class="btn btn-xs btn-ghost"

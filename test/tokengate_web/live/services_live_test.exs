@@ -67,8 +67,8 @@ defmodule TokengateWeb.ServicesLiveTest do
 
     # Search for the user
     view
-    |> element("input[name='supervisor_query']")
-    |> render_keyup(%{"value" => user.email})
+    |> element("#supervisor-search-form")
+    |> render_change(%{"supervisor_query" => user.email})
 
     # Click the user result
     view
@@ -861,5 +861,35 @@ defmodule TokengateWeb.ServicesLiveTest do
     refute html =~ "Something went wrong"
     assert has_element?(view, "#new-service-btn")
     refute Enum.any?(Accounts.list_services(), &String.starts_with?(&1.name, "Late "))
+  end
+
+  test "service row and detail modal link to /access/services/:id/members and models modal has valid id",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    service = service_fixture()
+    %{user: sup} = register("user")
+    {:ok, _} = Accounts.add_service_supervisor(service.id, sup.id)
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    assert has_element?(
+             view,
+             "#members-link-#{service.id}[href=\"/access/services/#{service.id}/members\"]",
+             "1"
+           )
+
+    view |> element("#detail-#{service.id}") |> render_click()
+    assert has_element?(view, "#service-detail-modal")
+
+    assert has_element?(
+             view,
+             "#manage-service-members-link[href=\"/access/services/#{service.id}/members\"]"
+           )
+
+    view |> element("#close-detail-btn") |> render_click()
+
+    view |> element("#edit-models-#{service.id}") |> render_click()
+    assert has_element?(view, "#models-modal-#{service.id}")
   end
 end

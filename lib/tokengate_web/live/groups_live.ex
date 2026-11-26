@@ -17,12 +17,17 @@ defmodule TokengateWeb.GroupsLive do
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
+  import TokengateWeb.AdminComponents
   alias Tokengate.Accounts
   alias Tokengate.Accounts.{Group, GroupMember}
   alias Tokengate.Budgets
   alias Tokengate.Providers
   alias Tokengate.Providers.{Model, GroupModel}
   alias Tokengate.Repo
+  alias TokengateWeb.StatsHelpers, as: Stats
+
+  @per_page 30
+  @sort_columns ~w(name members spend)a
 
   @impl true
   def mount(_params, _session, socket) do
@@ -42,7 +47,15 @@ defmodule TokengateWeb.GroupsLive do
         |> assign(:form, nil)
         |> assign(:editing_group_id, nil)
         |> assign(:editing_models_group_id, nil)
-        |> assign(:group_search, "")
+        |> assign(:delete_target_id, nil)
+        |> assign(:delete_target_name, nil)
+        |> assign(:search_query, "")
+        |> assign(:sort_field, :name)
+        |> assign(:sort_direction, :asc)
+        |> assign(:page, 1)
+        |> assign(:per_page, @per_page)
+        |> assign(:total_count, 0)
+        |> assign(:total_pages, 1)
         |> load_groups()
 
       {:ok, socket}
@@ -64,26 +77,43 @@ defmodule TokengateWeb.GroupsLive do
 
   ## Data loading ---------------------------------------------------------
 
-  # Loads the full dataset ONCE per mount (and after data mutations that
-  # change groups themselves). Search and modal toggles must NOT come through
-  # here — they filter in-memory / touch no data (see the assign-only handlers).
   defp load_groups(socket) do
-    groups =
-      from(t in Group, order_by: [asc: t.name])
-      |> Repo.all()
+    page =
+      Accounts.list_groups_page(
+        search: socket.assigns[:search_query] || "",
+        page: socket.assigns.page,
+        per_page: socket.assigns.per_page,
+        sort_field: socket.assigns.sort_field,
+        sort_direction: socket.assigns.sort_direction
+      )
+
+    groups = page.entries
+    group_ids = Enum.map(groups, & &1.id)
 
     member_counts =
-      from(gm in GroupMember,
-        group_by: gm.group_id,
-        select: {gm.group_id, count(gm.id)}
-      )
-      |> Repo.all()
-      |> Map.new()
+      if group_ids == [] do
+        %{}
+      else
+        from(gm in GroupMember,
+          where: gm.group_id in ^group_ids,
+          group_by: gm.group_id,
+          select: {gm.group_id, count(gm.id)}
+        )
+        |> Repo.all()
+        |> Map.new()
+      end
 
     granted_models =
-      from(tma in GroupModel, select: {tma.group_id, tma.model_id})
-      |> Repo.all()
-      |> Enum.group_by(fn {group_id, _} -> group_id end, fn {_, model_id} -> model_id end)
+      if group_ids == [] do
+        %{}
+      else
+        from(tma in GroupModel,
+          where: tma.group_id in ^group_ids,
+          select: {tma.group_id, tma.model_id}
+        )
+        |> Repo.all()
+        |> Enum.group_by(fn {group_id, _} -> group_id end, fn {_, model_id} -> model_id end)
+      end
 
     models_by_org =
       from(ma in Model, order_by: [asc: ma.name])
@@ -98,41 +128,125 @@ defmodule TokengateWeb.GroupsLive do
       |> Budgets.list_group_budgets()
       |> Map.new(fn budget -> {budget.group.id, budget} end)
 
+    sorted_groups =
+      if socket.assigns.sort_field in Accounts.group_page_sql_sorts() do
+        groups
+      else
+        sort_groups(
+          groups,
+          socket.assigns.sort_field,
+          socket.assigns.sort_direction,
+          member_counts,
+          group_budgets
+        )
+      end
+
     socket
     |> assign(:all_groups, groups)
-    |> stream_groups()
-    |> assign(:groups_empty?, groups == [])
     |> assign(:member_counts, member_counts)
     |> assign(:granted_models, granted_models)
     |> assign(:models_by_org, models_by_org)
     |> assign(:group_budgets, group_budgets)
+    |> assign(:page, page.page)
+    |> assign(:total_count, page.total)
+    |> assign(:total_pages, page.total_pages)
+    |> assign(:groups_empty?, page.total == 0)
+    |> stream(:groups, sorted_groups, reset: true)
   end
 
-  # Re-streams the (already loaded) groups filtered by the current search.
-  # Pure assign work: zero queries.
-  defp stream_groups(socket) do
-    search = socket.assigns[:group_search] || ""
-    search_down = String.downcase(search)
+  defp sort_groups(groups, field, direction, member_counts, group_budgets) do
+    Enum.sort_by(
+      groups,
+      fn g ->
+        {sort_value(g, field, member_counts, group_budgets), String.downcase(g.name || "")}
+      end,
+      fn {val_a, name_a}, {val_b, name_b} ->
+        case compare_sort_values(val_a, val_b, direction) do
+          :eq -> name_a <= name_b
+          order -> order == :lt
+        end
+      end
+    )
+  end
 
-    filtered =
-      Enum.filter(socket.assigns.all_groups, fn t ->
-        search == "" or String.contains?(String.downcase(t.name), search_down)
-      end)
+  defp sort_value(g, :members, member_counts, _group_budgets),
+    do: Map.get(member_counts, g.id, 0)
 
-    socket
-    |> stream(:groups, filtered, reset: true)
-    |> assign(:groups_empty?, filtered == [])
+  defp sort_value(g, :spend, _member_counts, group_budgets),
+    do: get_spend(g, group_budgets)
+
+  defp sort_value(g, _field, _member_counts, _group_budgets),
+    do: String.downcase(g.name || "")
+
+  defp compare_vals(%Decimal{} = a, %Decimal{} = b), do: Decimal.compare(a, b)
+
+  defp compare_vals(a, b) do
+    cond do
+      a < b -> :lt
+      a > b -> :gt
+      true -> :eq
+    end
+  end
+
+  defp compare_sort_values(a, b, direction) do
+    case {compare_vals(a, b), direction} do
+      {:eq, _} -> :eq
+      {:lt, :asc} -> :lt
+      {:lt, :desc} -> :gt
+      {:gt, :asc} -> :gt
+      {:gt, :desc} -> :lt
+    end
+  end
+
+  ## Events — search / sort / pagination -----------------------------------
+
+  @impl true
+  def handle_event("search_groups", %{"q" => search}, socket) do
+    {:noreply,
+     socket
+     |> assign(:search_query, search)
+     |> assign(:page, 1)
+     |> load_groups()}
+  end
+
+  def handle_event("search_groups", %{"group_search" => search}, socket) do
+    {:noreply,
+     socket
+     |> assign(:search_query, search)
+     |> assign(:page, 1)
+     |> load_groups()}
+  end
+
+  def handle_event("go_to_page", %{"page" => page}, socket) do
+    {:noreply,
+     socket
+     |> assign(:page, parse_page(page))
+     |> load_groups()}
+  end
+
+  def handle_event("sort_groups", %{"field" => field}, socket) do
+    with {:ok, field} <- to_sort_field(field),
+         true <- field in @sort_columns do
+      {sort_field, sort_direction} =
+        if socket.assigns.sort_field == field do
+          {field, toggle_sort_direction(socket.assigns.sort_direction)}
+        else
+          {field, default_direction_for(field)}
+        end
+
+      {:noreply,
+       socket
+       |> assign(:sort_field, sort_field)
+       |> assign(:sort_direction, sort_direction)
+       |> assign(:page, 1)
+       |> load_groups()}
+    else
+      _ -> {:noreply, socket}
+    end
   end
 
   ## Events — group CRUD ---------------------------------------------------
 
-  @impl true
-  def handle_event("search_groups", %{"group_search" => search}, socket) do
-    # Groups are already in memory — filter + re-stream, no queries.
-    {:noreply, socket |> assign(:group_search, search) |> stream_groups()}
-  end
-
-  @impl true
   def handle_event("new_group", _params, socket) do
     changeset = Accounts.change_group(%Group{})
 
@@ -182,10 +296,28 @@ defmodule TokengateWeb.GroupsLive do
     save_group(socket, socket.assigns.editing_group_id, group_params)
   end
 
+  def handle_event("open_delete_modal", %{"id" => group_id, "name" => name}, socket) do
+    {:noreply,
+     socket
+     |> assign(:delete_target_id, group_id)
+     |> assign(:delete_target_name, name)}
+  end
+
+  def handle_event("cancel_delete", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:delete_target_id, nil)
+     |> assign(:delete_target_name, nil)}
+  end
+
   def handle_event("delete_group", %{"id" => group_id}, socket) do
     case fetch_group(group_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, gettext("Limit profile not found."))}
+        {:noreply,
+         socket
+         |> assign(:delete_target_id, nil)
+         |> assign(:delete_target_name, nil)
+         |> put_flash(:error, gettext("Limit profile not found."))}
 
       group ->
         delete_group(socket, group)
@@ -212,13 +344,21 @@ defmodule TokengateWeb.GroupsLive do
   ## Private helpers — save ----------------------------------------------
 
   # Surgical refresh: only the table that actually changed, instead of the
-  # full load_groups() (groups + members + models + destinations + 2 spend
-  # aggregates).
+  # full load_groups().
   defp refresh_granted_models(socket, group_id) do
+    group_ids = Enum.map(socket.assigns.all_groups, & &1.id)
+
     granted_models =
-      from(tma in GroupModel, select: {tma.group_id, tma.model_id})
-      |> Repo.all()
-      |> Enum.group_by(fn {group_id, _} -> group_id end, fn {_, model_id} -> model_id end)
+      if group_ids == [] do
+        %{}
+      else
+        from(tma in GroupModel,
+          where: tma.group_id in ^group_ids,
+          select: {tma.group_id, tma.model_id}
+        )
+        |> Repo.all()
+        |> Enum.group_by(fn {gid, _} -> gid end, fn {_, model_id} -> model_id end)
+      end
 
     socket = assign(socket, :granted_models, granted_models)
 
@@ -238,6 +378,8 @@ defmodule TokengateWeb.GroupsLive do
         {:noreply,
          socket
          |> put_flash(:info, gettext("Limit profile deleted."))
+         |> assign(:delete_target_id, nil)
+         |> assign(:delete_target_name, nil)
          |> load_groups()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
@@ -246,10 +388,18 @@ defmodule TokengateWeb.GroupsLive do
           |> Enum.map(fn {field, {message, _}} -> "#{field} #{message}" end)
           |> Enum.join(", ")
 
-        {:noreply, put_flash(socket, :error, gettext("Could not delete: %{reason}", reason: msg))}
+        {:noreply,
+         socket
+         |> assign(:delete_target_id, nil)
+         |> assign(:delete_target_name, nil)
+         |> put_flash(:error, gettext("Could not delete: %{reason}", reason: msg))}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Could not delete the limit profile."))}
+        {:noreply,
+         socket
+         |> assign(:delete_target_id, nil)
+         |> assign(:delete_target_name, nil)
+         |> put_flash(:error, gettext("Could not delete the limit profile."))}
     end
   end
 
@@ -354,6 +504,28 @@ defmodule TokengateWeb.GroupsLive do
 
   ## Template helpers -----------------------------------------------------
 
+  defp to_sort_field(field) when is_binary(field) do
+    {:ok, String.to_existing_atom(field)}
+  rescue
+    ArgumentError -> :error
+  end
+
+  defp parse_page(page) when is_binary(page) do
+    case Integer.parse(page) do
+      {i, ""} when i > 0 -> i
+      _ -> 1
+    end
+  end
+
+  defp parse_page(page) when is_integer(page) and page > 0, do: page
+  defp parse_page(_), do: 1
+
+  defp toggle_sort_direction(:asc), do: :desc
+  defp toggle_sort_direction(:desc), do: :asc
+
+  defp default_direction_for(field) when field in [:members, :spend], do: :desc
+  defp default_direction_for(_), do: :asc
+
   def format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
   def format_decimal(nil), do: "—"
   def format_decimal(value), do: to_string(value)
@@ -374,24 +546,13 @@ defmodule TokengateWeb.GroupsLive do
           {gettext("Limit profiles")}
           <:subtitle>{gettext("Manage the limit profiles: cap, top-ups and models")}</:subtitle>
           <:actions>
-            <div class="flex items-center gap-2">
-              <%!-- Un `phx-change` exige que el input viva dentro de un <form>:
-                   sin él, LiveView lanza "form events require the input to be
-                   inside a form" y el buscador nunca llega al servidor. --%>
-              <form
-                id="groups-search-form"
-                phx-change="search_groups"
-                phx-submit="search_groups"
-                phx-debounce="200"
-              >
-                <input
-                  type="text"
-                  name="group_search"
-                  value={@group_search}
-                  placeholder={gettext("Search limit profile…")}
-                  class="input input-sm w-48"
-                />
-              </form>
+            <div class="flex flex-wrap items-center gap-3">
+              <.admin_search
+                event="search_groups"
+                value={@search_query}
+                placeholder={gettext("Search profile…")}
+                input_id="group-search"
+              />
               <.button phx-click="new_group" id="new-group-btn">
                 <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New limit profile")}
               </.button>
@@ -489,10 +650,30 @@ defmodule TokengateWeb.GroupsLive do
               class="btn btn-primary btn-sm"
               id="close-models-btn"
             >
-              Listo
+              {gettext("Done")}
             </button>
           </:footer>
         </.modal>
+
+        <%!-- Delete confirmation modal --%>
+        <.admin_delete_modal
+          :if={@delete_target_id}
+          id="delete-group-modal"
+          on_close="cancel_delete"
+          title={gettext("Delete limit profile")}
+          target_label={@delete_target_name}
+          target_span_id="delete-group-name"
+          confirm_event="delete_group"
+          confirm_value={@delete_target_id}
+          confirm_button_id="confirm-delete-group"
+          cancel_button_id="cancel-delete-group"
+          warning_intro={gettext("Will be permanently erased:")}
+          warning_items={[
+            gettext("Limit profile memberships and member model overrides"),
+            gettext("The models granted to the limit profile"),
+            gettext("API keys associated with those memberships")
+          ]}
+        />
 
         <%!-- Listado: una fila por perfil de límites (antes eran cards). --%>
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
@@ -501,9 +682,12 @@ defmodule TokengateWeb.GroupsLive do
             rows={@streams.groups}
             row_item={fn {_id, group} -> group end}
             row_class="align-top"
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
+            sort_event="sort_groups"
             empty?={@groups_empty?}
           >
-            <:col :let={group} label={gettext("Limit profile")}>
+            <:col :let={group} label={gettext("Limit profile")} field={:name}>
               <p class="font-medium text-sm text-base-content truncate max-w-72">{group.name}</p>
               <div class="flex items-center gap-1.5 mt-1 flex-wrap">
                 <button
@@ -518,8 +702,15 @@ defmodule TokengateWeb.GroupsLive do
                 </button>
               </div>
             </:col>
-            <:col :let={group} label={gettext("Members")} align="right">
-              <span class="font-mono text-sm">{Map.get(@member_counts, group.id, 0)}</span>
+            <:col :let={group} label={gettext("Members")} field={:members} align="right">
+              <.link
+                navigate={~p"/budget/profiles/#{group}/members"}
+                class="link link-hover font-mono text-sm tabular-nums"
+                id={"members-count-link-#{group.id}"}
+                title={gettext("Manage members")}
+              >
+                {Map.get(@member_counts, group.id, 0)}
+              </.link>
             </:col>
             <:col :let={group} label={gettext("Limits")} align="right">
               <div class="text-xs whitespace-nowrap">
@@ -533,18 +724,48 @@ defmodule TokengateWeb.GroupsLive do
                 </p>
               </div>
             </:col>
-            <:col :let={group} label={gettext("Spend/month")} align="right">
-              <% credit = group_credit(group, @group_budgets) %>
+            <:col :let={group} label={gettext("Spend/month")} field={:spend} align="right">
+              <% budget = Map.get(@group_budgets, group.id) %>
               <p class="font-mono text-sm">${format_decimal(get_spend(group, @group_budgets))}</p>
-              <div
-                id={"group-credit-#{group.id}"}
-                class="text-[11px] whitespace-nowrap"
-                title={credit.label}
-              >
-                <span class={["font-medium", credit.class]}>{credit.value}</span>
+              <div id={"group-credit-#{group.id}"} class="mt-1">
+                <%= cond do %>
+                  <% group.unlimited_spend -> %>
+                    <span
+                      class="badge badge-sm badge-success badge-outline"
+                      title={gettext("Marked unlimited: no monthly ceiling")}
+                    >
+                      {gettext("Unlimited")}
+                    </span>
+                  <% is_nil(budget) or is_nil(budget.monthly_limit_usd) -> %>
+                    <span
+                      class="badge badge-sm badge-warning badge-outline"
+                      title={gettext("No monthly budget")}
+                    >
+                      {gettext("No budget")}
+                    </span>
+                  <% true -> %>
+                    <div class="flex items-center justify-end gap-2 min-w-[150px]">
+                      <Stats.budget_bar
+                        compact
+                        spend={budget.monthly_spend_usd}
+                        limit={budget.monthly_limit_usd}
+                        pct={budget.monthly_pct}
+                      />
+                      <Stats.budget_badge pct={budget.monthly_pct} />
+                    </div>
+                <% end %>
               </div>
             </:col>
             <:action :let={group}>
+              <.link
+                navigate={~p"/stats/profiles/#{group.id}"}
+                class="btn btn-xs btn-ghost"
+                id={"stats-#{group.id}"}
+                title={gettext("View stats")}
+                aria-label={gettext("View stats")}
+              >
+                <.icon name="hero-chart-bar" class="w-3.5 h-3.5" />
+              </.link>
               <.link
                 navigate={~p"/budget/profiles/#{group}/members"}
                 class="btn btn-xs btn-ghost gap-1"
@@ -563,12 +784,12 @@ defmodule TokengateWeb.GroupsLive do
                 <.icon name="hero-pencil-square" class="w-3.5 h-3.5" /> {gettext("Edit")}
               </button>
               <button
-                phx-click="delete_group"
+                phx-click="open_delete_modal"
                 phx-value-id={group.id}
+                phx-value-name={group.name}
                 class="btn btn-xs btn-ghost text-error gap-1"
                 id={"delete-#{group.id}"}
                 title={gettext("Delete")}
-                data-confirm={gettext("Delete limit profile? This action cannot be undone.")}
               >
                 <.icon name="hero-trash" class="w-3.5 h-3.5" /> {gettext("Delete")}
               </button>
@@ -578,6 +799,13 @@ defmodule TokengateWeb.GroupsLive do
               <p>{gettext("No limit profiles yet.")}</p>
             </:empty>
           </.table>
+          <.admin_pagination
+            id="groups-pagination"
+            page={@page}
+            per_page={@per_page}
+            total={@total_count}
+            total_pages={@total_pages}
+          />
         </div>
       </div>
     </Layouts.dashboard>
@@ -591,35 +819,4 @@ defmodule TokengateWeb.GroupsLive do
     |> Map.get(group.id, %{})
     |> Map.get(:real_monthly_spend_usd, Decimal.new(0))
   end
-
-  # Límite de la sub para la tarjeta. El número que se edita es el límite de la
-  # propia sub, pero ese valor lo HEREDA cada miembro (no es un pozo común), así
-  # que el consumo agregado contra ese número mediría cosas distintas. La barra
-  # usa el rollup de `Budgets` —suma de los límites efectivos de los miembros
-  # contra la suma de su gasto debitado—, que es la misma definición que /stats
-  # y hace que numerador, denominador y % sean coherentes.
-  defp group_credit(group, group_budgets) do
-    budget = Map.get(group_budgets, group.id)
-
-    cond do
-      group.unlimited_spend ->
-        %{label: gettext("Monthly budget"), value: "ilimitado", class: "text-success"}
-
-      is_nil(budget) or is_nil(budget.monthly_limit_usd) ->
-        %{label: gettext("Monthly budget"), value: gettext("No budget"), class: "text-warning"}
-
-      true ->
-        %{
-          label: gettext("Monthly budget"),
-          value:
-            "#{format_decimal(budget.monthly_spend_usd)} / #{format_decimal(budget.monthly_limit_usd)}",
-          class: credit_class(budget.monthly_pct)
-        }
-    end
-  end
-
-  defp credit_class(nil), do: "text-base-content/60"
-  defp credit_class(pct) when pct >= 100, do: "text-error"
-  defp credit_class(pct) when pct >= 80, do: "text-warning"
-  defp credit_class(_pct), do: "text-success"
 end
