@@ -43,6 +43,7 @@ defmodule TokengateWeb.ProviderKeysLive do
           |> assign(:page_title, gettext("API keys") <> " · " <> provider.name)
           |> assign(:provider, provider)
           |> assign(:credential_form, nil)
+          |> assign(:limits_form, nil)
           |> assign(:editing_credential_id, nil)
           |> assign(:is_admin, user && user.global_role == "admin")
           |> assign(:credential_inflight, %{})
@@ -225,6 +226,45 @@ defmodule TokengateWeb.ProviderKeysLive do
   def handle_event("delete_credential", %{"id" => cred_id}, socket) do
     with_credential(socket, cred_id, &delete_credential/2)
   end
+
+  def handle_event("edit_provider_limits", _params, socket) do
+    changeset = Providers.change_provider(socket.assigns.provider)
+    {:noreply, assign(socket, :limits_form, to_form(changeset, as: :provider))}
+  end
+
+  def handle_event("cancel_provider_limits", _params, socket) do
+    {:noreply, assign(socket, :limits_form, nil)}
+  end
+
+  def handle_event("save_provider_limits", %{"provider" => params}, socket) do
+    attrs =
+      Map.take(params, [
+        "max_rpm",
+        "max_concurrent",
+        "max_concurrent_per_user",
+        "receive_timeout_ms"
+      ])
+
+    case Providers.update_provider(socket.assigns.provider, attrs) do
+      {:ok, updated} ->
+        audit(socket, "provider.update", "provider", updated.id, %{
+          "name" => updated.name,
+          "changes" => attrs
+        })
+
+        {:noreply,
+         socket
+         |> assign(:provider, updated)
+         |> assign(:limits_form, nil)
+         |> put_flash(:info, gettext("Provider updated."))}
+
+      {:error, changeset} ->
+        {:noreply,
+         assign(socket, :limits_form, to_form(%{changeset | action: :validate}, as: :provider))}
+    end
+  end
+
+  def handle_event("save_provider_limits", _params, socket), do: {:noreply, socket}
 
   # Stale clients (a row removed in another tab, a replayed event) must not
   # crash the page.
@@ -489,25 +529,28 @@ defmodule TokengateWeb.ProviderKeysLive do
             · <code class="font-mono">{@provider.base_url}</code>
           </:subtitle>
           <:actions>
-            <.link
-              navigate={~p"/catalog/providers"}
-              class="btn btn-ghost btn-sm"
-              id="back-to-providers"
-            >
-              <.icon name="hero-arrow-left" class="w-4 h-4" /> {gettext("Providers")}
-            </.link>
-            <.button
-              phx-click="new_credential"
-              phx-value-provider_id={@provider.id}
-              id={"new-credential-#{@provider.id}"}
-            >
-              <.icon name="hero-plus" class="w-4 h-4" /> {gettext("API key")}
-            </.button>
+            <div class="flex flex-wrap items-center gap-2">
+              <.link
+                navigate={~p"/catalog/providers"}
+                class="btn btn-ghost btn-sm"
+                id="back-to-providers"
+              >
+                <.icon name="hero-arrow-left" class="w-4 h-4" /> {gettext("Providers")}
+              </.link>
+              <.button
+                phx-click="new_credential"
+                phx-value-provider_id={@provider.id}
+                id={"new-credential-#{@provider.id}"}
+                class="btn btn-primary btn-soft btn-sm"
+              >
+                <.icon name="hero-plus" class="w-4 h-4" /> {gettext("API key")}
+              </.button>
+            </div>
           </:actions>
         </.header>
 
-        <%!-- Provider-level limits: every key below inherits them, so they are
-             read-only here and edited in the providers table. --%>
+        <%!-- Provider-level limits: every key below inherits them; operators can
+             tune them inline via the Edit button. --%>
         <div class="flex flex-wrap items-center gap-1.5" id="keys-provider-limits">
           <span class="text-[10px] uppercase tracking-wide text-base-content/40">
             {gettext("Inherited limits")}
@@ -524,14 +567,75 @@ defmodule TokengateWeb.ProviderKeysLive do
           <span class="badge badge-ghost badge-sm font-mono" title={gettext("Receive timeout")}>
             {Tokengate.Providers.ProviderLimits.receive_timeout_ms(@provider)} ms
           </span>
-          <.link
-            navigate={~p"/catalog/providers"}
-            class="text-xs link link-hover ml-1"
+          <button
+            type="button"
+            phx-click="edit_provider_limits"
+            class="btn btn-xs btn-ghost ml-1"
             id="edit-provider-limits"
+            title={gettext("Edit inherited limits")}
           >
-            {gettext("Edit")}
-          </.link>
+            <.icon name="hero-pencil-square" class="w-3.5 h-3.5" /> {gettext("Edit")}
+          </button>
         </div>
+
+        <.modal
+          :if={@limits_form}
+          id="provider-limits-modal"
+          title={gettext("Provider limits")}
+          on_close="cancel_provider_limits"
+          max_w="max-w-2xl"
+        >
+          <p class="text-xs text-base-content/50 mb-3">
+            {gettext(
+              "They apply to every API key of this provider, which inherits them. Empty = no limit."
+            )}
+          </p>
+          <.form for={@limits_form} id="provider-limits-form" phx-submit="save_provider_limits">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
+              <.input
+                field={@limits_form[:max_rpm]}
+                type="number"
+                label="Max RPM"
+                hint={gettext("Requests per minute across the provider. Empty = no limit.")}
+              />
+              <.input
+                field={@limits_form[:max_concurrent]}
+                type="number"
+                label={gettext("Max concurrency")}
+                hint={gettext("Concurrent requests across the provider. Empty = no limit.")}
+              />
+              <.input
+                field={@limits_form[:max_concurrent_per_user]}
+                type="number"
+                label={gettext("Max concurrency per user")}
+                hint={gettext("Concurrent cap per user. Empty = no limit.")}
+              />
+              <.input
+                field={@limits_form[:receive_timeout_ms]}
+                type="number"
+                label="Timeout (ms)"
+                hint={
+                  gettext("Max wait per response. Empty = global default (%{ms} ms).",
+                    ms: Tokengate.Providers.ProviderLimits.default_receive_timeout_ms()
+                  )
+                }
+              />
+            </div>
+            <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
+              <button
+                type="button"
+                phx-click="cancel_provider_limits"
+                class="btn btn-ghost btn-sm"
+                id="cancel-provider-limits-btn"
+              >
+                {gettext("Cancel")}
+              </button>
+              <button type="submit" class="btn btn-primary btn-sm" id="save-provider-limits-btn">
+                {gettext("Save")}
+              </button>
+            </div>
+          </.form>
+        </.modal>
 
         <%!-- Credential form (create / edit) — modal --%>
         <.modal
@@ -640,8 +744,10 @@ defmodule TokengateWeb.ProviderKeysLive do
                   phx-value-id={cred.id}
                   class="btn btn-xs btn-ghost"
                   id={"reset-breaker-#{cred.id}"}
+                  title={gettext("Reset circuit breaker")}
+                  aria-label={gettext("Reset circuit breaker")}
                 >
-                  <.icon name="hero-arrow-path" class="w-3 h-3" /> Reset
+                  <.icon name="hero-arrow-path" class="w-3.5 h-3.5" /> {gettext("Reset")}
                 </button>
               </div>
             </:col>
@@ -650,10 +756,12 @@ defmodule TokengateWeb.ProviderKeysLive do
                 <button
                   phx-click="reactivate_credential"
                   phx-value-id={cred.id}
-                  class="btn btn-xs btn-ghost btn-warning"
+                  class="btn btn-xs btn-ghost text-warning"
                   id={"reactivate-credential-#{cred.id}"}
+                  title={gettext("Reactivate")}
+                  aria-label={gettext("Reactivate")}
                 >
-                  <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Reactivate")}
+                  <.icon name="hero-arrow-path" class="w-3.5 h-3.5" />
                 </button>
               <% else %>
                 <button
@@ -666,10 +774,15 @@ defmodule TokengateWeb.ProviderKeysLive do
                       do: gettext("Disable"),
                       else: gettext("Enable")
                   }
+                  aria-label={
+                    if cred.status == "active",
+                      do: gettext("Disable"),
+                      else: gettext("Enable")
+                  }
                 >
                   <.icon
                     name={if cred.status == "active", do: "hero-pause", else: "hero-play"}
-                    class="w-3 h-3"
+                    class="w-3.5 h-3.5"
                   />
                 </button>
               <% end %>
@@ -678,8 +791,10 @@ defmodule TokengateWeb.ProviderKeysLive do
                 phx-value-id={cred.id}
                 class="btn btn-xs btn-ghost"
                 id={"edit-credential-#{cred.id}"}
+                title={gettext("Edit")}
+                aria-label={gettext("Edit")}
               >
-                <.icon name="hero-pencil-square" class="w-3 h-3" /> {gettext("Edit")}
+                <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
               </button>
               <button
                 phx-click="delete_credential"
@@ -687,8 +802,10 @@ defmodule TokengateWeb.ProviderKeysLive do
                 data-confirm={gettext("Delete this credential?")}
                 class="btn btn-xs btn-ghost text-error"
                 id={"delete-credential-#{cred.id}"}
+                title={gettext("Delete")}
+                aria-label={gettext("Delete")}
               >
-                {gettext("Delete")}
+                <.icon name="hero-trash" class="w-3.5 h-3.5" />
               </button>
             </:action>
             <:empty>

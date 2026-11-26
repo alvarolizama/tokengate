@@ -31,6 +31,7 @@ defmodule TokengateWeb.ModelsLive do
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
+  import TokengateWeb.AdminComponents
 
   # Las piezas compartidas con la página del modelo (descubrimiento de modelos
   # del proveedor, dom_key, máscara de key, formatters) viven en ModelPicker.
@@ -124,13 +125,30 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:provider_form_provider_key, nil)
       |> assign(:provider_credentials, nil)
       |> assign(:credential_form, nil)
-      |> load_models()
+      |> assign(:search_query, "")
+      |> assign(:filter_type, "all")
+      |> assign(:sort_field, nil)
+      |> assign(:sort_direction, :asc)
+      |> assign(:delete_target, nil)
+      |> assign(:all_models, [])
+      |> assign(:active_model_types, [])
       |> load_labs()
+      |> load_models_data()
       |> assign_form_data()
       |> assign_credential_choices()
       |> assign_scope_data()
 
     {:ok, socket}
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    q = Map.get(params, "q") || ""
+
+    {:noreply,
+     socket
+     |> assign(:search_query, q)
+     |> stream_models()}
   end
 
   ## Data loading ---------------------------------------------------------
@@ -157,81 +175,105 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  # Una fila por modelo: el stream lleva SÓLO modelos (el `.table` dibuja un
-  # `<tr>` por item y no sabe de filas separadoras). La etiqueta de la sección
-  # viaja en `@model_sections` (model.id → meta) y la pinta la primera celda del
-  # modelo que abre el grupo.
-  defp load_models(socket) do
-    models =
-      aliases_with_providers_query()
-      |> Repo.all()
-      # El SQL deja el orden de los LANES precargados por modelo (scope →
-      # priority); el orden de la LISTA es visual y va aquí: Fijados primero,
-      # luego cada tipo en orden canónico, alfabético dentro del grupo.
-      |> Enum.sort_by(&{not &1.pinned, type_rank(&1.model_type), String.downcase(&1.name)})
-
-    socket
-    |> stream(:models, models, reset: true, dom_id: & &1.id)
-    |> assign(:model_sections, model_group_headers(models))
-    |> assign(:models_empty?, models == [])
-  end
-
-  # -- Agrupación del listado por tipo ---------------------------------------
-  #
-  # El stream es UNA lista plana de modelos y `.table` dibuja un `<tr>` por
-  # item (sin filas separadoras ni colspan), así que la agrupación visual viaja
-  # como `model.id → meta`: la primera celda del modelo que abre sección pinta
-  # la etiqueta del grupo con su conteo. No hay filtro: el listado sigue
-  # completo.
-
   # Orden canónico de tipos = el del picker de alta (`model_type_choices/0`),
   # crudo porque un atributo de módulo no puede evaluar gettext.
   @type_order ~w(llm embedding decision stt tts image)
 
-  defp type_rank(type), do: Enum.find_index(@type_order, &(&1 == type)) || length(@type_order)
+  @sort_fields %{
+    "name" => :name,
+    "model_type" => :model_type,
+    "keys" => :keys,
+    "providers" => :providers
+  }
 
-  # 1er pase: conteo por sección (pinned es sección propia; el resto su tipo).
-  # 2o pase: el PRIMER modelo de cada sección abre el separador — la marca es
-  # por KEY DE SECCIÓN, no por model id (dos filas nunca comparten id, pero
-  # todas las de un grupo sí comparten sección: el check equivocado duplicaría
-  # el separador —y su DOM id— en cada fila del grupo).
-  defp model_group_headers(models) do
-    counts = Enum.frequencies_by(models, &section_key/1)
+  defp load_models(socket) do
+    socket
+    |> load_models_data()
+    |> stream_models()
+  end
 
-    {meta_list, _seen} =
-      Enum.map_reduce(models, %{}, fn model, seen ->
-        key = section_key(model)
+  defp load_models_data(socket) do
+    models =
+      aliases_with_providers_query()
+      |> Repo.all()
 
-        if Map.has_key?(seen, key) do
-          {nil, seen}
-        else
-          {section_meta(key, Map.fetch!(counts, key)), Map.put(seen, key, true)}
-        end
+    socket
+    |> assign(:all_models, models)
+    |> assign(:active_model_types, compute_active_model_types(models))
+  end
+
+  defp stream_models(socket) do
+    models =
+      socket.assigns.all_models
+      |> filter_models_by_type(socket.assigns.filter_type)
+      |> filter_models_by_query(socket.assigns.search_query, socket.assigns.labs_by_key)
+      |> sort_models(socket.assigns.sort_field, socket.assigns.sort_direction)
+
+    socket
+    |> stream(:models, models, reset: true, dom_id: & &1.id)
+    |> assign(:models_empty?, models == [])
+  end
+
+  defp compute_active_model_types(models) do
+    counts = Enum.frequencies_by(models, & &1.model_type)
+
+    model_type_choices()
+    |> Enum.flat_map(fn {label, type, _icon} ->
+      case Map.get(counts, type, 0) do
+        0 -> []
+        count -> [{type, label, count}]
+      end
+    end)
+  end
+
+  defp filter_models_by_type(models, "all"), do: models
+  defp filter_models_by_type(models, nil), do: models
+
+  defp filter_models_by_type(models, type) do
+    Enum.filter(models, &(&1.model_type == type))
+  end
+
+  defp filter_models_by_query(models, query, labs_by_key) do
+    needle = query |> to_string() |> String.trim() |> String.downcase()
+
+    if needle == "" do
+      models
+    else
+      Enum.filter(models, fn model ->
+        lab = Map.get(labs_by_key || %{}, model.lab_key)
+        lab_name = if lab, do: lab.name, else: ""
+
+        String.contains?(String.downcase(model.name || ""), needle) or
+          String.contains?(String.downcase(model.lab_key || ""), needle) or
+          String.contains?(String.downcase(lab_name || ""), needle)
       end)
-
-    models
-    |> Enum.zip(meta_list)
-    |> Map.new(fn {model, meta} -> {model.id, meta} end)
-  end
-
-  defp section_key(%{pinned: true}), do: :pinned
-  defp section_key(%{model_type: type}), do: type
-
-  defp section_meta(:pinned, count) do
-    %{type: "pinned", label: gettext("Pinned"), icon: "hero-star-solid", count: count}
-  end
-
-  defp section_meta(type, count) do
-    case Enum.find(model_type_choices(), fn {_, t, _} -> t == type end) do
-      {label, _, icon} ->
-        %{type: type, label: label, icon: icon, count: count}
-
-      # La columna tiene CHECK en DB, así que esto sólo dispararía un nil
-      # pre-vocabulario: sección genérica al final en vez de reventar el render.
-      nil ->
-        %{type: "other", label: gettext("Other"), icon: "hero-cpu-chip", count: count}
     end
   end
+
+  defp sort_models(models, nil, _direction) do
+    Enum.sort_by(models, &{not &1.pinned, type_rank(&1.model_type), String.downcase(&1.name)})
+  end
+
+  defp sort_models(models, field, direction) do
+    Enum.sort_by(
+      models,
+      fn model -> {model_sort_value(model, field), String.downcase(model.name || "")} end,
+      fn {val_a, name_a}, {val_b, name_b} ->
+        cond do
+          val_a == val_b -> name_a <= name_b
+          direction == :asc -> val_a < val_b
+          true -> val_a > val_b
+        end
+      end
+    )
+  end
+
+  defp model_sort_value(model, :name), do: String.downcase(model.name || "")
+  defp model_sort_value(model, :model_type), do: type_rank(model.model_type)
+  defp model_sort_value(model, :keys), do: lane_count(model)
+  defp model_sort_value(model, :providers), do: lane_provider_count(model)
+
+  defp type_rank(type), do: Enum.find_index(@type_order, &(&1 == type)) || length(@type_order)
 
   # El vínculo modelo→lab es blando (`lab_key`), así que la marca se resuelve
   # contra un índice cargado una vez: los labs se editan en otra página, no
@@ -700,6 +742,68 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
+  def handle_event("search_models", params, socket) do
+    {:noreply,
+     socket
+     |> assign(:search_query, query_param(params))
+     |> stream_models()}
+  end
+
+  def handle_event("filter_model_type", %{"type" => type}, socket) do
+    if type == "all" or type_endpoint(type) != nil do
+      {:noreply,
+       socket
+       |> assign(:filter_type, type)
+       |> stream_models()}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("filter_model_type", _params, socket), do: {:noreply, socket}
+
+  def handle_event("sort_models", %{"field" => field}, socket) do
+    case Map.fetch(@sort_fields, field) do
+      {:ok, sort_atom} ->
+        {sort_field, sort_direction} =
+          if socket.assigns.sort_field == sort_atom do
+            {sort_atom, if(socket.assigns.sort_direction == :asc, do: :desc, else: :asc)}
+          else
+            default_dir = if sort_atom in [:keys, :providers], do: :desc, else: :asc
+            {sort_atom, default_dir}
+          end
+
+        {:noreply,
+         socket
+         |> assign(:sort_field, sort_field)
+         |> assign(:sort_direction, sort_direction)
+         |> stream_models()}
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("sort_models", _params, socket), do: {:noreply, socket}
+
+  def handle_event("confirm_delete", %{"id" => model_id}, socket) do
+    if socket.assigns.is_admin do
+      case fetch_model(model_id) do
+        nil -> {:noreply, socket}
+        model -> {:noreply, assign(socket, :delete_target, model)}
+      end
+    else
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
+    end
+  end
+
+  def handle_event("confirm_delete", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel_delete", _params, socket) do
+    {:noreply, assign(socket, :delete_target, nil)}
+  end
+
   def handle_event("delete_model", %{"id" => model_id}, socket) do
     if socket.assigns.is_admin do
       case delete_model_locked(model_id) do
@@ -708,23 +812,28 @@ defmodule TokengateWeb.ModelsLive do
 
           {:noreply,
            socket
+           |> assign(:delete_target, nil)
            |> put_flash(:info, gettext("Model deleted."))
            |> load_models()}
 
         {:error, :has_providers} ->
           {:noreply,
-           put_flash(
-             socket,
+           socket
+           |> assign(:delete_target, nil)
+           |> put_flash(
              :error,
              gettext("Cannot delete: the model has providers assigned. Remove them first.")
            )}
 
         # Id forjado o modelo inexistente: no-op.
         {:error, :not_found} ->
-          {:noreply, socket}
+          {:noreply, assign(socket, :delete_target, nil)}
 
         {:error, _reason} ->
-          {:noreply, put_flash(socket, :error, gettext("Could not delete the model."))}
+          {:noreply,
+           socket
+           |> assign(:delete_target, nil)
+           |> put_flash(:error, gettext("Could not delete the model."))}
       end
     else
       {:noreply,
@@ -1340,38 +1449,71 @@ defmodule TokengateWeb.ModelsLive do
         <.header>
           {gettext("Models")}
           <:subtitle>{gettext("Configure models and the API keys that serve them")}</:subtitle>
-          <:actions :if={@is_admin}>
-            <.button phx-click="new_model" id="new-model-btn">
-              <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New model")}
-            </.button>
+          <:actions>
+            <div class="flex flex-wrap items-center gap-3">
+              <.admin_search
+                event="search_models"
+                value={@search_query}
+                placeholder={gettext("Search by name or lab…")}
+                input_id="model-search"
+              />
+              <.button :if={@is_admin} phx-click="new_model" id="new-model-btn">
+                <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New model")}
+              </.button>
+            </div>
           </:actions>
         </.header>
+
+        <div
+          :if={@active_model_types != []}
+          class="flex flex-wrap items-center gap-1.5"
+          id="model-filter-pills"
+        >
+          <button
+            type="button"
+            phx-click="filter_model_type"
+            phx-value-type="all"
+            id="filter-model-type-all"
+            class={[
+              "btn btn-xs",
+              if(@filter_type == "all", do: "btn-primary", else: "btn-ghost")
+            ]}
+          >
+            {gettext("All")}
+            <span class="badge badge-xs badge-ghost">{length(@all_models)}</span>
+          </button>
+          <button
+            :for={{type, label, count} <- @active_model_types}
+            type="button"
+            phx-click="filter_model_type"
+            phx-value-type={type}
+            id={"filter-model-type-#{type}"}
+            class={[
+              "btn btn-xs",
+              if(@filter_type == type, do: "btn-primary", else: "btn-ghost")
+            ]}
+          >
+            {label}
+            <span class="badge badge-xs badge-ghost">{count}</span>
+          </button>
+        </div>
 
         <%!-- Una fila por modelo. Las API keys que lo sirven viven en su propia
              página (/catalog/models/:id): aquí sólo se cuentan. El estado vacío
              lo pinta `.table` (`:empty`): con stream no puede inferirlo, así que
-             llega en `empty?`. La etiqueta de sección viaja en la primera celda
-             del modelo que abre el grupo (`@model_sections`). --%>
+             llega en `empty?`. --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm overflow-x-auto">
           <.table
             id="models"
             rows={@streams.models}
             row_item={fn {_id, model} -> model end}
             row_class="align-top"
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
+            sort_event="sort_models"
             empty?={@models_empty?}
           >
-            <:col :let={model} label={gettext("Model")}>
-              <div
-                :if={section = Map.get(@model_sections, model.id)}
-                id={"model-section-#{section.type}"}
-                class="flex items-center gap-1.5 mb-1.5"
-              >
-                <.icon name={section.icon} class="w-3.5 h-3.5 text-base-content/40" />
-                <span class="text-[11px] font-semibold uppercase tracking-wider text-base-content/40">
-                  {section.label}
-                </span>
-                <span class="badge badge-xs badge-ghost">{section.count}</span>
-              </div>
+            <:col :let={model} label={gettext("Model")} field={:name}>
               <div class="flex items-center gap-2">
                 <.mark_badge
                   mark={Model.mark(model, @labs_by_key)}
@@ -1399,7 +1541,7 @@ defmodule TokengateWeb.ModelsLive do
                 </span>
               </div>
             </:col>
-            <:col :let={model} label={gettext("Type")}>
+            <:col :let={model} label={gettext("Type")} field={:model_type}>
               <div class="flex flex-col gap-0.5">
                 <span
                   id={"model-badge-#{model.id}"}
@@ -1420,6 +1562,7 @@ defmodule TokengateWeb.ModelsLive do
             <:col
               :let={model}
               label={gettext("Keys")}
+              field={:keys}
               align="right"
               tooltip={gettext("Manage the API keys that serve this model")}
             >
@@ -1432,7 +1575,7 @@ defmodule TokengateWeb.ModelsLive do
                 <.icon name="hero-key" class="w-3 h-3" /> {lane_count(model)}
               </.link>
             </:col>
-            <:col :let={model} label={gettext("Providers")} align="right">
+            <:col :let={model} label={gettext("Providers")} field={:providers} align="right">
               <span class="badge badge-ghost badge-sm">{lane_provider_count(model)}</span>
             </:col>
             <:col :let={model} label={gettext("Price")} align="right">
@@ -1453,6 +1596,15 @@ defmodule TokengateWeb.ModelsLive do
               <% end %>
             </:col>
             <:action :let={model} :if={@is_admin}>
+              <.link
+                navigate={~p"/stats/models/#{model.id}"}
+                class="btn btn-xs btn-ghost"
+                id={"stats-model-#{model.id}"}
+                title={gettext("View stats")}
+                aria-label={gettext("View stats")}
+              >
+                <.icon name="hero-chart-bar" class="w-3.5 h-3.5" />
+              </.link>
               <button
                 phx-click="toggle_pin"
                 phx-value-id={model.id}
@@ -1487,9 +1639,8 @@ defmodule TokengateWeb.ModelsLive do
                 <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
               </button>
               <button
-                phx-click="delete_model"
+                phx-click="confirm_delete"
                 phx-value-id={model.id}
-                data-confirm={gettext("Delete this model? This action cannot be undone.")}
                 class="btn btn-xs btn-ghost text-error"
                 id={"delete-model-#{model.id}"}
                 title={gettext("Delete")}
@@ -1509,41 +1660,37 @@ defmodule TokengateWeb.ModelsLive do
              form — el tipo acota catálogo y proveedores antes de que exista
              nada que llenar. Sólo en creación; la edición cambia el tipo desde
              el select del form. --%>
-        <div
+        <.modal
           :if={@type_picker_open}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
           id="model-type-picker"
+          title={gettext("New model")}
+          on_close="cancel_form"
+          max_w="max-w-2xl"
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-2xl">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-1">{gettext("New model")}</h2>
-              <p class="text-sm text-base-content/60 mb-4">
-                {gettext(
-                  "First choose the type — it decides which providers are offered and the endpoint that will serve the model."
-                )}
-              </p>
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <button
-                  :for={{label, type, icon} <- model_type_choices()}
-                  type="button"
-                  phx-click="pick_model_type"
-                  phx-value-type={type}
-                  id={"pick-type-#{type}"}
-                  class="btn btn-outline btn-sm flex flex-col h-auto py-3 gap-1 normal-case"
-                >
-                  <.icon name={icon} class="w-5 h-5" />
-                  <span class="text-xs">{label}</span>
-                </button>
-              </div>
-              <div class="card-actions justify-end mt-2">
-                <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
-                  {gettext("Cancel")}
-                </button>
-              </div>
-            </div>
+          <p class="text-sm text-base-content/60 mb-4">
+            {gettext(
+              "First choose the type — it decides which providers are offered and the endpoint that will serve the model."
+            )}
+          </p>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <button
+              :for={{label, type, icon} <- model_type_choices()}
+              type="button"
+              phx-click="pick_model_type"
+              phx-value-type={type}
+              id={"pick-type-#{type}"}
+              class="btn btn-outline btn-sm flex flex-col h-auto py-3 gap-1 normal-case"
+            >
+              <.icon name={icon} class="w-5 h-5" />
+              <span class="text-xs">{label}</span>
+            </button>
           </div>
-        </div>
+          <div class="flex justify-end mt-4">
+            <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
+              {gettext("Cancel")}
+            </button>
+          </div>
+        </.modal>
 
         <%!-- Alta/edición en el contenedor único (`.modal`): el componente pinta
              el título, el indicador de pasos (`.steps`) y cierra con ✕/Escape/
@@ -1609,21 +1756,23 @@ defmodule TokengateWeb.ModelsLive do
                   id={"wizard-provider-#{dom_key(provider_ref(p))}"}
                   class="w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0 flex items-center gap-2"
                 >
-                  <img
-                    :if={p.logo_url}
-                    src={p.logo_url}
-                    alt=""
-                    data-logo
-                    class="w-5 h-5 shrink-0 rounded"
-                    loading="lazy"
-                  />
-                  <%!-- El icono va SIEMPRE (oculto si hay logo): una URL que
-                     no carga no dispara el fallback del servidor, así que la
-                     revela el listener global de `error` en app.js. --%>
-                  <.icon
-                    name="hero-server-stack"
-                    class={["w-5 h-5 shrink-0 text-base-content/30", p.logo_url && "hidden"]}
-                  />
+                  <span class="flex items-center justify-center w-7 h-7 shrink-0 rounded-lg bg-white overflow-hidden">
+                    <img
+                      :if={p.logo_url}
+                      src={p.logo_url}
+                      alt=""
+                      data-logo
+                      class="w-4 h-4 object-contain"
+                      loading="lazy"
+                    />
+                    <%!-- El icono va SIEMPRE (oculto si hay logo): una URL que
+                       no carga no dispara el fallback del servidor, así que la
+                       revela el listener global de `error` en app.js. --%>
+                    <.icon
+                      name="hero-server-stack"
+                      class={["w-4 h-4 text-neutral-600", p.logo_url && "hidden"]}
+                    />
+                  </span>
                   <span class="flex-1 min-w-0">
                     <span class="text-sm font-medium truncate">{p.name}</span>
                     <span class="text-xs text-base-content/50 font-mono ml-1">{p.key}</span>
@@ -2232,6 +2381,21 @@ defmodule TokengateWeb.ModelsLive do
             </div>
           </div>
         </div>
+
+        <.admin_delete_modal
+          :if={@delete_target}
+          id="delete-model-modal"
+          on_close="cancel_delete"
+          title={gettext("Delete model")}
+          target_label={@delete_target.name}
+          target_span_id="delete-model-target"
+          confirm_event="delete_model"
+          confirm_value={@delete_target.id}
+          confirm_button_id="confirm-delete-model"
+          cancel_button_id="cancel-delete-model"
+          warning_title={gettext("This action cannot be undone.")}
+          warning_intro={gettext("The model and its configuration will be permanently deleted.")}
+        />
       </div>
     </Layouts.dashboard>
     """

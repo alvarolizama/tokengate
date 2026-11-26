@@ -116,18 +116,95 @@ defmodule TokengateWeb.LabsLiveTest do
       assert has_element?(view, "#lab-mark-#{lab.key} img[src='https://cdn.example.com/l.png']")
     end
 
-    test "sin filtros: siempre builtin y custom juntos, sin tabs ni buscador", %{conn: conn} do
+    test "listado en tabla con buscador y filtros muestra builtin y custom juntos", %{conn: conn} do
       lab = create_lab(%{"name" => "Zzz Unique Lab"})
 
       {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
 
-      # La pantalla no acota: ni tabs de origen ni buscador.
+      assert has_element?(view, "tbody#labs[phx-update='stream']")
+      assert has_element?(view, "#search-form #lab-search")
+      assert has_element?(view, "#lab-filter-pills")
       refute has_element?(view, "#lab-source-tabs")
-      refute has_element?(view, "#search-form")
 
-      # Las dos fuentes conviven en el listado.
+      # Las dos fuentes conviven en el listado bajo "All".
       assert has_element?(view, "#lab-name-openai")
       assert has_element?(view, "#lab-name-#{lab.key}")
+    end
+
+    test "búsqueda, filtros All/Custom/Builtin, ordenamiento y enlace a modelos", %{conn: conn} do
+      lab = create_lab(%{"name" => "Zzz Searchable Lab", "key" => "zzz-search-#{unique()}"})
+
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
+
+      # Clickable model_count link to /catalog/models?q=<lab.key>
+      assert has_element?(
+               view,
+               "a#lab-models-#{lab.key}[href='/catalog/models?q=#{lab.key}']"
+             )
+
+      # Search filters by name or key
+      view |> element("#search-form") |> render_change(%{"q" => lab.key})
+      assert has_element?(view, "#lab-#{lab.key}")
+      refute has_element?(view, "#lab-openai")
+
+      view |> element("#search-form") |> render_change(%{"q" => "zzz-no-match-#{unique()}"})
+      assert has_element?(view, "#labs-empty")
+
+      view |> element("#search-form") |> render_change(%{"q" => ""})
+      assert has_element?(view, "#lab-openai")
+
+      # Filter pills: Custom / Builtin / All
+      view |> element("#filter-lab-source-custom") |> render_click()
+      assert has_element?(view, "#filter-lab-source-custom.btn-primary")
+      assert has_element?(view, "#lab-#{lab.key}")
+      refute has_element?(view, "#lab-openai")
+
+      view |> element("#filter-lab-source-builtin") |> render_click()
+      assert has_element?(view, "#lab-openai")
+      refute has_element?(view, "#lab-#{lab.key}")
+
+      view |> element("#filter-lab-source-all") |> render_click()
+      assert has_element?(view, "#lab-#{lab.key}")
+      assert has_element?(view, "#lab-openai")
+
+      # Sortable columns
+      view |> element("button[phx-click='sort_labs'][phx-value-field='name']") |> render_click()
+      view |> element("button[phx-click='sort_labs'][phx-value-field='source']") |> render_click()
+
+      view
+      |> element("button[phx-click='sort_labs'][phx-value-field='model_count']")
+      |> render_click()
+
+      view
+      |> element("button[phx-click='sort_labs'][phx-value-field='last_updated']")
+      |> render_click()
+
+      assert Process.alive?(view.pid)
+    end
+
+    test "lab_mark siempre renderiza img[data-logo] con icono sibling oculto para fallback", %{
+      conn: conn
+    } do
+      with_logo =
+        create_lab(%{
+          "logo_url" => "https://cdn.example.com/404.png",
+          "icon" => "hero-sparkles"
+        })
+
+      without_logo = create_lab(%{"icon" => "hero-rocket-launch"})
+
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
+
+      assert has_element?(
+               view,
+               "#lab-mark-#{with_logo.key} img[data-logo][src='https://cdn.example.com/404.png']"
+             )
+
+      assert has_element?(view, "#lab-mark-#{with_logo.key} .hero-sparkles.hidden")
+
+      refute has_element?(view, "#lab-mark-#{without_logo.key} img[data-logo]")
+      assert has_element?(view, "#lab-mark-#{without_logo.key} .hero-rocket-launch")
+      refute has_element?(view, "#lab-mark-#{without_logo.key} .hero-rocket-launch.hidden")
     end
   end
 

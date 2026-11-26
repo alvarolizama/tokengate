@@ -495,10 +495,28 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert html =~ model_record.name
 
     view |> element("#delete-model-#{model_record.id}") |> render_click()
+    assert has_element?(view, "#delete-model-modal")
+    view |> element("#confirm-delete-model") |> render_click()
 
     html = render(view)
     assert html =~ "Modelo eliminado"
     refute html =~ model_record.name
+  end
+
+  test "canceling model delete modal keeps the model", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_record = create_model()
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#delete-model-#{model_record.id}") |> render_click()
+    assert has_element?(view, "#delete-model-modal")
+    view |> element("#cancel-delete-model") |> render_click()
+
+    refute has_element?(view, "#delete-model-modal")
+    assert has_element?(view, "#model-link-#{model_record.id}")
+    assert Providers.get_model(model_record.id) != nil
   end
 
   test "key rows show the Priority badge from extra_body", %{conn: conn} do
@@ -532,6 +550,8 @@ defmodule TokengateWeb.ModelsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/catalog/models")
 
     view |> element("#delete-model-#{model_record.id}") |> render_click()
+    assert has_element?(view, "#delete-model-modal")
+    view |> element("#confirm-delete-model") |> render_click()
 
     html = render(view)
     assert html =~ "No se puede eliminar"
@@ -1784,7 +1804,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     u = unique()
 
     # La suite corre sobre una DB compartida (async: false): se barre para que
-    # las secciones y sus conteos sean deterministas.
+    # el orden sea determinista.
     Repo.delete_all(Tokengate.Providers.ModelProvider)
     Repo.delete_all(Providers.Model)
 
@@ -1798,23 +1818,17 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     {:ok, view, html} = live(conn, ~p"/catalog/models")
 
-    # Sección por cada tipo con modelos (los ids son estables por tipo).
-    assert has_element?(view, "#model-section-pinned")
-    assert has_element?(view, "#model-section-llm")
-    assert has_element?(view, "#model-section-embedding")
-    assert has_element?(view, "#model-section-image")
-    # Tipos sin modelos no abren sección; los retirados ya no existen.
-    refute has_element?(view, "#model-section-stt")
-    refute has_element?(view, "#model-section-video")
-    refute has_element?(view, "#model-section-other")
+    # Sin headers en celda (#model-section-*) que desalineen la primera fila.
+    refute has_element?(view, "#model-section-pinned")
+    refute has_element?(view, "#model-section-llm")
 
-    # Orden: Fijados, luego los tipos en orden canónico.
+    # Orden por defecto: Fijados primero, luego los tipos en orden canónico.
     assert order_before?(html, "#{u}-cc-pinned", "#{u}-zz-llm")
     assert order_before?(html, "#{u}-zz-llm", "#{u}-aa-emb")
     assert order_before?(html, "#{u}-aa-emb", "#{u}-bb-img")
   end
 
-  test "pinning a model moves it to the pinned section and updates its count", %{conn: conn} do
+  test "pinning a model moves it to the top of the list", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     u = unique()
 
@@ -1828,16 +1842,14 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     {:ok, view, html} = live(conn, ~p"/catalog/models")
 
-    # Antes del pin: fresh vive en la sección llm general, después de Fijados.
     assert order_before?(html, "#{u}-aa-already-pinned", "#{u}-mm-fresh-llm")
 
     view |> element("#pin-model-#{model.id}") |> render_click()
     html = render(view)
 
-    # Tras el pin: fresh entra a Fijados — queda antes de cualquier no
-    # pinneado (dentro de la sección manda el alfabético, aa < mm).
+    # Tras el pin: fresh entra a los fijados (queda antes de cualquier no pinneado).
     assert order_before?(html, "#{u}-mm-fresh-llm", "#{u}-zz-tail-llm")
-    assert has_element?(view, "#model-section-pinned", "2")
+    assert has_element?(view, "#model-pinned-#{model.id}")
   end
 
   # -- Collapsed providers section ------------------------------------------
@@ -2960,9 +2972,105 @@ defmodule TokengateWeb.ModelsLiveTest do
     _lane = create_model_provider(model_record, create_provider())
 
     view |> element("#delete-model-#{model_record.id}") |> render_click()
+    assert has_element?(view, "#delete-model-modal")
+    view |> element("#confirm-delete-model") |> render_click()
 
     assert render(view) =~ "No se puede eliminar"
     assert Providers.get_model(model_record.id) != nil
+  end
+
+  test "search, ?q= param, type filter pills, sorting, stats link and modal type-picker", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    u = unique()
+    Repo.delete_all(Tokengate.Providers.ModelProvider)
+    Repo.delete_all(Providers.Model)
+
+    lab = create_custom_lab(%{"name" => "Anthropic Search #{u}", "key" => "anthropic-#{u}"})
+    m_llm = create_model(%{name: "alpha-llm-#{u}", model_type: "llm", lab_key: lab.key})
+    m_img = create_model(%{name: "zeta-img-#{u}", model_type: "image", pinned: false})
+
+    provider = create_provider()
+    create_model_provider(m_img, provider)
+
+    conn = login(conn, admin, password)
+
+    # ?q= query param pre-filters on mount/handle_params
+    {:ok, view, _html} = live(conn, ~p"/catalog/models?q=#{lab.key}")
+    assert has_element?(view, "#model-search[value='#{lab.key}']")
+    assert has_element?(view, "#model-link-#{m_llm.id}")
+    refute has_element?(view, "#model-link-#{m_img.id}")
+
+    # Clearing search brings all back; search by model name works
+    view |> element("#search-form") |> render_change(%{"q" => "zeta-img"})
+    refute has_element?(view, "#model-link-#{m_llm.id}")
+    assert has_element?(view, "#model-link-#{m_img.id}")
+
+    view |> element("#search-form") |> render_change(%{"q" => ""})
+    assert has_element?(view, "#model-link-#{m_llm.id}")
+    assert has_element?(view, "#model-link-#{m_img.id}")
+
+    # Filter pills show All + active types present
+    assert has_element?(view, "#model-filter-pills")
+    assert has_element?(view, "#filter-model-type-all")
+    assert has_element?(view, "#filter-model-type-llm")
+    assert has_element?(view, "#filter-model-type-image")
+    refute has_element?(view, "#filter-model-type-stt")
+
+    view |> element("#filter-model-type-image") |> render_click()
+    assert has_element?(view, "#filter-model-type-image.btn-primary")
+    assert has_element?(view, "#model-link-#{m_img.id}")
+    refute has_element?(view, "#model-link-#{m_llm.id}")
+
+    view |> element("#filter-model-type-all") |> render_click()
+    assert has_element?(view, "#model-link-#{m_llm.id}")
+    assert has_element?(view, "#model-link-#{m_img.id}")
+
+    # Quick stats link in row actions
+    assert has_element?(view, "a#stats-model-#{m_llm.id}[href='/stats/models/#{m_llm.id}']")
+
+    # Sortable columns: name (asc -> desc), keys (desc -> asc)
+    view |> element("button[phx-click='sort_models'][phx-value-field='name']") |> render_click()
+    html_asc = render(view)
+    assert order_before?(html_asc, "alpha-llm-#{u}", "zeta-img-#{u}")
+
+    view |> element("button[phx-click='sort_models'][phx-value-field='name']") |> render_click()
+    html_desc = render(view)
+    assert order_before?(html_desc, "zeta-img-#{u}", "alpha-llm-#{u}")
+
+    view |> element("button[phx-click='sort_models'][phx-value-field='keys']") |> render_click()
+    html_keys = render(view)
+    assert order_before?(html_keys, "zeta-img-#{u}", "alpha-llm-#{u}")
+
+    # Canonical <.modal> type-picker with Escape + close button
+    view |> element("#new-model-btn") |> render_click()
+
+    assert has_element?(
+             view,
+             "#model-type-picker[phx-window-keydown='cancel_form'][phx-key='Escape']"
+           )
+
+    assert has_element?(view, "#model-type-picker button[aria-label]")
+    view |> element("#model-type-picker button[aria-label]") |> render_click()
+    refute has_element?(view, "#model-type-picker")
+  end
+
+  test "wizard step 1 wraps provider logos in canonical bg-white chip", %{conn: conn} do
+    seed_mirror!()
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+
+    assert has_element?(view, "#wizard-provider-openrouter span.bg-white img[data-logo]")
+
+    assert has_element?(
+             view,
+             "#wizard-provider-openrouter span.bg-white .hero-server-stack.hidden"
+           )
   end
 
   # El paso 0 no puede ofrecer un tipo que el gateway no sabe servir, y el

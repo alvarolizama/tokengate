@@ -27,6 +27,7 @@ defmodule TokengateWeb.ProvidersLive do
   require Logger
 
   import Ecto.Query, only: [from: 2]
+  import TokengateWeb.AdminComponents
   alias Tokengate.Providers
 
   alias Tokengate.Providers.{
@@ -78,6 +79,13 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:path_service_rows, [])
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:credential_inflight, %{})
+      |> assign(:search_query, "")
+      |> assign(:filter_status, "all")
+      |> assign(:sort_field, nil)
+      |> assign(:sort_direction, :asc)
+      |> assign(:delete_target, nil)
+      |> assign(:all_providers, [])
+      |> stream_configure(:providers, dom_id: &"providers-#{&1.id}")
       |> require_admin_hook()
       |> load_providers()
 
@@ -166,14 +174,102 @@ defmodule TokengateWeb.ProvidersLive do
       end)
 
     socket
-    |> assign(:providers, providers)
-    |> assign(:providers_empty?, providers == [])
+    |> assign(:all_providers, providers)
     |> assign(:credential_stats, credential_stats)
     |> assign(:provider_model_counts, provider_model_counts)
     |> assign(:breaker_statuses, breaker_statuses)
-    |> load_catalog()
     |> assign_inflight()
+    |> stream_providers()
+    |> load_catalog()
   end
+
+  @provider_sort_fields %{
+    "name" => :name,
+    "status" => :status,
+    "keys" => :keys,
+    "models" => :models
+  }
+
+  defp stream_providers(socket) do
+    providers =
+      socket.assigns.all_providers
+      |> filter_providers_by_status(socket.assigns.filter_status, socket.assigns)
+      |> filter_providers_by_query(socket.assigns.search_query)
+      |> sort_providers(socket.assigns.sort_field, socket.assigns.sort_direction, socket.assigns)
+
+    socket
+    |> stream(:providers, providers, reset: true)
+    |> assign(:providers_empty?, providers == [])
+  end
+
+  defp filter_providers_by_status(providers, "all", _assigns), do: providers
+
+  defp filter_providers_by_status(providers, "active", _assigns) do
+    Enum.filter(providers, &(&1.status == "active"))
+  end
+
+  defp filter_providers_by_status(providers, "disabled", _assigns) do
+    Enum.filter(providers, &(&1.status != "active"))
+  end
+
+  defp filter_providers_by_status(providers, "alerts", assigns) do
+    Enum.filter(providers, &provider_has_alert?(&1, assigns))
+  end
+
+  defp filter_providers_by_status(providers, _other, _assigns), do: providers
+
+  defp provider_has_alert?(provider, assigns) do
+    stats = credential_stats(provider.id, assigns.credential_stats)
+
+    health =
+      provider_health(
+        provider.id,
+        assigns.credential_stats,
+        assigns.breaker_statuses,
+        assigns.credential_inflight
+      )
+
+    stats.errored > 0 or health.open > 0
+  end
+
+  defp filter_providers_by_query(providers, query) do
+    needle = query |> to_string() |> String.trim() |> String.downcase()
+
+    if needle == "" do
+      providers
+    else
+      Enum.filter(providers, fn p ->
+        String.contains?(String.downcase(p.name || ""), needle) or
+          String.contains?(String.downcase(p.key || ""), needle) or
+          String.contains?(String.downcase(p.base_url || ""), needle)
+      end)
+    end
+  end
+
+  defp sort_providers(providers, nil, _direction, _assigns), do: providers
+
+  defp sort_providers(providers, field, direction, assigns) do
+    Enum.sort_by(
+      providers,
+      fn p -> {provider_sort_value(p, field, assigns), String.downcase(p.name || "")} end,
+      fn {val_a, name_a}, {val_b, name_b} ->
+        cond do
+          val_a == val_b -> name_a <= name_b
+          direction == :asc -> val_a < val_b
+          true -> val_a > val_b
+        end
+      end
+    )
+  end
+
+  defp provider_sort_value(p, :name, _assigns), do: String.downcase(p.name || "")
+  defp provider_sort_value(p, :status, _assigns), do: p.status || ""
+
+  defp provider_sort_value(p, :keys, assigns),
+    do: credential_stats(p.id, assigns.credential_stats).keys
+
+  defp provider_sort_value(p, :models, assigns),
+    do: model_count(p.id, assigns.provider_model_counts)
 
   # Catalog rows for the add-provider modal: the models.dev mirror decorated
   # with the live state (already activated = has a credential). Rows the
@@ -263,7 +359,8 @@ defmodule TokengateWeb.ProvidersLive do
     {:noreply,
      socket
      |> assign(:inflight_scheduled, false)
-     |> assign_inflight()}
+     |> assign_inflight()
+     |> stream_providers()}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -495,14 +592,82 @@ defmodule TokengateWeb.ProvidersLive do
 
   def handle_event("provider_draft", _params, socket), do: {:noreply, socket}
 
-  def handle_event("delete_provider", %{"id" => provider_id}, socket) do
-    provider = Enum.find(socket.assigns.providers, &(&1.id == provider_id))
+  def handle_event("search_providers", %{"q" => query}, socket) do
+    {:noreply,
+     socket
+     |> assign(:search_query, query)
+     |> stream_providers()}
+  end
 
-    cond do
-      is_nil(provider) ->
+  def handle_event("search_providers", %{"value" => query}, socket) do
+    {:noreply,
+     socket
+     |> assign(:search_query, query)
+     |> stream_providers()}
+  end
+
+  def handle_event("filter_provider_status", %{"status" => status}, socket)
+      when status in ~w(all active disabled alerts) do
+    {:noreply,
+     socket
+     |> assign(:filter_status, status)
+     |> stream_providers()}
+  end
+
+  def handle_event("sort_providers", %{"field" => field}, socket) do
+    case Map.fetch(@provider_sort_fields, field) do
+      {:ok, sort_atom} ->
+        {sort_field, sort_direction} =
+          if socket.assigns.sort_field == sort_atom do
+            {sort_atom, if(socket.assigns.sort_direction == :asc, do: :desc, else: :asc)}
+          else
+            default_dir = if sort_atom in [:keys, :models], do: :desc, else: :asc
+            {sort_atom, default_dir}
+          end
+
+        {:noreply,
+         socket
+         |> assign(:sort_field, sort_field)
+         |> assign(:sort_direction, sort_direction)
+         |> stream_providers()}
+
+      :error ->
         {:noreply, socket}
+    end
+  end
 
-      provider.source == "builtin" ->
+  def handle_event("confirm_delete", %{"id" => provider_id}, socket) do
+    case fetch_provider(provider_id) do
+      :error ->
+        {:noreply, provider_gone(socket)}
+
+      {:ok, %Provider{source: "builtin"}} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext(
+             "Catalog providers cannot be deleted — deactivate it to take it out of the routing (it is recreated on boot)."
+           )
+         )}
+
+      {:ok, provider} ->
+        {:noreply, assign(socket, :delete_target, provider)}
+    end
+  end
+
+  def handle_event("cancel_delete", _params, socket) do
+    {:noreply, assign(socket, :delete_target, nil)}
+  end
+
+  def handle_event("delete_provider", %{"id" => provider_id}, socket) do
+    socket = assign(socket, :delete_target, nil)
+
+    case fetch_provider(provider_id) do
+      :error ->
+        {:noreply, provider_gone(socket)}
+
+      {:ok, %Provider{source: "builtin"}} ->
         # Builtins come from the compile-time catalog: deleting them would
         # lose their credentials, and the boot sync would re-insert the row
         # anyway. Disable instead.
@@ -515,7 +680,7 @@ defmodule TokengateWeb.ProvidersLive do
            )
          )}
 
-      true ->
+      {:ok, provider} ->
         delete_provider(socket, provider)
     end
   end
@@ -1072,11 +1237,42 @@ defmodule TokengateWeb.ProvidersLive do
           {gettext("Providers")}
           <:subtitle>{gettext("LLM providers and credentials")}</:subtitle>
           <:actions>
-            <.button phx-click="open_catalog_modal" id="add-provider-btn">
-              <.icon name="hero-plus" class="w-4 h-4" /> {gettext("Add provider")}
-            </.button>
+            <div class="flex flex-wrap items-center gap-3">
+              <.admin_search
+                event="search_providers"
+                value={@search_query}
+                placeholder={gettext("Search by name, key or URL…")}
+                input_id="provider-search"
+              />
+              <.button phx-click="open_catalog_modal" id="add-provider-btn">
+                <.icon name="hero-plus" class="w-4 h-4" /> {gettext("Add provider")}
+              </.button>
+            </div>
           </:actions>
         </.header>
+
+        <div class="flex flex-wrap items-center gap-1.5" id="provider-filter-pills">
+          <button
+            :for={
+              {status, label} <- [
+                {"all", gettext("All")},
+                {"active", gettext("Active")},
+                {"disabled", gettext("Disabled")},
+                {"alerts", gettext("Alerts")}
+              ]
+            }
+            type="button"
+            phx-click="filter_provider_status"
+            phx-value-status={status}
+            id={"filter-provider-status-#{status}"}
+            class={[
+              "btn btn-xs",
+              if(@filter_status == status, do: "btn-primary", else: "btn-ghost")
+            ]}
+          >
+            {label}
+          </button>
+        </div>
 
         <%!-- Add/edit provider: one modal, a 2–3 step wizard. Step 1 (pick) is
              the searchable models.dev mirror — a row activates its provider on
@@ -1121,6 +1317,7 @@ defmodule TokengateWeb.ProvidersLive do
                   placeholder={gettext("Search provider or id (openrouter, fireworks, qwen…)")}
                   class="input input-sm w-full"
                   autocomplete="off"
+                  phx-debounce="200"
                 />
               </form>
 
@@ -1455,12 +1652,15 @@ defmodule TokengateWeb.ProvidersLive do
         <div class="card bg-base-100 border border-base-300 shadow-sm overflow-x-auto">
           <.table
             id="providers"
-            rows={@providers}
-            row_id={fn provider -> "providers-#{provider.id}" end}
+            rows={@streams.providers}
+            row_item={fn {_id, provider} -> provider end}
             row_class="align-top"
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
+            sort_event="sort_providers"
             empty?={@providers_empty?}
           >
-            <:col :let={provider} label={gettext("Provider")}>
+            <:col :let={provider} label={gettext("Provider")} field={:name}>
               <div class="flex items-center gap-2">
                 <%!-- Chip claro fijo: los logos del catálogo usan
                      fill="currentColor" y dentro de un <img> eso resuelve a
@@ -1506,7 +1706,7 @@ defmodule TokengateWeb.ProvidersLive do
                 </div>
               </div>
             </:col>
-            <:col :let={provider} label={gettext("Status")}>
+            <:col :let={provider} label={gettext("Status")} field={:status}>
               <span class={[
                 "badge badge-sm",
                 if(provider.status == "active", do: "badge-success", else: "badge-ghost")
@@ -1519,6 +1719,7 @@ defmodule TokengateWeb.ProvidersLive do
             <:col
               :let={provider}
               label={gettext("Keys")}
+              field={:keys}
               align="right"
               tooltip={gettext("Manage the API keys of this provider")}
             >
@@ -1537,7 +1738,7 @@ defmodule TokengateWeb.ProvidersLive do
                 {gettext("%{count} in error", count: stats.errored)}
               </p>
             </:col>
-            <:col :let={provider} label={gettext("Models")} align="right">
+            <:col :let={provider} label={gettext("Models")} field={:models} align="right">
               <span class="badge badge-ghost badge-sm">
                 {model_count(provider.id, @provider_model_counts)}
               </span>
@@ -1596,7 +1797,7 @@ defmodule TokengateWeb.ProvidersLive do
               <button
                 phx-click="toggle_provider"
                 phx-value-id={provider.id}
-                class="btn btn-sm btn-ghost px-2"
+                class="btn btn-xs btn-ghost"
                 id={"toggle-provider-#{provider.id}"}
                 title={
                   if provider.status == "active",
@@ -1611,7 +1812,7 @@ defmodule TokengateWeb.ProvidersLive do
               >
                 <.icon
                   name={if provider.status == "active", do: "hero-pause", else: "hero-play"}
-                  class="w-4 h-4"
+                  class="w-3.5 h-3.5"
                 />
               </button>
               <%!-- Capacidades: the per-service path overrides (base_url +
@@ -1621,12 +1822,12 @@ defmodule TokengateWeb.ProvidersLive do
               <button
                 phx-click="edit_paths"
                 phx-value-id={provider.id}
-                class="btn btn-sm btn-ghost px-2"
+                class="btn btn-xs btn-ghost"
                 id={"paths-#{provider.id}"}
                 title={gettext("Configure the path of each capability (base_url + path)")}
                 aria-label={gettext("Capabilities")}
               >
-                <.icon name="hero-adjustments-horizontal" class="w-4 h-4" />
+                <.icon name="hero-adjustments-horizontal" class="w-3.5 h-3.5" />
                 <span :if={path_override_count(provider) > 0} class="badge badge-xs badge-primary">
                   {path_override_count(provider)}
                 </span>
@@ -1637,23 +1838,22 @@ defmodule TokengateWeb.ProvidersLive do
               <button
                 phx-click="edit_provider"
                 phx-value-id={provider.id}
-                class="btn btn-sm btn-ghost px-2"
+                class="btn btn-xs btn-ghost"
                 id={"edit-#{provider.id}"}
                 title={gettext("Edit")}
                 aria-label={gettext("Edit")}
               >
-                <.icon name="hero-pencil-square" class="w-4 h-4" />
+                <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
               </button>
               <button
-                phx-click="delete_provider"
+                phx-click="confirm_delete"
                 phx-value-id={provider.id}
-                data-confirm={gettext("Delete this provider?")}
-                class="btn btn-sm btn-ghost px-2 text-error"
+                class="btn btn-xs btn-ghost text-error"
                 id={"delete-#{provider.id}"}
                 title={gettext("Delete")}
                 aria-label={gettext("Delete")}
               >
-                <.icon name="hero-trash" class="w-4 h-4" />
+                <.icon name="hero-trash" class="w-3.5 h-3.5" />
               </button>
             </:action>
             <:empty>
@@ -1662,6 +1862,21 @@ defmodule TokengateWeb.ProvidersLive do
             </:empty>
           </.table>
         </div>
+
+        <.admin_delete_modal
+          :if={@delete_target}
+          id="delete-provider-modal"
+          on_close="cancel_delete"
+          title={gettext("Delete provider")}
+          target_label={@delete_target.name}
+          target_span_id="delete-provider-target"
+          confirm_event="delete_provider"
+          confirm_value={@delete_target.id}
+          confirm_button_id="confirm-delete-provider"
+          cancel_button_id="cancel-delete-provider"
+          warning_title={gettext("This action cannot be undone.")}
+          warning_intro={gettext("The provider and its credentials will be permanently deleted.")}
+        />
       </div>
     </Layouts.dashboard>
     """

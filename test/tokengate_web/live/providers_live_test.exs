@@ -635,7 +635,9 @@ defmodule TokengateWeb.ProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live_providers(conn)
 
-    html = view |> element("#delete-#{provider.id}") |> render_click()
+    view |> element("#delete-#{provider.id}") |> render_click()
+    assert has_element?(view, "#delete-provider-modal")
+    html = view |> element("#confirm-delete-provider") |> render_click()
 
     assert html =~ "Proveedor eliminado."
     refute has_element?(view, "#edit-#{provider.id}")
@@ -672,7 +674,9 @@ defmodule TokengateWeb.ProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live_providers(conn)
 
-    html = view |> element("#delete-#{provider.id}") |> render_click()
+    view |> element("#delete-#{provider.id}") |> render_click()
+    assert has_element?(view, "#delete-provider-modal")
+    html = view |> element("#confirm-delete-provider") |> render_click()
 
     assert html =~ "está en uso por uno o más modelos"
     assert has_element?(view, "#edit-#{provider.id}")
@@ -1214,7 +1218,9 @@ defmodule TokengateWeb.ProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live_providers(conn)
 
-    html = view |> element("#delete-#{provider.id}") |> render_click()
+    view |> element("#delete-#{provider.id}") |> render_click()
+    assert has_element?(view, "#delete-provider-modal")
+    html = view |> element("#confirm-delete-provider") |> render_click()
 
     assert html =~ "está en uso por uno o más modelos"
     assert has_element?(view, "#edit-#{provider.id}")
@@ -1251,5 +1257,104 @@ defmodule TokengateWeb.ProvidersLiveTest do
     send(view.pid, :refresh_inflight)
     state_after = :sys.get_state(view.pid)
     assert state_after.socket.assigns.inflight_scheduled == false
+  end
+
+  test "search, status/alerts filter pills, stream, sorting, debounce and canonical actions", %{
+    conn: conn
+  } do
+    u = unique()
+
+    active_p =
+      create_provider(%{name: "Alpha Prov #{u}", base_url: "https://alpha-#{u}.example.com/v1"})
+
+    disabled_p = create_provider(%{name: "Zeta Disabled #{u}", status: "disabled"})
+    alert_p = create_provider(%{name: "Mid Alert #{u}"})
+
+    {:ok, _cred} =
+      Providers.create_credential(%{
+        provider_id: alert_p.id,
+        name: "Errored Key",
+        api_key_encrypted: "sk-err-#{u}",
+        status: "error"
+      })
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    # Stream + canonical row actions (btn-xs btn-ghost with w-3.5 h-3.5)
+    assert has_element?(view, "tbody#providers[phx-update='stream']")
+    assert has_element?(view, "#edit-#{active_p.id}.btn-xs.btn-ghost .w-3\\.5.h-3\\.5")
+    assert has_element?(view, "#delete-#{active_p.id}.btn-xs.btn-ghost.text-error")
+
+    # Search by name and by URL
+    view |> element("#search-form") |> render_change(%{"q" => "alpha-#{u}"})
+    assert has_element?(view, "#providers-#{active_p.id}")
+    refute has_element?(view, "#providers-#{disabled_p.id}")
+
+    view |> element("#search-form") |> render_change(%{"q" => ""})
+    assert has_element?(view, "#providers-#{disabled_p.id}")
+
+    # Filter pills: All / Active / Disabled / Alerts
+    view |> element("#filter-provider-status-disabled") |> render_click()
+    assert has_element?(view, "#filter-provider-status-disabled.btn-primary")
+    assert has_element?(view, "#providers-#{disabled_p.id}")
+    refute has_element?(view, "#providers-#{active_p.id}")
+
+    view |> element("#filter-provider-status-alerts") |> render_click()
+    assert has_element?(view, "#providers-#{alert_p.id}")
+    refute has_element?(view, "#providers-#{active_p.id}")
+    refute has_element?(view, "#providers-#{disabled_p.id}")
+
+    view |> element("#filter-provider-status-active") |> render_click()
+    assert has_element?(view, "#providers-#{active_p.id}")
+    refute has_element?(view, "#providers-#{disabled_p.id}")
+
+    view |> element("#filter-provider-status-all") |> render_click()
+
+    # Sortable columns: name asc -> desc
+    view
+    |> element("button[phx-click='sort_providers'][phx-value-field='name']")
+    |> render_click()
+
+    html_asc = render(view)
+    {a_pos, _} = :binary.match(html_asc, "Alpha Prov #{u}")
+    {z_pos, _} = :binary.match(html_asc, "Zeta Disabled #{u}")
+    assert a_pos < z_pos
+
+    view
+    |> element("button[phx-click='sort_providers'][phx-value-field='name']")
+    |> render_click()
+
+    html_desc = render(view)
+    {a_pos2, _} = :binary.match(html_desc, "Alpha Prov #{u}")
+    {z_pos2, _} = :binary.match(html_desc, "Zeta Disabled #{u}")
+    assert z_pos2 < a_pos2
+
+    # Sort by keys / models / status doesn't crash and updates sort_field
+    view
+    |> element("button[phx-click='sort_providers'][phx-value-field='keys']")
+    |> render_click()
+
+    view
+    |> element("button[phx-click='sort_providers'][phx-value-field='models']")
+    |> render_click()
+
+    view
+    |> element("button[phx-click='sort_providers'][phx-value-field='status']")
+    |> render_click()
+
+    assert Process.alive?(view.pid)
+
+    # Cancel delete modal keeps provider
+    view |> element("#delete-#{active_p.id}") |> render_click()
+    assert has_element?(view, "#delete-provider-modal")
+    view |> element("#cancel-delete-provider") |> render_click()
+    refute has_element?(view, "#delete-provider-modal")
+    assert has_element?(view, "#providers-#{active_p.id}")
+
+    # Catalog modal search input has phx-debounce="200"
+    view |> element("#add-provider-btn") |> render_click()
+    assert has_element?(view, "#catalog-search[phx-debounce='200']")
   end
 end

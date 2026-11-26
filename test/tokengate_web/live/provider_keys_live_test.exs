@@ -462,4 +462,83 @@ defmodule TokengateWeb.ProviderKeysLiveTest do
     assert has_element?(view, "#credential-#{credential.id}", "Producción")
     assert Providers.get_credential!(credential.id).name == "Producción"
   end
+
+  test "header buttons are btn-sm and row actions use btn-xs btn-ghost with w-3.5 h-3.5 icons", %{
+    conn: conn
+  } do
+    provider = create_provider()
+    credential = create_credential(provider, %{name: "Prod"})
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_keys(conn, provider)
+
+    assert has_element?(view, "#back-to-providers.btn-sm")
+    assert has_element?(view, "#new-credential-#{provider.id}.btn-sm")
+
+    assert has_element?(
+             view,
+             "#toggle-credential-btn-#{credential.id}.btn-xs.btn-ghost .w-3\\.5.h-3\\.5"
+           )
+
+    assert has_element?(
+             view,
+             "#edit-credential-#{credential.id}.btn-xs.btn-ghost .w-3\\.5.h-3\\.5"
+           )
+
+    assert has_element?(
+             view,
+             "#delete-credential-#{credential.id}.btn-xs.btn-ghost.text-error .w-3\\.5.h-3\\.5"
+           )
+  end
+
+  test "edit-provider-limits opens inline modal and updates inherited limits with audit", %{
+    conn: conn
+  } do
+    provider = create_provider(%{name: "Inline Limits #{unique()}", max_rpm: 100})
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_keys(conn, provider)
+
+    refute has_element?(view, "#provider-limits-modal")
+    view |> element("#edit-provider-limits") |> render_click()
+    assert has_element?(view, "#provider-limits-modal")
+    assert has_element?(view, "#provider-limits-form")
+
+    # Invalid value stays in modal with error
+    html =
+      view
+      |> form("#provider-limits-form", provider: %{max_rpm: "0"})
+      |> render_submit()
+
+    assert has_element?(view, "#provider-limits-modal")
+    assert html =~ "must be greater than 0" or html =~ "debe ser mayor a 0"
+
+    # Valid update closes modal, refreshes badges, persists and audits
+    html =
+      view
+      |> form("#provider-limits-form",
+        provider: %{
+          max_rpm: "250",
+          max_concurrent: "12",
+          max_concurrent_per_user: "3",
+          receive_timeout_ms: "45000"
+        }
+      )
+      |> render_submit()
+
+    refute has_element?(view, "#provider-limits-modal")
+    assert html =~ "Proveedor actualizado."
+    assert has_element?(view, "#keys-provider-limits", "RPM 250")
+    assert has_element?(view, "#keys-provider-limits", "Conc. 12")
+    assert has_element?(view, "#keys-provider-limits", "Conc./usuario 3")
+    assert has_element?(view, "#keys-provider-limits", "45000 ms")
+
+    reloaded = Providers.get_provider!(provider.id)
+    assert reloaded.max_rpm == 250
+    assert reloaded.max_concurrent == 12
+    assert reloaded.max_concurrent_per_user == 3
+    assert reloaded.receive_timeout_ms == 45_000
+  end
 end

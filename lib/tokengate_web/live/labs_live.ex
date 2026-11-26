@@ -42,6 +42,11 @@ defmodule TokengateWeb.LabsLive do
       |> assign(:editing_key, nil)
       |> assign(:delete_target, nil)
       |> assign(:icon_choices, @icon_choices)
+      |> assign(:search_query, "")
+      |> assign(:filter_source, "all")
+      |> assign(:sort_field, :name)
+      |> assign(:sort_direction, :asc)
+      |> assign(:all_labs, [])
       |> require_admin_hook()
       |> stream_configure(:labs, dom_id: &"lab-#{&1.key}")
       |> load_labs()
@@ -61,15 +66,72 @@ defmodule TokengateWeb.LabsLive do
 
   ## Data loading -----------------------------------------------------------
 
-  # Sin filtros de ningún tipo: builtin y custom se listan siempre juntos y
-  # completos. La pantalla es para ver y administrar labs, no para acotarlos.
+  @lab_sort_fields %{
+    "name" => :name,
+    "source" => :source,
+    "model_count" => :model_count,
+    "last_updated" => :last_updated
+  }
+
   defp load_labs(socket) do
     labs = Providers.list_labs()
+
+    socket
+    |> assign(:all_labs, labs)
+    |> stream_labs()
+  end
+
+  defp stream_labs(socket) do
+    labs =
+      socket.assigns.all_labs
+      |> filter_labs_by_source(socket.assigns.filter_source)
+      |> filter_labs_by_query(socket.assigns.search_query)
+      |> sort_labs(socket.assigns.sort_field, socket.assigns.sort_direction)
 
     socket
     |> stream(:labs, labs, reset: true)
     |> assign(:labs_empty?, labs == [])
   end
+
+  defp filter_labs_by_source(labs, "all"), do: labs
+
+  defp filter_labs_by_source(labs, source) when source in ~w(custom builtin) do
+    Enum.filter(labs, &(&1.source == source))
+  end
+
+  defp filter_labs_by_source(labs, _other), do: labs
+
+  defp filter_labs_by_query(labs, query) do
+    needle = query |> to_string() |> String.trim() |> String.downcase()
+
+    if needle == "" do
+      labs
+    else
+      Enum.filter(labs, fn lab ->
+        String.contains?(String.downcase(lab.name || ""), needle) or
+          String.contains?(String.downcase(lab.key || ""), needle)
+      end)
+    end
+  end
+
+  defp sort_labs(labs, field, direction) do
+    Enum.sort_by(
+      labs,
+      fn lab -> {lab_sort_value(lab, field), String.downcase(lab.name || "")} end,
+      fn {val_a, name_a}, {val_b, name_b} ->
+        cond do
+          val_a == val_b -> name_a <= name_b
+          direction == :asc -> val_a < val_b
+          true -> val_a > val_b
+        end
+      end
+    )
+  end
+
+  defp lab_sort_value(lab, :name), do: String.downcase(lab.name || "")
+  defp lab_sort_value(lab, :source), do: lab.source || ""
+  defp lab_sort_value(lab, :model_count), do: lab.model_count || 0
+  defp lab_sort_value(lab, :last_updated), do: lab.last_updated || ""
 
   ## Events — form ----------------------------------------------------------
 
@@ -193,6 +255,50 @@ defmodule TokengateWeb.LabsLive do
     end
   end
 
+  def handle_event("search_labs", %{"q" => query}, socket) do
+    {:noreply,
+     socket
+     |> assign(:search_query, query)
+     |> stream_labs()}
+  end
+
+  def handle_event("search_labs", %{"value" => query}, socket) do
+    {:noreply,
+     socket
+     |> assign(:search_query, query)
+     |> stream_labs()}
+  end
+
+  def handle_event("filter_lab_source", %{"source" => source}, socket)
+      when source in ~w(all custom builtin) do
+    {:noreply,
+     socket
+     |> assign(:filter_source, source)
+     |> stream_labs()}
+  end
+
+  def handle_event("sort_labs", %{"field" => field}, socket) do
+    case Map.fetch(@lab_sort_fields, field) do
+      {:ok, sort_atom} ->
+        {sort_field, sort_direction} =
+          if socket.assigns.sort_field == sort_atom do
+            {sort_atom, if(socket.assigns.sort_direction == :asc, do: :desc, else: :asc)}
+          else
+            default_dir = if sort_atom in [:model_count, :last_updated], do: :desc, else: :asc
+            {sort_atom, default_dir}
+          end
+
+        {:noreply,
+         socket
+         |> assign(:sort_field, sort_field)
+         |> assign(:sort_direction, sort_direction)
+         |> stream_labs()}
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   ## Private helpers — save ------------------------------------------------
@@ -279,81 +385,122 @@ defmodule TokengateWeb.LabsLive do
           {gettext("Labs")}
           <:subtitle>{gettext("Who built each model. Builtins come from models.dev.")}</:subtitle>
           <:actions>
-            <.button phx-click="new_lab" id="new-lab-btn">
-              <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New custom lab")}
-            </.button>
+            <div class="flex flex-wrap items-center gap-3">
+              <.admin_search
+                event="search_labs"
+                value={@search_query}
+                placeholder={gettext("Search by name or key…")}
+                input_id="lab-search"
+              />
+              <.button phx-click="new_lab" id="new-lab-btn">
+                <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New custom lab")}
+              </.button>
+            </div>
           </:actions>
         </.header>
 
-        <%!-- El estado vacío va FUERA del contenedor del stream: phx-update
-             solo administra los hijos con id de stream. --%>
-        <.empty_state
-          :if={@labs_empty?}
-          id="labs-empty"
-          icon="hero-beaker"
-          title={gettext("No labs to show.")}
-        />
+        <div class="flex flex-wrap items-center gap-1.5" id="lab-filter-pills">
+          <button
+            :for={
+              {source, label} <- [
+                {"all", gettext("All")},
+                {"custom", gettext("Custom")},
+                {"builtin", gettext("Builtin")}
+              ]
+            }
+            type="button"
+            phx-click="filter_lab_source"
+            phx-value-source={source}
+            id={"filter-lab-source-#{source}"}
+            class={[
+              "btn btn-xs",
+              if(@filter_source == source, do: "btn-primary", else: "btn-ghost")
+            ]}
+          >
+            {label}
+          </button>
+        </div>
 
-        <div id="labs" phx-update="stream" class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <div :for={{dom_id, lab} <- @streams.labs} id={dom_id}>
-            <div class="card bg-base-100 border border-base-300 shadow-sm h-full">
-              <div class="card-body p-4">
-                <div class="flex items-start gap-3">
-                  <.lab_mark lab={lab} size="md" id={"lab-mark-#{lab.key}"} />
-
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2 flex-wrap">
-                      <h3 class="font-semibold truncate" id={"lab-name-#{lab.key}"}>{lab.name}</h3>
-                      <.lab_badge lab={lab} id={"lab-badge-#{lab.key}"} />
-                    </div>
-                    <p class="text-xs text-base-content/50 font-mono truncate">{lab.key}</p>
-                  </div>
-
-                  <%!-- Acciones al mismo nivel que el nombre, arriba a la derecha. --%>
-                  <%= if lab.source == "custom" do %>
-                    <div class="card-actions justify-end shrink-0 -mt-1 -mr-1">
-                      <button
-                        phx-click="edit_lab"
-                        phx-value-key={lab.key}
-                        class="btn btn-ghost btn-xs"
-                        id={"edit-lab-#{lab.key}"}
-                      >
-                        <.icon name="hero-pencil-square" class="w-3.5 h-3.5" /> Editar
-                      </button>
-                      <button
-                        phx-click="confirm_delete"
-                        phx-value-key={lab.key}
-                        class="btn btn-ghost btn-xs text-error"
-                        id={"delete-lab-#{lab.key}"}
-                      >
-                        <.icon name="hero-trash" class="w-3.5 h-3.5" /> Eliminar
-                      </button>
-                    </div>
-                  <% end %>
-                </div>
-
-                <div class="mt-3 flex items-center gap-4 text-xs text-base-content/60">
-                  <span class="flex items-center gap-1">
-                    <.icon name="hero-cpu-chip" class="w-3.5 h-3.5" />
-                    {lab.model_count} {if lab.model_count == 1,
-                      do: gettext("model"),
-                      else: gettext("models")}
-                  </span>
-                  <span :if={lab.last_updated} class="flex items-center gap-1">
-                    <.icon name="hero-calendar-days" class="w-3.5 h-3.5" />
-                    {lab.last_updated}
-                  </span>
-                  <span
-                    :if={lab.source != "custom"}
-                    class="ml-auto text-[11px] uppercase tracking-wide text-base-content/30"
-                    title={gettext("A catalog lab identity is written by the models.dev refresh")}
-                  >
-                    {gettext("From catalog")}
-                  </span>
+        <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
+          <.table
+            id="labs"
+            rows={@streams.labs}
+            row_item={fn {_id, lab} -> lab end}
+            row_class="align-top"
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
+            sort_event="sort_labs"
+            empty?={@labs_empty?}
+          >
+            <:col :let={lab} label={gettext("Lab")} field={:name}>
+              <div class="flex items-center gap-3">
+                <.lab_mark lab={lab} size="sm" id={"lab-mark-#{lab.key}"} />
+                <div class="min-w-0">
+                  <p class="font-semibold truncate" id={"lab-name-#{lab.key}"}>{lab.name}</p>
+                  <p class="text-xs text-base-content/50 font-mono truncate">{lab.key}</p>
                 </div>
               </div>
-            </div>
-          </div>
+            </:col>
+            <:col :let={lab} label={gettext("Source")} field={:source}>
+              <.lab_badge lab={lab} id={"lab-badge-#{lab.key}"} />
+            </:col>
+            <:col :let={lab} label={gettext("Models")} field={:model_count} align="right">
+              <.link
+                navigate={~p"/catalog/models?#{[q: lab.key]}"}
+                class="link link-hover inline-flex items-center gap-1 whitespace-nowrap"
+                id={"lab-models-#{lab.key}"}
+                title={gettext("View models from this lab")}
+              >
+                <.icon name="hero-cpu-chip" class="w-3.5 h-3.5" />
+                <span>
+                  {lab.model_count} {if lab.model_count == 1,
+                    do: gettext("model"),
+                    else: gettext("models")}
+                </span>
+              </.link>
+            </:col>
+            <:col :let={lab} label={gettext("Updated")} field={:last_updated}>
+              <span :if={lab.last_updated} class="text-xs text-base-content/60 font-mono">
+                {lab.last_updated}
+              </span>
+              <span :if={!lab.last_updated} class="text-base-content/30">—</span>
+            </:col>
+            <:action :let={lab}>
+              <%= if lab.source == "custom" do %>
+                <button
+                  phx-click="edit_lab"
+                  phx-value-key={lab.key}
+                  class="btn btn-xs btn-ghost"
+                  id={"edit-lab-#{lab.key}"}
+                  title={gettext("Edit")}
+                  aria-label={gettext("Edit")}
+                >
+                  <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
+                </button>
+                <button
+                  phx-click="confirm_delete"
+                  phx-value-key={lab.key}
+                  class="btn btn-xs btn-ghost text-error"
+                  id={"delete-lab-#{lab.key}"}
+                  title={gettext("Delete")}
+                  aria-label={gettext("Delete")}
+                >
+                  <.icon name="hero-trash" class="w-3.5 h-3.5" />
+                </button>
+              <% else %>
+                <span
+                  class="text-[11px] uppercase tracking-wide text-base-content/30 whitespace-nowrap"
+                  title={gettext("A catalog lab identity is written by the models.dev refresh")}
+                >
+                  {gettext("From catalog")}
+                </span>
+              <% end %>
+            </:action>
+            <:empty>
+              <.icon name="hero-beaker" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+              <p>{gettext("No labs to show.")}</p>
+            </:empty>
+          </.table>
         </div>
       </div>
 
@@ -485,6 +632,20 @@ defmodule TokengateWeb.LabsLive do
   attr :id, :string, required: true
 
   defp lab_mark(assigns) do
+    logo =
+      case Lab.mark(assigns.lab) do
+        {:logo, url} -> url
+        _ -> nil
+      end
+
+    icon =
+      case assigns.lab.icon do
+        i when is_binary(i) and i != "" -> i
+        _ -> LabCatalog.default_icon()
+      end
+
+    assigns = assign(assigns, logo: logo, icon: icon)
+
     ~H"""
     <span
       id={@id}
@@ -493,12 +654,18 @@ defmodule TokengateWeb.LabsLive do
         if(@size == "md", do: "w-10 h-10", else: "w-8 h-8")
       ]}
     >
-      <%= case Lab.mark(@lab) do %>
-        <% {:logo, url} -> %>
-          <img src={url} alt="" class="object-contain w-5 h-5" loading="lazy" />
-        <% {:icon, icon} -> %>
-          <.icon name={icon} class="w-5 h-5 text-neutral-600" />
-      <% end %>
+      <img
+        :if={@logo}
+        src={@logo}
+        alt=""
+        data-logo
+        class="object-contain w-5 h-5"
+        loading="lazy"
+      />
+      <.icon
+        name={@icon}
+        class={["w-5 h-5 text-neutral-600", @logo && "hidden"]}
+      />
     </span>
     """
   end
@@ -521,7 +688,7 @@ defmodule TokengateWeb.LabsLive do
           else: gettext("Lab source and status")
       }
     >
-      {if @lab.status == "stale", do: "obsoleto", else: @lab.source}
+      {if @lab.status == "stale", do: gettext("stale"), else: @lab.source}
     </span>
     """
   end
