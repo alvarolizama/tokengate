@@ -1,4 +1,4 @@
-defmodule Tokengate.Repo.Migrations.RemoveRerankSupport do
+defmodule Tokengate.Repo.Migrations.DemoteRerankModelAliases do
   use Ecto.Migration
 
   def up do
