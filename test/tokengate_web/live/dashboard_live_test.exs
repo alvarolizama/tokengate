@@ -366,7 +366,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    fixture = group_with_log(%{cost: "0.005", user: admin})
+    _fixture = group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -378,13 +378,120 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#bd-model-rows")
     assert has_element?(view, "#bd-model-rows #bd-model-unknown")
 
-    # Switch to member
+    # Switch to API key breakdown (unattributed when logs have no api_key_id)
     view |> element("#tab-member") |> render_click()
     assert has_element?(view, "#bd-member-rows")
-    assert has_element?(view, "#bd-member-rows #bd-member-#{fixture.member.id}")
+    assert has_element?(view, "#bd-member-rows #bd-member-unattributed")
 
     # Group tab is not rendered on the personal dashboard
     refute has_element?(view, "#tab-group")
+  end
+
+  test "by API key breakdown shows truthful per-key stats for the active period", %{conn: conn} do
+    %{user: owner, password: password} = register("user")
+    Collector.reset()
+
+    u = unique()
+    {:ok, group} = Accounts.create_group(%{name: "KeyGroup #{u}"})
+    {:ok, member} = Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
+
+    {:ok, prov} =
+      Providers.create_provider(%{name: "KP #{u}", base_url: "http://localhost:1"})
+
+    {_, hash_a, prefix_a} = Accounts.generate_api_key_material()
+
+    {:ok, key_a} =
+      Accounts.create_api_key(%{
+        "subject_type" => "member",
+        "user_id" => owner.id,
+        "group_member_id" => member.id,
+        "label" => "laptop",
+        "key_hash" => hash_a,
+        "key_prefix" => prefix_a,
+        "status" => "active"
+      })
+
+    {_, hash_b, prefix_b} = Accounts.generate_api_key_material()
+
+    {:ok, key_b} =
+      Accounts.create_api_key(%{
+        "subject_type" => "member",
+        "user_id" => owner.id,
+        "group_member_id" => member.id,
+        "label" => "ci-runner",
+        "key_hash" => hash_b,
+        "key_prefix" => prefix_b,
+        "status" => "revoked"
+      })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    old = DateTime.add(now, -40 * 86_400, :second)
+
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        user_id: owner.id,
+        api_key_id: key_a.id,
+        api_key_prefix: key_a.key_prefix,
+        provider_id: prov.id,
+        model_requested: "gpt-4o",
+        status_code: 200,
+        prompt_tokens: 200,
+        completion_tokens: 100,
+        provider_cost_usd: Decimal.new("0.0200"),
+        latency_ms: 500,
+        inserted_at: now
+      })
+
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        user_id: owner.id,
+        api_key_id: key_b.id,
+        api_key_prefix: key_b.key_prefix,
+        provider_id: prov.id,
+        model_requested: "gpt-4o",
+        status_code: 200,
+        prompt_tokens: 80,
+        completion_tokens: 40,
+        provider_cost_usd: Decimal.new("0.0050"),
+        latency_ms: 200,
+        inserted_at: now
+      })
+
+    # Outside active week period — must not inflate key_b's stats
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        user_id: owner.id,
+        api_key_id: key_b.id,
+        api_key_prefix: key_b.key_prefix,
+        provider_id: prov.id,
+        model_requested: "gpt-4o",
+        status_code: 200,
+        prompt_tokens: 999,
+        completion_tokens: 999,
+        provider_cost_usd: Decimal.new("9.9900"),
+        latency_ms: 100,
+        inserted_at: old
+      })
+
+    conn = login(conn, owner, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+    render_async(view)
+
+    view |> element("#tab-member") |> render_click()
+
+    assert has_element?(view, "#bd-member-rows #bd-member-#{key_a.id}", "laptop")
+    assert has_element?(view, "#bd-member-rows #bd-member-#{key_a.id}", "#{prefix_a}••••")
+    assert has_element?(view, "#bd-member-rows #bd-member-#{key_a.id}", "Activo")
+    assert has_element?(view, "#bd-member-rows #bd-member-#{key_a.id}", "$0.02")
+
+    assert has_element?(view, "#bd-member-rows #bd-member-#{key_b.id}", "ci-runner")
+    assert has_element?(view, "#bd-member-rows #bd-member-#{key_b.id}", "#{prefix_b}••••")
+    assert has_element?(view, "#bd-member-rows #bd-member-#{key_b.id}", "Revocada")
+    assert has_element?(view, "#bd-member-rows #bd-member-#{key_b.id}", "$0.005")
+    refute has_element?(view, "#bd-member-rows #bd-member-#{key_b.id}", "$9.99")
   end
 
   test "switching period reloads metrics", %{conn: conn} do
@@ -1268,5 +1375,133 @@ defmodule TokengateWeb.DashboardLiveTest do
     # El número se re-lee junto con la tarjeta. `has_element?` normaliza el
     # `<span>` interno del componente compartido, que separa gasto de techo.
     assert has_element?(view, "#group-#{group.id}", "15.0000 / 100.0000")
+  end
+
+  ## S4: SVG chart slot math, responsive grids, key card polish ------------
+
+  test "bar_chart and stacked_bar_chart fit 168 hourly bars within viewBox 10..390" do
+    series =
+      for i <- 1..168 do
+        %{label: "h#{i}", value: i * 1.0, tooltip: "#{i}"}
+      end
+
+    bar_html =
+      render_component(&TokengateWeb.DashboardLive.bar_chart/1,
+        id: "test-168-bar",
+        title: "Week cost",
+        series: series
+      )
+
+    bar_rects =
+      bar_html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("svg rect")
+
+    assert length(Enum.to_list(bar_rects)) == 168
+
+    for rect <- bar_rects do
+      [x_str] = LazyHTML.attribute(rect, "x")
+      [w_str] = LazyHTML.attribute(rect, "width")
+      {x, _} = Float.parse(x_str)
+      {w, _} = Float.parse(w_str)
+      assert x >= 10.0
+      assert w > 0.0
+      assert x + w <= 391.0
+    end
+
+    stacked_series =
+      for i <- 1..168 do
+        %{label: "h#{i}", value_in: i * 10.0, value_out: i * 5.0, tooltip: "#{i}"}
+      end
+
+    stacked_html =
+      render_component(&TokengateWeb.DashboardLive.stacked_bar_chart/1,
+        id: "test-168-stacked",
+        title: "Week tokens",
+        series: stacked_series
+      )
+
+    stacked_rects =
+      stacked_html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("svg rect")
+
+    assert length(Enum.to_list(stacked_rects)) == 336
+
+    for rect <- stacked_rects do
+      [x_str] = LazyHTML.attribute(rect, "x")
+      [w_str] = LazyHTML.attribute(rect, "width")
+      {x, _} = Float.parse(x_str)
+      {w, _} = Float.parse(w_str)
+      assert x >= 10.0
+      assert w > 0.0
+      assert x + w <= 391.0
+    end
+  end
+
+  test "charts grid and skeleton use responsive 2-column layout (never grid-cols-4)", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+    group_with_log(%{cost: "0.005", user: admin})
+
+    conn = login(conn, admin, password)
+
+    dead_html = conn |> get(~p"/dashboard") |> html_response(200)
+    doc = LazyHTML.from_document(dead_html)
+
+    chart_skeleton_parents =
+      LazyHTML.query(doc, "#metrics-skeleton > div:has([data-skeleton-chart])")
+
+    assert [chart_grid] = Enum.to_list(chart_skeleton_parents)
+    [chart_grid_class] = LazyHTML.attribute(chart_grid, "class")
+    assert chart_grid_class =~ "lg:grid-cols-2"
+    refute chart_grid_class =~ "lg:grid-cols-4"
+
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+    render_async(view)
+
+    assert has_element?(view, "#charts-grid.grid-cols-1.lg\\:grid-cols-2")
+    refute has_element?(view, "#charts-grid.grid-cols-4")
+  end
+
+  test "revoke button uses warning ghost style and manage keys shows active count badge", %{
+    conn: conn
+  } do
+    %{group: group, owner: owner, member: member, owner_password: password} =
+      group_with_member()
+
+    conn = login(conn, owner, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#revoke-#{member.id}.btn-ghost.text-warning")
+    refute has_element?(view, "#revoke-#{member.id}.btn-primary")
+    assert has_element?(view, "#active-keys-count-#{group.id}", "1")
+
+    view |> element("#manage-keys-#{group.id}") |> render_click()
+
+    view
+    |> element("#new-key-form")
+    |> render_submit(%{"key" => %{"label" => "second-key"}})
+
+    assert has_element?(view, "#active-keys-count-#{group.id}", "2")
+  end
+
+  test "cards section uses 2-column responsive grid when user also supervises services", %{
+    conn: conn
+  } do
+    %{user: user, password: password} = register("user")
+    _group = group_with_log(%{user: user})
+
+    u = unique()
+    {:ok, service} = Accounts.create_service(%{name: "BotGrid #{u}"})
+    {:ok, _} = Accounts.add_service_supervisor(service.id, user.id)
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#groups-section .grid.grid-cols-1.lg\\:grid-cols-2")
+    assert has_element?(view, "#supervised-services-card")
   end
 end

@@ -5,30 +5,29 @@
   current_path={@current_path}
 >
   <div class="space-y-6">
-    <div class="flex items-center justify-between flex-wrap gap-4">
-      <.header>
-        {gettext("Dashboard")}
-        <:subtitle>
-          <span class="inline-flex items-center gap-2">
-            <.icon name="hero-funnel" class="w-4 h-4 text-base-content/50" />
-            {@scope_label}
-          </span>
-        </:subtitle>
-      </.header>
-
+    <.header>
+      {gettext("Dashboard")}
+      <:subtitle>
+        <span class="inline-flex items-center gap-2">
+          <.icon name="hero-funnel" class="w-4 h-4 text-base-content/50" />
+          {@scope_label}
+        </span>
+      </:subtitle>
       <%!-- Period selector + loading spinner. The selector is the SHARED
            canonical one (same four windows and labels as /stats) and it
            patches the query string, so the active period lives in the URL. --%>
-      <div :if={@has_access} class="flex items-center gap-3">
-        <span
-          :if={@loading and @displayed_period != nil}
-          class="loading loading-spinner loading-sm text-primary"
-          id="dashboard-loading"
-          title={gettext("Refreshing metrics…")}
-        ></span>
-        <.period_selector target={~p"/dashboard"} period={@period} />
-      </div>
-    </div>
+      <:actions :if={@has_access}>
+        <div class="flex items-center gap-3">
+          <span
+            :if={@loading and @displayed_period != nil}
+            class="loading loading-spinner loading-sm text-primary"
+            id="dashboard-loading"
+            title={gettext("Refreshing metrics…")}
+          ></span>
+          <.period_selector target={~p"/dashboard"} period={@period} />
+        </div>
+      </:actions>
+    </.header>
 
     <%!-- One-time new token alert — verde de éxito: es una clave CREADA, no una
          advertencia; mismo tratamiento que el banner de /services. El token
@@ -111,15 +110,19 @@
           </p>
         </div>
       <% else %>
-        <%!-- All cards full width, stacked vertically --%>
-        <div class="grid grid-cols-1 gap-4 mb-6">
+        <% card_count = length(@groups) + if(@supervised_services_count > 0, do: 1, else: 0) %>
+        <div class={[
+          "grid grid-cols-1 gap-4",
+          card_count > 1 && "lg:grid-cols-2",
+          card_count > 0 && "mb-6"
+        ]}>
           <%= for t <- @groups do %>
             <div
               class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow h-full"
               id={"group-#{t.group.id}"}
             >
               <div class="card-body p-5 flex flex-col h-full">
-                <%!-- Header: group name, role, key status --%>
+                <%!-- Header: group name, key status --%>
                 <div class="flex items-center justify-between">
                   <div>
                     <h3 class="font-semibold text-base-content">{t.group.name}</h3>
@@ -143,11 +146,18 @@
                     <button
                       type="button"
                       phx-click="manage_keys"
-                      class="btn btn-ghost btn-xs"
+                      class="btn btn-soft btn-primary btn-xs gap-1.5"
                       id={"manage-keys-#{t.group.id}"}
                       title={gettext("View, create and revoke your API keys")}
                     >
-                      <.icon name="hero-key" class="w-3.5 h-3.5" /> {gettext("Manage keys")}
+                      <.icon name="hero-key" class="w-3.5 h-3.5" />
+                      <span>{gettext("Manage keys")}</span>
+                      <span
+                        class="badge badge-xs badge-primary"
+                        id={"active-keys-count-#{t.group.id}"}
+                      >
+                        {@active_keys_count}
+                      </span>
                     </button>
                   </div>
                   <div class="flex items-center gap-1" id={"api-key-row-#{t.membership.id}"}>
@@ -174,7 +184,7 @@
                           "Revoke this key? A new one is issued and this token stops working."
                         )
                       }
-                      class="btn btn-sm btn-primary"
+                      class="btn btn-ghost btn-sm text-warning"
                       id={"revoke-#{t.membership.id}"}
                       title={
                         gettext(
@@ -225,7 +235,7 @@
                     <button
                       phx-click="generate_key"
                       phx-value-id={t.membership.id}
-                      class="btn btn-sm btn-primary"
+                      class="btn btn-sm btn-primary btn-soft"
                       id={"generate-#{t.membership.id}"}
                     >
                       <.icon name="hero-key" class="w-4 h-4" /> {gettext("Generate key")}
@@ -237,28 +247,23 @@
                 <div class="mt-auto pt-4 border-t border-base-200 space-y-3">
                   <div>
                     <%= if credit_visible?(t.credit) do %>
-                      <div class="flex items-center justify-between text-xs">
+                      <% cpct = credit_pct(t.credit) %>
+                      <div class="flex items-center justify-between text-xs mb-1.5">
                         <span class="text-base-content/60">{gettext("Monthly cap")}</span>
-                        <span class="font-mono">
-                          {format_decimal(t.credit.limit_spend_usd)}
-                          <span class="text-base-content/40">/ {format_decimal(t.credit.limit_usd)}</span>
-                        </span>
+                        <.budget_badge pct={cpct} />
                       </div>
-                      <div class="mt-1 h-2 rounded-full bg-base-200 overflow-hidden">
-                        <% cpct = credit_pct(t.credit) %>
-                        <div
-                          class={["h-full rounded-full transition-all", budget_bar_class(cpct)]}
-                          style={budget_bar_width(cpct)}
-                        >
-                        </div>
-                      </div>
+                      <.budget_bar
+                        spend={t.credit.limit_spend_usd}
+                        limit={t.credit.limit_usd}
+                        pct={cpct}
+                      />
                       <div
                         :if={Decimal.compare(t.credit.remaining_topup_usd, 0) == :gt}
-                        class="flex items-center justify-between text-xs"
+                        class="flex items-center justify-between text-xs mt-2"
                       >
                         <span class="text-base-content/60">{gettext("Available top-ups")}</span>
                         <span class="font-mono text-success">
-                          {format_decimal(t.credit.remaining_topup_usd)}
+                          ${format_decimal(t.credit.remaining_topup_usd)}
                         </span>
                       </div>
                     <% else %>
@@ -269,6 +274,15 @@
                       <div class="flex items-center justify-between text-xs mt-1">
                         <span class="text-base-content/60">{gettext("Monthly spend")}</span>
                         <span class="font-mono">${format_decimal(t.monthly_spend)}</span>
+                      </div>
+                      <div
+                        :if={t.credit && Decimal.compare(t.credit.remaining_topup_usd, 0) == :gt}
+                        class="flex items-center justify-between text-xs mt-1"
+                      >
+                        <span class="text-base-content/60">{gettext("Available top-ups")}</span>
+                        <span class="font-mono text-success">
+                          ${format_decimal(t.credit.remaining_topup_usd)}
+                        </span>
                       </div>
                     <% end %>
                   </div>
@@ -326,7 +340,7 @@
               </div>
             </div>
           </div>
-          <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div
               :for={i <- 1..4}
               class="card bg-base-100 border border-base-300 shadow-sm animate-pulse"
@@ -408,22 +422,6 @@
                     >
                       {gettext("By API key")}
                     </button>
-                    <%= if has_breakdown_data?(@breakdown_group) do %>
-                      <button
-                        phx-click="set_breakdown"
-                        phx-value-tab="group"
-                        class={[
-                          "join-item btn btn-sm",
-                          if(breakdown_tab_active?(@active_breakdown, "group"),
-                            do: "btn-primary",
-                            else: "btn-ghost"
-                          )
-                        ]}
-                        id="tab-group"
-                      >
-                        {gettext("By limit profile")}
-                      </button>
-                    <% end %>
                   </div>
                 </div>
 
@@ -469,56 +467,40 @@
                   <% end %>
                 <% end %>
 
-                <%!-- Member (API key) breakdown --%>
+                <%!-- API key breakdown --%>
                 <%= if @active_breakdown == "member" do %>
                   <%= if has_breakdown_data?(@breakdown_member) do %>
                     <div class="overflow-x-auto mt-3">
                       <.table
                         id="bd-member-rows"
                         rows={@breakdown_member}
-                        row_id={fn row -> "bd-member-#{row.group_member_id}" end}
+                        row_id={fn row -> row.dom_id end}
                       >
-                        <:col :let={row} label={gettext("Limit profile")}>
-                          {row.group_name}
+                        <:col :let={row} label={gettext("API key")}>
+                          <%= cond do %>
+                            <% row.label -> %>
+                              <div class="font-medium">{row.label}</div>
+                              <code
+                                :if={row.masked_prefix}
+                                class="text-xs font-mono text-base-content/50"
+                              >
+                                {row.masked_prefix}
+                              </code>
+                            <% row.masked_prefix -> %>
+                              <code class="text-sm font-mono">{row.masked_prefix}</code>
+                            <% true -> %>
+                              <span class="text-base-content/60">{gettext("Unattributed")}</span>
+                          <% end %>
                         </:col>
-                        <:col :let={row} label={gettext("User")}>
-                          <span class="font-mono text-sm">{row.user_email}</span>
-                        </:col>
-                        <:col :let={row} label={gettext("Requests")} align="right">
-                          <span class="font-mono">{format_number(row.request_count)}</span>
-                        </:col>
-                        <:col :let={row} label={gettext("Cost")} align="right">
-                          <span class="font-mono">${format_decimal(row.cost_usd)}</span>
-                        </:col>
-                        <:col :let={row} label={gettext("Tokens in")} align="right">
-                          <span class="font-mono">{format_number(row.prompt_tokens)}</span>
-                        </:col>
-                        <:col :let={row} label={gettext("Tokens out")} align="right">
-                          <span class="font-mono">{format_number(row.completion_tokens)}</span>
-                        </:col>
-                        <:col :let={row} label={gettext("TPS")} align="right">
-                          <span class="font-mono">{format_tps(row.avg_tps)}</span>
-                        </:col>
-                      </.table>
-                    </div>
-                  <% else %>
-                    <p class="text-sm text-base-content/40 py-6 text-center">
-                      {gettext("No data for this period.")}
-                    </p>
-                  <% end %>
-                <% end %>
-
-                <%!-- Group breakdown --%>
-                <%= if @active_breakdown == "group" do %>
-                  <%= if has_breakdown_data?(@breakdown_group) do %>
-                    <div class="overflow-x-auto mt-3">
-                      <.table
-                        id="bd-group-rows"
-                        rows={@breakdown_group}
-                        row_id={fn row -> "bd-group-#{row.group_id}" end}
-                      >
-                        <:col :let={row} label={gettext("Limit profile")}>
-                          <span class="font-medium">{row.group_name}</span>
+                        <:col :let={row} label={gettext("Status")}>
+                          <%= case row.status do %>
+                            <% "active" -> %>
+                              <span class="badge badge-sm badge-success">{gettext("Active")}</span>
+                            <% "revoked" -> %>
+                              <span class="badge badge-sm badge-error">{gettext("Revoked")}</span>
+                            <% _ -> %>
+                              <span class="text-base-content/40">—</span>
+                          <% end %>
                         </:col>
                         <:col :let={row} label={gettext("Requests")} align="right">
                           <span class="font-mono">{format_number(row.request_count)}</span>
@@ -547,7 +529,7 @@
             </div>
 
             <%!-- Charts: cost / requests / tokens per hour --%>
-            <div class="grid grid-cols-4 gap-4" id="charts-grid">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="charts-grid">
               <.bar_chart
                 id="cost-chart"
                 title={chart_title(title_period)}

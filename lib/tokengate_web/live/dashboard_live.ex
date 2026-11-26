@@ -30,23 +30,26 @@ defmodule TokengateWeb.DashboardLive do
 
   use TokengateWeb, :live_view
 
+  import Ecto.Query, only: [from: 2, where: 3]
   import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
   import TokengateWeb.KeysPanel
 
-  # `period_selector/1` and `period_label/1` come from the shared stats
-  # helpers: the four canonical windows have ONE source
-  # (`Periods.canonical_periods/0`), and the dashboard must not grow its own
-  # copy of the list or of the labels again.
-  import TokengateWeb.StatsHelpers, only: [period_label: 1, period_selector: 1]
+  # `period_selector/1`, `period_label/1`, and `budget_bar/1` come from the
+  # shared stats helpers: the four canonical windows and budget thresholds have
+  # ONE source, and the dashboard must not grow its own copy.
+  import TokengateWeb.StatsHelpers,
+    only: [budget_badge: 1, budget_bar: 1, credit_pct: 1, period_label: 1, period_selector: 1]
 
   alias Tokengate.Accounts
   alias Tokengate.Accounts.ApiKey
+  alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Metrics.StatsQueries
   alias Tokengate.Periods
   alias Tokengate.Providers
   alias Tokengate.Providers.Model
+  alias Tokengate.Repo
   alias TokengateWeb.KpiHelpers
 
   @pubsub Tokengate.PubSub
@@ -73,12 +76,8 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:requests_series, [])
       |> assign(:tokens_series, [])
       |> assign(:tps_series, [])
-      |> assign(:top_models, [])
-      |> assign(:top_groups, [])
-      |> assign(:top_members, [])
       |> assign(:breakdown_model, [])
       |> assign(:breakdown_member, [])
-      |> assign(:breakdown_group, [])
       |> assign(:active_breakdown, "model")
       |> assign(:scope_label, "Personal")
       # Scope por USUARIO (identidad durable, `request_logs.user_id`): la
@@ -357,7 +356,8 @@ defmodule TokengateWeb.DashboardLive do
          socket
          |> assign(:new_key_token, token)
          |> put_flash(:info, gettext("Key created. Copy it now: it is not shown again."))
-         |> load_user_keys(user.id)}
+         |> load_user_keys(user.id)
+         |> reload_personal_data(user)}
 
       {:error, _changeset} ->
         {:noreply, put_flash(socket, :error, gettext("Could not create the key."))}
@@ -475,7 +475,7 @@ defmodule TokengateWeb.DashboardLive do
   ## Events — breakdown tabs ------------------------------------------------
 
   def handle_event("set_breakdown", %{"tab" => tab}, socket)
-      when tab in ~w(model member group) do
+      when tab in ~w(model member) do
     {:noreply, assign(socket, :active_breakdown, tab)}
   end
 
@@ -493,6 +493,7 @@ defmodule TokengateWeb.DashboardLive do
     socket
     |> assign(:memberships, data.memberships)
     |> assign(:groups, data.groups)
+    |> assign(:active_keys_count, Map.get(data, :active_keys_count, 0))
     |> assign(:has_access, data.has_access)
   end
 
@@ -548,6 +549,7 @@ defmodule TokengateWeb.DashboardLive do
     %{
       memberships: memberships,
       groups: groups,
+      active_keys_count: length(active_keys),
       has_access: user.global_role == "admin" or groups != []
     }
   end
@@ -682,16 +684,9 @@ defmodule TokengateWeb.DashboardLive do
     tokens_series = to_token_points(series_with_tps, period, timezone)
     tps_series = to_chart_points(series_with_tps, period, :tps, &tps_tooltip/1, timezone)
 
-    # Breakdowns — ONE grouped read per half (rollup + tail) for the two
-    # tables: both are pivots of the same (user, membership, group, model)
-    # rows, so batching them removes a full scan without changing the UI
-    # contract (structures identical to breakdown_by_model/_member).
     breakdown_opts = Keyword.put(opts, :user_ids, user_ids)
-
-    {breakdown_model, breakdown_member} =
-      StatsQueries.breakdown_by_model_and_member(breakdown_opts)
-
-    # Model usage stats
+    breakdown_model = StatsQueries.breakdown_by_model(nil, breakdown_opts)
+    breakdown_member = breakdown_by_api_key(user_ids, opts)
 
     %{
       metrics: metrics,
@@ -701,11 +696,93 @@ defmodule TokengateWeb.DashboardLive do
       tps_series: tps_series,
       breakdown_model: breakdown_model,
       model_marks: model_marks_for(breakdown_model),
-      top_models: top_model_rows(breakdown_model),
-      breakdown_member: breakdown_member,
-      top_members: top_member_rows(breakdown_member)
+      breakdown_member: breakdown_member
     }
   end
+
+  defp breakdown_by_api_key([], _opts), do: []
+
+  defp breakdown_by_api_key(user_ids, opts) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    query =
+      from(rl in RequestLog,
+        where: rl.user_id in ^user_ids and rl.inserted_at >= ^from,
+        left_join: ak in ApiKey,
+        on: rl.api_key_id == ak.id and is_nil(ak.hidden_at),
+        group_by: [
+          rl.api_key_id,
+          fragment("CASE WHEN ? IS NULL THEN ? ELSE NULL END", rl.api_key_id, rl.api_key_prefix),
+          ak.id,
+          ak.label,
+          ak.key_prefix,
+          ak.status
+        ],
+        order_by: [
+          desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+          desc: count(rl.id)
+        ],
+        select: %{
+          api_key_id: rl.api_key_id,
+          api_key_prefix: max(rl.api_key_prefix),
+          key_label: ak.label,
+          key_prefix: ak.key_prefix,
+          key_status: ak.status,
+          request_count: count(rl.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+          prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+          completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+          total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", rl.latency_ms)
+        }
+      )
+
+    query =
+      if to do
+        where(query, [rl], rl.inserted_at <= ^to)
+      else
+        query
+      end
+
+    query
+    |> Repo.all(timeout: 15_000)
+    |> Enum.map(&normalize_api_key_breakdown_row/1)
+  end
+
+  defp normalize_api_key_breakdown_row(row) do
+    prefix = row.key_prefix || row.api_key_prefix
+    masked_prefix = if is_binary(prefix) and prefix != "", do: "#{prefix}••••", else: nil
+
+    dom_id =
+      cond do
+        is_binary(row.api_key_id) -> "bd-member-#{row.api_key_id}"
+        is_binary(prefix) and prefix != "" -> "bd-member-prefix-#{prefix}"
+        true -> "bd-member-unattributed"
+      end
+
+    label =
+      case row.key_label do
+        l when is_binary(l) and l != "" -> l
+        _ -> nil
+      end
+
+    %{
+      dom_id: dom_id,
+      api_key_id: row.api_key_id,
+      label: label,
+      masked_prefix: masked_prefix,
+      status: row.key_status,
+      request_count: row.request_count,
+      cost_usd: Decimal.new(to_string(row.cost_usd)),
+      prompt_tokens: row.prompt_tokens,
+      completion_tokens: row.completion_tokens,
+      avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+    }
+  end
+
+  defp compute_tps(_tokens, 0), do: nil
+  defp compute_tps(0, _latency), do: 0.0
+  defp compute_tps(tokens, latency), do: tokens / (latency / 1000)
 
   # Marca de cada modelo del desglose, resuelta en lote: `%{model_id => mark}`.
   # El desglose sale de los logs y solo trae id + nombre; la marca (logo del lab
@@ -744,11 +821,7 @@ defmodule TokengateWeb.DashboardLive do
     |> assign(:tps_series, bundle.tps_series)
     |> assign(:breakdown_model, bundle.breakdown_model)
     |> assign(:model_marks, Map.get(bundle, :model_marks, %{}))
-    |> assign(:top_models, bundle.top_models)
     |> assign(:breakdown_member, bundle.breakdown_member)
-    |> assign(:top_members, bundle.top_members)
-    |> assign(:breakdown_group, [])
-    |> assign(:top_groups, [])
     |> assign(:displayed_period, socket.assigns[:period])
     |> assign(:loading, false)
   end
@@ -838,33 +911,6 @@ defmodule TokengateWeb.DashboardLive do
         value_in: in_val,
         value_out: out_val,
         tooltip: "#{format_compact(trunc(in_val))} in / #{format_compact(trunc(out_val))} out"
-      }
-    end)
-  end
-
-  # Top 5 models by real (paid) cost for the horizontal-bars chart
-  defp top_model_rows(breakdown_model) do
-    top_rows(breakdown_model, & &1.model_name)
-  end
-
-  # Top 5 members by real (paid) cost for the horizontal-bars chart
-  defp top_member_rows(breakdown_member) do
-    top_rows(breakdown_member, & &1.user_email)
-  end
-
-  # Shared ranking logic: sort by cost_usd desc, take 5,
-  # normalize to %{label, value, tooltip} for `hbars_chart`.
-  defp top_rows(rows, label_fun) do
-    rows
-    |> Enum.sort_by(fn row -> Decimal.to_float(row.cost_usd) end, :desc)
-    |> Enum.take(5)
-    |> Enum.map(fn row ->
-      cost = Decimal.to_float(row.cost_usd)
-
-      %{
-        label: label_fun.(row),
-        value: cost,
-        tooltip: "$#{Float.round(cost, 6)} · #{row.request_count} req"
       }
     end)
   end
@@ -1078,56 +1124,11 @@ defmodule TokengateWeb.DashboardLive do
   def key_status_label(%{api_key: %{status: "revoked"}}), do: gettext("Revoked")
   def key_status_label(_), do: gettext("No key")
 
-  ## Budget helpers -------------------------------------------------------
-
-  def budget_pct(_spend, nil), do: nil
-
-  def budget_pct(spend, limit) when is_struct(limit, Decimal) do
-    spend = Decimal.to_float(spend)
-    limit = Decimal.to_float(limit)
-    if limit > 0, do: Float.round(spend / limit * 100, 1), else: 0.0
-  end
-
-  def budget_pct(spend, limit) when is_number(limit) do
-    spend = Decimal.to_float(spend)
-    if limit > 0, do: Float.round(spend / limit * 100, 1), else: 0.0
-  end
-
-  @doc "Returns CSS width string for budget bar, safe for nil limits."
-  def budget_bar_width(nil), do: "width: 0%"
-  def budget_bar_width(pct) when is_number(pct), do: "width: #{min(pct, 100)}%"
-
-  def budget_bar_class(pct) when is_number(pct) do
-    cond do
-      pct >= 90 -> "bg-error"
-      pct >= 70 -> "bg-warning"
-      true -> "bg-success"
-    end
-  end
-
-  def budget_bar_class(_), do: "bg-base-300"
-
   ## Credit helpers --------------------------------------------------------
 
   @doc "¿Hay límite mensual definido para el sujeto? (nil = sin límite)."
   def credit_visible?(%{limit_usd: limit}), do: not is_nil(limit)
   def credit_visible?(_), do: false
-
-  @doc "Porcentaje consumido del límite mensual efectivo (nil = sin límite)."
-  def credit_pct(%{limit_usd: limit, limit_spend_usd: spent}) when not is_nil(limit) do
-    if Decimal.compare(limit, 0) != :gt do
-      100.0
-    else
-      spent
-      |> Decimal.div(limit)
-      |> Decimal.mult(100)
-      |> Decimal.round(1)
-      |> Decimal.to_float()
-      |> min(100.0)
-    end
-  end
-
-  def credit_pct(_), do: nil
 
   @doc "Formatea un monto en micro-USD como USD."
   def format_micro(micro) when is_integer(micro) do
@@ -1174,11 +1175,15 @@ defmodule TokengateWeb.DashboardLive do
   def bar_chart(assigns) do
     max_value = chart_max_value(assigns.series)
     bar_count = max(length(assigns.series), 1)
+    slot = 380.0 / bar_count
+    gap = min(4.0, slot * 0.25)
+    bar_width = max(slot - gap, 0.8)
 
     assigns =
       assigns
       |> assign(:max_value, max_value)
-      |> assign(:bar_width, max(380 / bar_count - 4, 2))
+      |> assign(:slot, slot)
+      |> assign(:bar_width, bar_width)
       |> assign(:y_labels, compute_y_labels(max_value))
       |> assign(:x_labels, compute_x_labels(assigns.series))
 
@@ -1207,7 +1212,7 @@ defmodule TokengateWeb.DashboardLive do
               <svg viewBox="0 0 400 150" class="flex-1 h-40" preserveAspectRatio="none">
                 <%= for {row, i} <- Enum.with_index(@series) do %>
                   <% height = if @max_value > 0, do: max(row.value / @max_value * 120, 1), else: 1 %>
-                  <% x = 10 + i * (@bar_width + 4) %>
+                  <% x = 10.0 + i * @slot %>
                   <% y = 140 - height %>
                   <rect
                     x={x}
@@ -1264,11 +1269,15 @@ defmodule TokengateWeb.DashboardLive do
       |> Enum.max(fn -> 0.0 end)
 
     bar_count = max(length(assigns.series), 1)
+    slot = 380.0 / bar_count
+    gap = min(4.0, slot * 0.25)
+    bar_width = max(slot - gap, 0.8)
 
     assigns =
       assigns
       |> assign(:max_value, max_value)
-      |> assign(:bar_width, max(380 / bar_count - 4, 2))
+      |> assign(:slot, slot)
+      |> assign(:bar_width, bar_width)
       |> assign(:y_labels, compute_y_labels(max_value))
       |> assign(:x_labels, compute_x_labels(assigns.series))
 
@@ -1298,7 +1307,7 @@ defmodule TokengateWeb.DashboardLive do
                     if @max_value > 0, do: max(row.value_in / @max_value * 120, 0), else: 0 %>
                   <% out_height =
                     if @max_value > 0, do: max(row.value_out / @max_value * 120, 0), else: 0 %>
-                  <% x = 10 + i * (@bar_width + 4) %>
+                  <% x = 10.0 + i * @slot %>
                   <% out_y = 140 - out_height %>
                   <% in_y = out_y - in_height %>
                   <rect
@@ -1348,48 +1357,6 @@ defmodule TokengateWeb.DashboardLive do
               <%= for label <- @x_labels do %>
                 <span>{label}</span>
               <% end %>
-            </div>
-          </div>
-        <% end %>
-      </div>
-    </div>
-    """
-  end
-
-  attr :id, :string, required: true
-  attr :title, :string, required: true
-  attr :icon, :string, default: "hero-chart-bar-square"
-  attr :rows, :list, required: true
-  attr :empty_label, :string, default: "No data for this period."
-
-  def hbars_chart(assigns) do
-    assigns = assign(assigns, :max_value, chart_max_value(assigns.rows))
-
-    ~H"""
-    <div id={@id} class="card bg-base-100 border border-base-300 shadow-sm">
-      <div class="card-body">
-        <h2 class="card-title text-base">
-          <.icon name={@icon} class="w-5 h-5 text-base-content/60" />
-          {@title}
-        </h2>
-
-        <%= if @rows == [] or @max_value == 0.0 do %>
-          <div class="h-40 flex items-center justify-center text-base-content/40 text-sm">
-            {TokengateWeb.Gettext.translate(@empty_label)}
-          </div>
-        <% else %>
-          <div class="mt-4 space-y-3">
-            <div :for={row <- @rows} class="group">
-              <div class="flex items-center justify-between text-xs mb-1 gap-2">
-                <span class="font-medium truncate" title={row.label}>{row.label}</span>
-                <span class="font-mono text-base-content/60 whitespace-nowrap">{row.tooltip}</span>
-              </div>
-              <div class="h-2.5 rounded-full bg-base-200 overflow-hidden">
-                <div
-                  class="h-full rounded-full bg-primary/70 group-hover:bg-primary transition-all"
-                  style={"width: #{Float.round(max(row.value / @max_value * 100, 2.0), 1)}%"}
-                />
-              </div>
             </div>
           </div>
         <% end %>
