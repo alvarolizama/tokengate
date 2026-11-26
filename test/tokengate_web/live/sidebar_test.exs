@@ -103,12 +103,11 @@ defmodule TokengateWeb.SidebarTest do
 
     assert positions == Enum.sort(positions)
 
-    # Inside a section the links render in this order too. Labs goes before
-    # Proveedores (a lab is independent from any provider); en Presupuesto los
-    # perfiles de límites van antes de los top-ups.
+    # Inside a section the links render in this order too. In Catalog:
+    # Models -> Providers -> Labs; en Presupuesto los perfiles van antes de los top-ups.
     for {first, second} <- [
-          {"sidebar-link-catalog-labs", "sidebar-link-catalog-providers"},
-          {"sidebar-link-catalog-providers", "sidebar-link-catalog-models"},
+          {"sidebar-link-catalog-models", "sidebar-link-catalog-providers"},
+          {"sidebar-link-catalog-providers", "sidebar-link-catalog-labs"},
           {"sidebar-link-access-services", "sidebar-link-access-users"},
           {"sidebar-link-budget-profiles", "sidebar-link-budget-topups"}
         ] do
@@ -151,11 +150,12 @@ defmodule TokengateWeb.SidebarTest do
     refute has_element?(drill, "#sidebar-link-budget-topups[aria-current]")
   end
 
-  test "la entrada de presupuesto se llama «Perfiles de límites»", %{conn: conn} do
+  test "la entrada de presupuesto se llama «Perfiles»", %{conn: conn} do
     {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/providers")
 
     assert has_element?(view, "#sidebar-section-budget", "Presupuesto")
-    assert has_element?(view, "#sidebar-link-budget-profiles", "Perfiles de límites")
+    assert has_element?(view, "#sidebar-link-budget-profiles", "Perfiles")
+    refute has_element?(view, "#sidebar-link-budget-profiles", "Perfiles de límites")
 
     # El vocabulario viejo ya no se renderiza.
     refute has_element?(view, "#sidebar-section-budget", "Presupuestos mensuales")
@@ -279,5 +279,101 @@ defmodule TokengateWeb.SidebarTest do
 
     assert has_element?(view, "#sidebar-link-catalog-models[data-phx-link='redirect']")
     assert has_element?(view, "#sidebar-link-budget-topups[data-phx-link='redirect']")
+  end
+
+  describe "S1 foundation primitives" do
+    test "CoreComponents.header/1 includes flex-wrap when actions are present" do
+      html =
+        render_component(&TokengateWeb.CoreComponents.header/1, %{
+          inner_block: [%{__slot__: :inner_block, inner_block: fn _, _ -> "Title" end}],
+          actions: [%{__slot__: :actions, inner_block: fn _, _ -> "Action" end}]
+        })
+
+      assert html =~ "flex-wrap"
+      assert html =~ "Title"
+      assert html =~ "Action"
+    end
+
+    test "KpiHelpers.kpi_cards/1 uses mobile-first grid and wraps #kpi-tokens" do
+      html =
+        render_component(&TokengateWeb.KpiHelpers.kpi_cards/1, %{
+          metrics: TokengateWeb.KpiHelpers.empty_metrics()
+        })
+
+      assert html =~ "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
+      assert html =~ ~r/id="kpi-tokens"[\s\S]*flex-wrap/
+    end
+
+    test "StatsHelpers.list_search/1 renders form wrapper with debounce and no phx-keyup" do
+      html =
+        render_component(&TokengateWeb.StatsHelpers.list_search/1, %{
+          id: "test-list-search",
+          value: "abc",
+          placeholder: "Filter..."
+        })
+
+      assert html =~ ~s(<form)
+      assert html =~ ~s(id="test-list-search-form")
+      assert html =~ ~s(phx-change="filter_list")
+      assert html =~ ~s(phx-submit="filter_list")
+      assert html =~ ~s(id="test-list-search")
+      assert html =~ ~s(name="value")
+      assert html =~ ~s(phx-debounce="250")
+      refute html =~ "phx-keyup"
+    end
+
+    test "StatsHelpers.show_more/1 translates via gettext (EN and ES)" do
+      TokengateWeb.Gettext.put_locale("en")
+
+      html_en =
+        render_component(&TokengateWeb.StatsHelpers.show_more/1, %{
+          key: "models",
+          id: "models-more",
+          top: 10,
+          total: 15
+        })
+
+      assert html_en =~ "Show more (5 remaining)"
+
+      TokengateWeb.Gettext.put_locale("es")
+
+      html_es =
+        render_component(&TokengateWeb.StatsHelpers.show_more/1, %{
+          key: "models",
+          id: "models-more",
+          top: 10,
+          total: 15
+        })
+
+      assert html_es =~ "Ver más (5 restantes)"
+    end
+
+    test "AdminComponents.admin_pagination/1 translates range via gettext (EN and ES)" do
+      TokengateWeb.Gettext.put_locale("en")
+
+      html_en =
+        render_component(&TokengateWeb.AdminComponents.admin_pagination/1, %{
+          id: "users-pagination",
+          page: 1,
+          per_page: 10,
+          total: 25,
+          total_pages: 3
+        })
+
+      assert html_en =~ "1–10 of 25"
+
+      TokengateWeb.Gettext.put_locale("es")
+
+      html_es =
+        render_component(&TokengateWeb.AdminComponents.admin_pagination/1, %{
+          id: "users-pagination",
+          page: 1,
+          per_page: 10,
+          total: 25,
+          total_pages: 3
+        })
+
+      assert html_es =~ "1–10 de 25"
+    end
   end
 end

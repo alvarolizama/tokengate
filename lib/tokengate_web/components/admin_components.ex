@@ -222,7 +222,9 @@ defmodule TokengateWeb.AdminComponents do
       class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 px-4 py-3"
     >
       <div class="flex items-center gap-2 text-xs text-base-content/60">
-        <span id={"#{@id}-range"}>{@from}–{@to} de {@total}</span>
+        <span id={"#{@id}-range"}>
+          {gettext("%{from}–%{to} of %{total}", from: @from, to: @to, total: @total)}
+        </span>
       </div>
 
       <div class="flex items-center gap-1" id={"#{@id}-nav"}>

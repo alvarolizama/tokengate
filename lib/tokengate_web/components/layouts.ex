@@ -360,13 +360,13 @@ defmodule TokengateWeb.Layouts do
 
           <%= if admin?(@current_scope) do %>
             <.nav_group label={gettext("Catalog")} id="sidebar-section-catalogo">
-              <%!-- Labs (quién construyó cada modelo) va antes de Proveedores:
-                   el lab es el nivel más alto y no depende del proveedor. --%>
+              <%!-- Modelos primero (el catálogo que administra el gateway),
+                   luego Proveedores (con el badge de alertas) y Labs al final. --%>
               <.nav_link
-                label={gettext("Labs")}
-                icon="hero-beaker"
-                path={~p"/catalog/labs"}
-                active={active_path?(@current_path, ~p"/catalog/labs")}
+                label={gettext("Models")}
+                icon="hero-rectangle-stack"
+                path={~p"/catalog/models"}
+                active={active_path?(@current_path, ~p"/catalog/models")}
               />
               <.nav_link
                 label={gettext("Providers")}
@@ -377,10 +377,10 @@ defmodule TokengateWeb.Layouts do
                 badge_kind="badge-error"
               />
               <.nav_link
-                label={gettext("Models")}
-                icon="hero-rectangle-stack"
-                path={~p"/catalog/models"}
-                active={active_path?(@current_path, ~p"/catalog/models")}
+                label={gettext("Labs")}
+                icon="hero-beaker"
+                path={~p"/catalog/labs"}
+                active={active_path?(@current_path, ~p"/catalog/labs")}
               />
             </.nav_group>
 
@@ -407,7 +407,7 @@ defmodule TokengateWeb.Layouts do
                    un solo uso. Por eso la sección es Presupuesto, no Acceso
                    ni Operaciones. --%>
               <.nav_link
-                label={gettext("Limit profiles")}
+                label={gettext("Profiles")}
                 icon="hero-user-group"
                 path={~p"/budget/profiles"}
                 active={active_path?(@current_path, ~p"/budget/profiles")}

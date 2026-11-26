@@ -627,7 +627,7 @@ defmodule TokengateWeb.StatsHelpers do
   # derecha. Los tres comparten estos componentes para verse iguales.
 
   @doc """
-  Buscador en vivo de un listado. Emite `filter_list` en cada tecla con
+  Buscador en vivo de un listado. Emite `filter_list` con
   `%{"value" => texto}`; el LiveView re-renderiza el listado filtrado.
   """
   attr :id, :string, required: true
@@ -636,16 +636,24 @@ defmodule TokengateWeb.StatsHelpers do
 
   def list_search(assigns) do
     ~H"""
-    <.input
-      type="text"
-      name="q"
-      id={@id}
-      value={@value}
-      placeholder={@placeholder}
-      phx-keyup="filter_list"
-      phx-change="filter_list"
-      autocomplete="off"
-    />
+    <.form for={%{}} phx-change="filter_list" phx-submit="filter_list" id={"#{@id}-form"}>
+      <div class="relative">
+        <.icon
+          name="hero-magnifying-glass"
+          class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
+        />
+        <input
+          type="text"
+          name="value"
+          id={@id}
+          value={@value}
+          placeholder={@placeholder}
+          phx-debounce="250"
+          autocomplete="off"
+          class="input input-sm input-bordered pl-9 w-full sm:w-64"
+        />
+      </div>
+    </.form>
     """
   end
 
@@ -682,7 +690,7 @@ defmodule TokengateWeb.StatsHelpers do
         class="btn btn-ghost btn-xs"
         id={@id}
       >
-        Ver más ({@total - @top} restantes)
+        {gettext("Show more (%{count} remaining)", count: @total - @top)}
       </button>
     </div>
     """

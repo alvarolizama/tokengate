@@ -234,7 +234,7 @@ defmodule TokengateWeb.KpiHelpers do
 
   def kpi_cards(assigns) do
     ~H"""
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <%!-- El KPI de costo sigue el contrato del contenedor (`cost_window`):
            con "cap" declara la ventana UTC de los presupuestos (día/mes, ver
            Periods.period_bounds) — la misma que Mantenimiento; con "period"
@@ -287,7 +287,7 @@ defmodule TokengateWeb.KpiHelpers do
           "#{format_number(@metrics.prompt_tokens)} in / #{format_number(@metrics.completion_tokens)} out"
         }
       >
-        <span class="flex items-baseline gap-2">
+        <span class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           {format_compact(@metrics.prompt_tokens)}
           <span class="text-sm text-base-content/50">in</span>
           <span class="text-base-content/30">/</span>
