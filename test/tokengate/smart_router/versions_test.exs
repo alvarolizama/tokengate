@@ -548,6 +548,110 @@ defmodule Tokengate.SmartRouter.VersionsTest do
   # archive_version!/1 and unarchive_version!/1
   # ---------------------------------------------------------------------------
 
+  describe "update_version/2" do
+    test "renames a version and stores the note without touching its children" do
+      {default, _} = seeded_default!()
+      clone = Versions.clone_version!(default.id, %{"name" => "Before rename"})
+
+      use_cases_before =
+        Repo.aggregate(from(u in UseCase, where: u.router_config_id == ^clone.id), :count)
+
+      assert {:ok, updated} =
+               Versions.update_version(clone.id, %{
+                 "name" => "After rename",
+                 "description" => "Nota"
+               })
+
+      assert updated.name == "After rename"
+      assert updated.description == "Nota"
+      refute updated.is_default
+
+      assert Repo.aggregate(from(u in UseCase, where: u.router_config_id == ^clone.id), :count) ==
+               use_cases_before
+    end
+
+    test "only accepts name and description, so a rename cannot move is_default or archive" do
+      {default, _} = seeded_default!()
+      clone = Versions.clone_version!(default.id)
+
+      assert {:ok, updated} =
+               Versions.update_version(clone.id, %{
+                 "name" => "Sneaky",
+                 "is_default" => true,
+                 "shadow_enabled" => true,
+                 "archived_at" => DateTime.utc_now()
+               })
+
+      refute updated.is_default
+      refute updated.shadow_enabled
+      assert is_nil(updated.archived_at)
+      assert Versions.get_default!().id == default.id
+    end
+
+    test "rejects an empty name" do
+      {default, _} = seeded_default!()
+      clone = Versions.clone_version!(default.id)
+
+      assert {:error, changeset} = Versions.update_version(clone.id, %{"name" => ""})
+      assert errors_on(changeset).name != []
+    end
+  end
+
+  describe "delete_version/1" do
+    test "removes a candidate with its use cases, destinations, rules and shadow history" do
+      {default, _} = seeded_default!()
+      clone = Versions.clone_version!(default.id)
+      use_case = find_use_case(clone.id, "coding_implement")
+
+      shadow_eval = %ShadowEvaluation{
+        request_log_id: Ecto.UUID.generate(),
+        request_inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        default_config_id: default.id,
+        shadow_config_id: clone.id,
+        shadow_config_name: clone.name,
+        use_case_key: "coding_implement",
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      }
+
+      Repo.insert!(shadow_eval)
+
+      use_cases =
+        Repo.aggregate(from(u in UseCase, where: u.router_config_id == ^clone.id), :count)
+
+      rules = Repo.aggregate(from(r in Rule, where: r.router_config_id == ^clone.id), :count)
+
+      assert Versions.delete_preview(clone.id) == %{use_cases: use_cases, rules: rules}
+      assert use_cases > 0
+      assert rules > 0
+
+      assert {:ok, deleted} = Versions.delete_version(clone.id)
+      assert deleted.id == clone.id
+
+      refute Repo.get(Config, clone.id)
+      refute Repo.get(UseCase, use_case.id)
+      assert bindings(use_case.id) == []
+      assert Repo.all(from r in Rule, where: r.router_config_id == ^clone.id) == []
+      assert Repo.all(from e in ShadowEvaluation, where: e.shadow_config_id == ^clone.id) == []
+
+      # The Default and its catalogue survive untouched.
+      assert Versions.get_default!().id == default.id
+      assert find_use_case(default.id, "coding_implement")
+    end
+
+    test "refuses to delete the serving Default" do
+      {default, _} = seeded_default!()
+
+      assert {:error, :cannot_delete_default} = Versions.delete_version(default.id)
+      assert Versions.get_default!().id == default.id
+    end
+
+    test "raises for an unknown id" do
+      assert_raise Ecto.NoResultsError, fn ->
+        Versions.delete_version(Ecto.UUID.generate())
+      end
+    end
+  end
+
   describe "archive_version!/1" do
     test "refuses to archive the Default" do
       {default, _} = seeded_default!()
@@ -783,25 +887,25 @@ defmodule Tokengate.SmartRouter.VersionsTest do
   describe "Presets.ensure_all!/1" do
     test "seeds the Default by default and any version when given its id" do
       default = Config.ensure!()
-      assert %{inserted: 12, existing: 0} = Presets.ensure_all!()
+      assert %{inserted: 13, existing: 0} = Presets.ensure_all!()
 
       assert Repo.aggregate(from(u in UseCase, where: u.router_config_id == ^default.id), :count) ==
-               12
+               13
 
-      # The clone already carries the Default's twelve use cases: seeding it
+      # The clone already carries the Default's thirteen use cases: seeding it
       # again must not duplicate them.
       clone = Versions.clone_version!(default.id)
-      assert Repo.aggregate(UseCase, :count) == 24
+      assert Repo.aggregate(UseCase, :count) == 26
 
-      assert %{inserted: 0, existing: 12} = Presets.ensure_all!(clone.id)
-      assert Repo.aggregate(UseCase, :count) == 24
+      assert %{inserted: 0, existing: 13} = Presets.ensure_all!(clone.id)
+      assert Repo.aggregate(UseCase, :count) == 26
 
       assert Repo.aggregate(from(u in UseCase, where: u.router_config_id == ^clone.id), :count) ==
-               12
+               13
 
       # Re-seeding either version is a no-op.
-      assert %{inserted: 0, existing: 12} = Presets.ensure_all!()
-      assert %{inserted: 0, existing: 12} = Presets.ensure_all!(clone.id)
+      assert %{inserted: 0, existing: 13} = Presets.ensure_all!()
+      assert %{inserted: 0, existing: 13} = Presets.ensure_all!(clone.id)
     end
   end
 

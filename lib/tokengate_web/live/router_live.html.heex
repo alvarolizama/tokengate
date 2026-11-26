@@ -33,43 +33,65 @@
     <%!-- Version switcher: what the rest of the page (engine, rules, dry run)
           is editing, plus clone and diff against the serving Default. --%>
     <div class="card bg-base-100 border border-base-300 shadow-sm" id="router-version-bar">
-      <div class="card-body py-3">
-        <div class="flex flex-wrap items-end gap-3">
-          <.form
-            for={@nav_form}
-            id="router-version-switcher"
-            phx-change="select_version"
-            class="min-w-64 flex-1"
-          >
-            <.input
-              field={@nav_form[:version]}
-              type="select"
-              label={gettext("Editing version")}
-              options={
-                version_options(
-                  @versions,
-                  @show_archived,
-                  @editing_config,
-                  @default_config.id
-                )
-              }
-              hint={gettext("Use cases, rules and the dry run below belong to this version.")}
-            />
-          </.form>
-
-          <div class="flex flex-wrap items-center gap-2 pb-2">
-            <span
-              id="editing-version-state"
-              class={[
-                "badge badge-sm",
-                version_state_class(@editing_config, @default_config.id)
-              ]}
+      <div class="card-body gap-2 py-3">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div class="flex min-w-0 flex-wrap items-end gap-3">
+            <%!-- Fixed width: a `flex-1` select grew until the state badge was
+                  pushed to a second line on every desktop width. --%>
+            <.form
+              for={@nav_form}
+              id="router-version-switcher"
+              phx-change="select_version"
+              class="w-full sm:w-80"
             >
-              {version_state_label(@editing_config, @default_config.id)}
-            </span>
-            <span class="text-xs text-base-content/60" id="editing-version-name">
-              {@editing_config.name}
-            </span>
+              <.input
+                field={@nav_form[:version]}
+                type="select"
+                label={gettext("Editing version")}
+                options={
+                  version_options(
+                    @versions,
+                    @show_archived,
+                    @editing_config,
+                    @default_config.id
+                  )
+                }
+              />
+            </.form>
+
+            <div
+              class="flex min-w-0 items-center gap-2 rounded-lg border border-base-300/60 px-2 py-1.5"
+              id="editing-version-chip"
+            >
+              <span
+                id="editing-version-state"
+                class={[
+                  "badge badge-sm whitespace-nowrap",
+                  version_state_class(@editing_config, @default_config.id)
+                ]}
+              >
+                {version_state_label(@editing_config, @default_config.id)}
+              </span>
+              <span
+                class="max-w-40 truncate text-xs text-base-content/60"
+                id="editing-version-name"
+                title={@editing_config.name}
+              >
+                {@editing_config.name}
+              </span>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              phx-click="open_rename_version"
+              phx-value-id={@editing_config.id}
+              id="rename-version-bar-btn"
+              class="btn btn-sm btn-ghost"
+            >
+              <.icon name="hero-pencil-square" class="w-4 h-4" /> {gettext("Rename")}
+            </button>
             <button
               type="button"
               phx-click="open_clone_version"
@@ -87,13 +109,24 @@
             >
               <.icon name="hero-arrows-right-left" class="w-4 h-4" /> {gettext("Diff vs Default")}
             </button>
+            <.link
+              patch={~p"/catalog/router?#{[tab: "versions", version: @editing_config.id]}"}
+              id="manage-versions-btn"
+              class="btn btn-sm btn-outline"
+            >
+              <.icon name="hero-rectangle-stack" class="w-4 h-4" /> {gettext("Manage versions")}
+            </.link>
           </div>
         </div>
+
+        <p class="text-xs text-base-content/50" id="editing-version-hint">
+          {gettext("Use cases, rules and the dry run below belong to this version.")}
+        </p>
 
         <p
           :if={@editing_config.id != @default_config.id}
           id="editing-version-global-note"
-          class="mt-1 text-xs text-base-content/50"
+          class="text-xs text-base-content/50"
         >
           {gettext(
             "This is a candidate version: its policy and catalogue are edited here, but the kill switch and the baseline model are global and belong to the Default."
@@ -849,7 +882,13 @@
             </ul>
           </div>
 
-          <.form for={@rule_form} id="rule-form" phx-submit="save_rule">
+          <.form
+            for={@rule_form}
+            id="rule-form"
+            phx-submit="save_rule"
+            phx-change="validate_rule"
+            phx-debounce="300"
+          >
             <%!-- The chips are the source of truth; these hidden fields mirror
                   them so a submitted form always carries the same ids. --%>
             <input type="hidden" name="rule[group_ids]" value={Enum.join(@rule_group_ids, ",")} />
@@ -859,6 +898,11 @@
               value={Enum.join(@rule_service_ids, ",")}
             />
             <input type="hidden" name="rule[user_ids]" value={Enum.join(@rule_user_ids, ",")} />
+            <input
+              type="hidden"
+              name="rule[target_use_case_keys]"
+              value={Enum.join(@rule_target_keys, ",")}
+            />
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <.input field={@rule_form[:name]} label={gettext("Name")} />
               <.input
@@ -876,11 +920,38 @@
                   {gettext("Restrict to use cases"), "restrict_use_cases"}
                 ]}
               />
-              <.input
-                field={@rule_form[:target_use_case_keys]}
-                label={gettext("Target use cases (comma separated keys)")}
-                hint={gettext("force_use_case takes exactly one key.")}
-              />
+              <div class="sm:col-span-2" id="rule-target-use-cases">
+                <p class="text-sm font-medium text-base-content">
+                  {gettext("Target use cases")}
+                </p>
+                <div :if={@use_cases != []} class="mt-1 flex flex-wrap gap-1">
+                  <button
+                    :for={use_case <- @use_cases}
+                    type="button"
+                    phx-click="toggle_rule_target_key"
+                    phx-value-key={use_case.key}
+                    id={"rule-target-#{use_case.key}"}
+                    class={[
+                      "badge badge-sm cursor-pointer transition-colors",
+                      if(use_case.key in @rule_target_keys,
+                        do: "badge-primary",
+                        else: "badge-outline hover:border-primary/60"
+                      )
+                    ]}
+                  >
+                    {use_case.name}
+                    <span class="ml-1 font-mono text-[10px] opacity-60">{use_case.key}</span>
+                  </button>
+                </div>
+                <p :if={@use_cases == []} class="mt-1 text-xs text-base-content/50">
+                  {gettext("This version has no use cases yet: add them in the Engine tab.")}
+                </p>
+                <p class="mt-1 text-xs text-base-content/50">
+                  {gettext(
+                    "force_use_case takes exactly one key; restrict_use_cases takes as many as you select."
+                  )}
+                </p>
+              </div>
             </div>
 
             <h3 class="mt-3 text-sm font-medium">{gettext("Conditions")}</h3>
@@ -957,9 +1028,6 @@
                 <label class="text-sm font-medium text-base-content" for="rule-group-search">
                   {gettext("Limit profiles")}
                 </label>
-                <p class="text-xs text-base-content/50 mb-1">
-                  {gettext("Only requests from these limit profiles match.")}
-                </p>
                 <div class="relative">
                   <input
                     type="text"
@@ -1011,15 +1079,16 @@
                     </button>
                   </span>
                 </div>
+
+                <p class="mt-1 text-xs text-base-content/50">
+                  {gettext("Only requests from these limit profiles match.")}
+                </p>
               </div>
 
               <div phx-click-away="close_rule_pickers">
                 <label class="text-sm font-medium text-base-content" for="rule-service-search">
                   {gettext("Services")}
                 </label>
-                <p class="text-xs text-base-content/50 mb-1">
-                  {gettext("Only requests from these services match.")}
-                </p>
                 <div class="relative">
                   <input
                     type="text"
@@ -1071,15 +1140,16 @@
                     </button>
                   </span>
                 </div>
+
+                <p class="mt-1 text-xs text-base-content/50">
+                  {gettext("Only requests from these services match.")}
+                </p>
               </div>
 
               <div phx-click-away="close_rule_pickers">
                 <label class="text-sm font-medium text-base-content" for="rule-user-search">
                   {gettext("Users")}
                 </label>
-                <p class="text-xs text-base-content/50 mb-1">
-                  {gettext("Only requests from these users match.")}
-                </p>
                 <div class="relative">
                   <input
                     type="text"
@@ -1554,7 +1624,7 @@
                       <th class="text-right">{gettext("Use cases")}</th>
                       <th class="text-right">{gettext("Rules")}</th>
                       <th>{gettext("Shadow evaluation")}</th>
-                      <th></th>
+                      <th class="text-right">{gettext("Actions")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1570,7 +1640,7 @@
                           <p class="font-medium truncate">{version.name}</p>
                           <p
                             :if={version.description}
-                            class="text-xs text-base-content/50 truncate max-w-64"
+                            class="text-xs text-base-content/50 truncate max-w-48"
                           >
                             {version.description}
                           </p>
@@ -1586,11 +1656,11 @@
                         <span
                           id={"version-state-#{version.id}"}
                           class={[
-                            "badge badge-sm",
+                            "badge badge-sm whitespace-nowrap",
                             version_state_class(version, @default_config.id)
                           ]}
                         >
-                          {version_state_label(version, @default_config.id)}
+                          {version_state_label(version, @default_config.id, :short)}
                         </span>
                       </td>
                       <td class="text-sm">{policy_label(version.policy)}</td>
@@ -1600,35 +1670,28 @@
                       <td class="text-right tabular-nums text-sm">
                         {Map.get(@version_stats, version.id, %{rules: 0}).rules}
                       </td>
-                      <td>
+                      <td class="align-top">
                         <%= if version.id != @default_config.id and is_nil(version.archived_at) do %>
                           <.shadow_controls version={version} />
                         <% else %>
-                          <span class="text-xs text-base-content/40">
+                          <span class="text-xs leading-snug text-base-content/40">
                             {if version.id == @default_config.id,
                               do: gettext("The Default serves; it cannot shadow itself."),
                               else: gettext("Archived: restore it to evaluate it.")}
                           </span>
                         <% end %>
                       </td>
-                      <td>
-                        <div class="flex flex-wrap items-center justify-end gap-1">
+                      <td class="align-top whitespace-nowrap">
+                        <div class="flex flex-nowrap items-center justify-end gap-0.5">
                           <.link
                             patch={~p"/catalog/router?#{[tab: "engine", version: version.id]}"}
                             id={"edit-version-#{version.id}"}
                             class="btn btn-xs btn-ghost"
+                            title={gettext("Edit this version")}
+                            aria-label={gettext("Edit this version")}
                           >
-                            {gettext("Edit")}
+                            <.icon name="hero-adjustments-horizontal" class="w-3.5 h-3.5" />
                           </.link>
-                          <button
-                            type="button"
-                            phx-click="open_clone_version"
-                            phx-value-id={version.id}
-                            id={"clone-version-row-#{version.id}"}
-                            class="btn btn-xs btn-ghost"
-                          >
-                            {gettext("Clone")}
-                          </button>
                           <button
                             :if={version.id != @default_config.id and is_nil(version.archived_at)}
                             type="button"
@@ -1636,8 +1699,36 @@
                             phx-value-id={version.id}
                             id={"promote-version-#{version.id}"}
                             class="btn btn-xs btn-primary"
+                            title={gettext("Promote to Default")}
+                            aria-label={gettext("Promote to Default")}
                           >
-                            {gettext("Promote to Default")}
+                            <.icon name="hero-arrow-up-circle" class="w-3.5 h-3.5" />
+                          </button>
+                          <%!-- Icon-only actions with tooltips: six labelled
+                                buttons per row made the table unreadable, and a
+                                dropdown would be clipped by the table's
+                                `overflow-x-auto` wrapper. --%>
+                          <button
+                            type="button"
+                            phx-click="open_clone_version"
+                            phx-value-id={version.id}
+                            id={"clone-version-row-#{version.id}"}
+                            class="btn btn-xs btn-ghost"
+                            title={gettext("Clone this version")}
+                            aria-label={gettext("Clone this version")}
+                          >
+                            <.icon name="hero-document-duplicate" class="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            phx-click="open_rename_version"
+                            phx-value-id={version.id}
+                            id={"rename-version-#{version.id}"}
+                            class="btn btn-xs btn-ghost"
+                            title={gettext("Rename this version")}
+                            aria-label={gettext("Rename this version")}
+                          >
+                            <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
                           </button>
                           <button
                             :if={version.id != @default_config.id and is_nil(version.archived_at)}
@@ -1645,10 +1736,12 @@
                             phx-click="archive_version"
                             phx-value-id={version.id}
                             id={"archive-version-#{version.id}"}
-                            class="btn btn-xs btn-ghost text-error"
+                            class="btn btn-xs btn-ghost"
+                            title={gettext("Archive this version")}
+                            aria-label={gettext("Archive this version")}
                             data-confirm={gettext("Archive this version?")}
                           >
-                            {gettext("Archive")}
+                            <.icon name="hero-archive-box" class="w-3.5 h-3.5" />
                           </button>
                           <button
                             :if={version.archived_at}
@@ -1657,8 +1750,22 @@
                             phx-value-id={version.id}
                             id={"unarchive-version-#{version.id}"}
                             class="btn btn-xs btn-ghost"
+                            title={gettext("Restore this version")}
+                            aria-label={gettext("Restore this version")}
                           >
-                            {gettext("Restore")}
+                            <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            :if={version.id != @default_config.id}
+                            type="button"
+                            phx-click="open_delete_version"
+                            phx-value-id={version.id}
+                            id={"delete-version-#{version.id}"}
+                            class="btn btn-xs btn-ghost text-error"
+                            title={gettext("Delete this version permanently")}
+                            aria-label={gettext("Delete this version permanently")}
+                          >
+                            <.icon name="hero-trash" class="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </td>
@@ -2142,5 +2249,91 @@
         </button>
       </div>
     </.modal>
+
+    <.modal
+      :if={@rename_open}
+      id="rename-version-modal"
+      title={gettext("Rename version")}
+      on_close="cancel_rename_version"
+      max_w="max-w-lg"
+    >
+      <div
+        :if={@rename_errors != []}
+        id="rename-version-errors"
+        class="alert alert-error mb-3 text-sm"
+      >
+        <ul class="list-disc list-inside">
+          <li :for={error <- @rename_errors}>{error}</li>
+        </ul>
+      </div>
+
+      <.form for={@rename_form} id="rename-version-form" phx-submit="rename_version">
+        <.input field={@rename_form[:name]} label={gettext("Name")} />
+        <.input field={@rename_form[:description]} type="textarea" label={gettext("Description")} />
+        <p class="mt-2 text-xs text-base-content/50">
+          {gettext(
+            "Only the label and the note change: use cases, rules and destinations stay exactly as they are."
+          )}
+        </p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            phx-click="cancel_rename_version"
+            id="cancel-rename-version"
+            class="btn btn-ghost btn-sm"
+          >
+            {gettext("Cancel")}
+          </button>
+          <.button id="save-rename-version">{gettext("Save")}</.button>
+        </div>
+      </.form>
+    </.modal>
+
+    <.modal
+      :if={@delete_open and @delete_target}
+      id="delete-version-modal"
+      title={gettext("Delete version permanently")}
+      on_close="cancel_delete_version"
+      max_w="max-w-lg"
+    >
+      <div class="space-y-3 text-sm" id="delete-version-body">
+        <p>
+          {gettext(
+            "%{name} will be removed for good, together with its %{use_cases} use case(s), its %{rules} rule(s), every destination inside them and its shadow evaluation history. This cannot be undone.",
+            name: @delete_target.version.name,
+            use_cases: @delete_target.counts.use_cases,
+            rules: @delete_target.counts.rules
+          )}
+        </p>
+        <p class="text-xs text-base-content/60">
+          {gettext(
+            "Past request logs are kept: they are not linked to the version row. To stop serving a version without losing it, archive it instead."
+          )}
+        </p>
+      </div>
+      <div class="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          phx-click="cancel_delete_version"
+          id="cancel-delete-version"
+          class="btn btn-ghost btn-sm"
+        >
+          {gettext("Cancel")}
+        </button>
+        <button
+          type="button"
+          phx-click="delete_version"
+          phx-value-id={@delete_version_id}
+          id="confirm-delete-version"
+          class="btn btn-error btn-sm"
+        >
+          {gettext("Delete permanently")}
+        </button>
+      </div>
+    </.modal>
+
+    <p class="mt-1 text-xs text-base-content/50">
+      {gettext("Only requests from these users match.")}
+    </p>
   </div>
 </Layouts.dashboard>

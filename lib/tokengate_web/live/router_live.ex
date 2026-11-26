@@ -97,6 +97,13 @@ defmodule TokengateWeb.RouterLive do
       |> assign(:diff, nil)
       |> assign(:promote_open, false)
       |> assign(:promote_version_id, nil)
+      |> assign(:rename_open, false)
+      |> assign(:rename_version_id, nil)
+      |> assign(:rename_form, nil)
+      |> assign(:rename_errors, [])
+      |> assign(:delete_open, false)
+      |> assign(:delete_version_id, nil)
+      |> assign(:delete_target, nil)
       |> assign(:expanded_uc, nil)
       |> assign(:uc_open, false)
       |> assign(:uc_editing, nil)
@@ -111,6 +118,7 @@ defmodule TokengateWeb.RouterLive do
       |> assign(:rule_editing, nil)
       |> assign(:rule_form, nil)
       |> assign(:rule_errors, [])
+      |> assign(:rule_target_keys, [])
       |> reset_rule_pickers()
       |> assign(:dry_form, to_form(default_dry_params(), as: :dry))
       |> assign(:dry_result, nil)
@@ -207,7 +215,7 @@ defmodule TokengateWeb.RouterLive do
 
   def handle_event("seed_presets", _params, socket) do
     # Seed the version being edited, not the serving Default: a clone can then
-    # hold the same twelve keys without touching what live traffic sees.
+    # hold the same thirteen keys without touching what live traffic sees.
     %{inserted: inserted, existing: existing} =
       Presets.ensure_all!(socket.assigns.editing_config.id)
 
@@ -425,6 +433,121 @@ defmodule TokengateWeb.RouterLive do
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, gettext("Could not restore the version."))}
+    end
+  end
+
+  def handle_event("open_rename_version", %{"id" => id}, socket) do
+    version = version_by_id(socket, id)
+
+    {:noreply,
+     socket
+     |> assign(:rename_open, true)
+     |> assign(:rename_version_id, version.id)
+     |> assign(:rename_errors, [])
+     |> assign(
+       :rename_form,
+       to_form(
+         %{"name" => version.name, "description" => version.description || ""},
+         as: :rename
+       )
+     )}
+  end
+
+  def handle_event("cancel_rename_version", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:rename_open, false)
+     |> assign(:rename_version_id, nil)
+     |> assign(:rename_form, nil)
+     |> assign(:rename_errors, [])}
+  end
+
+  def handle_event("rename_version", %{"rename" => params}, socket) do
+    version_id = socket.assigns.rename_version_id
+    attrs = Map.take(params, ["name", "description"])
+
+    case Versions.update_version(version_id, attrs) do
+      {:ok, version} ->
+        audit(socket, "router.version_rename", "router_config", version.id, %{
+          "name" => version.name
+        })
+
+        {:noreply,
+         socket
+         |> assign(:rename_open, false)
+         |> assign(:rename_version_id, nil)
+         |> assign(:rename_form, nil)
+         |> assign(:rename_errors, [])
+         |> put_flash(:info, gettext("Version updated: %{name}.", name: version.name))
+         |> load_all(socket.assigns.editing_config.id)}
+
+      {:error, changeset} when is_struct(changeset, Ecto.Changeset) ->
+        {:noreply,
+         socket
+         |> assign(:rename_form, to_form(params, as: :rename))
+         |> assign(:rename_errors, errors_list(changeset))}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, gettext("Could not update the version."))}
+    end
+  end
+
+  def handle_event("open_delete_version", %{"id" => id}, socket) do
+    version = version_by_id(socket, id)
+
+    {:noreply,
+     socket
+     |> assign(:delete_open, true)
+     |> assign(:delete_version_id, version.id)
+     |> assign(:delete_target, %{
+       version: version,
+       counts: Versions.delete_preview(version.id)
+     })}
+  end
+
+  def handle_event("cancel_delete_version", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:delete_open, false)
+     |> assign(:delete_version_id, nil)
+     |> assign(:delete_target, nil)}
+  end
+
+  def handle_event("delete_version", %{"id" => id}, socket) do
+    case Versions.delete_version(id) do
+      {:ok, version} ->
+        audit(socket, "router.version_delete", "router_config", version.id, %{
+          "name" => version.name
+        })
+
+        # The deleted version can be the one being edited: fall back to the
+        # serving Default, which is the only row that is guaranteed to survive.
+        editing_id =
+          if socket.assigns.editing_config.id == version.id do
+            socket.assigns.default_config.id
+          else
+            socket.assigns.editing_config.id
+          end
+
+        {:noreply,
+         socket
+         |> assign(:delete_open, false)
+         |> assign(:delete_version_id, nil)
+         |> assign(:delete_target, nil)
+         |> put_flash(:info, gettext("Version deleted: %{name}.", name: version.name))
+         |> load_all(editing_id)
+         |> push_patch(to: router_path(socket.assigns.tab, editing_id))}
+
+      {:error, :cannot_delete_default} ->
+        {:noreply,
+         socket
+         |> assign(:delete_open, false)
+         |> assign(:delete_version_id, nil)
+         |> assign(:delete_target, nil)
+         |> put_flash(
+           :error,
+           gettext("The serving Default cannot be deleted: promote another version first.")
+         )}
     end
   end
 
@@ -703,6 +826,7 @@ defmodule TokengateWeb.RouterLive do
      |> assign(:rule_open, true)
      |> assign(:rule_editing, nil)
      |> assign(:rule_errors, [])
+     |> assign(:rule_target_keys, [])
      |> reset_rule_pickers()
      |> assign(:rule_form, to_form(default_rule_params(), as: :rule))}
   end
@@ -718,6 +842,7 @@ defmodule TokengateWeb.RouterLive do
          |> assign(:rule_open, true)
          |> assign(:rule_editing, rule.id)
          |> assign(:rule_errors, [])
+         |> assign(:rule_target_keys, rule.target_use_case_keys || [])
          |> load_rule_pickers(rule)
          |> assign(:rule_form, to_form(rule_params(rule), as: :rule))}
     end
@@ -730,7 +855,32 @@ defmodule TokengateWeb.RouterLive do
      |> assign(:rule_editing, nil)
      |> assign(:rule_form, nil)
      |> assign(:rule_errors, [])
+     |> assign(:rule_target_keys, [])
      |> reset_rule_pickers()}
+  end
+
+  # The rule form validates on change so the target picker can follow the
+  # selected action live: `force_use_case` holds exactly one key, so choosing a
+  # second one has to replace the first instead of appending.
+  def handle_event("validate_rule", %{"rule" => params}, socket) do
+    {:noreply,
+     socket
+     |> assign(:rule_target_keys, list_field(params["target_use_case_keys"]))
+     |> assign(:rule_form, to_form(params, as: :rule))}
+  end
+
+  def handle_event("toggle_rule_target_key", %{"key" => key}, socket) do
+    selected = socket.assigns.rule_target_keys
+    force? = socket.assigns.rule_form[:action].value == "force_use_case"
+
+    keys =
+      cond do
+        key in selected -> List.delete(selected, key)
+        force? -> [key]
+        true -> selected ++ [key]
+      end
+
+    {:noreply, assign(socket, :rule_target_keys, keys)}
   end
 
   # ---------------------------------------------------------------------------
@@ -1361,9 +1511,18 @@ defmodule TokengateWeb.RouterLive do
       "priority" => integer(params["priority"]) || 100,
       "enabled" => truthy?(params["enabled"]),
       "action" => params["action"],
-      "target_use_case_keys" => list_field(params["target_use_case_keys"]),
+      "target_use_case_keys" => rule_target_keys(params, socket),
       "match_conditions" => rule_conditions(params, socket)
     }
+  end
+
+  # The chips are the source of truth (the hidden field mirrors them), so the
+  # assign wins over whatever the form posted.
+  defp rule_target_keys(params, socket) do
+    case socket.assigns.rule_target_keys do
+      [] -> list_field(params["target_use_case_keys"])
+      keys -> keys
+    end
   end
 
   # Only the signals the operator filled become conditions: an empty field is
@@ -1655,6 +1814,12 @@ defmodule TokengateWeb.RouterLive do
   defp version_param(%{"version" => id}) when is_binary(id), do: id
   defp version_param(_params), do: nil
 
+  # The row the operator clicked, or the version being edited when the id is
+  # stale (a renamed/deleted row from a second tab).
+  defp version_by_id(socket, id) do
+    Enum.find(socket.assigns.versions, &(&1.id == id)) || socket.assigns.editing_config
+  end
+
   defp version_options(versions, show_archived, editing, default_id) do
     versions
     |> Enum.filter(fn version ->
@@ -1689,6 +1854,14 @@ defmodule TokengateWeb.RouterLive do
       :shadow -> gettext("Shadow %{pct}%", pct: version.shadow_sample_pct || 100)
       :draft -> gettext("Draft")
     end
+  end
+
+  # Inside the Versions table the row already names the version, so the badge
+  # can drop the redundant "Default ·" prefix and just say who serves.
+  defp version_state_label(version, default_id, :short) do
+    if version.id == default_id,
+      do: gettext("Serving"),
+      else: version_state_label(version, default_id)
   end
 
   defp version_state_class(version, default_id) do
@@ -1772,7 +1945,7 @@ defmodule TokengateWeb.RouterLive do
       id={"shadow-form-#{@version.id}"}
       phx-submit="set_shadow"
       phx-value-id={@version.id}
-      class="flex flex-wrap items-center gap-2"
+      class="flex flex-nowrap items-center gap-1.5 whitespace-nowrap"
     >
       <.input
         field={@form[:shadow_enabled]}
@@ -1787,22 +1960,25 @@ defmodule TokengateWeb.RouterLive do
         min="1"
         max="100"
         id={"shadow-sample-#{@version.id}"}
-        class="input input-xs w-16"
+        class="input input-xs w-14"
         aria-label={gettext("Sample %")}
       />
       <span class="text-xs text-base-content/50">%</span>
       <button type="submit" id={"save-shadow-#{@version.id}"} class="btn btn-xs btn-ghost">
         {gettext("Apply")}
       </button>
-      <p
+      <span
         :if={@version.decision_model_id}
         id={"shadow-classifier-note-#{@version.id}"}
-        class="text-xs text-base-content/50 w-full"
+        class="text-base-content/40"
+        title={
+          gettext(
+            "This version has a decision model: its classifier also runs in parallel and its cost is recorded, never billed."
+          )
+        }
       >
-        {gettext(
-          "This version has a decision model: its classifier also runs in parallel and its cost is recorded, never billed."
-        )}
-      </p>
+        <.icon name="hero-information-circle" class="w-3.5 h-3.5" />
+      </span>
     </.form>
     """
   end

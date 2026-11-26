@@ -31,6 +31,12 @@ defmodule Tokengate.SmartRouter.Versions do
       Default: shadowing it against itself can only ever agree.
     * `archive_version!/1` / `unarchive_version!/1` — retire a version. The
       Default cannot be archived, and archiving always turns the shadow off.
+    * `update_version/2` — rename and re-describe a version. Metadata only: no
+      routing knob, use case or rule is touched here.
+    * `delete_version/1` — permanently remove a non-Default version with its use
+      cases, destinations, rules and shadow history. Unlike archiving (which
+      keeps the row so old `request_logs` stay explainable), this is the way to
+      throw away a draft or a retired experiment for good.
 
   Every mutation invalidates the routing snapshot
   (`Tokengate.SmartRouter.invalidate/0`): the snapshot is cached for a minute
@@ -63,7 +69,15 @@ defmodule Tokengate.SmartRouter.Versions do
 
   alias Tokengate.Repo
   alias Tokengate.SmartRouter
-  alias Tokengate.SmartRouter.{Config, Rule, SessionPin, UseCase, UseCaseModel}
+
+  alias Tokengate.SmartRouter.{
+    Config,
+    Rule,
+    SessionPin,
+    ShadowEvaluation,
+    UseCase,
+    UseCaseModel
+  }
 
   # Fields a clone copies verbatim from its source version. Deliberately
   # excluded: `id`, `is_default`, `shadow_enabled`, `archived_at` (a clone is a
@@ -384,10 +398,101 @@ defmodule Tokengate.SmartRouter.Versions do
     end
   end
 
+  @doc """
+  Renames and/or re-describes a version.
+
+  Accepts only `name` and `description` (atom or string keys) — everything else
+  about a version is edited through the engine and rules tabs, where the
+  changeset validation that belongs to each field lives. Nothing here can move
+  `is_default`, `shadow_enabled` or `archived_at`, so a rename is safe to run on
+  the serving Default.
+
+  Returns `{:ok, version}` / `{:error, changeset}` and drops the routing
+  snapshot: the version name is part of what `/stats/router` and the log detail
+  render.
+  """
+  @spec update_version(String.t(), map()) ::
+          {:ok, Config.t()} | {:error, Ecto.Changeset.t() | atom()}
+  def update_version(version_id, attrs) when is_map(attrs) do
+    metadata = Map.take(atomize(attrs), [:name, :description])
+
+    result =
+      Repo.transaction(fn ->
+        lock_default_promotion!()
+        version = lock_version!(version_id)
+        update_version!(version, metadata)
+      end)
+
+    case result do
+      {:ok, updated} ->
+        invalidate_version!(updated.id)
+        {:ok, updated}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Permanently deletes a version that is **not** the serving Default.
+
+  Removes, in one transaction: the version's `router_use_case_models`
+  destinations, its `router_use_cases`, its `router_rules`, its
+  `router_shadow_evaluations` and finally the `router_configs` row itself.
+
+  Refused for the Default (`{:error, :cannot_delete_default}`): the router must
+  always have exactly one serving version, and the only way to stop serving a
+  version is promoting another one.
+
+  `request_logs` rows are untouched: they carry `router_config_id` as a plain
+  `uuid` with no FK, deliberately, so history survives the deletion. What is
+  lost with the version is its shadow history — the delete confirmation in the
+  UI says so before it runs.
+
+  Returns `{:ok, version}` (the deleted row, for the audit entry) /
+  `{:error, :cannot_delete_default}`. Raises `Ecto.NoResultsError` for an
+  unknown id.
+  """
+  @spec delete_version(String.t()) :: {:ok, Config.t()} | {:error, :cannot_delete_default}
+  def delete_version(version_id) do
+    result =
+      Repo.transaction(fn ->
+        lock_default_promotion!()
+        version = lock_version!(version_id)
+
+        if version.is_default do
+          Repo.rollback(:cannot_delete_default)
+        else
+          delete_children!(version.id)
+          Repo.delete!(version)
+        end
+      end)
+
+    case result do
+      {:ok, deleted} ->
+        invalidate_version!(deleted.id)
+        {:ok, deleted}
+
+      {:error, :cannot_delete_default} ->
+        {:error, :cannot_delete_default}
+    end
+  end
+
+  @doc """
+  What `delete_version/1` would destroy, for the confirmation dialog.
+  """
+  @spec delete_preview(String.t()) :: %{use_cases: non_neg_integer(), rules: non_neg_integer()}
+  def delete_preview(version_id) do
+    %{
+      use_cases:
+        Repo.aggregate(from(u in UseCase, where: u.router_config_id == ^version_id), :count),
+      rules: Repo.aggregate(from(r in Rule, where: r.router_config_id == ^version_id), :count)
+    }
+  end
+
   # ---------------------------------------------------------------------------
   # Diff
   # ---------------------------------------------------------------------------
-
   @doc """
   Structured difference between two versions.
 
@@ -507,6 +612,25 @@ defmodule Tokengate.SmartRouter.Versions do
       {:ok, updated} -> updated
       {:error, changeset} -> Repo.rollback(changeset)
     end
+  end
+
+  # Children before parent, in one transaction. `router_use_case_models` and
+  # `router_shadow_evaluations` also carry `on_delete: :delete_all`, but the
+  # delete is spelled out so the query count is predictable and so a change to
+  # those FKs can never silently turn this path into a constraint violation.
+  defp delete_children!(config_id) do
+    use_case_ids =
+      from(u in UseCase, where: u.router_config_id == ^config_id, select: u.id)
+
+    Repo.delete_all(
+      from(b in UseCaseModel, where: b.router_use_case_id in subquery(use_case_ids))
+    )
+
+    Repo.delete_all(from(u in UseCase, where: u.router_config_id == ^config_id))
+    Repo.delete_all(from(r in Rule, where: r.router_config_id == ^config_id))
+    Repo.delete_all(from(e in ShadowEvaluation, where: e.shadow_config_id == ^config_id))
+
+    :ok
   end
 
   # One transaction-scoped advisory lock for every write that rewrites

@@ -6,14 +6,14 @@ defmodule Tokengate.SmartRouter.PresetsTest do
   alias Tokengate.SmartRouter.UseCase
   alias Tokengate.SmartRouter.UseCaseModel
 
-  @expected_keys ~w(fast writing presentations coding_implement coding_arch_debug
-    data_heavy_finance research computer_use modeling_3d vision_extraction
-    structured_etl translation_i18n)
+  @expected_keys ~w(fast writing presentations coding_implement coding_arch
+    coding_audit data_heavy_finance research computer_use modeling_3d
+    vision_extraction structured_etl translation_i18n)
 
   describe "preset catalog" do
-    test "ships the twelve specialties in priority order" do
+    test "ships the thirteen specialties in priority order" do
       assert Presets.keys() == @expected_keys
-      assert length(Presets.all()) == 12
+      assert length(Presets.all()) == 13
     end
 
     test "every preset is a valid use case and carries its knobs" do
@@ -39,8 +39,11 @@ defmodule Tokengate.SmartRouter.PresetsTest do
       by_key = Map.new(Presets.all(), &{&1.key, &1})
 
       # Críticos: no se degradan y no se fijan a la sesión como un chatbot cualquiera.
-      assert by_key["coding_arch_debug"].critical_accuracy
-      refute by_key["coding_arch_debug"].allow_downgrade
+      # Planear arquitectura y cazar bugs piden el mismo rigor, no la misma lane.
+      assert by_key["coding_arch"].critical_accuracy
+      refute by_key["coding_arch"].allow_downgrade
+      assert by_key["coding_audit"].critical_accuracy
+      refute by_key["coding_audit"].allow_downgrade
       assert by_key["data_heavy_finance"].critical_accuracy
       refute by_key["data_heavy_finance"].allow_downgrade
 
@@ -53,7 +56,7 @@ defmodule Tokengate.SmartRouter.PresetsTest do
       refute by_key["structured_etl"].pin_session
 
       assert by_key["structured_etl"].max_history_turns <
-               by_key["coding_arch_debug"].max_history_turns
+               by_key["coding_arch"].max_history_turns
 
       # Compactar JSON donde el shape de salida es el contrato.
       assert by_key["structured_etl"].compact_json
@@ -63,9 +66,9 @@ defmodule Tokengate.SmartRouter.PresetsTest do
 
   describe "ensure_all!/0" do
     test "seeds every preset exactly once" do
-      assert %{inserted: 12, existing: 0} = Presets.ensure_all!()
+      assert %{inserted: 13, existing: 0} = Presets.ensure_all!()
 
-      assert Repo.aggregate(UseCase, :count) == 12
+      assert Repo.aggregate(UseCase, :count) == 13
 
       assert Enum.sort(Repo.all(from u in UseCase, select: u.key)) == Enum.sort(@expected_keys)
     end
@@ -80,7 +83,7 @@ defmodule Tokengate.SmartRouter.PresetsTest do
         |> UseCase.changeset(%{name: "Rápido (editado)", max_history_turns: 3, enabled: false})
         |> Repo.update()
 
-      assert %{inserted: 0, existing: 12} = Presets.ensure_all!()
+      assert %{inserted: 0, existing: 13} = Presets.ensure_all!()
 
       reloaded = Repo.get_by!(UseCase, key: "fast")
       assert reloaded.id == edited.id
@@ -89,7 +92,7 @@ defmodule Tokengate.SmartRouter.PresetsTest do
       refute reloaded.enabled
 
       # Ni una fila duplicada.
-      assert Repo.aggregate(UseCase, :count) == 12
+      assert Repo.aggregate(UseCase, :count) == 13
     end
 
     test "does not bind models: a fresh seed routes nowhere" do

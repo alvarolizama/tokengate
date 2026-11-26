@@ -431,6 +431,10 @@ defmodule TokengateWeb.RouterLiveTest do
     render_click(element(view, "#new-rule"))
     assert has_element?(view, "#rule-form")
 
+    # The target use case is a chip from the version catalogue, not a typed key.
+    assert has_element?(view, "#rule-target-use-cases")
+    view |> element("#rule-target-#{use_case.key}") |> render_click()
+
     view
     |> form("#rule-form",
       rule: %{
@@ -439,7 +443,6 @@ defmodule TokengateWeb.RouterLiveTest do
         "priority" => "5",
         "enabled" => "true",
         "action" => "force_use_case",
-        "target_use_case_keys" => use_case.key,
         "min_tokens" => "100",
         "max_tokens" => "",
         "has_tools" => "true",
@@ -473,6 +476,43 @@ defmodule TokengateWeb.RouterLiveTest do
     refute Repo.get(Rule, rule.id)
   end
 
+  test "the target use cases are picked from the version catalogue, one at a time when forcing",
+       %{
+         conn: conn
+       } do
+    first = create_use_case!(%{"name" => "Alpha"})
+    second = create_use_case!(%{"name" => "Beta"})
+
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/router?tab=rules")
+
+    render_click(element(view, "#new-rule"))
+
+    # The list offers every use case of the version being edited.
+    assert has_element?(view, "#rule-target-#{first.key}")
+    assert has_element?(view, "#rule-target-#{second.key}")
+
+    # restrict_use_cases accumulates.
+    view |> element("#rule-target-#{first.key}") |> render_click()
+    view |> element("#rule-target-#{second.key}") |> render_click()
+
+    assert view |> element("#rule-form") |> render() =~ ~s(value="#{first.key},#{second.key}")
+
+    # Clicking a selected chip takes it back out.
+    view |> element("#rule-target-#{first.key}") |> render_click()
+    assert view |> element("#rule-form") |> render() =~ ~s(value="#{second.key}")
+
+    # force_use_case holds exactly one key, so the second click replaces the first.
+    view
+    |> element("#rule-form")
+    |> render_change(%{"rule" => %{"name" => "Forced", "action" => "force_use_case"}})
+
+    view |> element("#rule-target-#{first.key}") |> render_click()
+
+    html = view |> element("#rule-form") |> render()
+    assert html =~ ~s(value="#{first.key}")
+    refute html =~ ~s(value="#{first.key},#{second.key}")
+  end
+
   test "an invalid rule keeps the modal open with its errors", %{conn: conn} do
     {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/router?tab=rules")
 
@@ -483,7 +523,6 @@ defmodule TokengateWeb.RouterLiveTest do
       rule: %{
         "name" => "Bad force",
         "action" => "force_use_case",
-        "target_use_case_keys" => "a, b",
         "priority" => "10",
         "enabled" => "true"
       }
@@ -770,6 +809,75 @@ defmodule TokengateWeb.RouterLiveTest do
     refute Repo.get(Config, default.id).shadow_enabled
   end
 
+  test "a version can be renamed from the header and from a row menu", %{conn: conn} do
+    default = default_config!()
+    candidate = Versions.clone_version!(default.id, %{"name" => "Old name"})
+
+    {:ok, view, _html} =
+      live(admin_conn(conn), ~p"/catalog/router?tab=versions&version=#{candidate.id}")
+
+    # The header button renames the version being edited.
+    view |> element("#rename-version-bar-btn") |> render_click()
+    assert has_element?(view, "#rename-version-modal")
+
+    view
+    |> form("#rename-version-form", rename: %{"name" => "Header name", "description" => "Nota"})
+    |> render_submit()
+
+    assert Repo.get!(Config, candidate.id).name == "Header name"
+    assert Repo.get!(Config, candidate.id).description == "Nota"
+    assert has_element?(view, "#editing-version-name", "Header name")
+    assert Repo.exists?(from a in AuditLog, where: a.action == "router.version_rename")
+
+    # The row menu renames any version, and its children survive the rename.
+    use_cases =
+      Repo.aggregate(from(u in UseCase, where: u.router_config_id == ^candidate.id), :count)
+
+    view |> element("#rename-version-#{candidate.id}") |> render_click()
+
+    view
+    |> form("#rename-version-form", rename: %{"name" => "Menu name", "description" => ""})
+    |> render_submit()
+
+    assert Repo.get!(Config, candidate.id).name == "Menu name"
+
+    assert Repo.aggregate(from(u in UseCase, where: u.router_config_id == ^candidate.id), :count) ==
+             use_cases
+  end
+
+  test "a candidate can be deleted permanently from its row menu", %{conn: conn} do
+    default = default_config!()
+    candidate = Versions.clone_version!(default.id, %{"name" => "Delete me"})
+
+    {:ok, view, _html} =
+      live(admin_conn(conn), ~p"/catalog/router?tab=versions&version=#{candidate.id}")
+
+    view |> element("#delete-version-#{candidate.id}") |> render_click()
+    assert has_element?(view, "#delete-version-modal")
+    assert has_element?(view, "#delete-version-body")
+
+    view |> element("#confirm-delete-version") |> render_click()
+
+    refute Repo.get(Config, candidate.id)
+    refute has_element?(view, "#router-version-row-#{candidate.id}")
+
+    # The deleted version was the one being edited: the page falls back to the
+    # serving Default instead of crashing on a missing row.
+    assert has_element?(view, "#editing-version-name", default.name)
+    assert Repo.exists?(from a in AuditLog, where: a.action == "router.version_delete")
+  end
+
+  test "the serving Default offers no delete action", %{conn: conn} do
+    default = default_config!()
+
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/router?tab=versions")
+
+    refute has_element?(view, "#delete-version-#{default.id}")
+    refute has_element?(view, "#promote-version-#{default.id}")
+    # Renaming the Default is allowed: it only changes a label.
+    assert has_element?(view, "#rename-version-#{default.id}")
+  end
+
   test "a candidate can be archived and restored from the Versions tab", %{conn: conn} do
     default = default_config!()
     candidate = Versions.clone_version!(default.id, %{"name" => "Archive me"})
@@ -932,12 +1040,13 @@ defmodule TokengateWeb.RouterLiveTest do
     view |> element("#rule-user-option-#{target.id}") |> render_click()
     assert has_element?(view, "#rule-user-chips", target.name)
 
+    view |> element("#rule-target-#{use_case.key}") |> render_click()
+
     view
     |> form("#rule-form",
       rule: %{
         "name" => "Scoped rule",
         "action" => "restrict_use_cases",
-        "target_use_case_keys" => use_case.key,
         "priority" => "7",
         "enabled" => "true"
       }

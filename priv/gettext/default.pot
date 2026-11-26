@@ -12,6 +12,7 @@ msgid ""
 msgstr ""
 
 #: lib/tokengate_web/components/core_components.ex:488
+#: lib/tokengate_web/live/router_live.html.heex:1627
 #, elixir-autogen, elixir-format
 msgid "Actions"
 msgstr ""
@@ -76,7 +77,7 @@ msgstr ""
 #: lib/tokengate_web/live/groups_live.ex:45
 #: lib/tokengate_web/live/groups_live.ex:606
 #: lib/tokengate_web/live/groups_live.ex:627
-#: lib/tokengate_web/live/router_live.html.heex:958
+#: lib/tokengate_web/live/router_live.html.heex:1029
 #: lib/tokengate_web/live/stats/group.ex:49
 #: lib/tokengate_web/live/stats/groups.ex:39
 #: lib/tokengate_web/live/stats/provider.ex:287
@@ -204,7 +205,7 @@ msgid "Providers"
 msgstr ""
 
 #: lib/tokengate_web/components/layouts.ex:399
-#: lib/tokengate_web/live/router_live.html.heex:1018
+#: lib/tokengate_web/live/router_live.html.heex:1090
 #: lib/tokengate_web/live/service_stats_live.ex:303
 #: lib/tokengate_web/live/services_live.ex:55
 #: lib/tokengate_web/live/services_live.ex:1200
@@ -252,7 +253,7 @@ msgstr ""
 #: lib/tokengate_web/live/monitoring_live.ex:1649
 #: lib/tokengate_web/live/monitoring_live.ex:1893
 #: lib/tokengate_web/live/profile_modal.ex:259
-#: lib/tokengate_web/live/router_live.ex:2265
+#: lib/tokengate_web/live/router_live.ex:2441
 #: lib/tokengate_web/live/stats/group.ex:327
 #: lib/tokengate_web/live/stats/model.ex:396
 #: lib/tokengate_web/live/stats/provider.ex:276
@@ -268,7 +269,7 @@ msgid "User"
 msgstr ""
 
 #: lib/tokengate_web/components/layouts.ex:405
-#: lib/tokengate_web/live/router_live.html.heex:1078
+#: lib/tokengate_web/live/router_live.html.heex:1151
 #: lib/tokengate_web/live/stats/users.ex:31
 #: lib/tokengate_web/live/stats_live.html.heex:136
 #: lib/tokengate_web/live/topups_live.html.heex:105
@@ -377,11 +378,13 @@ msgstr ""
 #: lib/tokengate_web/live/provider_keys_live.ex:680
 #: lib/tokengate_web/live/providers_live.ex:1573
 #: lib/tokengate_web/live/providers_live.ex:1639
-#: lib/tokengate_web/live/router_live.html.heex:646
-#: lib/tokengate_web/live/router_live.html.heex:741
-#: lib/tokengate_web/live/router_live.html.heex:1139
-#: lib/tokengate_web/live/router_live.html.heex:1959
-#: lib/tokengate_web/live/router_live.html.heex:2132
+#: lib/tokengate_web/live/router_live.html.heex:679
+#: lib/tokengate_web/live/router_live.html.heex:774
+#: lib/tokengate_web/live/router_live.html.heex:1209
+#: lib/tokengate_web/live/router_live.html.heex:2066
+#: lib/tokengate_web/live/router_live.html.heex:2239
+#: lib/tokengate_web/live/router_live.html.heex:2285
+#: lib/tokengate_web/live/router_live.html.heex:2321
 #: lib/tokengate_web/live/service_members_live.ex:406
 #: lib/tokengate_web/live/services_live.ex:1312
 #: lib/tokengate_web/live/topups_live.html.heex:279
@@ -430,7 +433,7 @@ msgstr ""
 #: lib/tokengate_web/live/notifications_live.ex:970
 #: lib/tokengate_web/live/profile_modal.ex:130
 #: lib/tokengate_web/live/profile_modal.ex:206
-#: lib/tokengate_web/live/router_live.html.heex:2107
+#: lib/tokengate_web/live/router_live.html.heex:2214
 #: lib/tokengate_web/live/services_live.ex:1356
 #: lib/tokengate_web/live/services_live.ex:1484
 #: lib/tokengate_web/live/services_live.ex:1566
@@ -509,8 +512,8 @@ msgstr ""
 #: lib/tokengate_web/live/provider_keys_live.ex:806
 #: lib/tokengate_web/live/providers_live.ex:1853
 #: lib/tokengate_web/live/providers_live.ex:1854
-#: lib/tokengate_web/live/router_live.html.heex:532
-#: lib/tokengate_web/live/router_live.html.heex:831
+#: lib/tokengate_web/live/router_live.html.heex:565
+#: lib/tokengate_web/live/router_live.html.heex:864
 #, elixir-autogen, elixir-format
 msgid "Delete"
 msgstr ""
@@ -525,9 +528,9 @@ msgstr ""
 #: lib/tokengate_web/live/provider_keys_live.ex:779
 #: lib/tokengate_web/live/providers_live.ex:1804
 #: lib/tokengate_web/live/providers_live.ex:1809
-#: lib/tokengate_web/live/router_live.html.heex:415
-#: lib/tokengate_web/live/router_live.html.heex:522
-#: lib/tokengate_web/live/router_live.html.heex:821
+#: lib/tokengate_web/live/router_live.html.heex:448
+#: lib/tokengate_web/live/router_live.html.heex:555
+#: lib/tokengate_web/live/router_live.html.heex:854
 #, elixir-autogen, elixir-format
 msgid "Disable"
 msgstr ""
@@ -536,7 +539,7 @@ msgstr ""
 #: lib/tokengate_web/live/providers_live.ex:1260
 #: lib/tokengate_web/live/providers_live.ex:1716
 #: lib/tokengate_web/live/router_live.html.heex:24
-#: lib/tokengate_web/live/router_live.html.heex:222
+#: lib/tokengate_web/live/router_live.html.heex:255
 #, elixir-autogen, elixir-format
 msgid "Disabled"
 msgstr ""
@@ -557,10 +560,9 @@ msgstr ""
 #: lib/tokengate_web/live/provider_keys_live.ex:795
 #: lib/tokengate_web/live/providers_live.ex:1843
 #: lib/tokengate_web/live/providers_live.ex:1844
-#: lib/tokengate_web/live/router_live.html.heex:406
-#: lib/tokengate_web/live/router_live.html.heex:513
-#: lib/tokengate_web/live/router_live.html.heex:812
-#: lib/tokengate_web/live/router_live.html.heex:1621
+#: lib/tokengate_web/live/router_live.html.heex:439
+#: lib/tokengate_web/live/router_live.html.heex:546
+#: lib/tokengate_web/live/router_live.html.heex:845
 #: lib/tokengate_web/live/topups_live.html.heex:392
 #, elixir-autogen, elixir-format
 msgid "Edit"
@@ -582,16 +584,16 @@ msgstr ""
 #: lib/tokengate_web/live/provider_keys_live.ex:780
 #: lib/tokengate_web/live/providers_live.ex:1805
 #: lib/tokengate_web/live/providers_live.ex:1810
-#: lib/tokengate_web/live/router_live.html.heex:415
-#: lib/tokengate_web/live/router_live.html.heex:522
-#: lib/tokengate_web/live/router_live.html.heex:821
+#: lib/tokengate_web/live/router_live.html.heex:448
+#: lib/tokengate_web/live/router_live.html.heex:555
+#: lib/tokengate_web/live/router_live.html.heex:854
 #, elixir-autogen, elixir-format
 msgid "Enable"
 msgstr ""
 
 #: lib/tokengate_web/live/monitoring_live.ex:1738
 #: lib/tokengate_web/live/provider_keys_live.ex:718
-#: lib/tokengate_web/live/router_live.html.heex:1753
+#: lib/tokengate_web/live/router_live.html.heex:1860
 #: lib/tokengate_web/live/stats/live.ex:170
 #, elixir-autogen, elixir-format
 msgid "In flight"
@@ -605,7 +607,7 @@ msgstr ""
 #: lib/tokengate_web/components/service_stats_body.ex:296
 #: lib/tokengate_web/live/models_live.ex:1027
 #: lib/tokengate_web/live/provider_keys_live.ex:710
-#: lib/tokengate_web/live/router_live.html.heex:561
+#: lib/tokengate_web/live/router_live.html.heex:594
 #, elixir-autogen, elixir-format
 msgid "Key"
 msgstr ""
@@ -650,9 +652,10 @@ msgstr ""
 #: lib/tokengate_web/live/observability_live.ex:458
 #: lib/tokengate_web/live/profile_modal.ex:157
 #: lib/tokengate_web/live/providers_live.ex:1470
-#: lib/tokengate_web/live/router_live.html.heex:564
-#: lib/tokengate_web/live/router_live.html.heex:863
-#: lib/tokengate_web/live/router_live.html.heex:1945
+#: lib/tokengate_web/live/router_live.html.heex:597
+#: lib/tokengate_web/live/router_live.html.heex:907
+#: lib/tokengate_web/live/router_live.html.heex:2052
+#: lib/tokengate_web/live/router_live.html.heex:2271
 #: lib/tokengate_web/live/services_live.ex:1259
 #: lib/tokengate_web/live/users_live.ex:1402
 #: lib/tokengate_web/live/users_live.ex:1474
@@ -797,6 +800,7 @@ msgstr ""
 #: lib/tokengate_web/live/provider_keys_live.ex:683
 #: lib/tokengate_web/live/providers_live.ex:1601
 #: lib/tokengate_web/live/providers_live.ex:1642
+#: lib/tokengate_web/live/router_live.html.heex:2287
 #: lib/tokengate_web/live/services_live.ex:1320
 #: lib/tokengate_web/live/topups_live.html.heex:282
 #: lib/tokengate_web/live/users_live.ex:1531
@@ -1241,8 +1245,8 @@ msgstr ""
 #: lib/tokengate_web/live/notifications_live.ex:883
 #: lib/tokengate_web/live/observability_live.ex:544
 #: lib/tokengate_web/live/providers_live.ex:1709
-#: lib/tokengate_web/live/router_live.html.heex:2022
-#: lib/tokengate_web/live/router_live.html.heex:2076
+#: lib/tokengate_web/live/router_live.html.heex:2129
+#: lib/tokengate_web/live/router_live.html.heex:2183
 #: lib/tokengate_web/live/topups_live.html.heex:122
 #: lib/tokengate_web/live/topups_live.html.heex:380
 #: lib/tokengate_web/live/user_stats_live.ex:816
@@ -1566,8 +1570,8 @@ msgstr ""
 #: lib/tokengate_web/components/service_stats_body.ex:238
 #: lib/tokengate_web/live/monitoring_live.ex:1486
 #: lib/tokengate_web/live/monitoring_live.ex:1643
-#: lib/tokengate_web/live/router_live.ex:2008
-#: lib/tokengate_web/live/router_live.ex:2261
+#: lib/tokengate_web/live/router_live.ex:2184
+#: lib/tokengate_web/live/router_live.ex:2437
 #: lib/tokengate_web/live/services_live.ex:1607
 #: lib/tokengate_web/live/stats/agent.ex:288
 #: lib/tokengate_web/live/stats/index.ex:471
@@ -1895,12 +1899,12 @@ msgstr ""
 #: lib/tokengate_web/live/monitoring_live.ex:1244
 #: lib/tokengate_web/live/monitoring_live.ex:1473
 #: lib/tokengate_web/live/monitoring_live.ex:1602
-#: lib/tokengate_web/live/router_live.html.heex:457
-#: lib/tokengate_web/live/router_live.html.heex:678
-#: lib/tokengate_web/live/router_live.html.heex:1423
-#: lib/tokengate_web/live/router_live.html.heex:1455
-#: lib/tokengate_web/live/router_live.html.heex:1485
-#: lib/tokengate_web/live/router_live.html.heex:1836
+#: lib/tokengate_web/live/router_live.html.heex:490
+#: lib/tokengate_web/live/router_live.html.heex:711
+#: lib/tokengate_web/live/router_live.html.heex:1493
+#: lib/tokengate_web/live/router_live.html.heex:1525
+#: lib/tokengate_web/live/router_live.html.heex:1555
+#: lib/tokengate_web/live/router_live.html.heex:1943
 #: lib/tokengate_web/live/stats/agent.ex:194
 #: lib/tokengate_web/live/stats/group.ex:204
 #: lib/tokengate_web/live/stats/models.ex:90
@@ -2212,7 +2216,7 @@ msgstr ""
 #: lib/tokengate_web/live/monitoring_live.ex:1480
 #: lib/tokengate_web/live/monitoring_live.ex:1652
 #: lib/tokengate_web/live/monitoring_live.ex:1897
-#: lib/tokengate_web/live/router_live.ex:2003
+#: lib/tokengate_web/live/router_live.ex:2179
 #: lib/tokengate_web/live/stats/groups.ex:94
 #: lib/tokengate_web/live/stats/model.ex:318
 #: lib/tokengate_web/live/stats/model.ex:388
@@ -2441,11 +2445,11 @@ msgstr ""
 #: lib/tokengate_web/live/model_providers_live.ex:2830
 #: lib/tokengate_web/live/model_providers_live.ex:3671
 #: lib/tokengate_web/live/model_providers_live.ex:3874
-#: lib/tokengate_web/live/router_live.html.heex:359
-#: lib/tokengate_web/live/router_live.html.heex:575
-#: lib/tokengate_web/live/router_live.html.heex:710
-#: lib/tokengate_web/live/router_live.html.heex:774
-#: lib/tokengate_web/live/router_live.html.heex:869
+#: lib/tokengate_web/live/router_live.html.heex:392
+#: lib/tokengate_web/live/router_live.html.heex:608
+#: lib/tokengate_web/live/router_live.html.heex:743
+#: lib/tokengate_web/live/router_live.html.heex:807
+#: lib/tokengate_web/live/router_live.html.heex:913
 #, elixir-autogen, elixir-format
 msgid "Priority"
 msgstr ""
@@ -2642,14 +2646,14 @@ msgstr ""
 
 #: lib/tokengate_web/live/model_providers_live.ex:3568
 #: lib/tokengate_web/live/model_providers_live.ex:3620
-#: lib/tokengate_web/live/router_live.html.heex:971
+#: lib/tokengate_web/live/router_live.html.heex:1039
 #, elixir-autogen, elixir-format
 msgid "Type to search a limit profile…"
 msgstr ""
 
 #: lib/tokengate_web/live/model_providers_live.ex:3432
 #: lib/tokengate_web/live/model_providers_live.ex:3485
-#: lib/tokengate_web/live/router_live.html.heex:1091
+#: lib/tokengate_web/live/router_live.html.heex:1161
 #, elixir-autogen, elixir-format
 msgid "Type to search a user…"
 msgstr ""
@@ -2947,10 +2951,10 @@ msgstr ""
 
 #: lib/tokengate_web/live/notifications_live.ex:627
 #: lib/tokengate_web/live/router_live.html.heex:24
-#: lib/tokengate_web/live/router_live.html.heex:221
-#: lib/tokengate_web/live/router_live.html.heex:601
-#: lib/tokengate_web/live/router_live.html.heex:721
-#: lib/tokengate_web/live/router_live.html.heex:950
+#: lib/tokengate_web/live/router_live.html.heex:254
+#: lib/tokengate_web/live/router_live.html.heex:634
+#: lib/tokengate_web/live/router_live.html.heex:754
+#: lib/tokengate_web/live/router_live.html.heex:1021
 #, elixir-autogen, elixir-format
 msgid "Enabled"
 msgstr ""
@@ -3403,7 +3407,7 @@ msgid "TPS"
 msgstr ""
 
 #: lib/tokengate_web/live/calculator_live.html.heex:337
-#: lib/tokengate_web/live/router_live.html.heex:1837
+#: lib/tokengate_web/live/router_live.html.heex:1944
 #: lib/tokengate_web/live/stats/provider.ex:122
 #: lib/tokengate_web/live/supervised_services_live.ex:419
 #, elixir-autogen, elixir-format
@@ -3749,7 +3753,7 @@ msgstr ""
 #: lib/tokengate_web/components/service_stats_body.ex:210
 #: lib/tokengate_web/live/monitoring_live.ex:1417
 #: lib/tokengate_web/live/monitoring_live.ex:1423
-#: lib/tokengate_web/live/router_live.html.heex:1739
+#: lib/tokengate_web/live/router_live.html.heex:1846
 #: lib/tokengate_web/live/stats/agents.ex:175
 #: lib/tokengate_web/live/stats/group.ex:246
 #: lib/tokengate_web/live/stats/groups.ex:141
@@ -3783,9 +3787,9 @@ msgstr ""
 #: lib/tokengate_web/live/monitoring_live.ex:1465
 #: lib/tokengate_web/live/monitoring_live.ex:1781
 #: lib/tokengate_web/live/monitoring_live.ex:1918
-#: lib/tokengate_web/live/router_live.html.heex:922
-#: lib/tokengate_web/live/router_live.html.heex:932
-#: lib/tokengate_web/live/router_live.html.heex:942
+#: lib/tokengate_web/live/router_live.html.heex:993
+#: lib/tokengate_web/live/router_live.html.heex:1003
+#: lib/tokengate_web/live/router_live.html.heex:1013
 #: lib/tokengate_web/live/user_stats_live.ex:822
 #: lib/tokengate_web/live/user_stats_live.ex:862
 #, elixir-autogen, elixir-format
@@ -3879,9 +3883,9 @@ msgstr ""
 #: lib/tokengate_web/live/monitoring_live.ex:1465
 #: lib/tokengate_web/live/monitoring_live.ex:1781
 #: lib/tokengate_web/live/monitoring_live.ex:1918
-#: lib/tokengate_web/live/router_live.html.heex:921
-#: lib/tokengate_web/live/router_live.html.heex:931
-#: lib/tokengate_web/live/router_live.html.heex:941
+#: lib/tokengate_web/live/router_live.html.heex:992
+#: lib/tokengate_web/live/router_live.html.heex:1002
+#: lib/tokengate_web/live/router_live.html.heex:1012
 #: lib/tokengate_web/live/user_stats_live.ex:822
 #: lib/tokengate_web/live/user_stats_live.ex:862
 #, elixir-autogen, elixir-format
@@ -4102,8 +4106,8 @@ msgstr ""
 
 #: lib/tokengate_web/live/audit_live.ex:306
 #: lib/tokengate_web/live/audit_live.ex:381
-#: lib/tokengate_web/live/router_live.html.heex:785
-#: lib/tokengate_web/live/router_live.html.heex:873
+#: lib/tokengate_web/live/router_live.html.heex:818
+#: lib/tokengate_web/live/router_live.html.heex:917
 #: lib/tokengate_web/live/stats/router.ex:269
 #, elixir-autogen, elixir-format
 msgid "Action"
@@ -5246,9 +5250,9 @@ msgid "Served by (API keys)"
 msgstr ""
 
 #: lib/tokengate_web/live/models_live.ex:2342
-#: lib/tokengate_web/live/router_live.html.heex:395
-#: lib/tokengate_web/live/router_live.html.heex:502
-#: lib/tokengate_web/live/router_live.html.heex:801
+#: lib/tokengate_web/live/router_live.html.heex:428
+#: lib/tokengate_web/live/router_live.html.heex:535
+#: lib/tokengate_web/live/router_live.html.heex:834
 #, elixir-autogen, elixir-format
 msgid "disabled"
 msgstr ""
@@ -6568,7 +6572,7 @@ msgstr ""
 msgid "Guard rails updated."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1532
+#: lib/tokengate_web/live/router_live.html.heex:1602
 #: lib/tokengate_web/live/topups_live.html.heex:31
 #, elixir-autogen, elixir-format
 msgid "Hide archived"
@@ -6589,7 +6593,7 @@ msgstr ""
 msgid "Last requests"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:148
+#: lib/tokengate_web/live/router_live.html.heex:181
 #: lib/tokengate_web/live/stats_live.html.heex:66
 #, elixir-autogen, elixir-format
 msgid "Live"
@@ -6962,8 +6966,8 @@ msgid "TTFT"
 msgstr ""
 
 #: lib/tokengate_web/live/monitoring_live.ex:1243
-#: lib/tokengate_web/live/router_live.html.heex:1405
-#: lib/tokengate_web/live/router_live.html.heex:1456
+#: lib/tokengate_web/live/router_live.html.heex:1475
+#: lib/tokengate_web/live/router_live.html.heex:1526
 #: lib/tokengate_web/live/stats/providers.ex:110
 #: lib/tokengate_web/live/stats/router.ex:470
 #, elixir-autogen, elixir-format
@@ -7594,8 +7598,8 @@ msgid "CSV Logs (30d)"
 msgstr ""
 
 #: lib/tokengate_web/live/audit_live.ex:482
-#: lib/tokengate_web/live/router_live.html.heex:2023
-#: lib/tokengate_web/live/router_live.html.heex:2077
+#: lib/tokengate_web/live/router_live.html.heex:2130
+#: lib/tokengate_web/live/router_live.html.heex:2184
 #: lib/tokengate_web/live/stats/router.ex:265
 #, elixir-autogen, elixir-format
 msgid "Changes"
@@ -7951,7 +7955,7 @@ msgstr ""
 msgid "Consumer"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1258
+#: lib/tokengate_web/live/router_live.html.heex:1328
 #: lib/tokengate_web/live/stats/agent.ex:154
 #, elixir-autogen, elixir-format
 msgid "Effort"
@@ -8258,7 +8262,7 @@ msgid "Members inherit this value unless their own access overrides it."
 msgstr ""
 
 #: lib/tokengate_web/live/groups_live.ex:759
-#: lib/tokengate_web/live/router_live.html.heex:256
+#: lib/tokengate_web/live/router_live.html.heex:289
 #, elixir-autogen, elixir-format
 msgid "No baseline"
 msgstr ""
@@ -8326,17 +8330,17 @@ msgstr ""
 msgid "$/1M"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2548
+#: lib/tokengate_web/live/router_live.ex:2724
 #, elixir-autogen, elixir-format
 msgid "%{amount} over"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2550
+#: lib/tokengate_web/live/router_live.ex:2726
 #, elixir-autogen, elixir-format
 msgid "%{amount} saved"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1511
+#: lib/tokengate_web/live/router_live.ex:1670
 #, elixir-autogen, elixir-format
 msgid "%{model} answered in %{ms} ms (confidence %{confidence})"
 msgstr ""
@@ -8346,7 +8350,7 @@ msgstr ""
 msgid "%{savings} over the priced baseline"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1807
+#: lib/tokengate_web/live/router_live.html.heex:1914
 #, elixir-autogen, elixir-format
 msgid "%{seconds}s"
 msgstr ""
@@ -8356,12 +8360,12 @@ msgstr ""
 msgid "%{share} of total · p50 %{p50} · p95 %{p95}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1477
+#: lib/tokengate_web/live/router_live.ex:1636
 #, elixir-autogen, elixir-format
 msgid "%{tokens} prompt tokens · tools: %{tools} · vision: %{vision} · structured: %{structured} · effort: %{effort}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:285
+#: lib/tokengate_web/live/router_live.html.heex:318
 #, elixir-autogen, elixir-format
 msgid "0 disables the fast path."
 msgstr ""
@@ -8371,25 +8375,25 @@ msgstr ""
 msgid "A saving obtained by losing cache reuse, switching models mid-session or falling back is not a saving."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:947
+#: lib/tokengate_web/live/router_live.html.heex:1018
 #, elixir-autogen, elixir-format
 msgid "Agent types (comma separated)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:625
+#: lib/tokengate_web/live/router_live.html.heex:658
 #, elixir-autogen, elixir-format
 msgid "Allow downgrade mid-task"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:909
-#: lib/tokengate_web/live/router_live.html.heex:920
-#: lib/tokengate_web/live/router_live.html.heex:930
-#: lib/tokengate_web/live/router_live.html.heex:940
+#: lib/tokengate_web/live/router_live.html.heex:980
+#: lib/tokengate_web/live/router_live.html.heex:991
+#: lib/tokengate_web/live/router_live.html.heex:1001
+#: lib/tokengate_web/live/router_live.html.heex:1011
 #, elixir-autogen, elixir-format
 msgid "Any"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:690
+#: lib/tokengate_web/live/router_live.html.heex:723
 #, elixir-autogen, elixir-format
 msgid "Any tier"
 msgstr ""
@@ -8399,12 +8403,12 @@ msgstr ""
 msgid "Avg decision time"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1731
+#: lib/tokengate_web/live/router_live.html.heex:1838
 #, elixir-autogen, elixir-format
 msgid "Avg tok/s"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2519
+#: lib/tokengate_web/live/router_live.ex:2695
 #, elixir-autogen, elixir-format
 msgid "Balanced"
 msgstr ""
@@ -8414,39 +8418,39 @@ msgstr ""
 msgid "Baseline (counterfactual)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:254
+#: lib/tokengate_web/live/router_live.html.heex:287
 #, elixir-autogen, elixir-format
 msgid "Baseline model (counterfactual)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1720
+#: lib/tokengate_web/live/router_live.html.heex:1827
 #, elixir-autogen, elixir-format
 msgid "Business view"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:300
+#: lib/tokengate_web/live/router_live.html.heex:333
 #, elixir-autogen, elixir-format
 msgid "Charge the decision cost to the subject"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:338
+#: lib/tokengate_web/live/router_live.html.heex:371
 #, elixir-autogen, elixir-format
 msgid "Check presets"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:680
+#: lib/tokengate_web/live/router_live.html.heex:713
 #, elixir-autogen, elixir-format
 msgid "Choose a model"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1497
-#: lib/tokengate_web/live/router_live.ex:1536
-#: lib/tokengate_web/live/router_live.html.heex:1264
+#: lib/tokengate_web/live/router_live.ex:1656
+#: lib/tokengate_web/live/router_live.ex:1695
+#: lib/tokengate_web/live/router_live.html.heex:1334
 #, elixir-autogen, elixir-format
 msgid "Classifier"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1537
+#: lib/tokengate_web/live/router_live.ex:1696
 #, elixir-autogen, elixir-format
 msgid "Classifier cache hit"
 msgstr ""
@@ -8461,58 +8465,58 @@ msgstr ""
 msgid "Classifier overhead"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2526
+#: lib/tokengate_web/live/router_live.ex:2702
 #, elixir-autogen, elixir-format
 msgid "Client default"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:635
+#: lib/tokengate_web/live/router_live.html.heex:668
 #, elixir-autogen, elixir-format
 msgid "Compact JSON"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1819
+#: lib/tokengate_web/live/router_live.html.heex:1926
 #, elixir-autogen, elixir-format
 msgid "Completed routed requests"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:789
-#: lib/tokengate_web/live/router_live.html.heex:886
+#: lib/tokengate_web/live/router_live.html.heex:822
+#: lib/tokengate_web/live/router_live.html.heex:957
 #, elixir-autogen, elixir-format
 msgid "Conditions"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:949
+#: lib/tokengate_web/live/router_live.html.heex:1020
 #, elixir-autogen, elixir-format
 msgid "Content regex"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2518
+#: lib/tokengate_web/live/router_live.ex:2694
 #, elixir-autogen, elixir-format
 msgid "Cost first"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1840
+#: lib/tokengate_web/live/router_live.html.heex:1947
 #, elixir-autogen, elixir-format
 msgid "Cost vs baseline"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:866
+#: lib/tokengate_web/live/router_live.ex:1016
 #, elixir-autogen, elixir-format
 msgid "Could not delete the rule."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:204
+#: lib/tokengate_web/live/router_live.ex:212
 #, elixir-autogen, elixir-format
 msgid "Could not save the router configuration."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:620
+#: lib/tokengate_web/live/router_live.html.heex:653
 #, elixir-autogen, elixir-format
 msgid "Critical accuracy (potency wins ties)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:279
+#: lib/tokengate_web/live/router_live.html.heex:312
 #, elixir-autogen, elixir-format
 msgid "Decision context (chars)"
 msgstr ""
@@ -8522,12 +8526,12 @@ msgstr ""
 msgid "Decision insights"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:232
+#: lib/tokengate_web/live/router_live.html.heex:265
 #, elixir-autogen, elixir-format
 msgid "Decision model"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:235
+#: lib/tokengate_web/live/router_live.html.heex:268
 #, elixir-autogen, elixir-format
 msgid "Decision models come first, then the chat models."
 msgstr ""
@@ -8538,7 +8542,7 @@ msgid "Decision p50"
 msgstr ""
 
 #: lib/tokengate_web/live/monitoring_live.ex:1194
-#: lib/tokengate_web/live/router_live.ex:1498
+#: lib/tokengate_web/live/router_live.ex:1657
 #, elixir-autogen, elixir-format
 msgid "Decision source"
 msgstr ""
@@ -8548,54 +8552,55 @@ msgstr ""
 msgid "Decision sources"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:274
+#: lib/tokengate_web/live/router_live.html.heex:307
 #, elixir-autogen, elixir-format
 msgid "Decision timeout (ms)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1191
+#: lib/tokengate_web/live/router_live.html.heex:1261
 #, elixir-autogen, elixir-format
 msgid "Declares tools"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:246
+#: lib/tokengate_web/live/router_live.html.heex:279
 #, elixir-autogen, elixir-format
 msgid "Default fallback model"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:530
+#: lib/tokengate_web/live/router_live.html.heex:563
 #, elixir-autogen, elixir-format
 msgid "Delete this destination?"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:829
+#: lib/tokengate_web/live/router_live.html.heex:862
 #, elixir-autogen, elixir-format
 msgid "Delete this rule?"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:568
-#: lib/tokengate_web/live/router_live.html.heex:867
-#: lib/tokengate_web/live/router_live.html.heex:1946
+#: lib/tokengate_web/live/router_live.html.heex:601
+#: lib/tokengate_web/live/router_live.html.heex:911
+#: lib/tokengate_web/live/router_live.html.heex:2053
+#: lib/tokengate_web/live/router_live.html.heex:2272
 #, elixir-autogen, elixir-format
 msgid "Description"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:687
+#: lib/tokengate_web/live/router_live.ex:810
 #, elixir-autogen, elixir-format
 msgid "Destination deleted."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:633
+#: lib/tokengate_web/live/router_live.ex:756
 #, elixir-autogen, elixir-format
 msgid "Destination saved."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:378
+#: lib/tokengate_web/live/router_live.html.heex:411
 #, elixir-autogen, elixir-format
 msgid "Destinations"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:429
+#: lib/tokengate_web/live/router_live.html.heex:462
 #, elixir-autogen, elixir-format
 msgid "Destinations of %{name}"
 msgstr ""
@@ -8605,59 +8610,59 @@ msgstr ""
 msgid "Direct $/1M"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1479
+#: lib/tokengate_web/live/router_live.html.heex:1549
 #, elixir-autogen, elixir-format
 msgid "Discarded candidates"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:135
-#: lib/tokengate_web/live/router_live.html.heex:1151
+#: lib/tokengate_web/live/router_live.html.heex:168
+#: lib/tokengate_web/live/router_live.html.heex:1221
 #, elixir-autogen, elixir-format
 msgid "Dry run"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:658
+#: lib/tokengate_web/live/router_live.html.heex:691
 #, elixir-autogen, elixir-format
 msgid "Edit destination"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:842
+#: lib/tokengate_web/live/router_live.html.heex:875
 #, elixir-autogen, elixir-format
 msgid "Edit rule"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:547
+#: lib/tokengate_web/live/router_live.html.heex:580
 #, elixir-autogen, elixir-format
 msgid "Edit use case"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:696
+#: lib/tokengate_web/live/router_live.html.heex:729
 #, elixir-autogen, elixir-format
 msgid "Effort override"
 msgstr ""
 
 #: lib/tokengate_web/live/monitoring_live.ex:1189
-#: lib/tokengate_web/live/router_live.html.heex:685
+#: lib/tokengate_web/live/router_live.html.heex:718
 #, elixir-autogen, elixir-format
 msgid "Effort tier"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1449
+#: lib/tokengate_web/live/router_live.html.heex:1519
 #, elixir-autogen, elixir-format
 msgid "Eligible destinations"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:888
+#: lib/tokengate_web/live/router_live.html.heex:959
 #, elixir-autogen, elixir-format
 msgid "Empty fields are ignored: a rule with no condition matches every request."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:209
+#: lib/tokengate_web/live/router_live.html.heex:242
 #, elixir-autogen, elixir-format
 msgid "Enabled (kill switch)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:115
+#: lib/tokengate_web/live/router_live.html.heex:148
 #, elixir-autogen, elixir-format
 msgid "Engine"
 msgstr ""
@@ -8668,18 +8673,18 @@ msgstr ""
 msgid "Escalated"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1258
+#: lib/tokengate_web/live/router_live.html.heex:1328
 #, elixir-autogen, elixir-format
 msgid "Estimated cost"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1500
-#: lib/tokengate_web/live/router_live.html.heex:1321
+#: lib/tokengate_web/live/router_live.ex:1659
+#: lib/tokengate_web/live/router_live.html.heex:1391
 #, elixir-autogen, elixir-format
 msgid "Fallback chain"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:579
+#: lib/tokengate_web/live/router_live.html.heex:612
 #, elixir-autogen, elixir-format
 msgid "Fallback model"
 msgstr ""
@@ -8689,7 +8694,7 @@ msgstr ""
 msgid "Fallback rate"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1735
+#: lib/tokengate_web/live/router_live.html.heex:1842
 #: lib/tokengate_web/live/stats/router.ex:477
 #: lib/tokengate_web/live/stats/router.ex:548
 #, elixir-autogen, elixir-format
@@ -8701,70 +8706,70 @@ msgstr ""
 msgid "False-savings signals"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1534
+#: lib/tokengate_web/live/router_live.ex:1693
 #, elixir-autogen, elixir-format
 msgid "Fast path (deterministic)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:284
+#: lib/tokengate_web/live/router_live.html.heex:317
 #, elixir-autogen, elixir-format
 msgid "Fast-path max tokens"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:460
+#: lib/tokengate_web/live/router_live.html.heex:493
 #, elixir-autogen, elixir-format
 msgid "Flags"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:715
+#: lib/tokengate_web/live/router_live.html.heex:748
 #, elixir-autogen, elixir-format
 msgid "Flags (JSON)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:590
+#: lib/tokengate_web/live/router_live.ex:713
 #, elixir-autogen, elixir-format
 msgid "Flags must be a JSON object, e.g. {\"tier\": \"premium\"}."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:875
+#: lib/tokengate_web/live/router_live.html.heex:919
 #, elixir-autogen, elixir-format
 msgid "Force one use case"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:573
+#: lib/tokengate_web/live/router_live.html.heex:606
 #, elixir-autogen, elixir-format
 msgid "Free-form signals the classifier sees."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:171
+#: lib/tokengate_web/live/router_live.html.heex:204
 #, elixir-autogen, elixir-format
 msgid "Global engine"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1196
+#: lib/tokengate_web/live/router_live.html.heex:1266
 #, elixir-autogen, elixir-format
 msgid "Has an image"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:938
+#: lib/tokengate_web/live/router_live.html.heex:1009
 #, elixir-autogen, elixir-format
 msgid "Has structured output"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:918
+#: lib/tokengate_web/live/router_live.html.heex:989
 #, elixir-autogen, elixir-format
 msgid "Has tools"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:928
+#: lib/tokengate_web/live/router_live.html.heex:999
 #, elixir-autogen, elixir-format
 msgid "Has vision"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2529
-#: lib/tokengate_web/live/router_live.html.heex:689
-#: lib/tokengate_web/live/router_live.html.heex:701
-#: lib/tokengate_web/live/router_live.html.heex:912
+#: lib/tokengate_web/live/router_live.ex:2705
+#: lib/tokengate_web/live/router_live.html.heex:722
+#: lib/tokengate_web/live/router_live.html.heex:734
+#: lib/tokengate_web/live/router_live.html.heex:983
 #, elixir-autogen, elixir-format
 msgid "High"
 msgstr ""
@@ -8774,7 +8779,7 @@ msgstr ""
 msgid "How each routed request was decided, and what that path cost."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:586
+#: lib/tokengate_web/live/router_live.html.heex:619
 #, elixir-autogen, elixir-format
 msgid "Keep last N images"
 msgstr ""
@@ -8784,12 +8789,12 @@ msgstr ""
 msgid "Last seen"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1839
+#: lib/tokengate_web/live/router_live.html.heex:1946
 #, elixir-autogen, elixir-format
 msgid "Latency / TTFT"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2521
+#: lib/tokengate_web/live/router_live.ex:2697
 #, elixir-autogen, elixir-format
 msgid "Latency first"
 msgstr ""
@@ -8804,54 +8809,54 @@ msgstr ""
 msgid "Loading router metrics…"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:295
+#: lib/tokengate_web/live/router_live.html.heex:328
 #, elixir-autogen, elixir-format
 msgid "Lock tool loops to the pinned model"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2527
-#: lib/tokengate_web/live/router_live.html.heex:687
-#: lib/tokengate_web/live/router_live.html.heex:699
-#: lib/tokengate_web/live/router_live.html.heex:910
+#: lib/tokengate_web/live/router_live.ex:2703
+#: lib/tokengate_web/live/router_live.html.heex:720
+#: lib/tokengate_web/live/router_live.html.heex:732
+#: lib/tokengate_web/live/router_live.html.heex:981
 #, elixir-autogen, elixir-format
 msgid "Low"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:562
+#: lib/tokengate_web/live/router_live.html.heex:595
 #, elixir-autogen, elixir-format
 msgid "Lowercase slug"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:591
+#: lib/tokengate_web/live/router_live.html.heex:624
 #, elixir-autogen, elixir-format
 msgid "Max history turns"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:902
-#: lib/tokengate_web/live/router_live.html.heex:1186
+#: lib/tokengate_web/live/router_live.html.heex:973
+#: lib/tokengate_web/live/router_live.html.heex:1256
 #, elixir-autogen, elixir-format
 msgid "Max. tokens"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2528
-#: lib/tokengate_web/live/router_live.html.heex:688
-#: lib/tokengate_web/live/router_live.html.heex:700
-#: lib/tokengate_web/live/router_live.html.heex:911
+#: lib/tokengate_web/live/router_live.ex:2704
+#: lib/tokengate_web/live/router_live.html.heex:721
+#: lib/tokengate_web/live/router_live.html.heex:733
+#: lib/tokengate_web/live/router_live.html.heex:982
 #, elixir-autogen, elixir-format
 msgid "Medium"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:485
+#: lib/tokengate_web/live/router_live.html.heex:518
 #, elixir-autogen, elixir-format
 msgid "Min. confidence"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:708
+#: lib/tokengate_web/live/router_live.html.heex:741
 #, elixir-autogen, elixir-format
 msgid "Min. confidence (0–1)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:897
+#: lib/tokengate_web/live/router_live.html.heex:968
 #, elixir-autogen, elixir-format
 msgid "Min. tokens"
 msgstr ""
@@ -8876,50 +8881,50 @@ msgstr ""
 msgid "Net savings (incl. decision cost)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:444
-#: lib/tokengate_web/live/router_live.html.heex:658
+#: lib/tokengate_web/live/router_live.html.heex:477
+#: lib/tokengate_web/live/router_live.html.heex:691
 #, elixir-autogen, elixir-format
 msgid "New destination"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:763
-#: lib/tokengate_web/live/router_live.html.heex:842
+#: lib/tokengate_web/live/router_live.html.heex:796
+#: lib/tokengate_web/live/router_live.html.heex:875
 #, elixir-autogen, elixir-format
 msgid "New rule"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:341
-#: lib/tokengate_web/live/router_live.html.heex:547
+#: lib/tokengate_web/live/router_live.html.heex:374
+#: lib/tokengate_web/live/router_live.html.heex:580
 #, elixir-autogen, elixir-format
 msgid "New use case"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1822
+#: lib/tokengate_web/live/router_live.html.heex:1929
 #, elixir-autogen, elixir-format
 msgid "Newest first · bounded to %{limit} rows"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:248
+#: lib/tokengate_web/live/router_live.html.heex:281
 #, elixir-autogen, elixir-format
 msgid "No default"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:454
+#: lib/tokengate_web/live/router_live.html.heex:487
 #, elixir-autogen, elixir-format
 msgid "No destinations yet: this use case cannot win a decision."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1323
+#: lib/tokengate_web/live/router_live.html.heex:1393
 #, elixir-autogen, elixir-format
 msgid "No fallback: a session pin or a single candidate answered."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2420
+#: lib/tokengate_web/live/router_live.ex:2596
 #, elixir-autogen, elixir-format
 msgid "No lane of the baseline model carries a price: baseline coverage and net savings will stay empty."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1758
+#: lib/tokengate_web/live/router_live.html.heex:1865
 #, elixir-autogen, elixir-format
 msgid "No requests in flight right now."
 msgstr ""
@@ -8934,7 +8939,7 @@ msgstr ""
 msgid "No routed traffic in this window."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:772
+#: lib/tokengate_web/live/router_live.html.heex:805
 #, elixir-autogen, elixir-format
 msgid "No rules yet: every decision goes through the classifier."
 msgstr ""
@@ -8944,22 +8949,22 @@ msgstr ""
 msgid "No subject has both routed and direct traffic in this window."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1545
+#: lib/tokengate_web/live/router_live.ex:1704
 #, elixir-autogen, elixir-format
 msgid "No use case has an eligible destination for this payload. Bind models to a use case (Engine tab) or relax its requirements."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:351
+#: lib/tokengate_web/live/router_live.html.heex:384
 #, elixir-autogen, elixir-format
 msgid "No use cases yet. Check the presets or create one."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:234
+#: lib/tokengate_web/live/router_live.html.heex:267
 #, elixir-autogen, elixir-format
 msgid "None (deterministic)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1499
+#: lib/tokengate_web/live/router_live.html.heex:1569
 #, elixir-autogen, elixir-format
 msgid "Nothing was discarded by the pre-filters."
 msgstr ""
@@ -8969,48 +8974,48 @@ msgstr ""
 msgid "OK"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:432
+#: lib/tokengate_web/live/router_live.html.heex:465
 #, elixir-autogen, elixir-format
 msgid "One row per model and effort tier. Capability flags are filters, not wishes: a destination that cannot honour a requirement is discarded before any classifier runs."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:716
+#: lib/tokengate_web/live/router_live.html.heex:749
 #, elixir-autogen, elixir-format
 msgid "Optional operator metadata, e.g. {\"tier\": \"premium\"}."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1174
+#: lib/tokengate_web/live/router_live.html.heex:1244
 #, elixir-autogen, elixir-format
 msgid "Paste the user message you want to test…"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1476
+#: lib/tokengate_web/live/router_live.ex:1635
 #, elixir-autogen, elixir-format
 msgid "Payload"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:630
+#: lib/tokengate_web/live/router_live.html.heex:663
 #, elixir-autogen, elixir-format
 msgid "Pin session to the model that opened it"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:240
-#: lib/tokengate_web/live/router_live.html.heex:1553
+#: lib/tokengate_web/live/router_live.html.heex:273
+#: lib/tokengate_web/live/router_live.html.heex:1623
 #, elixir-autogen, elixir-format
 msgid "Policy"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1495
+#: lib/tokengate_web/live/router_live.ex:1654
 #, elixir-autogen, elixir-format
 msgid "Pre-filters"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:226
+#: lib/tokengate_web/live/router_live.ex:234
 #, elixir-autogen, elixir-format
 msgid "Presets checked: %{inserted} created, %{existing} already present."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1172
+#: lib/tokengate_web/live/router_live.html.heex:1242
 #, elixir-autogen, elixir-format
 msgid "Prompt"
 msgstr ""
@@ -9025,53 +9030,53 @@ msgstr ""
 msgid "Prompt-cache reuse"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1290
+#: lib/tokengate_web/live/router_live.html.heex:1360
 #, elixir-autogen, elixir-format
 msgid "Prompt-saving transforms that would apply"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2520
+#: lib/tokengate_web/live/router_live.ex:2696
 #, elixir-autogen, elixir-format
 msgid "Quality first"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1682
+#: lib/tokengate_web/live/router_live.html.heex:1789
 #, elixir-autogen, elixir-format
 msgid "Real-time feed driven by PubSub (in-flight registry + completed request logs). No polling."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1486
+#: lib/tokengate_web/live/router_live.html.heex:1556
 #, elixir-autogen, elixir-format
 msgid "Reason"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:907
-#: lib/tokengate_web/live/router_live.html.heex:1180
+#: lib/tokengate_web/live/router_live.html.heex:978
+#: lib/tokengate_web/live/router_live.html.heex:1250
 #, elixir-autogen, elixir-format
 msgid "Reasoning effort"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:362
+#: lib/tokengate_web/live/router_live.html.heex:395
 #, elixir-autogen, elixir-format
 msgid "Requirements"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:615
+#: lib/tokengate_web/live/router_live.html.heex:648
 #, elixir-autogen, elixir-format
 msgid "Requires structured output"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:605
+#: lib/tokengate_web/live/router_live.html.heex:638
 #, elixir-autogen, elixir-format
 msgid "Requires tools"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:610
+#: lib/tokengate_web/live/router_live.html.heex:643
 #, elixir-autogen, elixir-format
 msgid "Requires vision"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:876
+#: lib/tokengate_web/live/router_live.html.heex:920
 #, elixir-autogen, elixir-format
 msgid "Restrict to use cases"
 msgstr ""
@@ -9086,12 +9091,12 @@ msgstr ""
 msgid "Router $/1M"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:197
+#: lib/tokengate_web/live/router_live.ex:205
 #, elixir-autogen, elixir-format
 msgid "Router configuration saved."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1727
+#: lib/tokengate_web/live/router_live.html.heex:1834
 #, elixir-autogen, elixir-format
 msgid "Router req/min (5 min)"
 msgstr ""
@@ -9106,67 +9111,67 @@ msgstr ""
 msgid "Router vs direct"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:777
-#: lib/tokengate_web/live/router_live.html.heex:2075
+#: lib/tokengate_web/live/router_live.html.heex:810
+#: lib/tokengate_web/live/router_live.html.heex:2182
 #, elixir-autogen, elixir-format
 msgid "Rule"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1533
+#: lib/tokengate_web/live/router_live.ex:1692
 #, elixir-autogen, elixir-format
 msgid "Rule (deterministic)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:862
+#: lib/tokengate_web/live/router_live.ex:1012
 #, elixir-autogen, elixir-format
 msgid "Rule deleted."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:811
+#: lib/tokengate_web/live/router_live.ex:961
 #, elixir-autogen, elixir-format
 msgid "Rule saved."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1490
-#: lib/tokengate_web/live/router_live.html.heex:125
-#: lib/tokengate_web/live/router_live.html.heex:754
-#: lib/tokengate_web/live/router_live.html.heex:1555
-#: lib/tokengate_web/live/router_live.html.heex:2068
+#: lib/tokengate_web/live/router_live.ex:1649
+#: lib/tokengate_web/live/router_live.html.heex:158
+#: lib/tokengate_web/live/router_live.html.heex:787
+#: lib/tokengate_web/live/router_live.html.heex:1625
+#: lib/tokengate_web/live/router_live.html.heex:2175
 #, elixir-autogen, elixir-format
 msgid "Rules"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1211
+#: lib/tokengate_web/live/router_live.html.heex:1281
 #, elixir-autogen, elixir-format
 msgid "Run dry run"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1154
+#: lib/tokengate_web/live/router_live.html.heex:1224
 #, elixir-autogen, elixir-format
 msgid "Runs the real decision over a synthetic payload: zero target tokens, zero budget debited, no session pin written."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:306
+#: lib/tokengate_web/live/router_live.html.heex:339
 #, elixir-autogen, elixir-format
 msgid "Save configuration"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:743
+#: lib/tokengate_web/live/router_live.html.heex:776
 #, elixir-autogen, elixir-format
 msgid "Save destination"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1141
+#: lib/tokengate_web/live/router_live.html.heex:1211
 #, elixir-autogen, elixir-format
 msgid "Save rule"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:648
+#: lib/tokengate_web/live/router_live.html.heex:681
 #, elixir-autogen, elixir-format
 msgid "Save use case"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:698
+#: lib/tokengate_web/live/router_live.html.heex:731
 #, elixir-autogen, elixir-format
 msgid "Send as-is"
 msgstr ""
@@ -9181,12 +9186,12 @@ msgstr ""
 msgid "Session coverage: %{coverage} · %{sessions} sessions"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1485
+#: lib/tokengate_web/live/router_live.ex:1644
 #, elixir-autogen, elixir-format
 msgid "Session pin"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1532
+#: lib/tokengate_web/live/router_live.ex:1691
 #, elixir-autogen, elixir-format
 msgid "Session pin (deterministic)"
 msgstr ""
@@ -9196,7 +9201,7 @@ msgstr ""
 msgid "Signal"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1535
+#: lib/tokengate_web/live/router_live.ex:1694
 #, elixir-autogen, elixir-format
 msgid "Single viable use case (deterministic)"
 msgstr ""
@@ -9224,32 +9229,32 @@ msgstr ""
 msgid "Spend, honest net savings and escalation share per use case and effort tier over %{period}."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:596
+#: lib/tokengate_web/live/router_live.html.heex:629
 #, elixir-autogen, elixir-format
 msgid "Stale tool trim threshold (%)"
 msgstr ""
 
 #: lib/tokengate_web/live/monitoring_live.ex:1246
-#: lib/tokengate_web/live/router_live.html.heex:390
-#: lib/tokengate_web/live/router_live.html.heex:495
-#: lib/tokengate_web/live/router_live.html.heex:796
-#: lib/tokengate_web/live/router_live.html.heex:1552
+#: lib/tokengate_web/live/router_live.html.heex:423
+#: lib/tokengate_web/live/router_live.html.heex:528
+#: lib/tokengate_web/live/router_live.html.heex:829
+#: lib/tokengate_web/live/router_live.html.heex:1622
 #: lib/tokengate_web/live/stats/router.ex:175
 #, elixir-autogen, elixir-format
 msgid "State"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:290
+#: lib/tokengate_web/live/router_live.html.heex:323
 #, elixir-autogen, elixir-format
 msgid "Sticky session TTL (s)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1201
+#: lib/tokengate_web/live/router_live.html.heex:1271
 #, elixir-autogen, elixir-format
 msgid "Structured output"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1834
+#: lib/tokengate_web/live/router_live.html.heex:1941
 #: lib/tokengate_web/live/stats/router.ex:615
 #: lib/tokengate_web/live/stats/router.ex:717
 #, elixir-autogen, elixir-format
@@ -9261,17 +9266,17 @@ msgstr ""
 msgid "Subject × resolved model. Requests the subject could only reach through the router are flagged: that spend exists because of the router."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:735
+#: lib/tokengate_web/live/router_live.html.heex:768
 #, elixir-autogen, elixir-format
 msgid "Supports structured output"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:725
+#: lib/tokengate_web/live/router_live.html.heex:758
 #, elixir-autogen, elixir-format
 msgid "Supports tools"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:730
+#: lib/tokengate_web/live/router_live.html.heex:763
 #, elixir-autogen, elixir-format
 msgid "Supports vision"
 msgstr ""
@@ -9281,43 +9286,38 @@ msgstr ""
 msgid "TTFT p50 / p95"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:572
-#: lib/tokengate_web/live/router_live.html.heex:711
+#: lib/tokengate_web/live/router_live.html.heex:605
+#: lib/tokengate_web/live/router_live.html.heex:744
 #, elixir-autogen, elixir-format
 msgid "Tags (comma separated)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:881
-#, elixir-autogen, elixir-format
-msgid "Target use cases (comma separated keys)"
-msgstr ""
-
-#: lib/tokengate_web/live/router_live.ex:2407
+#: lib/tokengate_web/live/router_live.ex:2583
 #, elixir-autogen, elixir-format
 msgid "The baseline model no longer exists: net savings cannot be priced."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:691
+#: lib/tokengate_web/live/router_live.ex:814
 #, elixir-autogen, elixir-format
 msgid "The destination is still referenced."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:647
+#: lib/tokengate_web/live/router_live.ex:770
 #, elixir-autogen, elixir-format
 msgid "The destination no longer exists."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:757
+#: lib/tokengate_web/live/router_live.html.heex:790
 #, elixir-autogen, elixir-format
 msgid "The deterministic layer: evaluated in priority order (lowest first), before any classifier and at zero cost. The first matching force wins; restrictions accumulate."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1550
+#: lib/tokengate_web/live/router_live.ex:1709
 #, elixir-autogen, elixir-format
 msgid "The dry run failed: %{reason}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:174
+#: lib/tokengate_web/live/router_live.html.heex:207
 #, elixir-autogen, elixir-format
 msgid "The kill switch and the bounded costs of a decision. The decision model classifies only when two or more use cases stay viable."
 msgstr ""
@@ -9327,12 +9327,12 @@ msgstr ""
 msgid "The policy that decides which model serves each request: use cases, effort tiers, rules and their live behaviour."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1541
+#: lib/tokengate_web/live/router_live.ex:1700
 #, elixir-autogen, elixir-format
 msgid "The router is disabled. Enable it in the Engine tab to dry-run."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:826
+#: lib/tokengate_web/live/router_live.ex:976
 #, elixir-autogen, elixir-format
 msgid "The rule no longer exists."
 msgstr ""
@@ -9342,7 +9342,7 @@ msgstr ""
 msgid "The same subject's routed traffic against its own non-routed traffic in the window."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:515
+#: lib/tokengate_web/live/router_live.ex:638
 #, elixir-autogen, elixir-format
 msgid "The use case no longer exists."
 msgstr ""
@@ -9352,7 +9352,7 @@ msgstr ""
 msgid "Throughput measured over the generation window only, TTFT/latency percentiles and normalized cost."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1246
+#: lib/tokengate_web/live/router_live.html.heex:1316
 #, elixir-autogen, elixir-format
 msgid "Tier: %{tier}"
 msgstr ""
@@ -9362,7 +9362,7 @@ msgstr ""
 msgid "Tokens saved"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1272
+#: lib/tokengate_web/live/router_live.html.heex:1342
 #, elixir-autogen, elixir-format
 msgid "Trace"
 msgstr ""
@@ -9373,18 +9373,18 @@ msgid "Unknown"
 msgstr ""
 
 #: lib/tokengate_web/live/monitoring_live.ex:1183
-#: lib/tokengate_web/live/router_live.html.heex:353
-#: lib/tokengate_web/live/router_live.html.heex:1383
-#: lib/tokengate_web/live/router_live.html.heex:1454
-#: lib/tokengate_web/live/router_live.html.heex:1484
-#: lib/tokengate_web/live/router_live.html.heex:1835
-#: lib/tokengate_web/live/router_live.html.heex:2021
+#: lib/tokengate_web/live/router_live.html.heex:386
+#: lib/tokengate_web/live/router_live.html.heex:1453
+#: lib/tokengate_web/live/router_live.html.heex:1524
+#: lib/tokengate_web/live/router_live.html.heex:1554
+#: lib/tokengate_web/live/router_live.html.heex:1942
+#: lib/tokengate_web/live/router_live.html.heex:2128
 #: lib/tokengate_web/live/stats/router.ex:469
 #, elixir-autogen, elixir-format
 msgid "Use case"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:501
+#: lib/tokengate_web/live/router_live.ex:624
 #, elixir-autogen, elixir-format
 msgid "Use case saved."
 msgstr ""
@@ -9394,19 +9394,19 @@ msgstr ""
 msgid "Use case × effort mix"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1235
+#: lib/tokengate_web/live/router_live.html.heex:1305
 #, elixir-autogen, elixir-format
 msgid "Use case: %{name}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:323
-#: lib/tokengate_web/live/router_live.html.heex:1554
-#: lib/tokengate_web/live/router_live.html.heex:2010
+#: lib/tokengate_web/live/router_live.html.heex:356
+#: lib/tokengate_web/live/router_live.html.heex:1624
+#: lib/tokengate_web/live/router_live.html.heex:2117
 #, elixir-autogen, elixir-format
 msgid "Use cases"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:581
+#: lib/tokengate_web/live/router_live.html.heex:614
 #, elixir-autogen, elixir-format
 msgid "Use the global default"
 msgstr ""
@@ -9416,7 +9416,7 @@ msgstr ""
 msgid "Value"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1827
+#: lib/tokengate_web/live/router_live.html.heex:1934
 #, elixir-autogen, elixir-format
 msgid "Waiting for the next routed request…"
 msgstr ""
@@ -9426,7 +9426,7 @@ msgstr ""
 msgid "Warn"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:326
+#: lib/tokengate_web/live/router_live.html.heex:359
 #, elixir-autogen, elixir-format
 msgid "What the work is, never a model. Each use case holds its effort-tiered destinations below."
 msgstr ""
@@ -9436,23 +9436,23 @@ msgstr ""
 msgid "Who spent on what"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1255
+#: lib/tokengate_web/live/router_live.html.heex:1325
 #, elixir-autogen, elixir-format
 msgid "Winning model"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1499
+#: lib/tokengate_web/live/router_live.ex:1658
 #, elixir-autogen, elixir-format
 msgid "Winning tier"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1499
-#: lib/tokengate_web/live/router_live.html.heex:1247
+#: lib/tokengate_web/live/router_live.ex:1658
+#: lib/tokengate_web/live/router_live.html.heex:1317
 #, elixir-autogen, elixir-format
 msgid "any"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:792
+#: lib/tokengate_web/live/router_live.html.heex:825
 #, elixir-autogen, elixir-format
 msgid "any request"
 msgstr ""
@@ -9462,22 +9462,22 @@ msgstr ""
 msgid "cache hits %{cache} · errors %{errors}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1496
+#: lib/tokengate_web/live/router_live.ex:1655
 #, elixir-autogen, elixir-format
 msgid "capability and context-window filters applied to every destination"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1303
+#: lib/tokengate_web/live/router_live.html.heex:1373
 #, elixir-autogen, elixir-format
 msgid "compact JSON: %{value}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2477
+#: lib/tokengate_web/live/router_live.ex:2653
 #, elixir-autogen, elixir-format
 msgid "compact json"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1630
+#: lib/tokengate_web/live/router_live.ex:1789
 #, elixir-autogen, elixir-format
 msgid "context window too small (%{window} < %{needed} tokens)"
 msgstr ""
@@ -9487,24 +9487,24 @@ msgstr ""
 msgid "coverage %{coverage} (%{count} priced)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2475
+#: lib/tokengate_web/live/router_live.ex:2651
 #, elixir-autogen, elixir-format
 msgid "critical"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1512
+#: lib/tokengate_web/live/router_live.ex:1671
 #, elixir-autogen, elixir-format
 msgid "decision model"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1294
-#: lib/tokengate_web/live/router_live.html.heex:1299
-#: lib/tokengate_web/live/router_live.html.heex:1315
+#: lib/tokengate_web/live/router_live.html.heex:1364
+#: lib/tokengate_web/live/router_live.html.heex:1369
+#: lib/tokengate_web/live/router_live.html.heex:1385
 #, elixir-autogen, elixir-format
 msgid "default"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1591
+#: lib/tokengate_web/live/router_live.ex:1750
 #, elixir-autogen, elixir-format
 msgid "destination disabled"
 msgstr ""
@@ -9514,73 +9514,68 @@ msgstr ""
 msgid "direct"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:395
-#: lib/tokengate_web/live/router_live.html.heex:501
-#: lib/tokengate_web/live/router_live.html.heex:801
+#: lib/tokengate_web/live/router_live.html.heex:428
+#: lib/tokengate_web/live/router_live.html.heex:534
+#: lib/tokengate_web/live/router_live.html.heex:834
 #, elixir-autogen, elixir-format
 msgid "enabled"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:882
-#, elixir-autogen, elixir-format
-msgid "force_use_case takes exactly one key."
-msgstr ""
-
-#: lib/tokengate_web/live/router_live.html.heex:1293
+#: lib/tokengate_web/live/router_live.html.heex:1363
 #, elixir-autogen, elixir-format
 msgid "keep last images: %{n}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1493
+#: lib/tokengate_web/live/router_live.ex:1652
 #, elixir-autogen, elixir-format
 msgid "matched: %{rules}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1298
+#: lib/tokengate_web/live/router_live.html.heex:1368
 #, elixir-autogen, elixir-format
 msgid "max history turns: %{n}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1526
-#: lib/tokengate_web/live/router_live.html.heex:1307
+#: lib/tokengate_web/live/router_live.ex:1685
+#: lib/tokengate_web/live/router_live.html.heex:1377
 #, elixir-autogen, elixir-format
 msgid "no"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1488
+#: lib/tokengate_web/live/router_live.ex:1647
 #, elixir-autogen, elixir-format
 msgid "no active pin"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1875
+#: lib/tokengate_web/live/router_live.html.heex:1982
 #: lib/tokengate_web/live/stats/router.ex:740
 #, elixir-autogen, elixir-format
 msgid "no direct access"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2476
+#: lib/tokengate_web/live/router_live.ex:2652
 #, elixir-autogen, elixir-format
 msgid "no downgrade"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1502
+#: lib/tokengate_web/live/router_live.ex:1661
 #, elixir-autogen, elixir-format
 msgid "no fallback (session pin or single candidate)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1492
+#: lib/tokengate_web/live/router_live.ex:1651
 #, elixir-autogen, elixir-format
 msgid "no rule matched"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1483
-#: lib/tokengate_web/live/router_live.ex:1703
-#: lib/tokengate_web/live/router_live.html.heex:374
+#: lib/tokengate_web/live/router_live.ex:1642
+#: lib/tokengate_web/live/router_live.ex:1876
+#: lib/tokengate_web/live/router_live.html.heex:407
 #, elixir-autogen, elixir-format
 msgid "none"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1487
+#: lib/tokengate_web/live/router_live.ex:1646
 #, elixir-autogen, elixir-format
 msgid "pinned to %{model}"
 msgstr ""
@@ -9590,67 +9585,67 @@ msgstr ""
 msgid "router"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1521
+#: lib/tokengate_web/live/router_live.ex:1680
 #, elixir-autogen, elixir-format
 msgid "skipped — deterministic"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1518
+#: lib/tokengate_web/live/router_live.ex:1677
 #, elixir-autogen, elixir-format
 msgid "skipped — deterministic (no decision model configured)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1312
+#: lib/tokengate_web/live/router_live.html.heex:1382
 #, elixir-autogen, elixir-format
 msgid "stale tool trim: %{n}%"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2474
-#: lib/tokengate_web/live/router_live.html.heex:478
+#: lib/tokengate_web/live/router_live.ex:2650
+#: lib/tokengate_web/live/router_live.html.heex:511
 #, elixir-autogen, elixir-format
 msgid "structured"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1600
+#: lib/tokengate_web/live/router_live.ex:1759
 #, elixir-autogen, elixir-format
 msgid "the use case requires structured output"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1594
+#: lib/tokengate_web/live/router_live.ex:1753
 #, elixir-autogen, elixir-format
 msgid "the use case requires tool support"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1597
+#: lib/tokengate_web/live/router_live.ex:1756
 #, elixir-autogen, elixir-format
 msgid "the use case requires vision support"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1838
+#: lib/tokengate_web/live/router_live.html.heex:1945
 #: lib/tokengate_web/live/stats/router.ex:543
 #, elixir-autogen, elixir-format
 msgid "tok/s"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2472
-#: lib/tokengate_web/live/router_live.html.heex:466
+#: lib/tokengate_web/live/router_live.ex:2648
+#: lib/tokengate_web/live/router_live.html.heex:499
 #, elixir-autogen, elixir-format
 msgid "tools"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2473
-#: lib/tokengate_web/live/router_live.html.heex:472
+#: lib/tokengate_web/live/router_live.ex:2649
+#: lib/tokengate_web/live/router_live.html.heex:505
 #, elixir-autogen, elixir-format
 msgid "vision"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1467
+#: lib/tokengate_web/live/router_live.html.heex:1537
 #, elixir-autogen, elixir-format
 msgid "winner"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1525
-#: lib/tokengate_web/live/router_live.html.heex:1306
+#: lib/tokengate_web/live/router_live.ex:1684
+#: lib/tokengate_web/live/router_live.html.heex:1376
 #, elixir-autogen, elixir-format
 msgid "yes"
 msgstr ""
@@ -9666,7 +9661,7 @@ msgstr ""
 msgid "Served cost"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2414
+#: lib/tokengate_web/live/router_live.ex:2590
 #, elixir-autogen, elixir-format
 msgid "The baseline model has no active global lane: net savings cannot be priced."
 msgstr ""
@@ -9686,22 +9681,22 @@ msgstr ""
 msgid "%{coverage} priced"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1975
+#: lib/tokengate_web/live/router_live.html.heex:2082
 #, elixir-autogen, elixir-format
 msgid "%{left} (serving Default) on the left, %{right} (this version) on the right."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:261
+#: lib/tokengate_web/live/router_live.ex:269
 #, elixir-autogen, elixir-format
 msgid "%{name} (copy)"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:379
+#: lib/tokengate_web/live/router_live.ex:387
 #, elixir-autogen, elixir-format
 msgid "%{name} is now the serving Default."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2222
+#: lib/tokengate_web/live/router_live.ex:2398
 #, elixir-autogen, elixir-format
 msgid "= equal"
 msgstr ""
@@ -9711,7 +9706,7 @@ msgstr ""
 msgid "A Shadow version estimates the input and its own decision with the real tokens of each request the Default already served. Nothing was sent upstream twice and nothing extra was billed."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1671
+#: lib/tokengate_web/live/router_live.html.heex:1778
 #, elixir-autogen, elixir-format
 msgid "A Shadow version never answers the client, never writes request logs, pins or budgets: it only records what it would have decided, priced with the real tokens of each request."
 msgstr ""
@@ -9721,43 +9716,38 @@ msgstr ""
 msgid "Active shadow"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1361
+#: lib/tokengate_web/live/router_live.html.heex:1431
 #, elixir-autogen, elixir-format
 msgid "Agreement"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1698
+#: lib/tokengate_web/live/router_live.html.heex:1805
 #, elixir-autogen, elixir-format
 msgid "All requests"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1735
+#: lib/tokengate_web/live/router_live.ex:1908
 #, elixir-autogen, elixir-format
 msgid "An archived version cannot evaluate live traffic."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1795
+#: lib/tokengate_web/live/router_live.ex:1968
 #, elixir-autogen, elixir-format
 msgid "Apply"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1651
-#, elixir-autogen, elixir-format
-msgid "Archive"
-msgstr ""
-
-#: lib/tokengate_web/live/router_live.html.heex:1649
+#: lib/tokengate_web/live/router_live.html.heex:1742
 #, elixir-autogen, elixir-format
 msgid "Archive this version?"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1688
+#: lib/tokengate_web/live/router_live.ex:1853
 #: lib/tokengate_web/live/stats/router.ex:285
 #, elixir-autogen, elixir-format
 msgid "Archived"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1610
+#: lib/tokengate_web/live/router_live.html.heex:1680
 #, elixir-autogen, elixir-format
 msgid "Archived: restore it to evaluate it."
 msgstr ""
@@ -9767,56 +9757,51 @@ msgstr ""
 msgid "Baseline cost"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:261
+#: lib/tokengate_web/live/router_live.html.heex:294
 #, elixir-autogen, elixir-format
 msgid "Baseline model (counterfactual) · global"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1630
-#, elixir-autogen, elixir-format
-msgid "Clone"
-msgstr ""
-
-#: lib/tokengate_web/live/router_live.html.heex:79
-#: lib/tokengate_web/live/router_live.html.heex:1542
-#: lib/tokengate_web/live/router_live.html.heex:1930
-#: lib/tokengate_web/live/router_live.html.heex:1961
+#: lib/tokengate_web/live/router_live.html.heex:101
+#: lib/tokengate_web/live/router_live.html.heex:1612
+#: lib/tokengate_web/live/router_live.html.heex:2037
+#: lib/tokengate_web/live/router_live.html.heex:2068
 #, elixir-autogen, elixir-format
 msgid "Clone version"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1206
+#: lib/tokengate_web/live/router_live.html.heex:1276
 #, elixir-autogen, elixir-format
 msgid "Compare with the serving Default"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1983
+#: lib/tokengate_web/live/router_live.html.heex:2090
 #, elixir-autogen, elixir-format
 msgid "Configuration"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:412
+#: lib/tokengate_web/live/router_live.ex:420
 #, elixir-autogen, elixir-format
 msgid "Could not archive the version."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1834
+#: lib/tokengate_web/live/router_live.ex:2010
 #, elixir-autogen, elixir-format
 msgid "Could not clone the version."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:427
+#: lib/tokengate_web/live/router_live.ex:435
 #, elixir-autogen, elixir-format
 msgid "Could not restore the version."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1746
+#: lib/tokengate_web/live/router_live.ex:1919
 #, elixir-autogen, elixir-format
 msgid "Could not update the shadow version."
 msgstr ""
 
 #: lib/tokengate_web/live/monitoring_live.ex:1242
-#: lib/tokengate_web/live/router_live.html.heex:1369
+#: lib/tokengate_web/live/router_live.html.heex:1439
 #, elixir-autogen, elixir-format
 msgid "Decision"
 msgstr ""
@@ -9831,7 +9816,7 @@ msgstr ""
 msgid "Decision time"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1995
+#: lib/tokengate_web/live/router_live.html.heex:2102
 #, elixir-autogen, elixir-format
 msgid "Default"
 msgstr ""
@@ -9847,7 +9832,7 @@ msgstr ""
 msgid "Default vs Shadow"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1342
+#: lib/tokengate_web/live/router_live.html.heex:1412
 #, elixir-autogen, elixir-format
 msgid "Default vs candidate"
 msgstr ""
@@ -9858,13 +9843,13 @@ msgstr ""
 msgid "Default vs estimated"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1687
+#: lib/tokengate_web/live/router_live.ex:1852
 #, elixir-autogen, elixir-format
 msgid "Default · serving"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:88
-#: lib/tokengate_web/live/router_live.html.heex:1969
+#: lib/tokengate_web/live/router_live.html.heex:110
+#: lib/tokengate_web/live/router_live.html.heex:2076
 #, elixir-autogen, elixir-format
 msgid "Diff vs Default"
 msgstr ""
@@ -9874,17 +9859,17 @@ msgstr ""
 msgid "Differs"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1690
+#: lib/tokengate_web/live/router_live.ex:1855
 #, elixir-autogen, elixir-format
 msgid "Draft"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:47
+#: lib/tokengate_web/live/router_live.html.heex:50
 #, elixir-autogen, elixir-format
 msgid "Editing version"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:214
+#: lib/tokengate_web/live/router_live.html.heex:247
 #, elixir-autogen, elixir-format
 msgid "Enabled (kill switch) · global"
 msgstr ""
@@ -9911,12 +9896,12 @@ msgstr ""
 msgid "Evaluations that could not decide"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1518
+#: lib/tokengate_web/live/router_live.html.heex:1588
 #, elixir-autogen, elixir-format
 msgid "Exactly one version serves live traffic (the Default). Any other version can be edited, evaluated as a Shadow in parallel, promoted in one click or archived."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1994
+#: lib/tokengate_web/live/router_live.html.heex:2101
 #, elixir-autogen, elixir-format
 msgid "Field"
 msgstr ""
@@ -9946,24 +9931,24 @@ msgstr ""
 msgid "No Shadow version evaluated this request."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1985
-#: lib/tokengate_web/live/router_live.html.heex:2012
-#: lib/tokengate_web/live/router_live.html.heex:2070
+#: lib/tokengate_web/live/router_live.html.heex:2092
+#: lib/tokengate_web/live/router_live.html.heex:2119
+#: lib/tokengate_web/live/router_live.html.heex:2177
 #, elixir-autogen, elixir-format
 msgid "No differences."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:961
+#: lib/tokengate_web/live/router_live.html.heex:1084
 #, elixir-autogen, elixir-format
 msgid "Only requests from these limit profiles match."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1021
+#: lib/tokengate_web/live/router_live.html.heex:1145
 #, elixir-autogen, elixir-format
 msgid "Only requests from these services match."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1081
+#: lib/tokengate_web/live/router_live.html.heex:2336
 #, elixir-autogen, elixir-format
 msgid "Only requests from these users match."
 msgstr ""
@@ -9978,65 +9963,61 @@ msgstr ""
 msgid "Open in Router"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1640
-#: lib/tokengate_web/live/router_live.html.heex:2116
-#: lib/tokengate_web/live/router_live.html.heex:2141
+#: lib/tokengate_web/live/router_live.html.heex:1702
+#: lib/tokengate_web/live/router_live.html.heex:1703
+#: lib/tokengate_web/live/router_live.html.heex:2223
+#: lib/tokengate_web/live/router_live.html.heex:2248
 #, elixir-autogen, elixir-format
 msgid "Promote to Default"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:2121
+#: lib/tokengate_web/live/router_live.html.heex:2228
 #, elixir-autogen, elixir-format
 msgid "Promoting makes this version serve live traffic immediately. The outgoing Default keeps its row as a candidate, and the global kill switch and baseline model are carried over unchanged."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1661
-#, elixir-autogen, elixir-format
-msgid "Restore"
-msgstr ""
-
-#: lib/tokengate_web/live/router_live.ex:388
+#: lib/tokengate_web/live/router_live.ex:396
 #, elixir-autogen, elixir-format
 msgid "Restore the version before promoting it."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1791
+#: lib/tokengate_web/live/router_live.ex:1964
 #, elixir-autogen, elixir-format
 msgid "Sample %"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:225
-#: lib/tokengate_web/live/router_live.html.heex:267
+#: lib/tokengate_web/live/router_live.html.heex:258
+#: lib/tokengate_web/live/router_live.html.heex:300
 #, elixir-autogen, elixir-format
 msgid "Set on the Default version."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1781
+#: lib/tokengate_web/live/router_live.ex:1954
 #, elixir-autogen, elixir-format
 msgid "Shadow"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1689
+#: lib/tokengate_web/live/router_live.ex:1854
 #, elixir-autogen, elixir-format
 msgid "Shadow %{pct}%"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1710
+#: lib/tokengate_web/live/router_live.html.heex:1817
 #, elixir-autogen, elixir-format
 msgid "Shadow discrepancies"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1556
+#: lib/tokengate_web/live/router_live.html.heex:1626
 #, elixir-autogen, elixir-format
 msgid "Shadow evaluation"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1818
+#: lib/tokengate_web/live/router_live.ex:1994
 #, elixir-autogen, elixir-format
 msgid "Shadow evaluation off for %{name}."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1811
+#: lib/tokengate_web/live/router_live.ex:1987
 #, elixir-autogen, elixir-format
 msgid "Shadow evaluation on for %{name} at %{pct}% of sampled traffic."
 msgstr ""
@@ -10046,38 +10027,38 @@ msgstr ""
 msgid "Shadow evaluations"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1533
+#: lib/tokengate_web/live/router_live.html.heex:1603
 #, elixir-autogen, elixir-format
 msgid "Show archived"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1159
+#: lib/tokengate_web/live/router_live.html.heex:1229
 #, elixir-autogen, elixir-format
 msgid "Testing version: %{name}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1609
+#: lib/tokengate_web/live/router_live.html.heex:1679
 #, elixir-autogen, elixir-format
 msgid "The Default serves; it cannot shadow itself."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1948
+#: lib/tokengate_web/live/router_live.html.heex:2055
 #, elixir-autogen, elixir-format
 msgid "The copy takes its own use cases, destinations and rules. It is a draft: neither the Default nor a shadow."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:183
+#: lib/tokengate_web/live/router_live.html.heex:216
 #, elixir-autogen, elixir-format
 msgid "The kill switch and the baseline model are global: they are shown read-only here and are only written on the serving Default."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1345
+#: lib/tokengate_web/live/router_live.html.heex:1415
 #, elixir-autogen, elixir-format
 msgid "The same payload decided by the serving Default and by the version being edited. Agreement means the candidate would have routed this request identically."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:354
-#: lib/tokengate_web/live/router_live.ex:1742
+#: lib/tokengate_web/live/router_live.ex:362
+#: lib/tokengate_web/live/router_live.ex:1915
 #, elixir-autogen, elixir-format
 msgid "The sample must be a whole number between 1 and 100."
 msgstr ""
@@ -10087,32 +10068,32 @@ msgstr ""
 msgid "The selected Shadow version agreed with the Default on every evaluation in this window: there is no migration to show."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1730
+#: lib/tokengate_web/live/router_live.ex:1903
 #, elixir-autogen, elixir-format
 msgid "The serving Default cannot be a shadow: it is already what traffic runs on."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:409
+#: lib/tokengate_web/live/router_live.ex:417
 #, elixir-autogen, elixir-format
 msgid "The serving Default cannot be archived."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1832
+#: lib/tokengate_web/live/router_live.ex:2008
 #, elixir-autogen, elixir-format
 msgid "The source version no longer exists."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:98
+#: lib/tokengate_web/live/router_live.html.heex:131
 #, elixir-autogen, elixir-format
 msgid "This is a candidate version: its policy and catalogue are edited here, but the kill switch and the baseline model are global and belong to the Default."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1996
+#: lib/tokengate_web/live/router_live.html.heex:2103
 #, elixir-autogen, elixir-format
 msgid "This version"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1802
+#: lib/tokengate_web/live/router_live.ex:1975
 #, elixir-autogen, elixir-format
 msgid "This version has a decision model: its classifier also runs in parallel and its cost is recorded, never billed."
 msgstr ""
@@ -10134,68 +10115,68 @@ msgstr ""
 msgid "Top migrations · %{version}"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1031
+#: lib/tokengate_web/live/router_live.html.heex:1100
 #, elixir-autogen, elixir-format
 msgid "Type to search a service…"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:56
+#: lib/tokengate_web/live/router_live.html.heex:123
 #, elixir-autogen, elixir-format
 msgid "Use cases, rules and the dry run below belong to this version."
 msgstr ""
 
 #: lib/tokengate_web/live/monitoring_live.ex:1241
-#: lib/tokengate_web/live/router_live.html.heex:1551
+#: lib/tokengate_web/live/router_live.html.heex:1621
 #: lib/tokengate_web/live/stats/router.ex:261
 #, elixir-autogen, elixir-format
 msgid "Version"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:399
+#: lib/tokengate_web/live/router_live.ex:407
 #, elixir-autogen, elixir-format
 msgid "Version archived: %{name}."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:295
+#: lib/tokengate_web/live/router_live.ex:303
 #, elixir-autogen, elixir-format
 msgid "Version cloned: %{name}."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:423
+#: lib/tokengate_web/live/router_live.ex:431
 #, elixir-autogen, elixir-format
 msgid "Version restored: %{name}."
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:158
-#: lib/tokengate_web/live/router_live.html.heex:1515
+#: lib/tokengate_web/live/router_live.html.heex:191
+#: lib/tokengate_web/live/router_live.html.heex:1585
 #, elixir-autogen, elixir-format
 msgid "Versions & Shadow"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1838
+#: lib/tokengate_web/live/router_live.ex:2014
 #, elixir-autogen, elixir-format
 msgid "changed"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1372
-#: lib/tokengate_web/live/router_live.html.heex:1377
+#: lib/tokengate_web/live/router_live.html.heex:1442
+#: lib/tokengate_web/live/router_live.html.heex:1447
 #, elixir-autogen, elixir-format
 msgid "decided"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1400
-#: lib/tokengate_web/live/router_live.html.heex:1418
-#: lib/tokengate_web/live/router_live.html.heex:1436
+#: lib/tokengate_web/live/router_live.html.heex:1470
+#: lib/tokengate_web/live/router_live.html.heex:1488
+#: lib/tokengate_web/live/router_live.html.heex:1506
 #, elixir-autogen, elixir-format
 msgid "different"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2220
+#: lib/tokengate_web/live/router_live.ex:2396
 #, elixir-autogen, elixir-format
 msgid "different model"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2221
+#: lib/tokengate_web/live/router_live.ex:2397
 #, elixir-autogen, elixir-format
 msgid "different tier"
 msgstr ""
@@ -10205,13 +10186,13 @@ msgstr ""
 msgid "differs"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1581
+#: lib/tokengate_web/live/router_live.html.heex:1651
 #, elixir-autogen, elixir-format
 msgid "editing"
 msgstr ""
 
 #: lib/tokengate_web/live/monitoring_live.ex:1141
-#: lib/tokengate_web/live/router_live.ex:2219
+#: lib/tokengate_web/live/router_live.ex:2395
 #, elixir-autogen, elixir-format
 msgid "error"
 msgstr ""
@@ -10221,24 +10202,24 @@ msgstr ""
 msgid "matches"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:2235
+#: lib/tokengate_web/live/router_live.ex:2411
 #, elixir-autogen, elixir-format
 msgid "no decision"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1836
+#: lib/tokengate_web/live/router_live.ex:2012
 #, elixir-autogen, elixir-format
 msgid "only in the Default"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.ex:1837
+#: lib/tokengate_web/live/router_live.ex:2013
 #, elixir-autogen, elixir-format
 msgid "only in this version"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1399
-#: lib/tokengate_web/live/router_live.html.heex:1417
-#: lib/tokengate_web/live/router_live.html.heex:1435
+#: lib/tokengate_web/live/router_live.html.heex:1469
+#: lib/tokengate_web/live/router_live.html.heex:1487
+#: lib/tokengate_web/live/router_live.html.heex:1505
 #, elixir-autogen, elixir-format
 msgid "same"
 msgstr ""
@@ -10258,7 +10239,123 @@ msgstr ""
 msgid "shadow ≠"
 msgstr ""
 
-#: lib/tokengate_web/live/router_live.html.heex:1889
+#: lib/tokengate_web/live/router_live.html.heex:1996
 #, elixir-autogen, elixir-format
 msgid "↳ Shadow %{name}:"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:2301
+#, elixir-autogen, elixir-format
+msgid "%{name} will be removed for good, together with its %{use_cases} use case(s), its %{rules} rule(s), every destination inside them and its shadow evaluation history. This cannot be undone."
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:1740
+#: lib/tokengate_web/live/router_live.html.heex:1741
+#, elixir-autogen, elixir-format
+msgid "Archive this version"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:1717
+#: lib/tokengate_web/live/router_live.html.heex:1718
+#, elixir-autogen, elixir-format
+msgid "Clone this version"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.ex:491
+#, elixir-autogen, elixir-format
+msgid "Could not update the version."
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:2330
+#, elixir-autogen, elixir-format
+msgid "Delete permanently"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:1765
+#: lib/tokengate_web/live/router_live.html.heex:1766
+#, elixir-autogen, elixir-format
+msgid "Delete this version permanently"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:2295
+#, elixir-autogen, elixir-format
+msgid "Delete version permanently"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:117
+#, elixir-autogen, elixir-format
+msgid "Manage versions"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:2274
+#, elixir-autogen, elixir-format
+msgid "Only the label and the note change: use cases, rules and destinations stay exactly as they are."
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:2309
+#, elixir-autogen, elixir-format
+msgid "Past request logs are kept: they are not linked to the version row. To stop serving a version without losing it, archive it instead."
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:93
+#, elixir-autogen, elixir-format
+msgid "Rename"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:1728
+#: lib/tokengate_web/live/router_live.html.heex:1729
+#, elixir-autogen, elixir-format
+msgid "Rename this version"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:2256
+#, elixir-autogen, elixir-format
+msgid "Rename version"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:1753
+#: lib/tokengate_web/live/router_live.html.heex:1754
+#, elixir-autogen, elixir-format
+msgid "Restore this version"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.ex:549
+#, elixir-autogen, elixir-format
+msgid "The serving Default cannot be deleted: promote another version first."
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.ex:537
+#, elixir-autogen, elixir-format
+msgid "Version deleted: %{name}."
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.ex:481
+#, elixir-autogen, elixir-format
+msgid "Version updated: %{name}."
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:1690
+#: lib/tokengate_web/live/router_live.html.heex:1691
+#, elixir-autogen, elixir-format
+msgid "Edit this version"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.ex:1863
+#, elixir-autogen, elixir-format
+msgid "Serving"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:925
+#, elixir-autogen, elixir-format
+msgid "Target use cases"
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:947
+#, elixir-autogen, elixir-format
+msgid "This version has no use cases yet: add them in the Engine tab."
+msgstr ""
+
+#: lib/tokengate_web/live/router_live.html.heex:950
+#, elixir-autogen, elixir-format
+msgid "force_use_case takes exactly one key; restrict_use_cases takes as many as you select."
 msgstr ""

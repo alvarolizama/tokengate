@@ -2,12 +2,18 @@ defmodule Tokengate.SmartRouter.Presets do
   @moduledoc """
   The shipped SmartRouter use-case presets, and the idempotent seeder.
 
-  Twelve specialties cover this operator's real traffic mix (software
+  Thirteen specialties cover this operator's real traffic mix (software
   development > data analysis > presentations > systems/chatbots/summaries):
 
-  #{Enum.map_join(~w(fast writing presentations coding_implement coding_arch_debug
-      data_heavy_finance research computer_use modeling_3d vision_extraction
-      structured_etl translation_i18n), ", ", &"`#{&1}`")}
+  #{Enum.map_join(~w(fast writing presentations coding_implement coding_arch
+      coding_audit data_heavy_finance research computer_use modeling_3d
+      vision_extraction structured_etl translation_i18n), ", ", &"`#{&1}`")}
+
+  `coding_arch` and `coding_audit` are two lanes on purpose: planning a
+  structure and hunting a bug both want a critical model, but they ask for
+  different work — one decides and writes the plan, the other reads code,
+  stack traces and edge cases to refute it — and collapsing them into a single
+  `coding_arch_debug` made the classifier pick between them by coin flip.
 
   They ship **without destinations**: binding models to a use case is an
   operator decision (the same model can be a valid destination for `writing`
@@ -27,7 +33,7 @@ defmodule Tokengate.SmartRouter.Presets do
   target keys, not ids), so they are also the conflict target of the insert.
   `ensure_all!/1` defaults to the serving Default, so a freshly migrated
   instance seeds exactly one catalogue; passing a cloned version's id seeds
-  that version instead, and a clone can then hold the same twelve keys as the
+  that version instead, and a clone can then hold the same thirteen keys as the
   Default.
   """
 
@@ -113,12 +119,12 @@ defmodule Tokengate.SmartRouter.Presets do
       priority: 40
     },
     %{
-      key: "coding_arch_debug",
-      name: "Arquitectura y depuración",
+      key: "coding_arch",
+      name: "Diseño de arquitectura",
       description:
-        "Arquitectura, trade-offs, causa raíz de bugs y concurrencia. " <>
-          "Un error aquí cuesta varios turnos de re-pregunta, así que el gate se invierte: gana el crítico.",
-      tags: ~w(code architecture debug reasoning),
+        "Planear arquitectura: límites de módulos, trade-offs, diseño de APIs y " <>
+          "decisiones que cuestan re-trabajo. El trabajo es decidir y dejar el plan escrito, no el diff.",
+      tags: ~w(code architecture design planning reasoning),
       requires_tools: true,
       requires_vision: false,
       requires_structured_output: false,
@@ -130,6 +136,25 @@ defmodule Tokengate.SmartRouter.Presets do
       compact_json: false,
       stale_tool_trim_threshold_pct: 70,
       priority: 50
+    },
+    %{
+      key: "coding_audit",
+      name: "Auditoría de código y bugs",
+      description:
+        "Auditar código, encontrar bugs y llegar a causa raíz: leer archivos, " <>
+          "stacktraces, concurrencia y casos borde. El trabajo es probar y refutar, no proponer el diseño.",
+      tags: ~w(code audit bugs debug review reasoning),
+      requires_tools: true,
+      requires_vision: false,
+      requires_structured_output: false,
+      critical_accuracy: true,
+      allow_downgrade: false,
+      pin_session: true,
+      keep_last_n_images: nil,
+      max_history_turns: 60,
+      compact_json: false,
+      stale_tool_trim_threshold_pct: 70,
+      priority: 55
     },
     %{
       key: "data_heavy_finance",
