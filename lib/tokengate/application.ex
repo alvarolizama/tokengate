@@ -5,8 +5,20 @@ defmodule Tokengate.Application do
 
   use Application
 
+  require Logger
+
+  # The dashboard and /stats compare the current period against the one before
+  # it; the widest selector ("30d") reaches ~60 days back through
+  # `Periods.previous_period_bounds/2`. Below that, `request_logs` no longer
+  # has the rows and the delta silently becomes "last N days vs whatever is
+  # left" — correct-looking, wrong. Not enforced, only surfaced: an operator
+  # may have a real reason to trim that far.
+  @min_retention_days 60
+
   @impl true
   def start(_type, _args) do
+    warn_on_short_retention()
+
     children = [
       TokengateWeb.Telemetry,
       Tokengate.Repo,
@@ -86,5 +98,19 @@ defmodule Tokengate.Application do
   def config_change(changed, _new, removed) do
     TokengateWeb.Endpoint.config_change(changed, removed)
     :ok
+  end
+
+  defp warn_on_short_retention do
+    days = Tokengate.Logs.PartitionWorker.retention_days()
+
+    if days < @min_retention_days do
+      Logger.warning(
+        "logs_retention_days is #{days}, below the #{@min_retention_days} days the " <>
+          "dashboard's 30d deltas need (the previous 30-day window reaches ~60 days back). " <>
+          "Period-over-period comparisons will silently under-report until it is raised."
+      )
+    else
+      :ok
+    end
   end
 end

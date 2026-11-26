@@ -1499,7 +1499,14 @@ defmodule Tokengate.LogsTest do
         |> Enum.map(& &1.total_cost_usd)
         |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
 
-      summary = Logs.service_stats(service.id)
+      # El agregado del servicio exige ventana explícita (`ensure_window!/2`):
+      # sin `:from` devolvería "lo que sobrevivió a la retención" como total.
+      # 7 días cubren los fixtures de este test.
+      summary =
+        Logs.service_stats(service.id,
+          from: DateTime.add(DateTime.utc_now(), -7 * 86_400, :second)
+        )
+
       assert Decimal.eq?(total, summary.total_cost_usd)
     end
 

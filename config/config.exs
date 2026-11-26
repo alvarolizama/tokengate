@@ -117,6 +117,13 @@ config :tokengate, :partition_boot_ensure, true
 # (Tokengate.Auditing.PartitionWorker.ensure_on_boot/0). Disabled in test.exs.
 config :tokengate, :audit_partition_boot_ensure, true
 
+# Un agregado de stats sin `:from` no significa "todo": significa "lo que
+# sobrevivió a la retención" (90 días), y antes se presentaba como el total sin
+# avisar. En dev/test levanta (`Logs.ensure_window!/2`) para que un caller nuevo
+# falle mientras se escribe; en producción avisa y clampea al corte, porque
+# tirar un dashboard es peor que un número parcial avisado.
+config :tokengate, :strict_stats_windows, config_env() != :prod
+
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 

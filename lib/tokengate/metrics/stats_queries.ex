@@ -80,7 +80,7 @@ defmodule Tokengate.Metrics.StatsQueries do
   are passed through to the raw side untouched.
   """
   def summary(filters \\ []) do
-    filters = normalize_filters(filters)
+    filters = normalize_filters(filters) |> Logs.ensure_window!("StatsQueries.summary/1")
 
     if hybrid?(filters) do
       from = Map.get(filters, :from)
@@ -667,77 +667,131 @@ defmodule Tokengate.Metrics.StatsQueries do
   # Flat rows keyed by (user, membership, group, model). Both the per-model and
   # the per-member tables are pivots of this SAME result, so the dashboard pays
   # one scan per half instead of two.
+  #
+  # TWO passes over two very different row counts: the aggregate runs on the
+  # bucket columns alone (`user_id`, `group_member_id`, `model_id`) and the
+  # joins that turn those ids into names are applied to its OUTPUT. Grouping by
+  # `u.id`/`tm.id`/`t.id`/`ma.id` (both sides of every join) instead made the
+  # planner hash-join the whole window before aggregating, and the six-uuid
+  # sort key spilled to disk — `Sort Method: external merge  Disk: 17432kB`
+  # for 125 output rows, over half the query's time. The names cannot ride in
+  # the first pass either: a `MAX()` on them still joins every input row.
+  # Measured (2M logs, 25 users): 210 → 79 ms over 7 days and 6.7 → 4.9 ms in
+  # the 3h window this reader actually asks for.
+  #
+  # The outer GROUP BY is deliberate, not redundant: `request_metrics_hourly`
+  # has NO foreign key on `group_member_id` (unlike `request_logs`, whose FK is
+  # `ON DELETE SET NULL`), so a rollup bucket keeps the id of a membership that
+  # no longer exists. Skipping the aggregate would hand the pivots N rows that
+  # all resolve to the same NULL membership instead of the one row the single
+  # GROUP BY produced.
   defp rollup_model_member_rows(opts) do
     {from, to} = rollup_window(opts)
 
-    from(m in RequestMetricsHourly,
-      where: m.hour_utc >= ^from and m.hour_utc < ^to,
+    buckets =
+      from(m in RequestMetricsHourly,
+        where: m.hour_utc >= ^from and m.hour_utc < ^to,
+        group_by: [m.user_id, m.group_member_id, m.model_id],
+        select: %{
+          user_id: m.user_id,
+          group_member_id: m.group_member_id,
+          model_id: m.model_id,
+          request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+          cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
+          prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
+          completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
+          cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_read_tokens),
+          total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms)
+        }
+      )
+      |> rollup_day_bounds(from, to)
+      |> maybe_rollup_scope(opts)
+      |> subquery()
+
+    from(b in buckets,
       left_join: ma in Model,
-      on: m.model_id == ma.id,
+      on: b.model_id == ma.id,
       as: :model,
       left_join: u in User,
-      on: m.user_id == u.id,
+      on: b.user_id == u.id,
       as: :user,
       left_join: tm in GroupMember,
-      on: m.group_member_id == tm.id,
+      on: b.group_member_id == tm.id,
       as: :member,
       left_join: t in assoc(tm, :group),
       as: :group,
-      group_by: [m.user_id, u.id, tm.id, t.id, m.model_id, ma.id],
+      group_by: [b.user_id, u.id, tm.id, t.id, ma.id],
       select: %{
-        user_id: m.user_id,
+        user_id: b.user_id,
         user_email: u.email,
         group_member_id: tm.id,
         group_name: t.name,
         model_id: ma.id,
         model_name: ma.name,
-        request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
-        cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
-        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
-        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
-        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_read_tokens),
-        total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms)
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", b.request_count),
+        cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", b.cost_usd_raw),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.cache_read_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", b.total_latency_ms)
       }
     )
-    |> rollup_day_bounds(from, to)
-    |> maybe_rollup_scope(opts)
     |> Repo.all(timeout: stats_query_timeout())
     |> Enum.map(fn row -> Map.put(row, :cost_usd, micro_to_decimal(row.cost_usd_raw)) end)
   end
 
   defp raw_model_member_rows(opts, from, to) do
-    RequestLog
-    |> where([rl], rl.inserted_at >= ^from)
-    |> maybe_to(to)
-    |> maybe_member_ids(opts[:member_ids])
-    |> maybe_user_ids(opts[:user_ids])
-    |> maybe_provider_id(opts[:provider_id])
-    |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id, as: :model)
-    |> join(:left, [rl], u in User, on: rl.user_id == u.id, as: :user)
-    |> join(:left, [rl], tm in GroupMember, on: rl.group_member_id == tm.id, as: :member)
-    |> join(:left, [member: tm], t in assoc(tm, :group), as: :group)
-    |> group_by([rl, user: u, member: tm, group: t, model: ma], [
-      rl.user_id,
-      u.id,
-      tm.id,
-      t.id,
-      rl.model_id,
-      ma.id
-    ])
-    |> select([rl, user: u, member: tm, group: t, model: ma], %{
-      user_id: rl.user_id,
-      user_email: u.email,
-      group_member_id: tm.id,
-      group_name: t.name,
-      model_id: ma.id,
-      model_name: ma.name,
-      request_count: count(rl.id),
-      cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-      prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
-      completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
-      cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
-      total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
-    })
+    # Same two-pass shape as `rollup_model_member_rows/1`; the names are joined
+    # onto the aggregate instead of into it.
+    buckets =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^from)
+      |> maybe_to(to)
+      |> maybe_member_ids(opts[:member_ids])
+      |> maybe_user_ids(opts[:user_ids])
+      |> maybe_provider_id(opts[:provider_id])
+      |> group_by([rl], [rl.user_id, rl.group_member_id, rl.model_id])
+      |> select([rl], %{
+        user_id: rl.user_id,
+        group_member_id: rl.group_member_id,
+        model_id: rl.model_id,
+        request_count: count(),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
+      })
+      |> subquery()
+
+    from(b in buckets,
+      left_join: ma in Model,
+      on: b.model_id == ma.id,
+      as: :model,
+      left_join: u in User,
+      on: b.user_id == u.id,
+      as: :user,
+      left_join: tm in GroupMember,
+      on: b.group_member_id == tm.id,
+      as: :member,
+      left_join: t in assoc(tm, :group),
+      as: :group,
+      group_by: [b.user_id, u.id, tm.id, t.id, ma.id],
+      select: %{
+        user_id: b.user_id,
+        user_email: u.email,
+        group_member_id: tm.id,
+        group_name: t.name,
+        model_id: ma.id,
+        model_name: ma.name,
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", b.request_count),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", b.cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.cache_read_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", b.total_latency_ms)
+      }
+    )
     |> Repo.all(timeout: stats_query_timeout())
     |> Enum.map(fn row -> Map.put(row, :cost_usd, Decimal.new(to_string(row.cost_usd))) end)
   end

@@ -45,6 +45,8 @@ defmodule Tokengate.Logs do
   # convention as `Metrics.Rollup` and `Metrics.StatsQueries`.
   @stats_timeout 120_000
 
+  require Logger
+
   defp stats_timeout,
     do: Application.get_env(:tokengate, :stats_query_timeout_ms, @stats_timeout)
 
@@ -534,6 +536,123 @@ defmodule Tokengate.Logs do
     end
   end
 
+  # --- Retention clamp (see `cost_summary/1`) -------------------------------
+  #
+  # Two shapes matter here and both were silent: `:from` absent entirely, and
+  # `:from` older than the retention cutoff. In both cases the aggregate ran
+  # over whatever partitions survive and reported the result as the total.
+  defp clamp_to_retention(filters) do
+    filters = Map.new(filters)
+    cutoff = retention_cutoff()
+
+    case normalize_bound(Map.get(filters, :from) || Map.get(filters, "from"), :start) do
+      nil ->
+        warn_truncated_summary(:missing_from)
+        Map.put(filters, :from, cutoff)
+
+      %DateTime{} = from ->
+        if DateTime.compare(from, cutoff) == :lt do
+          warn_truncated_summary({:before_cutoff, from})
+          Map.put(filters, :from, cutoff)
+        else
+          filters
+        end
+    end
+  end
+
+  # The cutoff the purge uses: `today - retention_days`, at the start of that
+  # UTC day. Same definition as the DROP, so "what survives" and "what the
+  # clamp allows" can never disagree.
+  defp retention_cutoff do
+    Tokengate.Logs.PartitionWorker.cutoff_day() |> day_edge(:start)
+  end
+
+  @doc """
+  Validates that a stats read declares its window.
+
+  An aggregate over `request_logs` with no `:from` is not "everything": it is
+  "whatever survived the retention", presented with a straight face. The
+  facades that accept an optional window (`user_stats/2`, `service_stats/2`,
+  `StatsQueries.summary/1`) call this before touching the table.
+
+  In `:dev`/`:test` (`config :tokengate, :strict_stats_windows`) a missing
+  `:from` RAISES, so a new caller fails loudly while it is being written. In
+  production it warns and clamps to the retention cutoff instead of crashing a
+  dashboard: a labelled partial number beats a 500.
+
+  Returns the filters with a guaranteed `:from`.
+  """
+  @spec ensure_window!(map() | keyword(), String.t()) :: map()
+  def ensure_window!(filters, fun) do
+    filters = Map.new(filters)
+
+    case normalize_bound(Map.get(filters, :from) || Map.get(filters, "from"), :start) do
+      nil ->
+        if strict_stats_windows?() do
+          raise ArgumentError, """
+          #{fun} was called without :from.
+
+          This read aggregates `request_logs`, which is pruned to \
+          #{Tokengate.Logs.PartitionWorker.retention_days()} days, so an \
+          unbounded window silently returns "last #{Tokengate.Logs.PartitionWorker.retention_days()} days" \
+          as if it were the total. Pass an explicit `:from` (a DateTime, Date \
+          or ISO-8601 string) inside the retention window.
+          """
+        else
+          warn_truncated_summary(:missing_from)
+          Map.put(filters, :from, retention_cutoff())
+        end
+
+      %DateTime{} = from ->
+        if DateTime.compare(from, retention_cutoff()) == :lt do
+          warn_truncated_summary({:before_cutoff, from})
+          Map.put(filters, :from, retention_cutoff())
+        else
+          filters
+        end
+    end
+  end
+
+  defp strict_stats_windows? do
+    Application.get_env(:tokengate, :strict_stats_windows, false)
+  end
+
+  defp warn_truncated_summary(reason) do
+    days = Tokengate.Logs.PartitionWorker.retention_days()
+
+    Logger.warning(
+      "Logs.cost_summary/1 returned a TRUNCATED total (#{describe_truncation(reason)}). " <>
+        "request_logs keeps only the last #{days} days " <>
+        "(cutoff #{Date.to_iso8601(Tokengate.Logs.PartitionWorker.cutoff_day())}). " <>
+        "Pass an explicit :from inside the window. Caller: #{summary_caller()}"
+    )
+  end
+
+  defp describe_truncation(:missing_from), do: "no :from given"
+
+  defp describe_truncation({:before_cutoff, from}),
+    do: "from #{DateTime.to_iso8601(from)} is older than the cutoff"
+
+  defp describe_truncation(_), do: "window older than the cutoff"
+
+  # Best-effort attribution: this warning only fires on the pathological path,
+  # so the cost of walking a stacktrace is paid once, not per request.
+  defp summary_caller do
+    case Process.info(self(), :current_stacktrace) do
+      {:current_stacktrace, frames} ->
+        Enum.find_value(frames, "unknown", fn
+          {mod, fun, arity, _loc} when mod not in [Tokengate.Logs, Logger, Process] ->
+            "#{inspect(mod)}.#{fun}/#{arity}"
+
+          _ ->
+            nil
+        end)
+
+      _ ->
+        "unknown"
+    end
+  end
+
   defp maybe_to(query, filters) do
     case normalize_bound(Map.get(filters, :to) || Map.get(filters, "to"), :end) do
       nil -> query
@@ -812,11 +931,26 @@ defmodule Tokengate.Logs do
 
   All sums are Decimal-safe (use `COALESCE` + `SUM` in SQL). Token sums
   default to 0 when no rows match.
+
+  ## Retention clamp
+
+  `request_logs` is pruned to `PartitionWorker.retention_days()` (90 by
+  default) by the nightly cron, so a window starting before the cutoff can
+  only ever return the surviving part of it. That used to be silent: with no
+  `:from` at all, `maybe_from/2` simply drops the date predicate and the
+  aggregate runs over whatever partitions are left, presenting "the last N
+  days" as the grand total.
+
+  A window that is missing `:from` (or starts before the cutoff) is clamped
+  to the cutoff and logged as a warning. Clamping invents no data — the older
+  rows are gone — but it makes the truncation visible and keeps the scan
+  inside the live partitions. A caller that passes an explicit `:from` inside
+  the window is untouched.
   """
   def cost_summary(filters \\ %{}) do
     result =
       RequestLog
-      |> apply_log_filters(filters)
+      |> apply_log_filters(clamp_to_retention(filters))
       |> select([rl], %{
         total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
         total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
@@ -1616,6 +1750,7 @@ defmodule Tokengate.Logs do
         is_list(opts) -> Map.new(opts)
         true -> %{}
       end
+      |> ensure_window!("Logs.user_stats/2")
 
     range =
       opts_map
@@ -1677,6 +1812,7 @@ defmodule Tokengate.Logs do
         is_list(opts) -> Map.new(opts)
         true -> %{}
       end
+      |> ensure_window!("Logs.service_stats/2")
 
     range =
       opts_map

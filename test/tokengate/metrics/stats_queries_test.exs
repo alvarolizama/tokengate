@@ -10,6 +10,8 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
 
   alias Tokengate.Accounts
   alias Tokengate.Logs
+  alias Tokengate.Logs.RequestLog
+  alias Tokengate.Repo
   alias Tokengate.Metrics.Rollup.HourlyAggregate
   alias Tokengate.Metrics.StatsQueries
   alias Tokengate.Providers
@@ -49,6 +51,30 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
       |> Map.put(:inserted_at, inserted_at)
 
     {:ok, _} = Logs.log_request(attrs)
+    :ok
+  end
+
+  # A log with no membership. `Logs.log_request/1` requires one, but the row
+  # exists in production: `request_logs.group_member_id` is
+  # `ON DELETE SET NULL`, so deleting a membership leaves its history behind
+  # with the column NULL. Inserted raw to reproduce exactly that state.
+  defp log_request_without_member(model_id, user_id, inserted_at) do
+    {1, _} =
+      Repo.insert_all(RequestLog, [
+        %{
+          id: Ecto.UUID.generate(),
+          user_id: user_id,
+          model_id: model_id,
+          model_requested: "gpt-4",
+          prompt_tokens: 100,
+          completion_tokens: 50,
+          provider_cost_usd: Decimal.new("0.800000"),
+          latency_ms: 500,
+          status_code: 200,
+          inserted_at: inserted_at
+        }
+      ])
+
     :ok
   end
 
@@ -506,6 +532,65 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
       raw = Tokengate.Metrics.Rollup.breakdown_by_model(nil, opts)
 
       assert_rows_match(hybrid, raw, :model_id)
+    end
+
+    test "breakdown_by_model_and_member consolida los huérfanos y no pierde gasto" do
+      {member, _group} = group_member_fixture()
+      user_id = member.user_id
+      gpt = model_fixture()
+
+      # Sin membresía (el resultado de `ON DELETE SET NULL` al borrarla): el
+      # agregado interno los separa por su id y el externo los vuelve a juntar
+      # bajo NULL, igual que el GROUP BY único de antes.
+      log_request(member.id, hours_ago(48), model_id: gpt.id, user_id: user_id)
+      log_request_without_member(gpt.id, user_id, hours_ago(48))
+      log_request_without_member(gpt.id, user_id, hours_ago(49))
+      log_request(member.id, hours_ago(1), model_id: gpt.id, user_id: user_id)
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to, user_ids: [user_id]]
+
+      {model_rows, member_rows} = StatsQueries.breakdown_by_model_and_member(opts)
+
+      # Las 4 requests del modelo, con membresía viva o no.
+      assert [%{model_id: model_id, request_count: 4}] = model_rows
+      assert model_id == gpt.id
+
+      # Dos filas: la membresía viva (2) y los sin-membresía consolidados (2).
+      # Si el agregado externo no consolidara, saldría una fila por bucket.
+      assert length(member_rows) == 2
+      by_member = Map.new(member_rows, &{&1.group_member_id, &1.request_count})
+      assert by_member[member.id] == 2
+      assert by_member[nil] == 2
+    end
+
+    test "breakdown_by_model_and_member cuadra con el total crudo de la ventana" do
+      {member, _group} = group_member_fixture()
+      gpt = model_fixture()
+      claude = model_fixture()
+
+      log_request(member.id, hours_ago(48), model_id: gpt.id, model_requested: gpt.name)
+      log_request(member.id, hours_ago(48), model_id: claude.id, model_requested: claude.name)
+      log_request(member.id, hours_ago(1), model_id: gpt.id, model_requested: gpt.name)
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to, user_ids: [member.user_id]]
+
+      {model_rows, member_rows} = StatsQueries.breakdown_by_model_and_member(opts)
+      summary = StatsQueries.summary(opts)
+
+      assert Enum.sum(Enum.map(model_rows, & &1.request_count)) == summary.request_count
+
+      assert Enum.reduce(model_rows, Decimal.new(0), &Decimal.add(&1.cost_usd, &2))
+             |> Decimal.compare(summary.total_cost_usd) == :eq
+
+      assert Enum.sum(Enum.map(member_rows, & &1.request_count)) == summary.request_count
     end
 
     test "breakdown_by_model honours the member scope on BOTH halves" do

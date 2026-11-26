@@ -292,12 +292,17 @@ defmodule Tokengate.Metrics.RollupTest do
       cred_a = Ecto.UUID.generate()
       cred_b = Ecto.UUID.generate()
 
-      # Ventana LITERAL y horas ya cerradas: el assert no depende del reloj.
-      from = ~U[2026-08-01 00:00:00Z]
-      to = ~U[2026-08-01 23:59:59Z]
+      # Ventana de AYER: horas ya cerradas (el rollup solo responde buckets
+      # completos) y DENTRO de la retención. Una fecha literal fija acababa
+      # fuera de los 90 días y el clamp de `Logs.cost_summary/1` la recortaba,
+      # así que el assert contra la serie cruda daba 0.
+      day = Date.add(Date.utc_today(), -1)
+      from = DateTime.new!(day, ~T[00:00:00], "Etc/UTC")
+      to = DateTime.new!(day, ~T[23:59:59], "Etc/UTC")
+      at = fn h, m -> DateTime.new!(day, Time.new!(h, m, 0), "Etc/UTC") end
 
       # lane A / cred A — $1.25 @ 01:10
-      log_request(tm.id, ~U[2026-08-01 01:10:00Z], %{
+      log_request(tm.id, at.(1, 10), %{
         model_id: model_id,
         model_provider_id: lane_a,
         credential_id: cred_a,
@@ -305,7 +310,7 @@ defmodule Tokengate.Metrics.RollupTest do
       })
 
       # lane A / cred B — $2.00 @ 02:20 (mismo lane, OTRA key)
-      log_request(tm.id, ~U[2026-08-01 02:20:00Z], %{
+      log_request(tm.id, at.(2, 20), %{
         model_id: model_id,
         model_provider_id: lane_a,
         credential_id: cred_b,
@@ -313,7 +318,7 @@ defmodule Tokengate.Metrics.RollupTest do
       })
 
       # lane B / cred A — $3.50 @ 03:30 (el lane que NO debe aparecer)
-      log_request(tm.id, ~U[2026-08-01 03:30:00Z], %{
+      log_request(tm.id, at.(3, 30), %{
         model_id: model_id,
         model_provider_id: lane_b,
         credential_id: cred_a,
@@ -348,13 +353,17 @@ defmodule Tokengate.Metrics.RollupTest do
       # Un solo bucket, el de la 01:00: fuera el de cred B (02:00) y el otro lane (03:00).
       assert [bucket] = series
 
-      assert bucket.hour |> DateTime.truncate(:second) |> DateTime.to_iso8601() ==
-               "2026-08-01T01:00:00Z"
+      assert DateTime.compare(
+               DateTime.truncate(bucket.hour, :second),
+               DateTime.new!(day, ~T[01:00:00], "Etc/UTC")
+             ) == :eq
 
       refute Enum.any?(
                series,
-               &(DateTime.to_iso8601(DateTime.truncate(&1.hour, :second)) ==
-                   "2026-08-01T03:00:00Z")
+               &(DateTime.compare(
+                   DateTime.truncate(&1.hour, :second),
+                   DateTime.new!(day, ~T[03:00:00], "Etc/UTC")
+                 ) == :eq)
              )
 
       # Sin opts el lane B SÍ está (backward-compatible): la serie completa suma los tres.
