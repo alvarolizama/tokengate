@@ -3088,4 +3088,84 @@ defmodule TokengateWeb.ModelsLiveTest do
       assert ModelsLive.type_endpoint(type)
     end
   end
+
+  test "saves manual informational market prices on model and displays them in table", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    model = create_model(%{name: "mkt-manual-#{unique()}"})
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    view |> element("#edit-model-#{model.id}") |> render_click()
+
+    assert has_element?(view, "#model-market-section")
+    assert has_element?(view, "#fetch-market-price-btn")
+
+    view
+    |> form("#model-form", %{
+      "model" => %{
+        "market_input_price_per_1m" => "2.50",
+        "market_output_price_per_1m" => "10.00",
+        "market_cache_price_per_1m" => "1.25"
+      }
+    })
+    |> render_change()
+
+    view
+    |> form("#model-form", %{
+      "model" => %{
+        "market_input_price_per_1m" => "2.50",
+        "market_output_price_per_1m" => "10.00",
+        "market_cache_price_per_1m" => "1.25"
+      }
+    })
+    |> render_submit()
+
+    updated = Providers.get_model!(model.id)
+    assert updated.market_price_source == "manual"
+    assert Decimal.equal?(updated.market_input_price_per_1m, Decimal.new("2.5"))
+    assert Decimal.equal?(updated.market_output_price_per_1m, Decimal.new("10.0"))
+    assert Decimal.equal?(updated.market_cache_price_per_1m, Decimal.new("1.25"))
+
+    assert has_element?(view, "#model-market-price-#{model.id}", "$2.5 / $10")
+  end
+
+  test "fetch from models.dev button prefills market prices from cached index", %{conn: conn} do
+    Tokengate.Providers.MarketPrices.clear_index()
+
+    on_exit(fn -> Tokengate.Providers.MarketPrices.clear_index() end)
+
+    u = unique()
+    model = create_model(%{name: "gpt-fetch-#{u}"})
+
+    Tokengate.Providers.MarketPrices.extract_index(%{
+      "openai" => %{
+        "models" => %{
+          "gpt-fetch-#{u}" => %{
+            "cost" => %{"input" => 1.75, "output" => 7.0, "cache_read" => 0.45}
+          }
+        }
+      }
+    })
+    |> Tokengate.Providers.MarketPrices.put_index()
+
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    view |> element("#edit-model-#{model.id}") |> render_click()
+    view |> element("#fetch-market-price-btn") |> render_click()
+    render_async(view)
+
+    assert has_element?(view, "#market-lookup-status", "models.dev")
+
+    view |> form("#model-form", %{}) |> render_submit()
+
+    updated = Providers.get_model!(model.id)
+    assert updated.market_price_source == "models.dev"
+    assert Decimal.equal?(updated.market_input_price_per_1m, Decimal.new("1.75"))
+    assert Decimal.equal?(updated.market_output_price_per_1m, Decimal.new("7.0"))
+    assert Decimal.equal?(updated.market_cache_price_per_1m, Decimal.new("0.45"))
+  end
 end

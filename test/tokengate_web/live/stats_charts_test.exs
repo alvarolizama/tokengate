@@ -238,4 +238,20 @@ defmodule TokengateWeb.StatsChartsTest do
       end
     end
   end
+
+  describe "DayHourChart eje Y sin encime" do
+    test "añade separación vertical y ancho de eje para que los ticks no pisen subtítulo ni horas",
+         %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      group_with_log(%{cost: Decimal.new("0.01"), inserted_at: DateTime.add(now, -10, :second)})
+
+      {:ok, view, _html} = live(conn, ~p"/stats")
+
+      assert has_element?(view, "#live-day-hour-chart .mt-3.mb-1 .w-12")
+      assert has_element?(view, "#live-day-hour-chart-hours.mt-2.ml-14")
+    end
+  end
 end

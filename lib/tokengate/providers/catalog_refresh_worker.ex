@@ -64,6 +64,7 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
     CatalogSyncState,
     Lab,
     LabCatalog,
+    MarketPrices,
     Provider
   }
 
@@ -86,6 +87,7 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
 
         {provider_counts, warnings} = apply_entries(entries)
         {lab_counts, warnings} = refresh_labs(models_payload, entries, warnings)
+        MarketPrices.sync_configured_models(providers_payload)
 
         provider_counts
         |> Map.merge(lab_counts)

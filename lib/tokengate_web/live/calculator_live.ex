@@ -37,7 +37,7 @@ defmodule TokengateWeb.CalculatorLive do
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
   alias Tokengate.Providers
-  alias Tokengate.Providers.Pricing
+  alias Tokengate.Providers.{Model, Pricing}
   alias TokengateWeb.StatsHelpers
 
   import TokengateWeb.KpiHelpers, only: [kpi_card: 1, format_compact: 1]
@@ -190,6 +190,23 @@ defmodule TokengateWeb.CalculatorLive do
       end
 
     {:noreply, socket}
+  end
+
+  def handle_event("use_market_prices", _params, socket) do
+    case selected_market_model(socket.assigns.models, socket.assigns.selected_model_id) do
+      nil ->
+        {:noreply, socket}
+
+      model ->
+        socket =
+          socket
+          |> assign(:cost_input, price_string(model.market_input_price_per_1m))
+          |> assign(:cost_cache, price_string(model.market_cache_price_per_1m))
+          |> assign(:cost_output, price_string(model.market_output_price_per_1m))
+          |> assign(:cost_cache_write, "0.00")
+
+        {:noreply, reload_selected(socket)}
+    end
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
@@ -746,4 +763,19 @@ defmodule TokengateWeb.CalculatorLive do
   end
 
   def periods, do: TokengateWeb.StatsHelpers.canonical_periods()
+
+  defp selected_market_model(_models, nil), do: nil
+  defp selected_market_model(_models, ""), do: nil
+
+  defp selected_market_model(models, model_id) do
+    case Enum.find(models || [], &(&1.id == model_id)) do
+      %Model{} = model -> if Model.has_market_prices?(model), do: model, else: nil
+      _ -> nil
+    end
+  end
+
+  defp fmt_market_ref(nil), do: "—"
+
+  defp fmt_market_ref(%Decimal{} = d),
+    do: "$" <> (d |> Decimal.round(6) |> Decimal.normalize() |> Decimal.to_string(:normal))
 end

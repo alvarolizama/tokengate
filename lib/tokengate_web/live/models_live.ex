@@ -54,7 +54,15 @@ defmodule TokengateWeb.ModelsLive do
   defdelegate type_endpoint(type), to: ModelPicker
   defdelegate type_endpoint_pairs(), to: ModelPicker
 
-  alias Tokengate.Providers.{Lab, Model, ModelIds, ModelProvider, Pricing, ServiceModels}
+  alias Tokengate.Providers.{
+    Lab,
+    MarketPrices,
+    Model,
+    ModelIds,
+    ModelProvider,
+    Pricing,
+    ServiceModels
+  }
 
   alias Tokengate.Repo
 
@@ -132,6 +140,8 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:delete_target, nil)
       |> assign(:all_models, [])
       |> assign(:active_model_types, [])
+      |> assign(:market_lookup_loading, false)
+      |> assign(:market_lookup_status, nil)
       |> load_labs()
       |> load_models_data()
       |> assign_form_data()
@@ -455,10 +465,17 @@ defmodule TokengateWeb.ModelsLive do
       # `source.data` es el struct VACÍO: lo que el operador ya eligió (el TIPO,
       # sobre todo) vive en `source.changes`. Se arrastra entero para no perderlo
       # al rearmar el changeset con el nombre del id elegido.
+      short_name = ModelIds.short_name(model)
+
       params =
         socket.assigns.form.source.changes
         |> Map.new(fn {key, value} -> {to_string(key), value} end)
-        |> Map.put("name", ModelIds.short_name(model))
+        |> Map.put("name", short_name)
+        |> maybe_prefill_market_prices(
+          short_name,
+          socket.assigns[:wizard_provider_key],
+          model
+        )
 
       changeset = Providers.change_model(socket.assigns.form.source.data, params)
 
@@ -466,6 +483,7 @@ defmodule TokengateWeb.ModelsLive do
        socket
        |> assign(:form, to_form(changeset, as: :model))
        |> assign(:wizard_provider_model, model)
+       |> assign(:market_lookup_status, nil)
        |> assign(:wizard_step, "details")}
     else
       {:noreply, socket}
@@ -548,9 +566,29 @@ defmodule TokengateWeb.ModelsLive do
   # revalidar con los params del formulario no lo pierde.
   def handle_event("validate_model", %{"model" => model_params}, socket) do
     if socket.assigns.is_admin and socket.assigns.form do
+      model_params = normalize_market_source_on_edit(socket.assigns.form.source, model_params)
       changeset = Providers.change_model(socket.assigns.form.source.data, model_params)
 
       {:noreply, assign(socket, :form, to_form(changeset, as: :model))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("fetch_market_price", _params, socket) do
+    if socket.assigns.is_admin and socket.assigns.form do
+      changeset = socket.assigns.form.source
+      name = Ecto.Changeset.get_field(changeset, :name)
+      lab_key = Ecto.Changeset.get_field(changeset, :lab_key)
+      lanes = market_lookup_lanes(socket)
+
+      {:noreply,
+       socket
+       |> assign(:market_lookup_loading, true)
+       |> assign(:market_lookup_status, nil)
+       |> start_async(:market_price_lookup, fn ->
+         MarketPrices.fetch_and_lookup(name: name, lab_key: lab_key, lanes: lanes)
+       end)}
     else
       {:noreply, socket}
     end
@@ -573,6 +611,8 @@ defmodule TokengateWeb.ModelsLive do
      |> assign(:editing_model_id, nil)
      |> assign(:model_form_picked_type, nil)
      |> assign(:type_picker_open, false)
+     |> assign(:market_lookup_loading, false)
+     |> assign(:market_lookup_status, nil)
      |> reset_wizard()}
   end
 
@@ -707,6 +747,8 @@ defmodule TokengateWeb.ModelsLive do
            # el id que viaja al upstream), no un "proveedor" que el modelo no
            # tiene: el proveedor es una propiedad de la key.
            |> assign(:wizard_lanes, model_lanes(model.id))
+           |> assign(:market_lookup_loading, false)
+           |> assign(:market_lookup_status, nil)
            |> assign(:wizard_step, "details")}
       end
     else
@@ -1256,6 +1298,53 @@ defmodule TokengateWeb.ModelsLive do
     do: gettext("Model created without a provider assignment: the assignment could not be saved.")
 
   @impl true
+  def handle_async(:market_price_lookup, {:ok, {:ok, entry}}, socket) do
+    socket = assign(socket, :market_lookup_loading, false)
+
+    case socket.assigns[:form] do
+      nil ->
+        {:noreply, socket}
+
+      form ->
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+        changeset =
+          form.source
+          |> Ecto.Changeset.put_change(:market_input_price_per_1m, entry.input)
+          |> Ecto.Changeset.put_change(:market_output_price_per_1m, entry.output)
+          |> Ecto.Changeset.put_change(:market_cache_price_per_1m, entry.cache)
+          |> Ecto.Changeset.put_change(:market_price_source, "models.dev")
+          |> Ecto.Changeset.put_change(:market_price_synced_at, now)
+
+        {:noreply,
+         socket
+         |> assign(:form, to_form(changeset, as: :model))
+         |> assign(:market_lookup_status, {:found, entry.provider_key, entry.model_id})}
+    end
+  end
+
+  def handle_async(:market_price_lookup, {:ok, :not_found}, socket) do
+    {:noreply,
+     socket
+     |> assign(:market_lookup_loading, false)
+     |> assign(:market_lookup_status, :not_found)}
+  end
+
+  def handle_async(:market_price_lookup, {:ok, {:error, _reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:market_lookup_loading, false)
+     |> assign(:market_lookup_status, :error)}
+  end
+
+  def handle_async(:market_price_lookup, {:exit, _reason}, socket) do
+    {:noreply,
+     socket
+     |> assign(:market_lookup_loading, false)
+     |> assign(:market_lookup_status, :error)}
+  end
+
+  @impl true
   def handle_info(
         {:wizard_models_result, provider_key, type, credential_id, result},
         %{assigns: assigns} = socket
@@ -1277,6 +1366,113 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   def handle_info(_event, socket), do: {:noreply, socket}
+
+  defp maybe_prefill_market_prices(params, name, provider_key, provider_model) do
+    case MarketPrices.get_index() do
+      nil ->
+        params
+
+      index ->
+        lanes =
+          if is_binary(provider_key) and is_binary(provider_model) do
+            [{provider_key, provider_model}]
+          else
+            []
+          end
+
+        case MarketPrices.lookup(index, name: name, lab_key: params["lab_key"], lanes: lanes) do
+          {:ok, entry} ->
+            now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+            params
+            |> maybe_put_decimal("market_input_price_per_1m", entry.input)
+            |> maybe_put_decimal("market_output_price_per_1m", entry.output)
+            |> maybe_put_decimal("market_cache_price_per_1m", entry.cache)
+            |> Map.put("market_price_source", "models.dev")
+            |> Map.put("market_price_synced_at", now)
+
+          :not_found ->
+            params
+        end
+    end
+  end
+
+  defp maybe_put_decimal(params, _key, nil), do: params
+  defp maybe_put_decimal(params, key, %Decimal{} = d), do: Map.put(params, key, d)
+
+  defp normalize_market_source_on_edit(changeset, model_params) do
+    edited_market? =
+      Enum.any?(
+        ~w(market_input_price_per_1m market_output_price_per_1m market_cache_price_per_1m),
+        fn key ->
+          atom_key = String.to_existing_atom(key)
+          old_val = changeset |> Ecto.Changeset.get_field(atom_key) |> decimal_param_str()
+          new_val = model_params |> Map.get(key) |> decimal_param_str()
+          old_val != new_val
+        end
+      )
+
+    any_present? =
+      Enum.any?(
+        ~w(market_input_price_per_1m market_output_price_per_1m market_cache_price_per_1m),
+        fn key -> (model_params[key] || "") |> to_string() |> String.trim() != "" end
+      )
+
+    cond do
+      not any_present? ->
+        model_params
+        |> Map.put("market_price_source", "")
+        |> Map.put("market_price_synced_at", nil)
+
+      edited_market? ->
+        Map.put(model_params, "market_price_source", "manual")
+
+      true ->
+        model_params
+    end
+  end
+
+  defp decimal_param_str(nil), do: ""
+
+  defp decimal_param_str(%Decimal{} = d),
+    do: d |> Decimal.normalize() |> Decimal.to_string(:normal)
+
+  defp decimal_param_str(v) when is_binary(v) do
+    trimmed = String.trim(v)
+
+    case Decimal.parse(trimmed) do
+      {d, ""} -> d |> Decimal.normalize() |> Decimal.to_string(:normal)
+      _ -> trimmed
+    end
+  end
+
+  defp decimal_param_str(v), do: to_string(v)
+
+  defp market_lookup_lanes(socket) do
+    wizard_lane =
+      case {socket.assigns[:wizard_provider_key], socket.assigns[:wizard_provider_model]} do
+        {pk, pm} when is_binary(pk) and is_binary(pm) and pm != "" -> [{pk, pm}]
+        _ -> []
+      end
+
+    existing_lanes =
+      Enum.flat_map(socket.assigns[:wizard_lanes] || [], fn lane ->
+        pk =
+          cond do
+            lane.credential && lane.credential.provider -> lane.credential.provider.key
+            lane.pool && lane.pool.provider -> lane.pool.provider.key
+            true -> nil
+          end
+
+        if is_binary(pk) and is_binary(lane.provider_model) do
+          [{pk, lane.provider_model}]
+        else
+          []
+        end
+      end)
+
+    Enum.uniq(wizard_lane ++ existing_lanes)
+  end
 
   # La marca: logo remoto si es el del lab, si no un hero icon. El chip claro es
   # fijo porque los logos del catálogo son oscuros y el tema también lo es
@@ -1434,6 +1630,20 @@ defmodule TokengateWeb.ModelsLive do
 
   def price_summary(_model), do: nil
 
+  defp format_market_summary(%Model{} = model) do
+    in_str =
+      if model.market_input_price_per_1m,
+        do: "$#{fmt_price(model.market_input_price_per_1m)}",
+        else: "—"
+
+    out_str =
+      if model.market_output_price_per_1m,
+        do: "$#{fmt_price(model.market_output_price_per_1m)}",
+        else: "—"
+
+    "#{in_str} / #{out_str}"
+  end
+
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -1579,21 +1789,31 @@ defmodule TokengateWeb.ModelsLive do
               <span class="badge badge-ghost badge-sm">{lane_provider_count(model)}</span>
             </:col>
             <:col :let={model} label={gettext("Price")} align="right">
-              <%= case price_summary(model) do %>
-                <% nil -> %>
-                  <span class="text-base-content/30">—</span>
-                <% :mixed -> %>
-                  <span class="text-[11px] text-base-content/40">
-                    {gettext("mixed units")}
-                  </span>
-                <% {unit, amount} -> %>
-                  <span class="text-sm whitespace-nowrap" title={Pricing.label(unit)}>
-                    ${fmt_price(amount)}
-                    <span class="text-[10px] text-base-content/40">
-                      /{Pricing.rate_suffix(unit)}
+              <div class="flex flex-col items-end gap-0.5">
+                <%= case price_summary(model) do %>
+                  <% nil -> %>
+                    <span class="text-base-content/30">—</span>
+                  <% :mixed -> %>
+                    <span class="text-[11px] text-base-content/40">
+                      {gettext("mixed units")}
                     </span>
-                  </span>
-              <% end %>
+                  <% {unit, amount} -> %>
+                    <span class="text-sm whitespace-nowrap tabular-nums" title={Pricing.label(unit)}>
+                      ${fmt_price(amount)}
+                      <span class="text-[10px] text-base-content/40">
+                        /{Pricing.rate_suffix(unit)}
+                      </span>
+                    </span>
+                <% end %>
+                <span
+                  :if={Model.has_market_prices?(model)}
+                  id={"model-market-price-#{model.id}"}
+                  class="text-[10px] text-base-content/50 whitespace-nowrap tabular-nums"
+                  title={gettext("Informational market reference only (not used for billing)")}
+                >
+                  {gettext("Market ref")}: {format_market_summary(model)}
+                </span>
+              </div>
             </:col>
             <:action :let={model} :if={@is_admin}>
               <.link
@@ -2279,6 +2499,107 @@ defmodule TokengateWeb.ModelsLive do
                         </div>
                       </details>
                     <% end %>
+                  </div>
+                </div>
+
+                <%!-- Informational market reference prices (display-only) --%>
+                <div
+                  class="rounded-lg border border-base-300 p-3 mt-4 space-y-2"
+                  id="model-market-section"
+                >
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <span class="text-sm font-medium text-base-content/80">
+                        {gettext("Market reference prices (display-only)")}
+                      </span>
+                      <p class="text-[11px] text-base-content/50">
+                        {gettext(
+                          "USD per 1M tokens · Informational only, never used for billing or cost calculation."
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      phx-click="fetch_market_price"
+                      id="fetch-market-price-btn"
+                      disabled={@market_lookup_loading}
+                      class="btn btn-xs btn-outline gap-1.5"
+                    >
+                      <span
+                        :if={@market_lookup_loading}
+                        class="loading loading-spinner loading-xs"
+                      />
+                      <.icon
+                        :if={!@market_lookup_loading}
+                        name="hero-arrow-down-tray"
+                        class="w-3.5 h-3.5"
+                      />
+                      {gettext("Fetch from models.dev")}
+                    </button>
+                  </div>
+
+                  <p
+                    :if={@market_lookup_status}
+                    id="market-lookup-status"
+                    class={[
+                      "text-xs",
+                      case @market_lookup_status do
+                        {:found, _, _} -> "text-success"
+                        _ -> "text-warning"
+                      end
+                    ]}
+                  >
+                    <%= case @market_lookup_status do %>
+                      <% {:found, pk, mid} -> %>
+                        {gettext("Prefilled from models.dev (%{provider}: %{model}).",
+                          provider: pk,
+                          model: mid
+                        )}
+                      <% :not_found -> %>
+                        {gettext("No matching entry found in models.dev for this model name.")}
+                      <% :error -> %>
+                        {gettext(
+                          "Could not reach models.dev right now. You can still type prices manually."
+                        )}
+                    <% end %>
+                  </p>
+
+                  <input
+                    type="hidden"
+                    name="model[market_price_source]"
+                    value={@form[:market_price_source].value || ""}
+                  />
+                  <input
+                    type="hidden"
+                    name="model[market_price_synced_at]"
+                    value={@form[:market_price_synced_at].value || ""}
+                  />
+
+                  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <.input
+                      field={@form[:market_input_price_per_1m]}
+                      type="number"
+                      step="0.000001"
+                      min="0"
+                      label={gettext("Market input ($/1M)")}
+                      placeholder="e.g. 2.50"
+                    />
+                    <.input
+                      field={@form[:market_output_price_per_1m]}
+                      type="number"
+                      step="0.000001"
+                      min="0"
+                      label={gettext("Market output ($/1M)")}
+                      placeholder="e.g. 10.00"
+                    />
+                    <.input
+                      field={@form[:market_cache_price_per_1m]}
+                      type="number"
+                      step="0.000001"
+                      min="0"
+                      label={gettext("Market cache read ($/1M)")}
+                      placeholder="e.g. 1.25"
+                    />
                   </div>
                 </div>
 

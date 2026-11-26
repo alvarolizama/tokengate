@@ -51,6 +51,7 @@ defmodule TokengateWeb.DashboardLive do
   alias Tokengate.Providers.Model
   alias Tokengate.Repo
   alias TokengateWeb.KpiHelpers
+  alias TokengateWeb.ModelPicker
 
   @pubsub Tokengate.PubSub
   @metrics_topic "metrics:updated"
@@ -89,6 +90,9 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:new_token, nil)
       |> assign(:new_token_group, nil)
       |> assign(:supervised_services_count, count_supervised_services(user))
+      |> assign(:accessible_models, [])
+      |> assign(:accessible_models_query, "")
+      |> assign(:api_base_url, TokengateWeb.Endpoint.url())
       |> assign(:model_marks, %{})
       |> assign(:keys_modal_open, false)
       |> assign(:keys, [])
@@ -479,6 +483,11 @@ defmodule TokengateWeb.DashboardLive do
     {:noreply, assign(socket, :active_breakdown, tab)}
   end
 
+  def handle_event("search_accessible_models", params, socket) do
+    q = Map.get(params, "q") || Map.get(params, "value") || ""
+    {:noreply, assign(socket, :accessible_models_query, q)}
+  end
+
   ## Data loading ---------------------------------------------------------
 
   defp load_personal_data(socket, user) do
@@ -493,6 +502,7 @@ defmodule TokengateWeb.DashboardLive do
     socket
     |> assign(:memberships, data.memberships)
     |> assign(:groups, data.groups)
+    |> assign(:accessible_models, Map.get(data, :accessible_models, []))
     |> assign(:active_keys_count, Map.get(data, :active_keys_count, 0))
     |> assign(:has_access, data.has_access)
   end
@@ -546,12 +556,55 @@ defmodule TokengateWeb.DashboardLive do
 
     # Admins always see the full org-wide dashboard. Regular users need at
     # least one group membership to access API keys, endpoint info, and metrics.
+    accessible_models = build_accessible_models(memberships, groups)
+
     %{
       memberships: memberships,
       groups: groups,
+      accessible_models: accessible_models,
       active_keys_count: length(active_keys),
       has_access: user.global_role == "admin" or groups != []
     }
+  end
+
+  @model_type_order ~w(llm decision embedding stt tts image)
+
+  defp build_accessible_models([], _groups), do: []
+
+  defp build_accessible_models(memberships, groups) do
+    models_by_member = Providers.list_accessible_models_for_members(memberships)
+    labs_by_key = Map.new(Providers.list_labs(), &{&1.key, &1})
+    group_name_by_member = Map.new(groups, &{&1.membership.id, &1.group.name})
+    base_url = TokengateWeb.Endpoint.url()
+
+    memberships
+    |> Enum.flat_map(fn membership ->
+      profile_name = Map.get(group_name_by_member, membership.id)
+
+      models_by_member
+      |> Map.get(membership.id, [])
+      |> Enum.map(&{&1, profile_name})
+    end)
+    |> Enum.group_by(fn {model, _profile} -> model.id end)
+    |> Enum.map(fn {_id, entries} ->
+      {model, _} = hd(entries)
+      profiles = entries |> Enum.map(&elem(&1, 1)) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+      path = ModelPicker.type_endpoint_path(model.model_type)
+
+      %{
+        model: model,
+        mark: Model.mark(model, labs_by_key),
+        endpoint_path: path,
+        api_url: if(path, do: base_url <> path, else: nil),
+        profiles: profiles
+      }
+    end)
+    |> Enum.sort_by(fn %{model: m} ->
+      type_idx =
+        Enum.find_index(@model_type_order, &(&1 == m.model_type)) || length(@model_type_order)
+
+      {not m.pinned, type_idx, String.downcase(m.name || "")}
+    end)
   end
 
   # The key shown on the card: the one bound to this membership, otherwise the
@@ -1148,19 +1201,55 @@ defmodule TokengateWeb.DashboardLive do
   attr :id, :string, required: true
 
   defp model_mark(assigns) do
+    mark = assigns.mark || {:icon, Model.default_icon()}
+    logo_url = if elem(mark, 0) == :logo, do: elem(mark, 1), else: nil
+    fallback_icon = if elem(mark, 0) == :icon, do: elem(mark, 1), else: Model.default_icon()
+
+    assigns =
+      assigns
+      |> assign(:logo_url, logo_url)
+      |> assign(:fallback_icon, fallback_icon)
+
     ~H"""
     <span
       id={@id}
       class="flex items-center justify-center shrink-0 w-7 h-7 rounded-lg border border-base-300 bg-white overflow-hidden"
     >
-      <%= case @mark || {:icon, Model.default_icon()} do %>
-        <% {:logo, url} -> %>
-          <img src={url} alt="" class="w-4 h-4 object-contain" loading="lazy" />
-        <% {:icon, icon} -> %>
-          <.icon name={icon} class="w-4 h-4 text-neutral-600" />
-      <% end %>
+      <img
+        :if={@logo_url}
+        src={@logo_url}
+        alt=""
+        data-logo
+        class="w-4 h-4 object-contain"
+        loading="lazy"
+      />
+      <.icon
+        name={@fallback_icon}
+        class={["w-4 h-4 text-neutral-600", @logo_url && "hidden"]}
+      />
     </span>
     """
+  end
+
+  defp filter_accessible_models(models, query) do
+    needle = query |> to_string() |> String.trim() |> String.downcase()
+
+    if needle == "" do
+      models
+    else
+      Enum.filter(models, fn %{model: m, api_url: url} ->
+        String.contains?(String.downcase(m.name || ""), needle) or
+          String.contains?(String.downcase(m.model_type || ""), needle) or
+          String.contains?(String.downcase(m.lab_key || ""), needle) or
+          String.contains?(String.downcase(url || ""), needle)
+      end)
+    end
+  end
+
+  defp format_market_price(nil), do: "—"
+
+  defp format_market_price(%Decimal{} = d) do
+    "$" <> (d |> Decimal.round(6) |> Decimal.normalize() |> Decimal.to_string(:normal))
   end
 
   ## Chart components ------------------------------------------------------

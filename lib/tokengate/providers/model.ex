@@ -57,11 +57,22 @@ defmodule Tokengate.Providers.Model do
     # lab that carries no mark. Operator-owned, like the lab's own `icon`; a
     # linked lab always wins in the UI.
     field :icon, :string
+    # Informational market reference prices (USD per 1M tokens).
+    # Display-only: CostCalculator, billing, and consumption rollups NEVER read
+    # these fields — actual costs always come from upstream usage reports or
+    # per-lane model_providers fallback pricing.
+    field :market_input_price_per_1m, :decimal
+    field :market_output_price_per_1m, :decimal
+    field :market_cache_price_per_1m, :decimal
+    field :market_price_source, :string
+    field :market_price_synced_at, :utc_datetime
 
     has_many :model_providers, Tokengate.Providers.ModelProvider
 
     timestamps(type: :utc_datetime)
   end
+
+  @market_price_sources ~w(models.dev manual)
 
   @doc false
   def changeset(model, attrs) do
@@ -77,12 +88,22 @@ defmodule Tokengate.Providers.Model do
       :lazy_cleanup_enabled,
       :pinned,
       :lab_key,
-      :icon
+      :icon,
+      :market_input_price_per_1m,
+      :market_output_price_per_1m,
+      :market_cache_price_per_1m,
+      :market_price_source,
+      :market_price_synced_at
     ])
     |> validate_required([:name, :context_window])
     |> validate_inclusion(:model_type, @model_types)
     |> validate_inclusion(:effort_default, @effort_levels)
     |> validate_inclusion(:effort_override, @effort_levels)
+    |> validate_number(:market_input_price_per_1m, greater_than_or_equal_to: 0)
+    |> validate_number(:market_output_price_per_1m, greater_than_or_equal_to: 0)
+    |> validate_number(:market_cache_price_per_1m, greater_than_or_equal_to: 0)
+    |> normalize_blank(:market_price_source)
+    |> validate_inclusion(:market_price_source, @market_price_sources)
     |> validate_format(:icon, @icon_format,
       message: "must be a hero icon name, e.g. hero-cpu-chip"
     )
@@ -90,6 +111,16 @@ defmodule Tokengate.Providers.Model do
     |> normalize_effort_policy()
     |> unique_constraint(:name)
   end
+
+  @doc "True when at least one informational market price field is present."
+  @spec has_market_prices?(%__MODULE__{} | map() | nil) :: boolean()
+  def has_market_prices?(%__MODULE__{} = model) do
+    not is_nil(model.market_input_price_per_1m) or
+      not is_nil(model.market_output_price_per_1m) or
+      not is_nil(model.market_cache_price_per_1m)
+  end
+
+  def has_market_prices?(_), do: false
 
   @doc "Valid reasoning effort levels for the operator policy"
   def effort_levels, do: @effort_levels
@@ -143,12 +174,15 @@ defmodule Tokengate.Providers.Model do
   # rule as `normalize_icon/1`.
   defp normalize_effort_policy(changeset) do
     for field <- [:effort_default, :effort_override], reduce: changeset do
-      cs ->
-        case get_change(cs, field) do
-          "" -> put_change(cs, field, nil)
-          value when is_binary(value) -> put_change(cs, field, String.trim(value))
-          _ -> cs
-        end
+      cs -> normalize_blank(cs, field)
+    end
+  end
+
+  defp normalize_blank(changeset, field) do
+    case get_change(changeset, field) do
+      "" -> put_change(changeset, field, nil)
+      value when is_binary(value) -> put_change(changeset, field, String.trim(value))
+      _ -> changeset
     end
   end
 end

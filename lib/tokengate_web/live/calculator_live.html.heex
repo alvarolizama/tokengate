@@ -126,6 +126,32 @@
                   </span>
                 </div>
 
+                <% market_model = selected_market_model(@models, @selected_model_id) %>
+                <div
+                  :if={market_model && !@lane_non_token}
+                  id="calc-market-ref"
+                  class="rounded-lg border border-base-300 bg-base-200/40 px-2.5 py-2 text-[11px] space-y-1.5"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="font-medium text-base-content/70">
+                      {gettext("Market ref (USD / 1M)")}
+                    </span>
+                    <button
+                      type="button"
+                      phx-click="use_market_prices"
+                      id="use-market-prices-btn"
+                      class="btn btn-xs btn-ghost text-primary px-1.5"
+                    >
+                      {gettext("Use market")}
+                    </button>
+                  </div>
+                  <div class="text-base-content/60 tabular-nums">
+                    {fmt_market_ref(market_model.market_input_price_per_1m)} in · {fmt_market_ref(
+                      market_model.market_cache_price_per_1m
+                    )} cache · {fmt_market_ref(market_model.market_output_price_per_1m)} out
+                  </div>
+                </div>
+
                 <%!-- An empty or invalid rate is NOT free and NOT the hardcoded
                      default: the estimate counts $0 there and this banner says
                      which field carries no price. --%>

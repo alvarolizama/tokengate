@@ -77,29 +77,29 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
 
         <%!-- Tipo de gráfica, unidad y ventana explícitos, como en las
              gráficas por minuto de En vivo. --%>
-        <p class="text-[10px] text-base-content/40" id={"#{@id}-hint"}>
+        <p class="text-[10px] leading-snug text-base-content/40" id={"#{@id}-hint"}>
           {@hint}
         </p>
 
-        <div class="flex gap-2 items-end mt-1">
+        <div class="flex gap-2 items-end mt-3 mb-1">
           <%!-- Eje Y (con la escala √, los ticks se posicionan en √(tick/techo)) --%>
           <%= if @has_data? do %>
-            <div class="relative h-40 w-10 shrink-0">
+            <div class="relative h-40 w-12 shrink-0">
               <span
                 :for={tick <- Stats.y_axis_ticks(@max)}
-                class="absolute right-0 text-[9px] text-base-content/50 tabular-nums -translate-y-1/2"
+                class="absolute right-0 text-[9px] leading-none text-base-content/50 tabular-nums -translate-y-1/2"
                 style={"bottom: #{y_tick_pct(tick, @scale_max)}%"}
               >
                 {Stats.format_number(tick)}
               </span>
-              <span class="absolute right-0 bottom-0 text-[9px] text-base-content/50 tabular-nums translate-y-1/2">
+              <span class="absolute right-0 bottom-0 text-[9px] leading-none text-base-content/50 tabular-nums translate-y-1/2">
                 0
               </span>
             </div>
           <% else %>
             <%!-- Sin tráfico: el hueco del eje se mantiene para que las barras
                  no se desalineen de las etiquetas de hora. --%>
-            <div class="h-40 w-10 shrink-0"></div>
+            <div class="h-40 w-12 shrink-0"></div>
           <% end %>
 
           <div class="relative flex-1">
@@ -145,7 +145,7 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
         <%!-- Etiquetas de hora: una cada 3 horas, como en las gráficas por
              minuto. En En vivo las horas que aún no han llegado quedan más
              apagadas, para que la gráfica se lea como "el día hasta ahora". --%>
-        <div class="flex gap-[3px] mt-1 ml-12" id={"#{@id}-hours"}>
+        <div class="flex gap-[3px] mt-2 ml-14" id={"#{@id}-hours"}>
           <span :for={row <- @rows} class="flex-1 text-center">
             <span
               :if={rem(row.hour, 3) == 0}

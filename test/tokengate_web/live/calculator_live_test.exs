@@ -1005,4 +1005,30 @@ defmodule TokengateWeb.CalculatorLiveTest do
 
     refute_received {:calc_db_query, ^ref, _}
   end
+
+  test "model with informational market prices offers Use market helper without changing real spend",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    {:ok, model_} =
+      Providers.create_model(%{
+        name: "calc-mkt-#{unique()}",
+        context_window: 128_000,
+        market_input_price_per_1m: Decimal.new("2.50"),
+        market_output_price_per_1m: Decimal.new("10.00"),
+        market_cache_price_per_1m: Decimal.new("1.25"),
+        market_price_source: "models.dev"
+      })
+
+    {:ok, view, _html} = live(login(conn, admin, password), ~p"/calculator")
+    change(view, %{model_id: model_.id})
+
+    assert has_element?(view, "#calc-market-ref", "$2.5")
+    assert has_element?(view, "#use-market-prices-btn")
+
+    html = view |> element("#use-market-prices-btn") |> render_click()
+    assert html =~ ~s(value="2.50")
+    assert html =~ ~s(value="10.00")
+    assert html =~ ~s(value="1.25")
+  end
 end

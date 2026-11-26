@@ -239,10 +239,24 @@ defmodule TokengateWeb.ModelPicker do
     "image" => "POST /v1/images/generations"
   }
 
+  @type_endpoint_paths %{
+    "llm" => "/v1/chat/completions",
+    "decision" => "/v1/decisions",
+    "embedding" => "/v1/embeddings",
+    "stt" => "/v1/audio/transcriptions",
+    "tts" => "/v1/audio/speech",
+    "image" => "/v1/images/generations"
+  }
+
   @doc "The /v1 endpoint that serves a model type (nil when unknown)."
   @spec type_endpoint(String.t() | nil) :: String.t() | nil
   def type_endpoint(type) when is_binary(type), do: Map.get(@type_endpoints, type)
   def type_endpoint(_), do: nil
+
+  @doc "The raw /v1 URL path that serves a model type (nil when unknown)."
+  @spec type_endpoint_path(String.t() | nil) :: String.t() | nil
+  def type_endpoint_path(type) when is_binary(type), do: Map.get(@type_endpoint_paths, type)
+  def type_endpoint_path(_), do: nil
 
   @doc "The full type → endpoint map, as pairs (testable surface)."
   @spec type_endpoint_pairs() :: [{String.t(), String.t()}]

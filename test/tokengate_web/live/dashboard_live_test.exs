@@ -1504,4 +1504,84 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#groups-section .grid.grid-cols-1.lg\\:grid-cols-2")
     assert has_element?(view, "#supervised-services-card")
   end
+
+  test "displays read-only accessible models with lab logo, API URL, and informational market prices",
+       %{conn: conn} do
+    u = unique()
+
+    {:ok, lab} =
+      Providers.create_custom_lab(%{
+        "name" => "Lab #{u}",
+        "key" => "lab-#{u}",
+        "logo_url" => "https://logos.test/lab-#{u}.svg"
+      })
+
+    {:ok, chat_model} =
+      Providers.create_model(%{
+        name: "chat-model-#{u}",
+        context_window: 128_000,
+        model_type: "llm",
+        lab_key: lab.key,
+        market_input_price_per_1m: Decimal.new("2.5"),
+        market_output_price_per_1m: Decimal.new("10.0"),
+        market_cache_price_per_1m: Decimal.new("1.25"),
+        market_price_source: "models.dev"
+      })
+
+    {:ok, embed_model} =
+      Providers.create_model(%{
+        name: "embed-model-#{u}",
+        context_window: 8_192,
+        model_type: "embedding"
+      })
+
+    {:ok, denied_model} =
+      Providers.create_model(%{
+        name: "denied-model-#{u}",
+        context_window: 64_000,
+        model_type: "llm"
+      })
+
+    {:ok, group} = Accounts.create_group(%{name: "Dev Group #{u}"})
+    {:ok, _} = Providers.grant_model_to_group(group.id, chat_model.id)
+    {:ok, _} = Providers.grant_model_to_group(group.id, denied_model.id)
+
+    {:ok, user} =
+      Accounts.register_user(%{
+        email: "models-dash-#{u}@example.com",
+        name: "Dash #{u}",
+        password: "password-secret-#{u}1"
+      })
+
+    {:ok, member} = Accounts.create_group_member(%{user_id: user.id, group_id: group.id})
+    {:ok, _} = Providers.grant_extra_model(member.id, embed_model.id)
+    {:ok, _} = Providers.deny_model(member.id, denied_model.id)
+
+    conn = login(conn, user, "password-secret-#{u}1")
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#accessible-models-card")
+    assert has_element?(view, "#accessible-models-count", "2")
+    assert has_element?(view, "#dashboard-api-base-url", "/v1")
+
+    assert has_element?(view, "#accessible-model-#{chat_model.id}", chat_model.name)
+
+    assert has_element?(
+             view,
+             "#accessible-model-mark-#{chat_model.id} img[src='https://logos.test/lab-#{u}.svg']"
+           )
+
+    assert has_element?(
+             view,
+             "#accessible-model-url-#{chat_model.id}",
+             "/v1/chat/completions"
+           )
+
+    assert has_element?(view, "#accessible-model-market-#{chat_model.id}", "$2.5")
+    assert has_element?(view, "#accessible-model-market-#{chat_model.id}", "$10")
+    assert has_element?(view, "#accessible-model-#{embed_model.id}", embed_model.name)
+    assert has_element?(view, "#accessible-model-url-#{embed_model.id}", "/v1/embeddings")
+    refute has_element?(view, "#accessible-model-#{denied_model.id}")
+    refute has_element?(view, "#edit-model-#{chat_model.id}")
+  end
 end

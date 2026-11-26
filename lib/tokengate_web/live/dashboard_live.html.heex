@@ -99,6 +99,28 @@
       }
     </script>
 
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyValue">
+      export default {
+        mounted() {
+          this.el.addEventListener("click", () => {
+            const text = this.el.dataset.copyText
+            if (!text || !navigator.clipboard?.writeText) return
+            navigator.clipboard.writeText(text).then(() => {
+              const label = this.el.querySelector("[data-copy-label]")
+              if (!label || label.dataset.copied) return
+              const original = label.textContent
+              label.dataset.copied = "true"
+              label.textContent = this.el.dataset.copiedLabel || "Copied!"
+              setTimeout(() => {
+                label.textContent = original
+                delete label.dataset.copied
+              }, 1500)
+            }).catch(() => {})
+          })
+        }
+      }
+    </script>
+
     <%!-- Groups + models catalog + supervised services — arriba de métricas --%>
     <section id="groups-section">
       <%= if @groups == [] and not @has_access do %>
@@ -316,6 +338,211 @@
               </div>
             </div>
           </.link>
+        </div>
+
+        <%!-- Read-only accessible models catalog with lab logos, API URLs, and informational market prices --%>
+        <% filtered_models =
+          filter_accessible_models(@accessible_models, @accessible_models_query) %>
+        <% show_market_col = Enum.any?(@accessible_models, &Model.has_market_prices?(&1.model)) %>
+        <div
+          :if={@groups != [] or @accessible_models != []}
+          class="card bg-base-100 border border-base-300 shadow-sm mb-6"
+          id="accessible-models-card"
+        >
+          <div class="card-body p-5 gap-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div class="flex items-center gap-2">
+                  <.icon name="hero-cube" class="w-5 h-5 text-base-content/60" />
+                  <h3 class="font-semibold text-base-content">
+                    {gettext("Available models")}
+                  </h3>
+                  <span class="badge badge-sm badge-ghost" id="accessible-models-count">
+                    {length(@accessible_models)}
+                  </span>
+                  <span class="badge badge-xs badge-outline text-base-content/50">
+                    {gettext("Read-only")}
+                  </span>
+                </div>
+                <p class="text-xs text-base-content/50 mt-0.5">
+                  {gettext("Models granted to your account and the API endpoint for each")}
+                </p>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-2">
+                <div class="flex items-center gap-1.5 rounded-lg border border-base-300 bg-base-200/40 px-2.5 py-1">
+                  <span class="text-[10px] uppercase tracking-wide text-base-content/50">
+                    {gettext("Base URL")}
+                  </span>
+                  <code class="text-xs font-mono text-base-content/80" id="dashboard-api-base-url">
+                    {"#{@api_base_url}/v1"}
+                  </code>
+                  <button
+                    type="button"
+                    id="copy-api-base-url"
+                    phx-hook=".CopyValue"
+                    data-copy-text={"#{@api_base_url}/v1"}
+                    data-copied-label={gettext("Copied!")}
+                    class="btn btn-xs btn-ghost px-1.5"
+                    title={gettext("Copy base URL")}
+                  >
+                    <.icon name="hero-clipboard-document" class="w-3.5 h-3.5" />
+                    <span data-copy-label class="text-[10px]">{gettext("Copy")}</span>
+                  </button>
+                </div>
+
+                <.form
+                  :if={length(@accessible_models) > 4}
+                  for={%{}}
+                  id="accessible-models-search-form"
+                  phx-change="search_accessible_models"
+                  phx-submit="search_accessible_models"
+                >
+                  <div class="relative">
+                    <.icon
+                      name="hero-magnifying-glass"
+                      class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-base-content/40"
+                    />
+                    <input
+                      type="text"
+                      name="q"
+                      id="accessible-models-search"
+                      value={@accessible_models_query}
+                      placeholder={gettext("Search models…")}
+                      phx-debounce="200"
+                      autocomplete="off"
+                      class="input input-xs input-bordered pl-8 w-44 sm:w-56"
+                    />
+                  </div>
+                </.form>
+              </div>
+            </div>
+
+            <%= if @accessible_models == [] do %>
+              <p
+                class="text-sm text-base-content/40 py-4 text-center"
+                id="accessible-models-empty"
+              >
+                {gettext("No models granted to your profile yet.")}
+              </p>
+            <% else %>
+              <div class="overflow-x-auto">
+                <.table
+                  id="accessible-models-table"
+                  rows={filtered_models}
+                  row_id={fn item -> "accessible-model-#{item.model.id}" end}
+                  empty?={filtered_models == []}
+                  empty_text={gettext("No models match your search.")}
+                >
+                  <:col :let={item} label={gettext("Model")}>
+                    <div class="flex items-center gap-2.5 min-w-0">
+                      <.model_mark
+                        mark={item.mark}
+                        id={"accessible-model-mark-#{item.model.id}"}
+                      />
+                      <div class="min-w-0">
+                        <div class="flex items-center gap-1.5">
+                          <span class="font-mono font-medium text-sm text-base-content truncate">
+                            {item.model.name}
+                          </span>
+                          <span
+                            :if={item.model.pinned}
+                            class="text-warning shrink-0"
+                            title={gettext("Pinned")}
+                          >
+                            <.icon name="hero-star-solid" class="w-3 h-3" />
+                          </span>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2 text-[11px] text-base-content/50">
+                          <span class="tabular-nums">
+                            {format_compact(item.model.context_window)} ctx
+                          </span>
+                          <span
+                            :for={profile <- item.profiles}
+                            :if={length(@groups) > 1}
+                            class="badge badge-xs badge-ghost"
+                          >
+                            {profile}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </:col>
+                  <:col :let={item} label={gettext("Type")}>
+                    <span class="badge badge-sm badge-outline badge-info whitespace-nowrap">
+                      {item.model.model_type}
+                    </span>
+                  </:col>
+                  <:col :let={item} label={gettext("API URL")}>
+                    <%= if item.api_url do %>
+                      <div class="flex items-center gap-1.5 min-w-0">
+                        <span class="badge badge-xs badge-ghost font-mono shrink-0">POST</span>
+                        <code
+                          id={"accessible-model-url-#{item.model.id}"}
+                          class="font-mono text-xs text-base-content/80 whitespace-nowrap"
+                        >
+                          {item.api_url}
+                        </code>
+                        <button
+                          type="button"
+                          id={"copy-model-url-#{item.model.id}"}
+                          phx-hook=".CopyValue"
+                          data-copy-text={item.api_url}
+                          data-copied-label={gettext("Copied!")}
+                          class="btn btn-xs btn-ghost px-1.5 shrink-0"
+                          title={gettext("Copy API URL")}
+                        >
+                          <.icon name="hero-clipboard-document" class="w-3.5 h-3.5" />
+                          <span data-copy-label class="sr-only">{gettext("Copy")}</span>
+                        </button>
+                      </div>
+                    <% else %>
+                      <span class="text-base-content/30">—</span>
+                    <% end %>
+                  </:col>
+                  <:col
+                    :let={item}
+                    :if={show_market_col}
+                    label={gettext("Market ref (USD / 1M)")}
+                    align="right"
+                    tooltip={
+                      gettext(
+                        "Informational market reference only — actual cost depends on upstream usage"
+                      )
+                    }
+                  >
+                    <%= if Model.has_market_prices?(item.model) do %>
+                      <div
+                        id={"accessible-model-market-#{item.model.id}"}
+                        class="text-xs whitespace-nowrap tabular-nums"
+                        title={
+                          gettext(
+                            "Informational market reference only — not used for billing or budget deductions"
+                          )
+                        }
+                      >
+                        <span>
+                          {format_market_price(item.model.market_input_price_per_1m)}
+                          <span class="text-base-content/40">in</span>
+                          <span class="text-base-content/30">·</span>
+                          {format_market_price(item.model.market_output_price_per_1m)}
+                          <span class="text-base-content/40">out</span>
+                        </span>
+                        <div
+                          :if={item.model.market_cache_price_per_1m}
+                          class="text-[10px] text-base-content/50"
+                        >
+                          {format_market_price(item.model.market_cache_price_per_1m)} cache
+                        </div>
+                      </div>
+                    <% else %>
+                      <span class="text-base-content/30">—</span>
+                    <% end %>
+                  </:col>
+                </.table>
+              </div>
+            <% end %>
+          </div>
         </div>
       <% end %>
     </section>

@@ -75,12 +75,16 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
           </div>
 
           <%!-- Day labels --%>
+          <% day_count = length(@pivoted.days) %>
+          <% label_step = if day_count > 16, do: div(day_count, 10) + 1, else: 1 %>
           <div class="flex gap-px mt-1">
             <span
-              :for={day <- @pivoted.days}
-              class="flex-1 text-center text-[9px] text-base-content/40"
+              :for={{day, idx} <- Enum.with_index(@pivoted.days)}
+              class="flex-1 text-center text-[9px] text-base-content/40 tabular-nums"
             >
-              {Calendar.strftime(day, "%d")}
+              <span :if={rem(idx, label_step) == 0 or idx == day_count - 1}>
+                {Calendar.strftime(day, "%d")}
+              </span>
             </span>
           </div>
         </div>
