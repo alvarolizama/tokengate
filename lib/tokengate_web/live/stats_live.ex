@@ -38,16 +38,19 @@ defmodule TokengateWeb.StatsLive do
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Metrics.StatsQueries
   alias Tokengate.Periods
+  alias Tokengate.SmartRouter.Analytics
   import TokengateWeb.StatsLive.Agent, only: [agent: 1]
   import TokengateWeb.StatsLive.Agents, only: [agents: 1]
   import TokengateWeb.StatsLive.Index, only: [index: 1]
   import TokengateWeb.StatsLive.Models, only: [models: 1]
   import TokengateWeb.StatsLive.Model, only: [model: 1]
   import TokengateWeb.StatsLive.Groups, only: [groups: 1]
+  import TokengateWeb.StatsLive.Group, only: [group: 1]
   import TokengateWeb.StatsLive.Services, only: [services: 1]
   import TokengateWeb.StatsLive.Users, only: [users: 1]
   import TokengateWeb.StatsLive.Providers, only: [providers: 1]
   import TokengateWeb.StatsLive.Provider, only: [provider: 1]
+  import TokengateWeb.StatsLive.Router, only: [router: 1]
   import TokengateWeb.StatsLive.LiveSection, only: [live: 1]
 
   import TokengateWeb.StatsHelpers, only: [period_selector: 1, sort_rows: 3]
@@ -169,12 +172,13 @@ defmodule TokengateWeb.StatsLive do
     period = parse_period(params["period"])
     model_filter = cast_uuid(params["model_id"])
     group_filter = cast_uuid(params["group_id"])
-    # :group action carries the group in the URL path; the other actions
-    # clear it (drill-downs keep using ?group_id=).
+    # :group action carries the group in the URL path (/stats/profiles/:id);
+    # :groups keeps ?group_id= as an alias of the detail, matching :models/:model.
     group_id =
       case socket.assigns.live_action do
-        :group -> cast_uuid(params["group_id"]) || socket.assigns[:group_id]
-        _ -> cast_uuid(params["group_id"])
+        :group -> cast_uuid(params["group_id"])
+        :groups -> group_filter
+        _ -> nil
       end
 
     # :provider carries the provider in the URL path (/stats/providers/:id).
@@ -266,6 +270,7 @@ defmodule TokengateWeb.StatsLive do
     do: ~p"/stats/agents/#{key}"
 
   def period_target(%{live_action: :models}), do: "/stats/models"
+  def period_target(%{live_action: :router}), do: "/stats/router"
   def period_target(%{live_action: :groups}), do: "/stats/profiles"
   def period_target(%{live_action: :services}), do: "/stats/services"
   def period_target(%{live_action: :users}), do: "/stats/users"
@@ -447,6 +452,25 @@ defmodule TokengateWeb.StatsLive do
           end
 
         start_async(socket, :stats_counters, fn -> compute_counter_assigns(params) end)
+
+      # La vista Router: un bundle propio (analítica del SmartRouter sobre
+      # `request_logs`), con el mismo cache estructural que el resto de tabs.
+      :router ->
+        case cached_structural_bundle(key) do
+          {:ok, bundle} ->
+            socket
+            |> assign(:stats_loading, false)
+            |> assign(:load_error, false)
+            |> assign(empty_structural_assigns(:router))
+            |> assign(bundle)
+
+          :miss ->
+            socket
+            |> start_async(:stats_data, fn ->
+              cached_structural_bundle(key, fn -> compute_router_assigns(params) end)
+            end)
+            |> assign(:stats_loading, true)
+        end
 
       # El resto de las pestañas: el mismo bundle único de siempre, ahora
       # bajo la clave estructural (rankings con percentile_cont, picos,
@@ -694,6 +718,46 @@ defmodule TokengateWeb.StatsLive do
     |> run_parallel()
     |> Map.new()
     |> derive_series_labels()
+  end
+
+  # Bundle de la vista Router. Todo sale de `SmartRouter.Analytics` sobre la
+  # MISMA ventana canónica del selector de período; la página no recalcula
+  # ningún ahorro por su cuenta.
+  #
+  # Los insights NO son una consulta más: se derivan en memoria del resumen,
+  # del semáforo de falsos ahorros y del mix de casos de uso que esta misma
+  # carga ya pidió. Volver a llamar a `decision_insights/1` repetía esos tres
+  # escaneos (los más caros del módulo) para tirar el resultado.
+  defp compute_router_assigns(params) do
+    filters = router_filters(params)
+
+    bundle =
+      [
+        fn -> {:router_summary, Analytics.summary(filters)} end,
+        fn -> {:router_use_cases, Analytics.use_case_breakdown(filters)} end,
+        fn -> {:router_model_perf, Analytics.model_performance(filters)} end,
+        fn -> {:router_vs_direct, Analytics.router_vs_direct_by_subject(filters)} end,
+        fn -> {:router_attribution, Analytics.who_spent_on_what(filters)} end,
+        fn -> {:router_signals, Analytics.false_savings_signals(filters)} end,
+        fn -> {:router_sources, Analytics.decision_source_breakdown(filters)} end
+      ]
+      |> run_parallel()
+      |> Map.new()
+
+    Map.put(
+      bundle,
+      :router_insights,
+      Analytics.decision_insights_from(
+        bundle.router_summary,
+        bundle.router_signals,
+        bundle.router_use_cases
+      )
+    )
+  end
+
+  defp router_filters(params) do
+    %{from: from, to: to} = Periods.period_bounds(params.period, params.timezone)
+    [from: from, to: to]
   end
 
   # drilldown_series_labels se deriva EN MEMORIA de la daily series que ya se
@@ -1018,50 +1082,23 @@ defmodule TokengateWeb.StatsLive do
       :groups ->
         admin? = params.user.global_role == "admin"
 
-        base =
-          [
-            fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end
-          ] ++
-            if admin? do
-              [fn -> {:group_budgets, Budgets.list_group_budgets(params.timezone)} end]
-            else
-              []
-            end
-
-        # Drill-down (?group_id=) shares the template with :group and
-        # needs the group record for the breadcrumb.
         case params.group_filter do
           nil ->
-            base
+            [
+              fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end
+            ] ++
+              if admin? do
+                [fn -> {:group_budgets, Budgets.list_group_budgets(params.timezone)} end]
+              else
+                []
+              end
 
           group_id ->
-            if group_drilldown_allowed?(params.user, group_id) do
-              [fn -> {:group, Accounts.get_group(group_id)} end | base]
-            else
-              base
-            end
+            group_detail_tasks(group_id, params.user, params.timezone, opts)
         end
 
       :group ->
-        group_id = params.group_id
-        allowed? = not is_nil(group_id) and group_drilldown_allowed?(params.user, group_id)
-
-        if allowed? do
-          [
-            fn -> {:group, Accounts.get_group(group_id)} end,
-            fn ->
-              {:group_budget,
-               Budgets.list_group_budgets(params.timezone) |> find_group_budget(group_id)}
-            end,
-            fn -> {:breakdown_member, Rollup.breakdown_by_member(group_id, opts)} end,
-            fn -> {:breakdown_model, Rollup.breakdown_by_model(group_id, opts)} end,
-            # Una sola ejecución: drilldown_series_labels se deriva en memoria
-            # del mismo resultado (la query era idéntica y corría dos veces).
-            fn -> {:drilldown_series, Rollup.daily_series_by_model_for_group(group_id, opts)} end
-          ]
-        else
-          []
-        end
+        group_detail_tasks(params.group_id, params.user, params.timezone, opts)
 
       :users ->
         [
@@ -1110,6 +1147,29 @@ defmodule TokengateWeb.StatsLive do
       fn -> {:breakdown_agent, Rollup.breakdown_by_agent_for_model(model_id, opts)} end,
       fn -> {:drilldown_series, Rollup.daily_series_by_provider_for_model(model_id, opts)} end
     ]
+  end
+
+  # Detalle de un perfil de límites: mismo bundle tanto para la ruta propia
+  # (`/stats/profiles/:id`, action `:group`) como para el alias `?group_id=`
+  # de la pestaña Perfiles de límites.
+  defp group_detail_tasks(nil, _user, _timezone, _opts), do: [fn -> {:group, nil} end]
+
+  defp group_detail_tasks(group_id, user, timezone, opts) do
+    if group_drilldown_allowed?(user, group_id) do
+      [
+        fn -> {:group, Accounts.get_group(group_id)} end,
+        fn ->
+          {:group_budget, Budgets.list_group_budgets(timezone) |> find_group_budget(group_id)}
+        end,
+        fn -> {:breakdown_member, Rollup.breakdown_by_member(group_id, opts)} end,
+        fn -> {:breakdown_model, Rollup.breakdown_by_model(group_id, opts)} end,
+        # Una sola ejecución: drilldown_series_labels se deriva en memoria
+        # del mismo resultado (la query era idéntica y corría dos veces).
+        fn -> {:drilldown_series, Rollup.daily_series_by_model_for_group(group_id, opts)} end
+      ]
+    else
+      [fn -> {:group, nil} end]
+    end
   end
 
   # Perfil horario (gráfica "Uso por hora del día"). Con ventanas de más de un
@@ -1247,7 +1307,15 @@ defmodule TokengateWeb.StatsLive do
       budgets_by_user: %{},
       service_budgets: [],
       group_budgets: [],
-      group_budget: nil
+      group_budget: nil,
+      router_summary: nil,
+      router_use_cases: [],
+      router_model_perf: [],
+      router_vs_direct: [],
+      router_attribution: [],
+      router_signals: nil,
+      router_insights: [],
+      router_sources: []
     }
   end
 

@@ -36,6 +36,14 @@ defmodule Tokengate.Providers.Model do
   # icon of its own (`ModelsLive` is the only reader today).
   @default_icon "hero-cpu-chip"
 
+  # Marcas de fábrica reservadas por el gateway. `"router"` es un **alias
+  # reservado del campo `model`**: `POST /v1/chat/completions` con
+  # `"model": "router"` se intercepta antes de la cascada, así que una fila real
+  # del catálogo con ese nombre taparía el alias. No es un `model_type` ni una
+  # fila en `models`. La comparación es case-insensitive y con `trim`, porque
+  # `" Router "` colisiona igual.
+  @reserved_names ~w(router)
+
   schema "models" do
     field :name, :string
     field :context_window, :integer
@@ -96,6 +104,7 @@ defmodule Tokengate.Providers.Model do
       :market_price_synced_at
     ])
     |> validate_required([:name, :context_window])
+    |> validate_reserved_name()
     |> validate_inclusion(:model_type, @model_types)
     |> validate_inclusion(:effort_default, @effort_levels)
     |> validate_inclusion(:effort_override, @effort_levels)
@@ -132,6 +141,22 @@ defmodule Tokengate.Providers.Model do
   def default_icon, do: @default_icon
 
   @doc """
+  True when `name` is a reserved gateway alias (`"router"`, case-insensitive
+  and trimmed).
+
+  Public because the catalogue admin and the proxy both need the same answer
+  about the same string — a second copy of the rule would drift.
+  """
+  @spec reserved_name?(term()) :: boolean()
+  def reserved_name?(name) when is_binary(name),
+    do: String.downcase(String.trim(name)) in @reserved_names
+
+  def reserved_name?(_), do: false
+
+  @doc "The aliases reserved by the gateway (never a row in `models`)."
+  def reserved_names, do: @reserved_names
+
+  @doc """
   The mark to render next to a model: its lab's mark when the lab is linked and
   known, else the model's own `icon`, else the generic one.
 
@@ -155,6 +180,21 @@ defmodule Tokengate.Providers.Model do
     case Map.get(labs_by_key || %{}, model.lab_key) do
       %Lab{} = lab -> Lab.mark(lab)
       _ -> {:icon, model.icon || @default_icon}
+    end
+  end
+
+  # El alias reservado se rechaza por nombre, sin importar mayúsculas ni
+  # espacios: es la única forma de que ninguna fila del catálogo tape el alias
+  # del router en la cascada.
+  defp validate_reserved_name(changeset) do
+    if reserved_name?(get_field(changeset, :name)) do
+      add_error(
+        changeset,
+        :name,
+        "is reserved by the gateway for the SmartRouter alias and cannot be a model name"
+      )
+    else
+      changeset
     end
   end
 

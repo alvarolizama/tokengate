@@ -30,6 +30,12 @@ defmodule Tokengate.Accounts.Service do
     field :monthly_spend_limit_usd, :decimal
     field :unlimited_spend, :boolean, default: false
 
+    # SmartRouter: flag propio del consumidor machine, independiente del perfil
+    # de límites (un servicio no tiene grupo). Viaja al `%GroupMember{}` virtual
+    # de `ApiAuth.service_to_virtual_member/1` para que
+    # `Accounts.router_enabled?/1` responda igual para usuarios y servicios.
+    field :router_enabled, :boolean, default: false
+
     # N claves activas con etiqueta, igual que un usuario: la asociación
     # canónica es `api_keys`. `has_one :api_key` se conserva porque hay
     # consumidores que resuelven UNA clave (auth del proxy, stats de servicio
@@ -43,7 +49,7 @@ defmodule Tokengate.Accounts.Service do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(name concurrency_limit rpm_limit monthly_spend_limit_usd unlimited_spend)a
+  @permitted ~w(name concurrency_limit rpm_limit monthly_spend_limit_usd unlimited_spend router_enabled)a
   @required ~w(name)a
 
   def changeset(service, attrs) do

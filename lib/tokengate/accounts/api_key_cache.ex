@@ -17,6 +17,12 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   resuelve `propio (usuario) || contenedor (perfil de límites) || default`, así que ambos
   extremos de la regla tienen que estar dentro del entry cacheado.
 
+  Lo mismo vale para el acceso al SmartRouter: `Accounts.router_enabled?/1`
+  resuelve el tri-estado `member.router_enabled || group.router_enabled`, así
+  que la entrada cacheada tiene que llevar el flag del miembro **y** el del
+  perfil. Editar cualquiera de los dos ya invalida por id (ver abajo), igual que
+  el flag propio del servicio en su virtual member.
+
   Caching the limits alongside the member avoids the extra preload/query
   `Accounts.effective_limits/1` performs for service-backed members.
 

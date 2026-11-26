@@ -627,7 +627,12 @@ defmodule Tokengate.Providers do
       {:ok, ma} = ok ->
         Tokengate.Cache.invalidate({:model_id_by_name, model.name})
         Tokengate.Cache.invalidate({:model_id_by_name, ma.name})
+        # The router snapshot embeds model name/type/context/prices and is
+        # cached for a minute: a model edit must not keep routing on the old
+        # row, and the per-id cache S3 reads has to drop with it.
+        Tokengate.Cache.invalidate({:router_model_by_id, model.id})
         Tokengate.Routing.Cache.invalidate_all()
+        Tokengate.SmartRouter.invalidate()
         ok
 
       {:error, changeset} ->
@@ -638,15 +643,28 @@ defmodule Tokengate.Providers do
   def delete_model(%Model{} = model) do
     # request_logs no longer carries an FK on model_id (dropped in
     # 20260901161239 — the SET NULL made model deletion O(referenced logs)
-    # and timed out in production), so there is nothing to declare here:
-    # deletion cannot violate referential integrity and log rows keep the
-    # model id as historical data.
+    # and timed out in production), so log rows keep the model id as
+    # historical data and cannot block the delete.
+    #
+    # The SmartRouter bindings DO restrict: `router_use_case_models.target_model_id`
+    # is `ON DELETE RESTRICT`, because silently emptying a use case is a
+    # routing failure, not a cleanup. Declaring the constraint on a changeset is
+    # what turns that into `{:error, %Ecto.Changeset{}}` (a form error) instead
+    # of an `Ecto.ConstraintError` (a 500). The name is Postgres' default for
+    # the column's FK and is asserted by the migration test.
     model
+    |> Ecto.Changeset.change()
+    |> Ecto.Changeset.foreign_key_constraint(:id,
+      name: :router_use_case_models_target_model_id_fkey,
+      message: "the model is still assigned to a SmartRouter use case"
+    )
     |> Repo.delete()
     |> case do
       {:ok, _ma} = ok ->
         Tokengate.Cache.invalidate({:model_id_by_name, model.name})
+        Tokengate.Cache.invalidate({:router_model_by_id, model.id})
         Tokengate.Routing.Cache.invalidate_all()
+        Tokengate.SmartRouter.invalidate()
         ok
 
       {:error, changeset} ->

@@ -425,6 +425,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
           {"remove_member", %{"id" => "no-es-un-uuid"}},
           {"open_details", %{"id" => "no-es-un-uuid"}},
           {"toggle_extra_model", %{"target-id" => "no-es-un-uuid", "model-id" => model_.id}},
+          {"set_router_access", %{"id" => "no-es-un-uuid", "state" => "allow"}},
           {"remove_member", %{"id" => Ecto.UUID.generate()}}
         ] do
       html = render_hook(view, event, params)
@@ -663,5 +664,74 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     assert has_element?(view, "#members-#{m1.id}")
     refute has_element?(view, "#members-#{m2.id}")
     assert has_element?(view, "#group-config", "$25.00")
+  end
+
+  # --------------------------------------------------------------------------
+  # SmartRouter access — tri-estado heredar/permitir/negar
+  # --------------------------------------------------------------------------
+
+  test "el modal del miembro persiste el tri-estado, audita y refresca el estado efectivo",
+       %{conn: conn} do
+    %{group: group, member: member} = group_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    # El perfil (false por default) se hereda: la fila lo dice y no hay override.
+    assert has_element?(view, "#router-state-#{member.id}", "Heredado")
+
+    view |> element("#details-#{member.id}") |> render_click()
+    assert has_element?(view, "#router-access-#{member.id}")
+    assert has_element?(view, "#router-effective-#{member.id}", "denegado")
+
+    # Permitir: override propio del miembro.
+    view |> element("#router-access-allow-#{member.id}") |> render_click()
+
+    assert Accounts.get_group_member!(member.id).router_enabled == true
+    assert has_element?(view, "#router-effective-#{member.id}", "permitido")
+    assert has_element?(view, "#router-state-#{member.id}", "Permitido")
+
+    assert [allow_audit] =
+             Tokengate.Auditing.list_audit_logs(%{
+               action: "group_member.router_access_change",
+               entity_id: member.id
+             })
+
+    assert allow_audit.changes["router_enabled"] == true
+    assert allow_audit.changes["effective"] == true
+
+    # Negar: el override gana sobre el perfil.
+    view |> element("#router-access-deny-#{member.id}") |> render_click()
+
+    assert Accounts.get_group_member!(member.id).router_enabled == false
+    assert has_element?(view, "#router-effective-#{member.id}", "denegado")
+    assert has_element?(view, "#router-state-#{member.id}", "Denegado")
+
+    # Heredar: vuelve a nil y el efectivo lo decide el perfil.
+    view |> element("#router-access-inherit-#{member.id}") |> render_click()
+
+    assert Accounts.get_group_member!(member.id).router_enabled == nil
+    assert has_element?(view, "#router-effective-#{member.id}", "del perfil de límites")
+    assert has_element?(view, "#router-state-#{member.id}", "Heredado")
+  end
+
+  test "un miembro que hereda sigue al perfil cuando el perfil permite el router", %{conn: conn} do
+    %{group: group, member: member} = group_with_member()
+    {:ok, group} = Accounts.update_group(group, %{router_enabled: true})
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    assert has_element?(view, "#router-state-#{member.id}", "Heredado")
+    assert has_element?(view, "#router-state-#{member.id}", "efectivo: permitido")
+
+    # Negar en el miembro apaga el efectivo aunque el perfil lo permita.
+    render_hook(view, "set_router_access", %{"id" => member.id, "state" => "deny"})
+
+    assert has_element?(view, "#router-state-#{member.id}", "Denegado")
+    assert has_element?(view, "#router-state-#{member.id}", "efectivo: denegado")
+    assert Accounts.get_group_member!(member.id).router_enabled == false
   end
 end

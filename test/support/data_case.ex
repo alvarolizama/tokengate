@@ -67,6 +67,11 @@ defmodule Tokengate.DataCase do
     # other hot-path sets) whose TTL outlives the sandbox rollback: a later
     # test sharing a key would read the previous test's rows.
     Tokengate.Cache.invalidate_all()
+    # SmartRouter pins and classifier answers are VM-global ETS too. A pin left
+    # by a previous test would hijack the next test's decision, and a cached
+    # classifier answer would skip the injected fake classifier.
+    Tokengate.SmartRouter.SessionPin.flush()
+    Tokengate.SmartRouter.DecisionCache.flush()
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Tokengate.Repo, shared: not tags[:async])
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
   end

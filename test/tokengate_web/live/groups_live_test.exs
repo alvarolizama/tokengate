@@ -531,4 +531,111 @@ defmodule TokengateWeb.GroupsLiveTest do
     view |> element("th button[phx-value-field='monthly_cap']") |> render_click()
     assert has_element?(view, "#groups-#{empty_capped.id}")
   end
+
+  # --------------------------------------------------------------------------
+  # SmartRouter access — flag del perfil + baseline de ahorro
+  # --------------------------------------------------------------------------
+
+  test "editar un perfil persiste el acceso al router y su baseline, audita e invalida el caché",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{group: group, model: model} = group_fixture()
+
+    # Miembro con key para comprobar que el toggle llega al caché de auth.
+    %{user: member_user} = register("user")
+    {:ok, member} = Accounts.create_group_member(%{user_id: member_user.id, group_id: group.id})
+    {:ok, _key, token} = Accounts.replace_api_key(member)
+
+    # Entrada cacheada con el flag del perfil apagado.
+    warm = Accounts.resolve_auth_by_api_key(token).member
+    refute Accounts.router_enabled?(warm)
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/budget/profiles")
+
+    refute has_element?(view, "#router-badge-#{group.id}")
+
+    view |> element("#edit-#{group.id}") |> render_click()
+
+    assert has_element?(view, "#group-form input[name='group[router_enabled]']")
+
+    assert has_element?(
+             view,
+             "#group-form select[name='group[router_baseline_model_id]'] option[value='#{model.id}']"
+           )
+
+    view
+    |> form("#group-form", %{
+      group: %{
+        name: group.name,
+        router_enabled: "true",
+        router_baseline_model_id: model.id
+      }
+    })
+    |> render_submit()
+
+    updated = Accounts.get_group!(group.id)
+    assert updated.router_enabled
+    assert updated.router_baseline_model_id == model.id
+
+    # La pastilla aparece en la fila sin recargar la página.
+    assert has_element?(view, "#router-badge-#{group.id}")
+
+    # El caché de auth ya no sirve la entrada vieja (member + group preloaded).
+    assert Accounts.router_enabled?(Accounts.resolve_auth_by_api_key(token).member)
+
+    assert [audit] =
+             Tokengate.Auditing.list_audit_logs(%{action: "group.update", entity_id: group.id})
+
+    assert audit.changes["changes"]["router_enabled"] == "true"
+    assert audit.changes["changes"]["router_baseline_model_id"] == model.id
+  end
+
+  test "quitar el baseline deja el perfil sin modelo base", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{group: group, model: model} = group_fixture()
+
+    {:ok, group} = Accounts.update_group(group, %{router_baseline_model_id: model.id})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/budget/profiles")
+
+    view |> element("#edit-#{group.id}") |> render_click()
+
+    # El select abre con el baseline actual seleccionado.
+    assert has_element?(
+             view,
+             "#group-form select[name='group[router_baseline_model_id]'] option[value='#{model.id}'][selected]"
+           )
+
+    view
+    |> form("#group-form", %{group: %{name: group.name, router_baseline_model_id: ""}})
+    |> render_submit()
+
+    assert Accounts.get_group!(group.id).router_baseline_model_id == nil
+  end
+
+  test "el selector de baseline solo ofrece modelos llm", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{group: group} = group_fixture()
+    u = unique()
+
+    # Un modelo de imagen nunca puede ser el contrafactual de una petición de
+    # chat: su precio no se mide en tokens y la cobertura quedaría vacía.
+    {:ok, image_model} =
+      Providers.create_model(%{
+        name: "image-#{u}",
+        context_window: 0,
+        model_type: "image"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/budget/profiles")
+
+    view |> element("#edit-#{group.id}") |> render_click()
+
+    select = "#group-form select[name='group[router_baseline_model_id]']"
+    assert has_element?(view, select)
+    refute has_element?(view, "#{select} option[value='#{image_model.id}']")
+  end
 end

@@ -360,8 +360,16 @@ defmodule TokengateWeb.Layouts do
 
           <%= if admin?(@current_scope) do %>
             <.nav_group label={gettext("Catalog")} id="sidebar-section-catalogo">
-              <%!-- Modelos primero (el catálogo que administra el gateway),
-                   luego Proveedores (con el badge de alertas) y Labs al final. --%>
+              <%!-- El Router va primero: es la política que decide qué modelo
+                   sirve cada request, antes del catálogo que esa política
+                   consume. Después Modelos, Proveedores (con el badge de
+                   alertas) y Labs al final. --%>
+              <.nav_link
+                label={gettext("Router")}
+                icon="hero-arrows-right-left"
+                path={~p"/catalog/router"}
+                active={active_path?(@current_path, ~p"/catalog/router")}
+              />
               <.nav_link
                 label={gettext("Models")}
                 icon="hero-rectangle-stack"

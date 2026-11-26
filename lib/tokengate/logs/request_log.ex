@@ -83,6 +83,37 @@ defmodule Tokengate.Logs.RequestLog do
     # Conversation-level cache affinity key (client session_id / hashed
     # conversation opening). NULL when no session could be derived.
     field :session_id, :string
+
+    # ---------------------------------------------------------------------
+    # SmartRouter telemetry (S1). `model_id` keeps the model that ACTUALLY
+    # served and `model_requested` keeps the alias the client sent ("router"),
+    # so every existing aggregate stays correct; these columns are the extra
+    # metadata that makes the router auditable.
+    # ---------------------------------------------------------------------
+
+    # Joined the router at all. It is the predicate of the ONLY index this wave
+    # adds (`request_logs_routed_via_router_inserted_at_idx`, partial).
+    field :routed_via_router, :boolean, default: false
+    # Resolved logical model name (the alias only lives in `model_requested`).
+    field :model_resolved, :string
+    field :router_use_case_id, :binary_id
+    field :router_use_case_key, :string
+    field :router_use_case_model_id, :binary_id
+    field :router_effort_tier, :string
+    # session_pin | rule | fast_path | single_candidate | classifier |
+    # fallback_timeout | fallback_error | default
+    field :router_decision_source, :string
+    # Cost/latency of the DECISION step, kept out of `provider_cost_usd`.
+    field :router_decision_ms, :integer
+    field :router_decision_cost_usd, :decimal
+    # Counterfactual frozen at request time with the baseline lane's rates;
+    # NULL when no price could be computed (a saving is never invented).
+    field :router_baseline_model_id, :binary_id
+    field :router_baseline_cost_usd, :decimal
+    # false = the subject spent here only through the router (no direct ACL).
+    field :router_direct_access, :boolean
+    # Prompt tokens the prompt-saving knobs trimmed from this request.
+    field :prompt_tokens_saved_est, :integer
     field :credential_name, :string
     field :client_agent, :string
     field :provider_key_prefix, :string
@@ -115,12 +146,21 @@ defmodule Tokengate.Logs.RequestLog do
       type: :binary_id
   end
 
+  # `session_id` estaba en el schema y el `WriteWorker` ya lo poblaba, pero
+  # faltaba aquí: `cast/3` lo descartaba en silencio en cada INSERT y la
+  # analítica de cambio de sesión nunca pudo leerlo. Entra junto con las
+  # columnas del router (S1) para que el escritor no tenga que conocer una
+  # segunda lista.
   @permitted ~w(group_member_id user_id service_id subject_type provider_id model_provider_id credential_id model_id
     model_requested model_responded agent_type status_code provider_status_code
     error_reason error_message prompt_tokens completion_tokens cache_read_tokens
     cache_creation_tokens provider_cost_usd credit_subscription_id credit_topup_id
     latency_ms ttft_ms streaming cache_hit request_type think effort effort_applied api_key_prefix
-    credential_name client_agent provider_key_prefix api_key_id inserted_at oban_job_id)a
+    credential_name client_agent provider_key_prefix api_key_id session_id inserted_at oban_job_id
+    routed_via_router model_resolved router_use_case_id router_use_case_key
+    router_use_case_model_id router_effort_tier router_decision_source
+    router_decision_ms router_decision_cost_usd router_baseline_model_id
+    router_baseline_cost_usd router_direct_access prompt_tokens_saved_est)a
 
   @required ~w(model_requested inserted_at subject_type)a
 

@@ -15,6 +15,12 @@ defmodule Tokengate.Accounts.GroupMember do
     belongs_to :group, Tokengate.Accounts.Group
     field :status, :string, default: "active"
 
+    # SmartRouter access, tri-estado: nil = hereda el perfil de límites ·
+    # true = fuerza permitir · false = fuerza negar. Nullable a propósito: un
+    # booleano plano obligaría a editar a cada miembro cuando cambia el perfil.
+    # `Accounts.router_enabled?/1` es el único resolutor.
+    field :router_enabled, :boolean
+
     # Virtual field populated only on the service "virtual member" built by
     # `TokengateWeb.Plugs.ApiAuth.service_to_virtual_member/1`. Carries the
     # service name so the proxy can snapshot it into in-flight entries.
@@ -25,7 +31,7 @@ defmodule Tokengate.Accounts.GroupMember do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(user_id group_id status)a
+  @permitted ~w(user_id group_id status router_enabled)a
   @required ~w(user_id group_id)a
 
   def changeset(group_member, attrs) do

@@ -544,7 +544,9 @@ defmodule TokengateWeb.GroupsLive do
               "default_concurrency_limit",
               "default_rpm_limit",
               "monthly_spend_limit_usd",
-              "unlimited_spend"
+              "unlimited_spend",
+              "router_enabled",
+              "router_baseline_model_id"
             ])
         })
 
@@ -738,6 +740,32 @@ defmodule TokengateWeb.GroupsLive do
                 hint={gettext("Only path to unlimited; wins over the limit.")}
               />
             </div>
+            <%!-- SmartRouter del perfil: el default que heredan sus miembros
+                 (el tri-estado del miembro vive en su modal de detalle). --%>
+            <div class="rounded-lg border border-base-300 bg-base-200/40 p-3 mt-4">
+              <p class="text-xs font-medium uppercase tracking-wide text-base-content/50 mb-2">
+                {gettext("SmartRouter access")}
+              </p>
+              <.input
+                field={@form[:router_enabled]}
+                type="checkbox"
+                label={gettext("Allow the SmartRouter for this limit profile")}
+                hint={gettext("Members inherit this value unless their own access overrides it.")}
+              />
+              <.input
+                field={@form[:router_baseline_model_id]}
+                type="select"
+                label={gettext("Savings baseline model")}
+                prompt={gettext("No baseline")}
+                options={
+                  @models_by_org
+                  |> Map.get("all", [])
+                  |> Enum.filter(&(&1.model_type == "llm"))
+                  |> Enum.map(&{&1.name, &1.id})
+                }
+                hint={gettext("Counterfactual model used to measure savings. Optional.")}
+              />
+            </div>
             <div class="flex gap-2 mt-4 justify-end">
               <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
                 {gettext("Cancel")}
@@ -820,6 +848,7 @@ defmodule TokengateWeb.GroupsLive do
                   <.icon name="hero-rectangle-stack" class="w-3 h-3" />
                   {gettext("%{count} models", count: length(Map.get(@granted_models, group.id, [])))}
                 </button>
+                <.router_badge id={"router-badge-#{group.id}"} enabled={group.router_enabled} />
               </div>
             </:col>
             <:col :let={group} label={gettext("Members")} field={:members} align="right">

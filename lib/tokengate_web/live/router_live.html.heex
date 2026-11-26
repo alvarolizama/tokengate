@@ -1,0 +1,1262 @@
+<Layouts.dashboard
+  flash={@flash}
+  current_scope={@current_user}
+  impersonator={@impersonator}
+  current_path={@current_path}
+>
+  <div class="space-y-6">
+    <.header>
+      {gettext("Smart router")}
+      <:subtitle>
+        {gettext(
+          "The policy that decides which model serves each request: use cases, effort tiers, rules and their live behaviour."
+        )}
+      </:subtitle>
+      <:actions>
+        <div class="flex flex-wrap items-center gap-2">
+          <span
+            id="router-switch-state"
+            class={[
+              "badge badge-sm",
+              if(@config.enabled, do: "badge-success", else: "badge-ghost")
+            ]}
+          >
+            {if @config.enabled, do: gettext("Enabled"), else: gettext("Disabled")}
+          </span>
+          <.link navigate={~p"/stats/router"} class="btn btn-sm btn-ghost" id="router-stats-link">
+            <.icon name="hero-chart-bar-square" class="w-4 h-4" /> {gettext("Router stats")}
+          </.link>
+        </div>
+      </:actions>
+    </.header>
+
+    <div class="overflow-x-auto pb-1">
+      <div class="join whitespace-nowrap" id="router-nav" role="tablist">
+        <.link
+          patch={~p"/catalog/router?tab=engine"}
+          id="router-tab-engine"
+          class={[
+            "join-item btn btn-sm",
+            if(@tab == "engine", do: "btn-primary", else: "btn-ghost")
+          ]}
+        >
+          <.icon name="hero-cog-6-tooth" class="w-4 h-4" /> {gettext("Engine")}
+        </.link>
+        <.link
+          patch={~p"/catalog/router?tab=rules"}
+          id="router-tab-rules"
+          class={[
+            "join-item btn btn-sm",
+            if(@tab == "rules", do: "btn-primary", else: "btn-ghost")
+          ]}
+        >
+          <.icon name="hero-funnel" class="w-4 h-4" /> {gettext("Rules")}
+        </.link>
+        <.link
+          patch={~p"/catalog/router?tab=dry_run"}
+          id="router-tab-dry-run"
+          class={[
+            "join-item btn btn-sm",
+            if(@tab == "dry_run", do: "btn-primary", else: "btn-ghost")
+          ]}
+        >
+          <.icon name="hero-beaker" class="w-4 h-4" /> {gettext("Dry run")}
+        </.link>
+        <.link
+          patch={~p"/catalog/router?tab=live"}
+          id="router-tab-live"
+          class={[
+            "join-item btn btn-sm",
+            if(@tab == "live", do: "btn-primary", else: "btn-ghost")
+          ]}
+        >
+          <span class="relative inline-flex w-4 h-4 items-center justify-center">
+            <span class="absolute w-2 h-2 rounded-full bg-success animate-pulse"></span>
+          </span>
+          {gettext("Live")}
+        </.link>
+      </div>
+    </div>
+
+    <%= cond do %>
+      <% @tab == "engine" -> %>
+        <div class="space-y-6">
+          <%!-- Global engine --%>
+          <div class="card bg-base-100 border border-base-300 shadow-sm" id="router-config-card">
+            <div class="card-body">
+              <h2 class="card-title text-base">
+                <.icon name="hero-cog-6-tooth" class="w-5 h-5 text-base-content/60" />
+                {gettext("Global engine")}
+              </h2>
+              <p class="text-xs text-base-content/60">
+                {gettext(
+                  "The kill switch and the bounded costs of a decision. The decision model classifies only when two or more use cases stay viable."
+                )}
+              </p>
+
+              <div
+                :if={@baseline_warning}
+                id="baseline-unpriced-warning"
+                class="alert alert-warning mt-3 text-sm"
+                role="alert"
+              >
+                <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
+                <span>{@baseline_warning}</span>
+              </div>
+
+              <.form
+                for={@config_form}
+                id="router-config-form"
+                phx-submit="save_config"
+                class="mt-4"
+              >
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <.input
+                    field={@config_form[:enabled]}
+                    type="checkbox"
+                    label={gettext("Enabled (kill switch)")}
+                  />
+                  <.input
+                    field={@config_form[:decision_model_id]}
+                    type="select"
+                    label={gettext("Decision model")}
+                    options={@decision_model_options}
+                    prompt={gettext("None (deterministic)")}
+                    hint={gettext("Decision models come first, then the chat models.")}
+                  />
+                  <.input
+                    field={@config_form[:policy]}
+                    type="select"
+                    label={gettext("Policy")}
+                    options={policy_options()}
+                  />
+                  <.input
+                    field={@config_form[:default_model_id]}
+                    type="select"
+                    label={gettext("Default fallback model")}
+                    options={@llm_model_options}
+                    prompt={gettext("No default")}
+                  />
+                  <.input
+                    field={@config_form[:baseline_model_id]}
+                    type="select"
+                    label={gettext("Baseline model (counterfactual)")}
+                    options={@llm_model_options}
+                    prompt={gettext("No baseline")}
+                  />
+                  <.input
+                    field={@config_form[:decision_timeout_ms]}
+                    type="number"
+                    label={gettext("Decision timeout (ms)")}
+                  />
+                  <.input
+                    field={@config_form[:decision_context_chars]}
+                    type="number"
+                    label={gettext("Decision context (chars)")}
+                  />
+                  <.input
+                    field={@config_form[:fast_path_max_tokens]}
+                    type="number"
+                    label={gettext("Fast-path max tokens")}
+                    hint={gettext("0 disables the fast path.")}
+                  />
+                  <.input
+                    field={@config_form[:sticky_ttl_seconds]}
+                    type="number"
+                    label={gettext("Sticky session TTL (s)")}
+                  />
+                  <.input
+                    field={@config_form[:lock_tool_loops]}
+                    type="checkbox"
+                    label={gettext("Lock tool loops to the pinned model")}
+                  />
+                  <.input
+                    field={@config_form[:charge_decision_to_subject]}
+                    type="checkbox"
+                    label={gettext("Charge the decision cost to the subject")}
+                  />
+                </div>
+
+                <div class="mt-4 flex justify-end">
+                  <.button id="save-router-config">
+                    {gettext("Save configuration")}
+                  </.button>
+                </div>
+              </.form>
+            </div>
+          </div>
+
+          <%!-- Use cases --%>
+          <div
+            class="card bg-base-100 border border-base-300 shadow-sm"
+            id="router-use-cases-card"
+          >
+            <div class="card-body">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-rectangle-group" class="w-5 h-5 text-base-content/60" />
+                    {gettext("Use cases")}
+                  </h2>
+                  <p class="text-xs text-base-content/60 mt-1">
+                    {gettext(
+                      "What the work is, never a model. Each use case holds its effort-tiered destinations below."
+                    )}
+                  </p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    phx-click="seed_presets"
+                    id="seed-presets"
+                    class="btn btn-sm btn-ghost"
+                  >
+                    <.icon name="hero-sparkles" class="w-4 h-4" /> {gettext("Check presets")}
+                  </button>
+                  <.button phx-click="new_use_case" id="new-use-case">
+                    <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New use case")}
+                  </.button>
+                </div>
+              </div>
+
+              <div class="mt-3 overflow-x-auto">
+                <.table
+                  id="router-use-cases"
+                  rows={@use_cases}
+                  row_id={&"router-uc-row-#{&1.id}"}
+                  empty_text={gettext("No use cases yet. Check the presets or create one.")}
+                >
+                  <:col :let={use_case} label={gettext("Use case")}>
+                    <div class="min-w-0">
+                      <p class="font-medium truncate">{use_case.name}</p>
+                      <p class="text-xs text-base-content/50 font-mono">{use_case.key}</p>
+                    </div>
+                  </:col>
+                  <:col :let={use_case} label={gettext("Priority")} align="right">
+                    <span class="tabular-nums">{use_case.priority}</span>
+                  </:col>
+                  <:col :let={use_case} label={gettext("Requirements")}>
+                    <div class="flex flex-wrap gap-1">
+                      <span
+                        :for={flag <- use_case_flags(use_case)}
+                        class="badge badge-xs badge-ghost"
+                      >
+                        {flag}
+                      </span>
+                      <span
+                        :if={use_case_flags(use_case) == []}
+                        class="text-xs text-base-content/40"
+                      >
+                        {gettext("none")}
+                      </span>
+                    </div>
+                  </:col>
+                  <:col :let={use_case} label={gettext("Destinations")}>
+                    <button
+                      type="button"
+                      phx-click="toggle_destinations"
+                      phx-value-id={use_case.id}
+                      id={"router-uc-destinations-#{use_case.id}"}
+                      class="btn btn-xs btn-ghost"
+                    >
+                      <.icon name="hero-server-stack" class="w-3.5 h-3.5" />
+                      {length(use_case.use_case_models)}
+                    </button>
+                  </:col>
+                  <:col :let={use_case} label={gettext("State")}>
+                    <span class={[
+                      "badge badge-sm",
+                      if(use_case.enabled, do: "badge-success", else: "badge-ghost")
+                    ]}>
+                      {if use_case.enabled, do: gettext("enabled"), else: gettext("disabled")}
+                    </span>
+                  </:col>
+                  <:action :let={use_case}>
+                    <button
+                      type="button"
+                      phx-click="edit_use_case"
+                      phx-value-id={use_case.id}
+                      id={"edit-use-case-#{use_case.id}"}
+                      class="btn btn-xs btn-ghost"
+                    >
+                      {gettext("Edit")}
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="toggle_use_case"
+                      phx-value-id={use_case.id}
+                      id={"toggle-use-case-#{use_case.id}"}
+                      class="btn btn-xs btn-ghost"
+                    >
+                      {if use_case.enabled, do: gettext("Disable"), else: gettext("Enable")}
+                    </button>
+                  </:action>
+                </.table>
+              </div>
+
+              <%= for use_case <- @use_cases, use_case.id == @expanded_uc do %>
+                <div
+                  class="mt-4 rounded-box border border-base-300 p-4"
+                  id={"router-destinations-#{use_case.id}"}
+                >
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="min-w-0">
+                      <h3 class="font-medium text-sm">
+                        {gettext("Destinations of %{name}", name: use_case.name)}
+                      </h3>
+                      <p class="text-xs text-base-content/50">
+                        {gettext(
+                          "One row per model and effort tier. Capability flags are filters, not wishes: a destination that cannot honour a requirement is discarded before any classifier runs."
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      phx-click="new_destination"
+                      phx-value-use_case_id={use_case.id}
+                      id={"new-destination-#{use_case.id}"}
+                      class="btn btn-xs btn-primary"
+                    >
+                      <.icon name="hero-plus" class="w-3.5 h-3.5" /> {gettext("New destination")}
+                    </button>
+                  </div>
+
+                  <div class="mt-3 overflow-x-auto">
+                    <.table
+                      id={"router-destinations-table-#{use_case.id}"}
+                      rows={use_case.use_case_models}
+                      row_id={&"router-dest-row-#{&1.id}"}
+                      empty_text={
+                        gettext("No destinations yet: this use case cannot win a decision.")
+                      }
+                    >
+                      <:col :let={destination} label={gettext("Model")}>
+                        <span class="text-sm">{destination_label(destination)}</span>
+                      </:col>
+                      <:col :let={destination} label={gettext("Flags")}>
+                        <div class="flex flex-wrap gap-1">
+                          <span
+                            :if={destination.supports_tools}
+                            class="badge badge-xs badge-ghost"
+                          >
+                            {gettext("tools")}
+                          </span>
+                          <span
+                            :if={destination.supports_vision}
+                            class="badge badge-xs badge-ghost"
+                          >
+                            {gettext("vision")}
+                          </span>
+                          <span
+                            :if={destination.supports_structured_output}
+                            class="badge badge-xs badge-ghost"
+                          >
+                            {gettext("structured")}
+                          </span>
+                          <span :if={destination.tags != []} class="badge badge-xs badge-outline">
+                            {Enum.join(destination.tags, ", ")}
+                          </span>
+                        </div>
+                      </:col>
+                      <:col :let={destination} label={gettext("Min. confidence")} align="right">
+                        <span class="tabular-nums text-sm">
+                          {if destination.min_confidence,
+                            do:
+                              destination.min_confidence
+                              |> Decimal.to_string()
+                              |> String.trim_trailing("."),
+                            else: "—"}
+                        </span>
+                      </:col>
+                      <:col :let={destination} label={gettext("State")}>
+                        <span class={[
+                          "badge badge-sm",
+                          if(destination.enabled, do: "badge-success", else: "badge-ghost")
+                        ]}>
+                          {if destination.enabled,
+                            do: gettext("enabled"),
+                            else: gettext("disabled")}
+                        </span>
+                      </:col>
+                      <:action :let={destination}>
+                        <button
+                          type="button"
+                          phx-click="edit_destination"
+                          phx-value-id={destination.id}
+                          id={"edit-destination-#{destination.id}"}
+                          class="btn btn-xs btn-ghost"
+                        >
+                          {gettext("Edit")}
+                        </button>
+                        <button
+                          type="button"
+                          phx-click="toggle_destination"
+                          phx-value-id={destination.id}
+                          id={"toggle-destination-#{destination.id}"}
+                          class="btn btn-xs btn-ghost"
+                        >
+                          {if destination.enabled, do: gettext("Disable"), else: gettext("Enable")}
+                        </button>
+                        <button
+                          type="button"
+                          phx-click="delete_destination"
+                          phx-value-id={destination.id}
+                          id={"delete-destination-#{destination.id}"}
+                          class="btn btn-xs btn-ghost text-error"
+                          data-confirm={gettext("Delete this destination?")}
+                        >
+                          {gettext("Delete")}
+                        </button>
+                      </:action>
+                    </.table>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Use case modal --%>
+        <.modal
+          :if={@uc_open}
+          id="use-case-modal"
+          title={if @uc_editing, do: gettext("Edit use case"), else: gettext("New use case")}
+          on_close="cancel_use_case"
+          max_w="max-w-3xl"
+        >
+          <div :if={@uc_errors != []} id="use-case-errors" class="alert alert-error mb-3 text-sm">
+            <ul class="list-disc list-inside">
+              <li :for={error <- @uc_errors}>{error}</li>
+            </ul>
+          </div>
+
+          <.form for={@uc_form} id="use-case-form" phx-submit="save_use_case">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <.input
+                field={@uc_form[:key]}
+                label={gettext("Key")}
+                hint={gettext("Lowercase slug")}
+              />
+              <.input field={@uc_form[:name]} label={gettext("Name")} />
+              <.input
+                field={@uc_form[:description]}
+                type="textarea"
+                label={gettext("Description")}
+              />
+              <.input
+                field={@uc_form[:tags]}
+                label={gettext("Tags (comma separated)")}
+                hint={gettext("Free-form signals the classifier sees.")}
+              />
+              <.input field={@uc_form[:priority]} type="number" label={gettext("Priority")} />
+              <.input
+                field={@uc_form[:fallback_model_id]}
+                type="select"
+                label={gettext("Fallback model")}
+                options={@llm_model_options}
+                prompt={gettext("Use the global default")}
+              />
+              <.input
+                field={@uc_form[:keep_last_n_images]}
+                type="number"
+                label={gettext("Keep last N images")}
+              />
+              <.input
+                field={@uc_form[:max_history_turns]}
+                type="number"
+                label={gettext("Max history turns")}
+              />
+              <.input
+                field={@uc_form[:stale_tool_trim_threshold_pct]}
+                type="number"
+                label={gettext("Stale tool trim threshold (%)")}
+              />
+            </div>
+
+            <div class="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
+              <.input field={@uc_form[:enabled]} type="checkbox" label={gettext("Enabled")} />
+              <.input
+                field={@uc_form[:requires_tools]}
+                type="checkbox"
+                label={gettext("Requires tools")}
+              />
+              <.input
+                field={@uc_form[:requires_vision]}
+                type="checkbox"
+                label={gettext("Requires vision")}
+              />
+              <.input
+                field={@uc_form[:requires_structured_output]}
+                type="checkbox"
+                label={gettext("Requires structured output")}
+              />
+              <.input
+                field={@uc_form[:critical_accuracy]}
+                type="checkbox"
+                label={gettext("Critical accuracy (potency wins ties)")}
+              />
+              <.input
+                field={@uc_form[:allow_downgrade]}
+                type="checkbox"
+                label={gettext("Allow downgrade mid-task")}
+              />
+              <.input
+                field={@uc_form[:pin_session]}
+                type="checkbox"
+                label={gettext("Pin session to the model that opened it")}
+              />
+              <.input
+                field={@uc_form[:compact_json]}
+                type="checkbox"
+                label={gettext("Compact JSON")}
+              />
+            </div>
+
+            <div class="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                phx-click="cancel_use_case"
+                id="cancel-use-case"
+                class="btn btn-ghost btn-sm"
+              >
+                {gettext("Cancel")}
+              </button>
+              <.button id="save-use-case">{gettext("Save use case")}</.button>
+            </div>
+          </.form>
+        </.modal>
+
+        <%!-- Destination modal --%>
+        <.modal
+          :if={@dest_open}
+          id="destination-modal"
+          title={
+            if @dest_editing, do: gettext("Edit destination"), else: gettext("New destination")
+          }
+          on_close="cancel_destination"
+          max_w="max-w-2xl"
+        >
+          <div
+            :if={@dest_errors != []}
+            id="destination-errors"
+            class="alert alert-error mb-3 text-sm"
+          >
+            <ul class="list-disc list-inside">
+              <li :for={error <- @dest_errors}>{error}</li>
+            </ul>
+          </div>
+
+          <.form for={@dest_form} id="destination-form" phx-submit="save_destination">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <.input
+                field={@dest_form[:target_model_id]}
+                type="select"
+                label={gettext("Model")}
+                options={@llm_model_options}
+                prompt={gettext("Choose a model")}
+              />
+              <.input
+                field={@dest_form[:effort_tier]}
+                type="select"
+                label={gettext("Effort tier")}
+                options={[
+                  {gettext("Low"), "low"},
+                  {gettext("Medium"), "medium"},
+                  {gettext("High"), "high"},
+                  {gettext("Any tier"), "any"}
+                ]}
+              />
+              <.input
+                field={@dest_form[:effort_override]}
+                type="select"
+                label={gettext("Effort override")}
+                options={[
+                  {gettext("Send as-is"), ""},
+                  {gettext("Low"), "low"},
+                  {gettext("Medium"), "medium"},
+                  {gettext("High"), "high"}
+                ]}
+              />
+              <.input
+                field={@dest_form[:min_confidence]}
+                type="number"
+                step="0.01"
+                label={gettext("Min. confidence (0–1)")}
+              />
+              <.input field={@dest_form[:priority]} type="number" label={gettext("Priority")} />
+              <.input field={@dest_form[:tags]} label={gettext("Tags (comma separated)")} />
+              <.input
+                field={@dest_form[:flags_json]}
+                type="textarea"
+                label={gettext("Flags (JSON)")}
+                hint={gettext("Optional operator metadata, e.g. {\"tier\": \"premium\"}.")}
+              />
+            </div>
+
+            <div class="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
+              <.input field={@dest_form[:enabled]} type="checkbox" label={gettext("Enabled")} />
+              <.input
+                field={@dest_form[:supports_tools]}
+                type="checkbox"
+                label={gettext("Supports tools")}
+              />
+              <.input
+                field={@dest_form[:supports_vision]}
+                type="checkbox"
+                label={gettext("Supports vision")}
+              />
+              <.input
+                field={@dest_form[:supports_structured_output]}
+                type="checkbox"
+                label={gettext("Supports structured output")}
+              />
+            </div>
+
+            <div class="mt-4 flex justify-end gap-2">
+              <button type="button" phx-click="cancel_destination" class="btn btn-ghost btn-sm">
+                {gettext("Cancel")}
+              </button>
+              <.button id="save-destination">{gettext("Save destination")}</.button>
+            </div>
+          </.form>
+        </.modal>
+      <% @tab == "rules" -> %>
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="router-rules-card">
+          <div class="card-body">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0">
+                <h2 class="card-title text-base">
+                  <.icon name="hero-funnel" class="w-5 h-5 text-base-content/60" />
+                  {gettext("Rules")}
+                </h2>
+                <p class="text-xs text-base-content/60 mt-1">
+                  {gettext(
+                    "The deterministic layer: evaluated in priority order (lowest first), before any classifier and at zero cost. The first matching force wins; restrictions accumulate."
+                  )}
+                </p>
+              </div>
+              <.button phx-click="new_rule" id="new-rule">
+                <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New rule")}
+              </.button>
+            </div>
+
+            <div class="mt-3 overflow-x-auto">
+              <.table
+                id="router-rules"
+                rows={@rules}
+                row_id={&"router-rule-row-#{&1.id}"}
+                empty_text={gettext("No rules yet: every decision goes through the classifier.")}
+              >
+                <:col :let={rule} label={gettext("Priority")} align="right">
+                  <span class="tabular-nums">{rule.priority}</span>
+                </:col>
+                <:col :let={rule} label={gettext("Rule")}>
+                  <div class="min-w-0">
+                    <p class="font-medium truncate">{rule.name}</p>
+                    <p :if={rule.description} class="text-xs text-base-content/50 truncate">
+                      {rule.description}
+                    </p>
+                  </div>
+                </:col>
+                <:col :let={rule} label={gettext("Action")}>
+                  <span class="badge badge-sm badge-outline">{rule.action}</span>
+                  <span class="ml-1 text-xs font-mono">{Enum.join(rule.target_use_case_keys, ", ")}</span>
+                </:col>
+                <:col :let={rule} label={gettext("Conditions")}>
+                  <span class="text-xs font-mono text-base-content/70">
+                    {if rule.match_conditions == %{},
+                      do: gettext("any request"),
+                      else: rule_conditions_summary(rule)}
+                  </span>
+                </:col>
+                <:col :let={rule} label={gettext("State")}>
+                  <span class={[
+                    "badge badge-sm",
+                    if(rule.enabled, do: "badge-success", else: "badge-ghost")
+                  ]}>
+                    {if rule.enabled, do: gettext("enabled"), else: gettext("disabled")}
+                  </span>
+                </:col>
+                <:action :let={rule}>
+                  <button
+                    type="button"
+                    phx-click="edit_rule"
+                    phx-value-id={rule.id}
+                    id={"edit-rule-#{rule.id}"}
+                    class="btn btn-xs btn-ghost"
+                  >
+                    {gettext("Edit")}
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="toggle_rule"
+                    phx-value-id={rule.id}
+                    id={"toggle-rule-#{rule.id}"}
+                    class="btn btn-xs btn-ghost"
+                  >
+                    {if rule.enabled, do: gettext("Disable"), else: gettext("Enable")}
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="delete_rule"
+                    phx-value-id={rule.id}
+                    id={"delete-rule-#{rule.id}"}
+                    class="btn btn-xs btn-ghost text-error"
+                    data-confirm={gettext("Delete this rule?")}
+                  >
+                    {gettext("Delete")}
+                  </button>
+                </:action>
+              </.table>
+            </div>
+          </div>
+        </div>
+
+        <.modal
+          :if={@rule_open}
+          id="rule-modal"
+          title={if @rule_editing, do: gettext("Edit rule"), else: gettext("New rule")}
+          on_close="cancel_rule"
+          max_w="max-w-3xl"
+        >
+          <div :if={@rule_errors != []} id="rule-errors" class="alert alert-error mb-3 text-sm">
+            <ul class="list-disc list-inside">
+              <li :for={error <- @rule_errors}>{error}</li>
+            </ul>
+          </div>
+
+          <.form for={@rule_form} id="rule-form" phx-submit="save_rule">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <.input field={@rule_form[:name]} label={gettext("Name")} />
+              <.input
+                field={@rule_form[:description]}
+                type="textarea"
+                label={gettext("Description")}
+              />
+              <.input field={@rule_form[:priority]} type="number" label={gettext("Priority")} />
+              <.input
+                field={@rule_form[:action]}
+                type="select"
+                label={gettext("Action")}
+                options={[
+                  {gettext("Force one use case"), "force_use_case"},
+                  {gettext("Restrict to use cases"), "restrict_use_cases"}
+                ]}
+              />
+              <.input
+                field={@rule_form[:target_use_case_keys]}
+                label={gettext("Target use cases (comma separated keys)")}
+                hint={gettext("force_use_case takes exactly one key.")}
+              />
+            </div>
+
+            <h3 class="mt-3 text-sm font-medium">{gettext("Conditions")}</h3>
+            <p class="text-xs text-base-content/50">
+              {gettext(
+                "Empty fields are ignored: a rule with no condition matches every request."
+              )}
+            </p>
+
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <.input
+                field={@rule_form[:min_tokens]}
+                type="number"
+                label={gettext("Min. tokens")}
+              />
+              <.input
+                field={@rule_form[:max_tokens]}
+                type="number"
+                label={gettext("Max. tokens")}
+              />
+              <.input
+                field={@rule_form[:reasoning_effort]}
+                type="select"
+                label={gettext("Reasoning effort")}
+                options={[
+                  {gettext("Any"), ""},
+                  {gettext("Low"), "low"},
+                  {gettext("Medium"), "medium"},
+                  {gettext("High"), "high"}
+                ]}
+              />
+              <.input
+                field={@rule_form[:has_tools]}
+                type="select"
+                label={gettext("Has tools")}
+                options={[
+                  {gettext("Any"), ""},
+                  {gettext("Yes"), "true"},
+                  {gettext("No"), "false"}
+                ]}
+              />
+              <.input
+                field={@rule_form[:has_vision]}
+                type="select"
+                label={gettext("Has vision")}
+                options={[
+                  {gettext("Any"), ""},
+                  {gettext("Yes"), "true"},
+                  {gettext("No"), "false"}
+                ]}
+              />
+              <.input
+                field={@rule_form[:has_structured_output]}
+                type="select"
+                label={gettext("Has structured output")}
+                options={[
+                  {gettext("Any"), ""},
+                  {gettext("Yes"), "true"},
+                  {gettext("No"), "false"}
+                ]}
+              />
+              <.input
+                field={@rule_form[:agent_types]}
+                label={gettext("Agent types (comma separated)")}
+              />
+              <.input field={@rule_form[:group_ids]} label={gettext("Limit profile ids")} />
+              <.input field={@rule_form[:service_ids]} label={gettext("Service ids")} />
+              <.input field={@rule_form[:content_regex]} label={gettext("Content regex")} />
+              <.input field={@rule_form[:enabled]} type="checkbox" label={gettext("Enabled")} />
+            </div>
+
+            <div class="mt-4 flex justify-end gap-2">
+              <button type="button" phx-click="cancel_rule" class="btn btn-ghost btn-sm">
+                {gettext("Cancel")}
+              </button>
+              <.button id="save-rule">{gettext("Save rule")}</.button>
+            </div>
+          </.form>
+        </.modal>
+      <% @tab == "dry_run" -> %>
+        <div class="space-y-6">
+          <div class="card bg-base-100 border border-base-300 shadow-sm" id="dry-run-form-card">
+            <div class="card-body">
+              <h2 class="card-title text-base">
+                <.icon name="hero-beaker" class="w-5 h-5 text-base-content/60" />
+                {gettext("Dry run")}
+              </h2>
+              <p class="text-xs text-base-content/60">
+                {gettext(
+                  "Runs the real decision over a synthetic payload: zero target tokens, zero budget debited, no session pin written."
+                )}
+              </p>
+
+              <.form for={@dry_form} id="dry-run-form" phx-submit="run_dry_run" class="mt-3">
+                <.input
+                  field={@dry_form[:prompt]}
+                  type="textarea"
+                  label={gettext("Prompt")}
+                  rows="4"
+                  placeholder={gettext("Paste the user message you want to test…")}
+                />
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <.input
+                    field={@dry_form[:effort]}
+                    type="select"
+                    label={gettext("Reasoning effort")}
+                    options={effort_options()}
+                  />
+                  <.input
+                    field={@dry_form[:max_tokens]}
+                    type="number"
+                    label={gettext("Max. tokens")}
+                  />
+                  <.input
+                    field={@dry_form[:has_tools]}
+                    type="checkbox"
+                    label={gettext("Declares tools")}
+                  />
+                  <.input
+                    field={@dry_form[:has_vision]}
+                    type="checkbox"
+                    label={gettext("Has an image")}
+                  />
+                  <.input
+                    field={@dry_form[:structured]}
+                    type="checkbox"
+                    label={gettext("Structured output")}
+                  />
+                </div>
+                <div class="mt-3 flex justify-end">
+                  <.button id="run-dry-run">
+                    <.icon name="hero-play" class="w-4 h-4" /> {gettext("Run dry run")}
+                  </.button>
+                </div>
+              </.form>
+            </div>
+          </div>
+
+          <div
+            :if={@dry_error}
+            id="dry-run-error"
+            class="alert alert-error text-sm"
+            role="alert"
+          >
+            <.icon name="hero-x-circle" class="w-5 h-5 shrink-0" />
+            <span>{@dry_error}</span>
+          </div>
+
+          <%= if @dry_result do %>
+            <div class="space-y-6" id="dry-run-result">
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="min-w-0">
+                      <h2 class="card-title text-base" id="dry-run-use-case">
+                        {gettext("Use case: %{name}", name: @dry_result.use_case.name)}
+                      </h2>
+                      <p class="text-xs text-base-content/50 font-mono">
+                        {@dry_result.use_case.key}
+                      </p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="badge badge-sm badge-primary" id="dry-run-source">
+                        {source_label(@dry_result.decision_meta.source)}
+                      </span>
+                      <span class="badge badge-sm badge-outline" id="dry-run-tier">
+                        {gettext("Tier: %{tier}",
+                          tier: @dry_result.primary.effort_tier || gettext("any")
+                        )}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2" id="dry-run-primary">
+                    <div class="rounded-box border border-base-300 p-3">
+                      <p class="text-xs text-base-content/50">{gettext("Winning model")}</p>
+                      <p class="font-semibold">{@dry_result.primary.model_name}</p>
+                      <p class="text-xs text-base-content/60">
+                        {gettext("Effort")}: {@dry_result.primary.effort || "—"} · {gettext(
+                          "Estimated cost"
+                        )}: {money(@dry_result.primary.cost_usd)}
+                      </p>
+                    </div>
+                    <div class="rounded-box border border-base-300 p-3" id="dry-run-classifier">
+                      <p class="text-xs text-base-content/50">{gettext("Classifier")}</p>
+                      <p class="text-sm">
+                        {classifier_trace(@dry_result.decision_meta, @config)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div class="mt-4">
+                    <h3 class="text-sm font-medium mb-2">{gettext("Trace")}</h3>
+                    <div
+                      class="overflow-x-auto rounded-box border border-base-300"
+                      id="dry-run-trace"
+                    >
+                      <table class="table table-sm">
+                        <tbody>
+                          <tr :for={{label, detail} <- @dry_trace}>
+                            <th class="w-40 align-top text-xs text-base-content/60">{label}</th>
+                            <td class="text-sm">{detail}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div class="mt-4 flex flex-wrap gap-2" id="dry-run-prompt-policy">
+                    <span class="text-xs text-base-content/50 w-full">
+                      {gettext("Prompt-saving transforms that would apply")}
+                    </span>
+                    <span class="badge badge-sm badge-ghost">
+                      {gettext("keep last images: %{n}",
+                        n: @dry_result.prompt_policy.keep_last_n_images || gettext("default")
+                      )}
+                    </span>
+                    <span class="badge badge-sm badge-ghost">
+                      {gettext("max history turns: %{n}",
+                        n: @dry_result.prompt_policy.max_history_turns || gettext("default")
+                      )}
+                    </span>
+                    <span class="badge badge-sm badge-ghost">
+                      {gettext("compact JSON: %{value}",
+                        value:
+                          if(@dry_result.prompt_policy.compact_json,
+                            do: gettext("yes"),
+                            else: gettext("no")
+                          )
+                      )}
+                    </span>
+                    <span class="badge badge-sm badge-ghost">
+                      {gettext("stale tool trim: %{n}%",
+                        n:
+                          @dry_result.prompt_policy.stale_tool_trim_threshold_pct ||
+                            gettext("default")
+                      )}
+                    </span>
+                  </div>
+
+                  <div class="mt-4" id="dry-run-fallbacks">
+                    <h3 class="text-sm font-medium mb-2">{gettext("Fallback chain")}</h3>
+                    <p :if={@dry_result.fallbacks == []} class="text-sm text-base-content/50">
+                      {gettext("No fallback: a session pin or a single candidate answered.")}
+                    </p>
+                    <ol :if={@dry_result.fallbacks != []} class="list-decimal list-inside text-sm">
+                      <li :for={fallback <- @dry_result.fallbacks}>
+                        {fallback.model_name} · {fallback.effort_tier} · {money(fallback.cost_usd)}
+                      </li>
+                    </ol>
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body">
+                    <h2 class="card-title text-base">{gettext("Eligible destinations")}</h2>
+                    <div class="overflow-x-auto">
+                      <table class="table table-sm" id="dry-run-eligible">
+                        <thead>
+                          <tr>
+                            <th>{gettext("Use case")}</th>
+                            <th>{gettext("Model")}</th>
+                            <th>{gettext("Tier")}</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr :for={row <- @dry_audit.eligible}>
+                            <td class="font-mono text-xs">{row.use_case_key}</td>
+                            <td>{row.model_name}</td>
+                            <td>{row.tier}</td>
+                            <td>
+                              <span :if={row.selected} class="badge badge-xs badge-primary">
+                                {gettext("winner")}
+                              </span>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body">
+                    <h2 class="card-title text-base">{gettext("Discarded candidates")}</h2>
+                    <div class="overflow-x-auto">
+                      <table class="table table-sm" id="dry-run-discarded">
+                        <thead>
+                          <tr>
+                            <th>{gettext("Use case")}</th>
+                            <th>{gettext("Model")}</th>
+                            <th>{gettext("Reason")}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr :for={row <- @dry_audit.discarded}>
+                            <td class="font-mono text-xs">{row.use_case_key}</td>
+                            <td>{row.model_name}</td>
+                            <td class="text-xs text-base-content/60">{row.reason}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p :if={@dry_audit.discarded == []} class="text-sm text-base-content/50">
+                      {gettext("Nothing was discarded by the pre-filters.")}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      <% true -> %>
+        <div class="space-y-6">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <p class="text-sm text-base-content/60">
+              {gettext(
+                "Real-time feed driven by PubSub (in-flight registry + completed request logs). No polling."
+              )}
+            </p>
+            <.link
+              navigate={~p"/stats/router"}
+              class="btn btn-sm btn-ghost"
+              id="router-live-stats-link"
+            >
+              <.icon name="hero-chart-bar-square" class="w-4 h-4" /> {gettext("Business view")}
+            </.link>
+          </div>
+
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" id="router-pulse">
+            <div class="stat rounded-box border border-base-300 bg-base-100 p-4">
+              <p class="text-xs text-base-content/50">{gettext("Router req/min (5 min)")}</p>
+              <p class="text-2xl font-semibold tabular-nums">{@pulse.per_minute}</p>
+            </div>
+            <div class="stat rounded-box border border-base-300 bg-base-100 p-4">
+              <p class="text-xs text-base-content/50">{gettext("Avg tok/s")}</p>
+              <p class="text-2xl font-semibold tabular-nums">{format_tps(@pulse.avg_tps)}</p>
+            </div>
+            <div class="stat rounded-box border border-base-300 bg-base-100 p-4">
+              <p class="text-xs text-base-content/50">{gettext("Fallbacks")}</p>
+              <p class="text-2xl font-semibold tabular-nums">{@pulse.fallbacks}</p>
+            </div>
+            <div class="stat rounded-box border border-base-300 bg-base-100 p-4">
+              <p class="text-xs text-base-content/50">{gettext("Errors")}</p>
+              <p class={[
+                "text-2xl font-semibold tabular-nums",
+                @pulse.errors > 0 && "text-error"
+              ]}>
+                {@pulse.errors}
+              </p>
+            </div>
+          </div>
+
+          <div class="card bg-base-100 border border-base-300 shadow-sm" id="router-inflight">
+            <div class="card-body">
+              <h2 class="card-title text-base">
+                <.icon name="hero-bolt" class="w-5 h-5 text-base-content/60" />
+                {gettext("In flight")}
+                <span class="badge badge-sm badge-ghost">{length(@inflight)}</span>
+              </h2>
+
+              <p :if={@inflight == []} class="text-sm text-base-content/50 py-3">
+                {gettext("No requests in flight right now.")}
+              </p>
+
+              <div :if={@inflight != []} class="divide-y divide-base-200">
+                <div
+                  :for={entry <- @inflight}
+                  id={"router-inflight-#{entry.id}"}
+                  class="flex flex-wrap items-center gap-3 py-2 text-sm"
+                >
+                  <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                  </span>
+                  <span class="font-medium">
+                    {Map.get(entry, :service_name) || Map.get(entry, :user_email) || "—"}
+                  </span>
+                  <span
+                    class="text-base-content/60"
+                    id={"router-inflight-model-#{entry.id}"}
+                  >
+                    {Map.get(entry, :model_resolved) || Map.get(entry, :model_requested) || "—"}
+                  </span>
+                  <span class="text-xs text-base-content/50">
+                    {Map.get(entry, :provider_name) || "—"}
+                  </span>
+                  <span
+                    :if={Map.get(entry, :router_use_case_key)}
+                    class="badge badge-xs badge-outline"
+                  >
+                    {Map.get(entry, :router_use_case_key)}
+                  </span>
+                  <span
+                    :if={Map.get(entry, :router_effort_tier)}
+                    class="badge badge-xs badge-ghost"
+                    id={"router-inflight-tier-#{entry.id}"}
+                  >
+                    {Map.get(entry, :router_effort_tier)}
+                  </span>
+                  <span
+                    :if={Map.get(entry, :router_decision_source)}
+                    class="badge badge-xs badge-ghost"
+                    id={"router-inflight-source-#{entry.id}"}
+                  >
+                    {Map.get(entry, :router_decision_source)}
+                  </span>
+                  <span :if={Map.get(entry, :effort)} class="badge badge-xs badge-ghost">
+                    {Map.get(entry, :effort)}
+                  </span>
+                  <span class="ml-auto text-xs text-base-content/40 tabular-nums">
+                    {gettext("%{seconds}s", seconds: seconds_ago(Map.get(entry, :started_at)))}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card bg-base-100 border border-base-300 shadow-sm" id="router-events-card">
+            <div class="card-body">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <h2 class="card-title text-base">
+                  <.icon name="hero-arrow-path" class="w-5 h-5 text-base-content/60" />
+                  {gettext("Completed routed requests")}
+                </h2>
+                <span class="text-xs text-base-content/50">
+                  {gettext("Newest first · bounded to %{limit} rows", limit: 100)}
+                </span>
+              </div>
+
+              <p :if={@router_events_count == 0} class="text-sm text-base-content/50 py-4">
+                {gettext("Waiting for the next routed request…")}
+              </p>
+
+              <div class="overflow-x-auto">
+                <table class="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>{gettext("Subject")}</th>
+                      <th>{gettext("Use case")}</th>
+                      <th>{gettext("Model")}</th>
+                      <th class="text-right">{gettext("Tokens")}</th>
+                      <th class="text-right">{gettext("tok/s")}</th>
+                      <th class="text-right">{gettext("Latency / TTFT")}</th>
+                      <th class="text-right">{gettext("Cost vs baseline")}</th>
+                    </tr>
+                  </thead>
+                  <tbody id="router-events" phx-update="stream">
+                    <tr :for={{dom_id, log} <- @streams.router_events} id={dom_id}>
+                      <td>
+                        <div class="min-w-0">
+                          <p class="text-sm font-medium truncate">{subject_label(log)}</p>
+                          <p :if={group_label(log)} class="text-xs text-base-content/50">
+                            {group_label(log)}
+                          </p>
+                        </div>
+                      </td>
+                      <td>
+                        <p class="text-sm font-mono">
+                          {Map.get(log, :router_use_case_key) || "—"}
+                        </p>
+                        <p class="text-xs text-base-content/50">
+                          {Map.get(log, :router_effort_tier) || "—"} · {Map.get(
+                            log,
+                            :router_decision_source
+                          ) || "—"}
+                        </p>
+                      </td>
+                      <td>
+                        <p class="text-sm">
+                          {Map.get(log, :model_resolved) || Map.get(log, :model_requested) || "—"}
+                        </p>
+                        <div class="flex flex-wrap items-center gap-1">
+                          <span class="text-xs text-base-content/50">{provider_label(log) || "—"}</span>
+                          <span
+                            :if={Map.get(log, :router_direct_access) == false}
+                            id={"router-live-no-direct-#{Map.get(log, :id)}"}
+                            class="badge badge-xs badge-warning"
+                          >
+                            {gettext("no direct access")}
+                          </span>
+                        </div>
+                      </td>
+                      <td class="text-right tabular-nums text-sm">
+                        {format_number(
+                          (Map.get(log, :prompt_tokens) || 0) +
+                            (Map.get(log, :completion_tokens) || 0)
+                        )}
+                      </td>
+                      <td class="text-right tabular-nums text-sm">{format_tps(log_tps(log))}</td>
+                      <td class="text-right tabular-nums text-xs">
+                        {format_ms(Map.get(log, :latency_ms))} / {format_ms(
+                          Map.get(log, :ttft_ms)
+                        )}
+                      </td>
+                      <td class="text-right tabular-nums text-sm">
+                        <p>{money(request_cost(log))}</p>
+                        <p class="text-xs text-base-content/50">{cost_vs_baseline(log)}</p>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+    <% end %>
+  </div>
+</Layouts.dashboard>

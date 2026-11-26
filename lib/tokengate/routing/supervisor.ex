@@ -14,6 +14,12 @@ defmodule Tokengate.Routing.Supervisor do
       for per-credential circuit breakers.
     * `Tokengate.Routing.CircuitBreakerManager` – DynamicSupervisor that
       lazily starts one `Tokengate.Routing.CircuitBreaker` per credential.
+    * `Tokengate.SmartRouter.SessionPin` – ETS pin
+      `{subject_id, session_key} -> destination` (Layer 0).
+    * `Tokengate.SmartRouter.DecisionCache` – short-lived ETS cache of
+      classifier answers.
+    * `Tokengate.Routing.DecisionTaskSupervisor` – isolated, timeout-bounded
+      `Task.Supervisor` for the on-demand classifier call.
   """
 
   use Supervisor
@@ -32,6 +38,9 @@ defmodule Tokengate.Routing.Supervisor do
       {Tokengate.Routing.PoolCounters, name: Tokengate.Routing.PoolCounters},
       {Registry, keys: :unique, name: Tokengate.Routing.CircuitBreakerRegistry},
       Tokengate.Routing.CircuitBreakerManager,
+      {Tokengate.SmartRouter.SessionPin, name: Tokengate.SmartRouter.SessionPin},
+      {Tokengate.SmartRouter.DecisionCache, name: Tokengate.SmartRouter.DecisionCache},
+      {Task.Supervisor, name: Tokengate.Routing.DecisionTaskSupervisor},
       {Task.Supervisor, name: Tokengate.Routing.RecoveryTaskSupervisor},
       Tokengate.Routing.RecoveryProber
     ]

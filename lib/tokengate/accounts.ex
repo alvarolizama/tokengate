@@ -1814,7 +1814,7 @@ defmodule Tokengate.Accounts do
   # Columns the admin services table reads. Explicit so a page load never drags
   # associations or columns the table does not render into the socket.
   @service_page_fields ~w(id name concurrency_limit rpm_limit monthly_spend_limit_usd
-    unlimited_spend inserted_at updated_at)a
+    unlimited_spend router_enabled inserted_at updated_at)a
 
   @service_page_default_per_page 30
   @service_page_max_per_page 100
@@ -2476,6 +2476,62 @@ defmodule Tokengate.Accounts do
       rpm_limit: resolve_limit(service.rpm_limit, nil, :rpm_limit)
     }
   end
+
+  # ---------------------------------------------------------------------------
+  # SmartRouter access
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  SmartRouter access for an auth subject — the single place the tri-state is
+  resolved.
+
+  `member.router_enabled` wins when set (`true` allows · `false` denies);
+  `nil` inherits `group.router_enabled`. A service's virtual member carries
+  `group: nil` and its own flag copied from the `%Service{}`, so the same
+  predicate answers for users and machine consumers.
+
+  The flag defaults to deny: a subject with no resolvable end (no loaded
+  profile and no own flag) is answered `false`, so the router is never opened by
+  omission. A member whose profile was not preloaded is loaded here instead of
+  being silently denied.
+
+  Edits to any of the three flags invalidate `ApiKeyCache` (`update_group/2`,
+  `update_group_member/2` and `update_service/2` already pipe into the
+  invalidation helpers), so the resolved value is immediate across nodes.
+  """
+  @spec router_enabled?(GroupMember.t() | Service.t() | Group.t() | nil) :: boolean()
+  def router_enabled?(%GroupMember{router_enabled: flag}) when is_boolean(flag), do: flag
+
+  def router_enabled?(%GroupMember{group: %Group{router_enabled: flag}}), do: flag == true
+
+  def router_enabled?(%GroupMember{group: %Ecto.Association.NotLoaded{}} = member),
+    do: router_enabled?(Repo.preload(member, :group))
+
+  def router_enabled?(%Service{router_enabled: flag}), do: flag == true
+
+  def router_enabled?(%Group{router_enabled: flag}), do: flag == true
+
+  def router_enabled?(_), do: false
+
+  @doc """
+  The subject's savings baseline — `groups.router_baseline_model_id`.
+
+  `nil` for services (they own no profile) and for a profile that has not
+  picked one: the router then falls back to `router_configs.baseline_model_id`,
+  and when neither exists no saving percentage is reported (a baseline is never
+  invented).
+  """
+  @spec router_baseline_model_id(GroupMember.t() | Group.t() | Service.t() | nil) ::
+          binary() | nil
+  def router_baseline_model_id(%Group{router_baseline_model_id: id}), do: id
+
+  def router_baseline_model_id(%GroupMember{group: %Group{router_baseline_model_id: id}}),
+    do: id
+
+  def router_baseline_model_id(%GroupMember{group: %Ecto.Association.NotLoaded{}} = member),
+    do: router_baseline_model_id(Repo.preload(member, :group))
+
+  def router_baseline_model_id(_), do: nil
 
   # La regla única: propio, si no contenedor, si no default del módulo.
   defp resolve_limit(own, _container, _key) when is_integer(own), do: own

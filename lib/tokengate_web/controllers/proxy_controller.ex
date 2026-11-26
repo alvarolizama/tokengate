@@ -62,12 +62,14 @@ defmodule TokengateWeb.ProxyController do
   require Logger
 
   alias Tokengate.Budgets.Manager, as: Budgets
+  alias Tokengate.Accounts
   alias Tokengate.Accounts.GroupMember
   alias Tokengate.Limits.Manager, as: Limits
   alias Tokengate.Logs.WriteWorker
   alias Tokengate.Metrics.Collector
   alias Tokengate.Providers
   alias Tokengate.Providers.{Credential, Provider, ProviderLimits}
+  alias Tokengate.SmartRouter
 
   alias Tokengate.Proxy.{
     AudioMultipart,
@@ -168,34 +170,40 @@ defmodule TokengateWeb.ProxyController do
     Process.delete(:tg_deferred_fallback_logs)
     Process.delete(:tg_upstream_retry_after_ms)
     Process.delete(:tg_inflight_id)
+    Process.delete(:tg_router)
+    Process.delete(:tg_router_decision_logged)
 
     with :ok <- require_model(model),
          :ok <- acquire_group_limits(key_id, limits) do
       try do
-        case route_and_acquire(member, payload, affinity_key, limits) do
-          {:ok, route, hold} ->
-            inflight = register_inflight(conn, member, payload, route)
-            Process.put(:tg_inflight_id, inflight.id)
+        if model == "router" do
+          execute_router_chat(conn, member, payload, limits, request_start)
+        else
+          case route_and_acquire(member, payload, affinity_key, limits) do
+            {:ok, route, hold} ->
+              inflight = register_inflight(conn, member, payload, route)
+              Process.put(:tg_inflight_id, inflight.id)
 
-            try do
-              if payload["stream"] == true do
-                execute_stream(conn, route, payload, member, @max_attempts, [])
-              else
-                execute(conn, route, payload, member, @max_attempts, [])
+              try do
+                if payload["stream"] == true do
+                  execute_stream(conn, route, payload, member, @max_attempts, [])
+                else
+                  execute(conn, route, payload, member, @max_attempts, [])
+                end
+              after
+                settle_budget(member, hold)
+                Tokengate.Logs.Inflight.finish_request(inflight.id)
+                release_active_probe()
+                release_active_credential_limits()
+                flush_deferred_fallback_logs(conn, member)
+                Process.delete(:tg_inflight_id)
               end
-            after
-              settle_budget(member, hold)
-              Tokengate.Logs.Inflight.finish_request(inflight.id)
-              release_active_probe()
-              release_active_credential_limits()
-              flush_deferred_fallback_logs(conn, member)
-              Process.delete(:tg_inflight_id)
-            end
 
-          {:error, error} ->
-            log_and_render_gate_error(conn, member, model, error,
-              latency_ms: elapsed(request_start)
-            )
+            {:error, error} ->
+              log_and_render_gate_error(conn, member, model, error,
+                latency_ms: elapsed(request_start)
+              )
+          end
         end
       after
         Limits.release(key_id)
@@ -204,6 +212,494 @@ defmodule TokengateWeb.ProxyController do
       {:error, error} ->
         log_and_render_gate_error(conn, member, model, error, latency_ms: elapsed(request_start))
     end
+  end
+
+  ## SmartRouter chat path #####################################################
+  #
+  # `"model": "router"` is a reserved alias, not a `models` row: the decision
+  # engine resolves it to a concrete model and every step below reuses the
+  # ordinary chat pipeline (streaming, ResponseCache, fallback matrix, cost
+  # accounting). The only thing the router adds is WHERE the route comes from.
+
+  @router_alias "router"
+  # Cascade cap for the router's destination walk (same bound the direct
+  # route/acquire loop uses).
+  @max_route_retries 20
+  # Chat is served by `llm` models; `decision` stays accepted exactly like the
+  # direct path (`route_and_acquire/5` passes both).
+  @router_capabilities ["llm", "decision"]
+
+  # Gates + budget first, decision second, route third. The budget hold is
+  # taken BEFORE the classifier runs: paying a classifier for a subject that
+  # cannot spend is pure loss, and the hold is settled (or released) by the
+  # same `settle_budget/2` every other request uses.
+  defp execute_router_chat(conn, member, payload, limits, request_start) do
+    with :ok <- router_gate(),
+         :ok <- router_access_gate(member) do
+      case reserve_credit_budget(member, limits) do
+        {:ok, hold} ->
+          case prepare_router_route(conn, member, payload) do
+            {:ok, route} ->
+              conn = assign_router(conn, Process.get(:tg_router))
+              inflight = register_inflight(conn, member, payload, route)
+              Process.put(:tg_inflight_id, inflight.id)
+
+              try do
+                if payload["stream"] == true do
+                  execute_stream(conn, route, payload, member, @max_attempts, [])
+                else
+                  execute(conn, route, payload, member, @max_attempts, [])
+                end
+              after
+                close_router_request(conn, member, hold, inflight)
+              end
+
+            {:error, error} ->
+              close_router_request(conn, member, hold, nil)
+
+              log_and_render_gate_error(conn, member, @router_alias, error,
+                latency_ms: elapsed(request_start)
+              )
+          end
+
+        {:error, error} ->
+          log_and_render_gate_error(conn, member, @router_alias, error,
+            latency_ms: elapsed(request_start)
+          )
+      end
+    else
+      {:error, error} ->
+        log_and_render_gate_error(conn, member, @router_alias, error,
+          latency_ms: elapsed(request_start)
+        )
+    end
+  end
+
+  # Exactly-once teardown for a router request, whatever the outcome: the
+  # classifier's own row (when it is charged to the subject), the budget hold,
+  # the in-flight entry, the probe lease, the credential slot, the deferred
+  # fallback rows and the per-request process state.
+  defp close_router_request(conn, member, hold, inflight) do
+    record_router_decision_cost(conn, member)
+    settle_budget(member, hold)
+
+    if inflight, do: Tokengate.Logs.Inflight.finish_request(inflight.id)
+
+    release_active_probe()
+    release_active_credential_limits()
+    flush_deferred_fallback_logs(conn, member)
+
+    Process.delete(:tg_inflight_id)
+    Process.delete(:tg_router)
+    Process.delete(:tg_router_decision_logged)
+    Process.delete(:tg_prompt_tokens_saved)
+  end
+
+  # A disabled router is a 503 even for a subject that opted in: the kill
+  # switch must not depend on per-subject state.
+  defp router_gate do
+    if SmartRouter.enabled?(), do: :ok, else: {:error, :router_disabled}
+  end
+
+  # Discovery and authorization are the same predicate: `/v1/models` only
+  # advertises the alias to subjects this gate would let through.
+  defp router_access_gate(member) do
+    if Accounts.router_enabled?(member), do: :ok, else: {:error, :router_access_disabled}
+  end
+
+  defp prepare_router_route(conn, member, payload) do
+    case SmartRouter.decide(payload, router_decision_context(conn, member)) do
+      {:ok, decision} ->
+        ctx = router_state(decision)
+        Process.put(:tg_router, ctx)
+
+        case acquire_router_route(ctx, member, payload, conn, 0, 0) do
+          {:ok, route, ctx} ->
+            Process.put(:tg_router, ctx)
+            {:ok, route}
+
+          {:error, error} ->
+            {:error, error}
+        end
+
+      {:error, reason} ->
+        {:error, router_decision_error(reason)}
+    end
+  end
+
+  # The decision context: who is asking, in which conversation, on which
+  # surface. `subject_id` is the SPEND subject (the user behind the member, or
+  # the virtual service member), so a pin follows the person across keys.
+  defp router_decision_context(conn, member) do
+    %{
+      subject_id: router_subject_id(member),
+      group_id: member.group_id,
+      service_id: router_service_id(member),
+      session_id: session_id_header(conn) || conn.assigns[:session_key],
+      agent_type: conn.assigns[:agent_type]
+    }
+  end
+
+  defp router_subject_id(%GroupMember{user_id: nil} = member), do: member.id
+  defp router_subject_id(%GroupMember{user_id: user_id}), do: user_id
+  defp router_subject_id(_), do: nil
+
+  defp router_service_id(%GroupMember{user_id: nil} = member), do: member.id
+  defp router_service_id(_), do: nil
+
+  # The cascade cursor: the decision's chain is walked forward, one model at a
+  # time, with a per-model exclusion list — a credential that failed (or is
+  # saturated) is skipped for THAT model without pinning a healthy key out of
+  # an unrelated fallback destination.
+  defp router_state(decision) do
+    chain = [decision.primary | Enum.reject(decision.fallbacks, &is_nil/1)]
+    config = router_config()
+
+    %{
+      decision: decision,
+      chain: chain,
+      position: 0,
+      exclude: %{},
+      effort_overrides: router_effort_overrides(chain),
+      decision_lane_cost: router_decision_lane_cost(decision.decision_meta),
+      charge_decision?: Map.get(config, :charge_decision_to_subject) == true,
+      last_reject: nil,
+      last_reason: nil
+    }
+  end
+
+  defp router_config do
+    case router_snapshot() do
+      %{config: %{} = config} -> config
+      _ -> %{}
+    end
+  end
+
+  defp router_snapshot do
+    SmartRouter.snapshot()
+  rescue
+    _ -> %{}
+  end
+
+  # `effort_override` belongs to the use-case BINDING, not to the shared model
+  # row: resolve it once per destination so `optimize_ctx/2` can prefer it.
+  defp router_effort_overrides(chain) do
+    Enum.reduce(chain, %{}, fn entry, acc ->
+      with binding_id when is_binary(binding_id) <- Map.get(entry, :use_case_model_id),
+           override when is_binary(override) <- SmartRouter.effort_override(binding_id) do
+        Map.put(acc, entry.model_id, override)
+      else
+        _ -> acc
+      end
+    end)
+  end
+
+  # The classifier's own price, from the usage the engine returned and the
+  # decision model's global lane. `nil` when it cannot be priced honestly (no
+  # usage, no lane, no rates) — a decision cost is never invented either.
+  #
+  # Only a REAL Layer-2 call has a cost to book. A `DecisionCache` hit re-uses
+  # an answer whose `usage` belongs to the request that populated the cache —
+  # charging it again would bill the same classifier tokens once per cache hit;
+  # a deterministic layer (`rules`, `session_pin`, `fast_path`, tier
+  # substitution) never called a model at all. Both leave the cost `nil`, which
+  # also means no `router_decision` row and no debit.
+  defp router_decision_lane_cost(meta) do
+    usage = Map.get(meta, :usage)
+    model_id = Map.get(meta, :model_id)
+
+    with true <- Map.get(meta, :classifier) == true,
+         true <- Map.get(meta, :cache_hit) != true,
+         true <- is_map(usage),
+         model_id when is_binary(model_id) <- model_id,
+         {:ok, lane} <- SmartRouter.resolve_decision_lane(model_id) do
+      prompt = Map.get(usage, "prompt_tokens") || Map.get(usage, "input_tokens") || 0
+      completion = Map.get(usage, "completion_tokens") || Map.get(usage, "output_tokens") || 0
+      mp = lane.model_provider
+
+      cost =
+        CostCalculator.provider_cost(nil,
+          manual_pricing: %{
+            input_cost_per_million: mp.input_cost_per_million,
+            output_cost_per_million: mp.output_cost_per_million,
+            cache_cost_per_million: mp.cache_cost_per_million,
+            cache_write_cost_per_million: mp.cache_write_cost_per_million
+          },
+          usage: %{prompt_tokens: prompt, completion_tokens: completion},
+          pricing_unit: mp.pricing_unit
+        )
+
+      if Decimal.compare(cost, @zero_cost) == :gt do
+        %{
+          cost: cost,
+          model_id: model_id,
+          model_name: router_model_name(model_id),
+          provider_id: lane.credential.provider_id,
+          credential_id: lane.credential.id,
+          credential_name: lane.credential.name,
+          prompt_tokens: prompt,
+          completion_tokens: completion
+        }
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  defp router_model_name(model_id) do
+    case Map.get(router_snapshot(), :decision_model) do
+      %{id: ^model_id, name: name} -> name
+      _ -> nil
+    end
+  end
+
+  defp router_decision_error(:router_disabled), do: :router_disabled
+
+  defp router_decision_error(reason) do
+    Logger.warning("smart router decision failed: #{inspect(reason)}")
+    :router_no_candidates
+  end
+
+  # Walks the decision's chain from `position`, trying every visible lane of
+  # each destination. Model-level failures (`:no_available_provider`, a
+  # credential gate) advance the position; a credential refused by the
+  # provider gate is excluded and the SAME destination is retried.
+  defp acquire_router_route(_ctx, _member, _payload, _conn, _position, attempt)
+       when attempt >= @max_route_retries do
+    {:error, {:cascade_exhausted, :provider_concurrency_exceeded}}
+  end
+
+  defp acquire_router_route(ctx, member, payload, conn, position, attempt) do
+    case Enum.at(ctx.chain, position) do
+      nil ->
+        {:error, router_chain_error(ctx)}
+
+      entry ->
+        exclude = Map.get(ctx.exclude, entry.model_id, [])
+        request_context = router_request_context(conn, payload, exclude)
+
+        case Router.route_by_model_id(entry.model_id, member, request_context) do
+          {:ok, route} ->
+            key_id = member.api_key.id
+
+            case acquire_credential_limits(route.credential, key_id) do
+              :ok ->
+                Process.put(:tg_acquired_credential, {route.credential, key_id})
+                {:ok, route, %{ctx | position: position, last_reject: nil}}
+
+              {:error, reject} ->
+                ctx = %{
+                  ctx
+                  | exclude:
+                      Map.put(ctx.exclude, entry.model_id, [route.credential.id | exclude]),
+                    last_reject: router_reject(reject)
+                }
+
+                acquire_router_route(ctx, member, payload, conn, position, attempt + 1)
+            end
+
+          {:error, reason} ->
+            ctx = %{ctx | position: position + 1, last_reject: router_reject(reason)}
+            acquire_router_route(ctx, member, payload, conn, position + 1, attempt + 1)
+        end
+    end
+  end
+
+  defp router_request_context(conn, payload, exclude) do
+    %{
+      "messages" => payload["messages"] || [],
+      :api_key_hash => conn.assigns[:affinity_key] || conn.assigns.api_key_hash,
+      :exclude_credential_ids => exclude,
+      :capability => @router_capabilities
+    }
+  end
+
+  defp router_reject({:provider_rate_limited, _retry_ms}), do: :provider_rate_limited
+  defp router_reject(:provider_user_concurrency_exceeded), do: :provider_concurrency_exceeded
+  defp router_reject(reject), do: reject
+
+  # Every destination failed. A saturation/rate-limit refusal keeps its honest
+  # 429; anything else means the router had no servable destination at all.
+  defp router_chain_error(%{last_reject: reject})
+       when reject in [:provider_concurrency_exceeded, :provider_rate_limited] do
+    {:cascade_exhausted, reject}
+  end
+
+  defp router_chain_error(_ctx), do: :router_no_candidates
+
+  # Router-side replacement of `route_and_acquire_fallback/8`: the current
+  # credential is excluded for ITS model, then the chain is walked from the
+  # current position — the same destination first (another lane), then the next
+  # `decision.fallbacks` entry (potent alternative -> use-case fallback ->
+  # global default). The serving model, the in-flight row and the session pin
+  # follow the hop.
+  #
+  # `reason` is the failure that triggered the hop (`:timeout`, `:server_error`,
+  # …). It is kept on the context so `router_decision_source_for/2` can say
+  # `"fallback_timeout"` instead of a generic `"fallback_error"` — the
+  # classification is the caller's, not something this function could infer.
+  defp advance_router_route(conn, route, payload, member, ctx, reason) do
+    release_active_credential_limits()
+
+    model_id = route.model.id
+    exclude = [route.credential.id | Map.get(ctx.exclude, model_id, [])]
+    ctx = %{ctx | exclude: Map.put(ctx.exclude, model_id, exclude)}
+
+    case acquire_router_route(ctx, member, payload, conn, ctx.position, 0) do
+      {:ok, new_route, ctx} ->
+        ctx = %{ctx | last_reason: reason || ctx.last_reject}
+        Process.put(:tg_router, ctx)
+        update_inflight_route(conn, member, payload, new_route)
+        maybe_repin_session(conn, ctx, route, new_route)
+
+        {:ok, new_route, Map.get(ctx.exclude, new_route.model.id, []), 0}
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+
+  # Leaving the pinned model is exactly what the pin exists to prevent — but a
+  # dead destination must not sentence every later turn to a failed attempt:
+  # when the cascade hops, the pin follows the NEW model, keeping the use case
+  # and the conversation's requirements.
+  defp maybe_repin_session(conn, ctx, old_route, new_route) do
+    session_key = conn.assigns[:session_key]
+    member = conn.assigns.current_group_member
+    subject_id = router_subject_id(member)
+    entry = router_entry_for(ctx, new_route.model.id)
+    ttl_ms = router_sticky_ttl_ms()
+
+    with true <- new_route.model.id != old_route.model.id,
+         true <- Map.get(ctx.decision.use_case, :pin_session) == true,
+         true <- is_binary(session_key) and is_binary(subject_id) and ttl_ms > 0,
+         %{} = pin <- SmartRouter.SessionPin.get(subject_id, session_key) do
+      SmartRouter.SessionPin.put(
+        subject_id,
+        session_key,
+        %{
+          use_case_id: Map.get(pin, :use_case_id) || ctx.decision.use_case.id,
+          use_case_key: Map.get(pin, :use_case_key) || ctx.decision.use_case.key,
+          use_case_model_id: entry && entry.use_case_model_id,
+          model_id: new_route.model.id,
+          model_name: new_route.model.name,
+          effort_tier: entry && entry.effort_tier,
+          requirements: Map.get(pin, :requirements, %{})
+        },
+        ttl_ms
+      )
+    end
+
+    :ok
+  end
+
+  defp router_sticky_ttl_ms do
+    case Map.get(router_config(), :sticky_ttl_seconds) do
+      seconds when is_integer(seconds) and seconds > 0 -> seconds * 1000
+      _ -> 0
+    end
+  end
+
+  defp router_entry_for(ctx, model_id) do
+    Enum.find(ctx.chain, &(&1.model_id == model_id))
+  end
+
+  # The conn carries the router context for the whole request: the log
+  # builders, the in-flight row and `optimize_ctx/2` all read it from here.
+  defp assign_router(conn, nil), do: conn
+
+  defp assign_router(conn, ctx) do
+    conn
+    |> assign(:router, ctx)
+    |> assign(:router_prompt_policy, Map.get(ctx.decision, :prompt_policy))
+    |> assign(:router_effort_overrides, ctx.effort_overrides)
+    |> assign(:router_pinned, Map.get(ctx.decision.decision_meta, :pinned) == true)
+  end
+
+  defp router_effort_override(conn, route) do
+    case conn.assigns[:router_effort_overrides] do
+      %{} = overrides -> Map.get(overrides, route.model.id)
+      _ -> nil
+    end
+  end
+
+  # The classifier paid for this request and the operator decided the subject
+  # pays for it: book a SEPARATE `router_decision` row (so
+  # `Budgets.SyncWorker`, which reconciles from `request_logs.provider_cost_usd`,
+  # matches the debit exactly) and add the amount to the same hold settlement.
+  defp record_router_decision_cost(conn, member) do
+    with %{charge_decision?: true} = ctx <- Process.get(:tg_router),
+         %{cost: %Decimal{} = cost} = lane_cost <- Map.get(ctx, :decision_lane_cost),
+         false <- Process.get(:tg_router_decision_logged, false) do
+      Process.put(:tg_router_decision_logged, true)
+      enqueue_router_decision_log(conn, member, lane_cost)
+      add_router_decision_cost(cost)
+    else
+      _ -> :ok
+    end
+  end
+
+  defp add_router_decision_cost(cost) do
+    total =
+      case Process.get(:tg_budget_actual_cost) do
+        %Decimal{} = actual -> Decimal.add(actual, cost)
+        _ -> cost
+      end
+
+    Process.put(:tg_budget_actual_cost, total)
+  end
+
+  # The classifier's own row. It is a SEPARATE debit, not a routed request:
+  # `routed_via_router` is false (this row was not routed BY the router — it IS
+  # the router's own spend) and `router_decision_cost_usd` is nil (the column
+  # lives on the request whose decision it paid for; leaving it here would add
+  # the same amount to every SUM over the column). `session_id` is nil for the
+  # same reason: the decision has no conversation of its own, and a session id
+  # here made the switch counters read a phantom session change per request.
+  # `credit_topup_id` names the SAME hold the served request debited, so
+  # `Budgets.SyncWorker` reconciles both rows against one top-up.
+  defp enqueue_router_decision_log(conn, member, lane_cost) do
+    subject = log_subject(member)
+
+    %{
+      "group_member_id" => subject.group_member_id,
+      "user_id" => member.user_id,
+      "service_id" => subject.service_id,
+      "subject_type" => subject.subject_type,
+      "provider_id" => lane_cost.provider_id,
+      "model_id" => lane_cost.model_id,
+      "model_requested" => @router_alias,
+      "model_resolved" => lane_cost.model_name,
+      "agent_type" => conn.assigns[:agent_type],
+      "client_agent" => conn.assigns[:client_agent],
+      "status_code" => 200,
+      "prompt_tokens" => lane_cost.prompt_tokens,
+      "completion_tokens" => lane_cost.completion_tokens,
+      "provider_cost_usd" => Decimal.to_string(lane_cost.cost, :normal),
+      "latency_ms" => 0,
+      "streaming" => false,
+      # The row the durable reconciliation reads: the router's own spend,
+      # separate from the served request it helped route.
+      "request_type" => "router_decision",
+      "routed_via_router" => false,
+      "router_decision_source" => "classifier",
+      "router_decision_cost_usd" => nil,
+      "api_key_prefix" => member.api_key && member.api_key.key_prefix,
+      "api_key_id" => member.api_key && member.api_key.id,
+      "session_id" => nil,
+      "credit_topup_id" => Process.get(:tg_credit_topup_id),
+      "credential_name" => lane_cost.credential_name,
+      "credential_id" => lane_cost.credential_id,
+      "provider_key_prefix" => nil,
+      "inserted_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    }
+    |> WriteWorker.new()
+    |> insert_log_job(%{
+      model_id: lane_cost.model_id,
+      provider_id: lane_cost.provider_id,
+      status: 200,
+      request_type: "router_decision"
+    })
   end
 
   @doc """
@@ -259,7 +755,8 @@ defmodule TokengateWeb.ProxyController do
   defp service_passthrough(conn, service) do
     payload = conn.body_params
 
-    with :ok <- validate_service_contract(service, payload) do
+    with :ok <- reject_router_alias(payload["model"]),
+         :ok <- validate_service_contract(service, payload) do
       simple_proxy(
         conn,
         payload,
@@ -507,8 +1004,15 @@ defmodule TokengateWeb.ProxyController do
     Process.delete(:tg_deferred_fallback_logs)
     Process.delete(:tg_upstream_retry_after_ms)
     Process.delete(:tg_inflight_id)
+    Process.delete(:tg_router)
+    Process.delete(:tg_prompt_tokens_saved)
 
     with :ok <- require_model(model),
+         # The alias is a chat-only destination: every non-chat surface
+         # (embeddings, STT, TTS, images, decisions) refuses it BEFORE the
+         # catalog is consulted, so it never resolves as `404 model_not_found`
+         # nor reaches a provider.
+         :ok <- reject_router_alias(model),
          :ok <- acquire_group_limits(key_id, limits) do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits, [],
@@ -569,6 +1073,12 @@ defmodule TokengateWeb.ProxyController do
 
   defp require_input(%{"input" => input}) when is_binary(input) or is_list(input), do: :ok
   defp require_input(_), do: {:error, {:invalid_request, "input is required (string or array)"}}
+
+  # `"router"` is a chat alias: on a non-chat surface it names no capability at
+  # all, so the answer is the same 400 a model of the wrong type gets — never a
+  # 404 (the alias is a real, advertised id) and never a provider call.
+  defp reject_router_alias(@router_alias), do: {:error, :model_type_mismatch}
+  defp reject_router_alias(_model), do: :ok
 
   # Optional seam that runs AFTER the route is picked and BEFORE any upstream
   # call: it returns the request opts the adapter needs (the media body) or a
@@ -1269,30 +1779,79 @@ defmodule TokengateWeb.ProxyController do
   # as "Pending" while it executes. think/effort are already in conn assigns.
   defp register_inflight(conn, member, payload, route) do
     inflight =
-      Tokengate.Logs.Inflight.start_request(%{
-        group_member_id: member.id,
-        subject_type: if(member.user_id == nil, do: "service", else: "user"),
-        service_name: member.service_name,
-        user_email: member.user && member.user.email,
-        group_name: member.group && member.group.name,
-        group_id: member.group_id,
-        model_requested: payload["model"],
-        agent_type: conn.assigns.agent_type,
-        client_agent: conn.assigns.client_agent,
-        streaming: payload["stream"] == true,
-        think: conn.assigns[:think] || false,
-        effort: conn.assigns[:effort],
-        provider_name: route.model_provider.credential.provider.name,
-        api_key_prefix: member.api_key && member.api_key.key_prefix,
-        credential_name: route.credential.name,
-        credential_id: route.credential.id,
-        provider_key_suffix: provider_key_prefix(route.credential)
-      })
+      Tokengate.Logs.Inflight.start_request(
+        Map.merge(
+          %{
+            group_member_id: member.id,
+            subject_type: if(member.user_id == nil, do: "service", else: "user"),
+            service_name: member.service_name,
+            user_email: member.user && member.user.email,
+            group_name: member.group && member.group.name,
+            group_id: member.group_id,
+            model_requested: payload["model"],
+            agent_type: conn.assigns.agent_type,
+            client_agent: conn.assigns.client_agent,
+            streaming: payload["stream"] == true,
+            think: conn.assigns[:think] || false,
+            effort: conn.assigns[:effort],
+            provider_name: route.model_provider.credential.provider.name,
+            api_key_prefix: member.api_key && member.api_key.key_prefix,
+            credential_name: route.credential.name,
+            credential_id: route.credential.id,
+            provider_key_suffix: provider_key_prefix(route.credential)
+          },
+          inflight_router_fields(conn, route)
+        )
+      )
 
     inflight
   end
 
-  @max_route_retries 20
+  # The router columns of the in-flight row: who is running which use case on
+  # which resolved model right now. `routed_via_router: false` on a direct
+  # request keeps the entry shape uniform.
+  #
+  # The context is read from the process state FIRST: `advance_router_route/6`
+  # publishes the post-hop context there before refreshing the row, while
+  # `conn.assigns[:router]` still holds the decision's original context —
+  # reading the assign would keep showing the failed destination and its
+  # `fallback_*` source would never be visible live.
+  defp inflight_router_fields(conn, route) do
+    case router_ctx(conn) do
+      %{} = ctx ->
+        entry = router_entry_for(ctx, route.model.id)
+
+        %{
+          routed_via_router: true,
+          model_resolved: route.model.name,
+          router_use_case_key: get_in(ctx.decision, [:use_case, :key]),
+          router_effort_tier: entry && entry.effort_tier,
+          router_decision_source: router_decision_source_for(ctx, route)
+        }
+
+      _ ->
+        %{routed_via_router: false}
+    end
+  end
+
+  # The live router context: the process state is authoritative (it is the one
+  # the cascade mutates), the conn assign is the frozen decision-time copy.
+  defp router_ctx(conn) do
+    case Process.get(:tg_router) do
+      %{} = ctx -> ctx
+      _ -> conn.assigns[:router]
+    end
+  end
+
+  defp router_decision_source_for(ctx, route) do
+    source = Map.get(ctx.decision.decision_meta, :source)
+
+    cond do
+      route.model.id == ctx.decision.primary.model_id -> to_string(source || "default")
+      Map.get(ctx, :last_reason) == :timeout -> "fallback_timeout"
+      true -> "fallback_error"
+    end
+  end
 
   defp route_and_acquire(member, payload, api_key_hash, limits, exclude \\ [], route_opts \\ []) do
     route_and_acquire(member, payload, api_key_hash, limits, exclude, route_opts, {0, nil})
@@ -1417,6 +1976,34 @@ defmodule TokengateWeb.ProxyController do
   #      Gate 2), resets `provider_retries` to 0 when the credential changes,
   #      and refreshes `Inflight` with the new provider/credential.
   defp advance_fallback_route(
+         conn,
+         route,
+         payload,
+         member,
+         exclude,
+         provider_retries,
+         reason,
+         capability
+       ) do
+    case Process.get(:tg_router) do
+      %{} = ctx ->
+        advance_router_route(conn, route, payload, member, ctx, reason)
+
+      _ ->
+        advance_direct_route(
+          conn,
+          route,
+          payload,
+          member,
+          exclude,
+          provider_retries,
+          reason,
+          capability
+        )
+    end
+  end
+
+  defp advance_direct_route(
          conn,
          route,
          payload,
@@ -1570,26 +2157,34 @@ defmodule TokengateWeb.ProxyController do
 
   defp update_inflight_route(conn, member, payload, route) do
     if inflight_id = Process.get(:tg_inflight_id) do
-      Tokengate.Logs.Inflight.start_request(%{
-        id: inflight_id,
-        group_member_id: member.id,
-        subject_type: if(member.user_id == nil, do: "service", else: "user"),
-        service_name: member.service_name,
-        user_email: member.user && member.user.email,
-        group_name: member.group && member.group.name,
-        group_id: member.group_id,
-        model_requested: payload["model"],
-        agent_type: conn.assigns.agent_type,
-        client_agent: conn.assigns.client_agent,
-        streaming: payload["stream"] == true,
-        think: conn.assigns[:think] || false,
-        effort: conn.assigns[:effort],
-        provider_name: route.model_provider.credential.provider.name,
-        api_key_prefix: member.api_key && member.api_key.key_prefix,
-        credential_name: route.credential.name,
-        credential_id: route.credential.id,
-        provider_key_suffix: provider_key_prefix(route.credential)
-      })
+      Tokengate.Logs.Inflight.start_request(
+        Map.merge(
+          %{
+            id: inflight_id,
+            group_member_id: member.id,
+            subject_type: if(member.user_id == nil, do: "service", else: "user"),
+            service_name: member.service_name,
+            user_email: member.user && member.user.email,
+            group_name: member.group && member.group.name,
+            group_id: member.group_id,
+            model_requested: payload["model"],
+            agent_type: conn.assigns.agent_type,
+            client_agent: conn.assigns.client_agent,
+            streaming: payload["stream"] == true,
+            think: conn.assigns[:think] || false,
+            effort: conn.assigns[:effort],
+            provider_name: route.model_provider.credential.provider.name,
+            api_key_prefix: member.api_key && member.api_key.key_prefix,
+            credential_name: route.credential.name,
+            credential_id: route.credential.id,
+            provider_key_suffix: provider_key_prefix(route.credential)
+          },
+          # A router hop moves `model_resolved` / `router_*` with the new
+          # route: the live monitor must show the destination that is actually
+          # serving, not the decision's first choice.
+          inflight_router_fields(conn, route)
+        )
+      )
     end
   end
 
@@ -1820,7 +2415,9 @@ defmodule TokengateWeb.ProxyController do
       client_agent: conn.assigns.client_agent,
       request_type: request_type,
       credit_topup_id: nil,
-      cache_hit: true
+      cache_hit: true,
+      # $0 served by the gateway: no counterfactual baseline (F9).
+      router_baseline: false
     )
   end
 
@@ -1879,7 +2476,9 @@ defmodule TokengateWeb.ProxyController do
     # —que 400ea en un campo que no documenta— y (b) apila las guard rails una
     # vez por intento. `payload` sigue siendo el del cliente para la cascada:
     # cada intento se reescribe desde cero con las reglas de SU upstream.
-    attempt_payload =
+    conn = assign_router_effort(conn, route)
+
+    {attempt_payload, prompt_tokens_saved} =
       payload
       |> Map.put("model", route.model_responded)
       |> inject_guard_rails(route.model)
@@ -1888,7 +2487,12 @@ defmodule TokengateWeb.ProxyController do
     # The effort value THIS attempt sends to the wire: consumed by the log
     # row if the attempt wins (fallbacks rebuild from the client payload, so
     # every attempt re-derives its own value).
-    conn = assign(conn, :effort_applied, wire_effort(attempt_payload))
+    conn =
+      conn
+      |> assign(:effort_applied, wire_effort(attempt_payload))
+      |> assign(:prompt_tokens_saved_est, prompt_tokens_saved)
+
+    Process.put(:tg_prompt_tokens_saved, prompt_tokens_saved)
 
     # Gateway-local response cache (non-streaming chat only): identical
     # requests served from ETS. The key is the body THIS upstream receives, so
@@ -2175,7 +2779,9 @@ defmodule TokengateWeb.ProxyController do
 
     # Mismo contrato que `execute/7`: el body por-intento se construye desde el
     # body ORIGINAL del cliente (nunca desde el del intento anterior).
-    attempt_payload =
+    conn = assign_router_effort(conn, route)
+
+    {attempt_payload, prompt_tokens_saved} =
       payload
       |> Map.put("model", route.model_responded)
       |> ensure_stream_options()
@@ -2184,7 +2790,12 @@ defmodule TokengateWeb.ProxyController do
 
     # Same contract as `execute/7`: the applied effort of THIS attempt, for
     # the log row if the attempt wins.
-    conn = assign(conn, :effort_applied, wire_effort(attempt_payload))
+    conn =
+      conn
+      |> assign(:effort_applied, wire_effort(attempt_payload))
+      |> assign(:prompt_tokens_saved_est, prompt_tokens_saved)
+
+    Process.put(:tg_prompt_tokens_saved, prompt_tokens_saved)
 
     # Measured just before the upstream call: TTFT is the time from this
     # point to the provider's first chunk.
@@ -2524,19 +3135,68 @@ defmodule TokengateWeb.ProxyController do
   defp maybe_optimize(payload, %{model_type: "llm"} = route_ctx) do
     messages = payload["messages"] || []
 
-    payload
-    |> Map.put("messages", PromptOptimizer.stable_prefix(messages))
-    |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
-    |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
-    |> drop_strict_fields(provider_key(route_ctx))
-    |> normalize_reasoning(route_ctx)
-    # Operator overrides run LAST so they can strip/replace anything the
-    # gateway or the client put in the body (a per-row `omit_body_fields`
-    # can pull a client field back out, and `extra_body` can add/replace).
-    |> apply_request_overrides(route_ctx)
+    payload =
+      payload
+      |> Map.put("messages", PromptOptimizer.stable_prefix(messages))
+      |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
+      |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
+
+    {payload, saved} =
+      apply_prompt_policy(payload, Map.get(route_ctx, :prompt_policy),
+        pinned: Map.get(route_ctx, :router_pinned) == true
+      )
+
+    payload =
+      payload
+      |> drop_strict_fields(provider_key(route_ctx))
+      |> normalize_reasoning(route_ctx)
+      # Operator overrides run LAST so they can strip/replace anything the
+      # gateway or the client put in the body (a per-row `omit_body_fields`
+      # can pull a client field back out, and `extra_body` can add/replace).
+      |> apply_request_overrides(route_ctx)
+
+    {payload, saved}
   end
 
-  defp maybe_optimize(payload, _model_model), do: payload
+  defp maybe_optimize(payload, _model_model), do: {payload, nil}
+
+  # The SmartRouter use-case passes, applied in a fixed order and only for a
+  # request the router decided (`prompt_policy` comes from the decision's use
+  # case; nil = a direct request, byte-identical body).
+  #
+  # `prompt_tokens_saved_est` is measured, not guessed: the SAME estimator runs
+  # over the messages before and after the policy passes, so it reports exactly
+  # the tokens those passes removed from THIS request. The estimator includes
+  # the JSON that travels as strings (`tool_calls[*].function.arguments`), so
+  # `compact_json_tools` reports its real saving instead of zero.
+  #
+  # `:pinned` tells `stale_tool_trim/3` the session is served by an active
+  # `SessionPin`: rewriting its historical messages would invalidate the hot
+  # upstream prefix, so the trim has to clear `stale_tool_trim_threshold_pct`
+  # before it is allowed to run.
+  defp apply_prompt_policy(payload, nil, _opts), do: {payload, nil}
+
+  defp apply_prompt_policy(payload, policy, opts) when is_map(policy) do
+    messages = payload["messages"] || []
+    before = PromptOptimizer.estimate_prompt_tokens(messages)
+    pinned? = Keyword.get(opts, :pinned, false)
+
+    optimized =
+      messages
+      |> PromptOptimizer.keep_last_n_images(Map.get(policy, :keep_last_n_images))
+      |> PromptOptimizer.window_history(Map.get(policy, :max_history_turns))
+      |> compact_json_tools(Map.get(policy, :compact_json) == true)
+      |> PromptOptimizer.stale_tool_trim(Map.get(policy, :stale_tool_trim_threshold_pct),
+        pinned: pinned?
+      )
+
+    after_tokens = PromptOptimizer.estimate_prompt_tokens(optimized)
+
+    {Map.put(payload, "messages", optimized), max(before - after_tokens, 0)}
+  end
+
+  defp compact_json_tools(messages, true), do: PromptOptimizer.compact_json_tools(messages)
+  defp compact_json_tools(messages, false), do: messages
 
   # Body keys the gateway owns (model mapping, passthrough body, usage
   # accounting): never a valid rename target nor an override target — an
@@ -2800,17 +3460,35 @@ defmodule TokengateWeb.ProxyController do
   # Context for the pre-flight transform pipeline: everything the passes
   # need that isn't in the payload itself. Built once per attempt from the
   # conn assigns and the routed model_provider.
-  defp optimize_ctx(_conn, route) do
+  defp optimize_ctx(conn, route) do
     %{
       model_type: route.model && route.model.model_type,
       model_provider: route.model_provider,
-      # Operator effort policy of the logical model (nil/nil = no-op).
+      # Operator effort policy of the logical model (nil/nil = no-op). A router
+      # decision overrides it per destination: the use-case binding, not the
+      # shared model row, decides the effort the request goes out with.
       effort_default: route.model && route.model.effort_default,
-      effort_override: route.model && route.model.effort_override,
+      effort_override:
+        conn.assigns[:router_effort_override] || (route.model && route.model.effort_override),
+      # Use-case prompt policy — `nil` for a direct request (no extra passes).
+      prompt_policy: conn.assigns[:router_prompt_policy],
+      # An ACTIVE session pin means this conversation's upstream prefix is
+      # cached: `stale_tool_trim` must not rewrite history unless the saving
+      # clears its threshold.
+      router_pinned: conn.assigns[:router_pinned] == true,
       extra_body: model_provider_setting(route, :extra_body),
       omit_body_fields: model_provider_setting(route, :omit_body_fields),
       omit_headers: model_provider_setting(route, :omit_headers)
     }
+  end
+
+  # Publishes THIS attempt's router effort override from the decision's chain:
+  # `optimize_ctx/2` then simply prefers the assign over the model row.
+  defp assign_router_effort(conn, route) do
+    case conn.assigns[:router_effort_overrides] do
+      %{} -> assign(conn, :router_effort_override, router_effort_override(conn, route))
+      _ -> conn
+    end
   end
 
   # Removes the body fields a provider's catalog entry declares unacceptable.
@@ -3314,6 +3992,88 @@ defmodule TokengateWeb.ProxyController do
     %{subject_type: "user", group_member_id: member.id, service_id: nil}
   end
 
+  # The router columns of a durable row. `routed_via_router: false` for a
+  # direct request keeps the column honest without adding keys nobody reads.
+  #
+  # `baseline` is `false` for the rows that must NOT carry a counterfactual
+  # (`$0` ResponseCache hits, error rows): pricing "what the baseline model
+  # would have cost" for a request that served nothing skews model selection.
+  defp router_log_attrs(route, member, usage, baseline) do
+    case Process.get(:tg_router) do
+      %{} = ctx ->
+        entry = router_entry_for(ctx, route.model.id)
+        meta = ctx.decision.decision_meta
+        baseline_cost = if baseline, do: router_baseline_cost(member, usage), else: nil
+
+        %{
+          "routed_via_router" => true,
+          "model_resolved" => route.model.name,
+          "router_use_case_id" => ctx.decision.use_case.id,
+          "router_use_case_key" => ctx.decision.use_case.key,
+          "router_use_case_model_id" => entry && entry.use_case_model_id,
+          "router_effort_tier" => entry && entry.effort_tier,
+          "router_decision_source" => router_decision_source_for(ctx, route),
+          "router_decision_ms" => Map.get(meta, :latency_ms),
+          "router_decision_cost_usd" => router_decision_cost_string(ctx),
+          "router_baseline_model_id" => baseline_cost && baseline_cost.model_id,
+          "router_baseline_cost_usd" =>
+            baseline_cost && Decimal.to_string(baseline_cost.cost, :normal),
+          "router_direct_access" => Router.direct_access?(route.model.id, member),
+          "prompt_tokens_saved_est" => Process.get(:tg_prompt_tokens_saved)
+        }
+
+      _ ->
+        %{"routed_via_router" => false}
+    end
+  end
+
+  defp router_model_requested(default) do
+    if Process.get(:tg_router), do: @router_alias, else: default
+  end
+
+  defp router_decision_cost_string(%{decision_lane_cost: %{cost: %Decimal{} = cost}}),
+    do: Decimal.to_string(cost, :normal)
+
+  defp router_decision_cost_string(_ctx), do: nil
+
+  # The FROZEN counterfactual: the request's real usage priced with the
+  # baseline model's own primary visible lane (`groups.router_baseline_model_id`
+  # -> `router_configs.baseline_model_id`). `nil` when there is no baseline
+  # model, no visible lane or no tariff — a saving is never invented.
+  #
+  # The rates are the lane's WHOLE tariff: `cache_read` splits the prompt,
+  # `cache_write` prices the creation tokens, and a non-token unit is priced
+  # with the lane's `unit_cost` against the chat's own quantities (`per_request`
+  # is 1 per call), exactly like `cost_with_fallback/4` prices the served
+  # request. Leaving any of them out undervalued the baseline and inflated the
+  # reported saving.
+  defp router_baseline_cost(member, usage) do
+    model_id =
+      Accounts.router_baseline_model_id(member) || Map.get(router_config(), :baseline_model_id)
+
+    case model_id && Router.primary_tariff(model_id, member) do
+      %{} = tariff ->
+        cost =
+          CostCalculator.provider_cost(nil,
+            manual_pricing: %{
+              input_cost_per_million: tariff.input_cost_per_million,
+              output_cost_per_million: tariff.output_cost_per_million,
+              cache_cost_per_million: tariff.cache_cost_per_million,
+              cache_write_cost_per_million: tariff.cache_write_cost_per_million
+            },
+            usage: usage,
+            pricing_unit: tariff.pricing_unit || "per_1m_tokens",
+            unit_cost: tariff.unit_cost,
+            quantities: ServiceUsage.quantities("llm", %{}, %{})
+          )
+
+        if Decimal.compare(cost, @zero_cost) == :gt, do: %{model_id: model_id, cost: cost}
+
+      _ ->
+        nil
+    end
+  end
+
   defp enqueue_log(
          route,
          member,
@@ -3335,7 +4095,10 @@ defmodule TokengateWeb.ProxyController do
       "provider_id" => route.model_provider.credential.provider_id,
       "model_provider_id" => route.model_provider.id,
       "model_id" => route.model.id,
-      "model_requested" => route.model.name,
+      # The client's own string: `"router"` when the alias was requested, so a
+      # routed request is never disguised as a direct one.
+      "model_requested" =>
+        router_model_requested(Keyword.get(extra, :model_requested, route.model.name)),
       "model_responded" => route.model_responded,
       "agent_type" => agent_type,
       "client_agent" => Keyword.get(extra, :client_agent),
@@ -3376,6 +4139,9 @@ defmodule TokengateWeb.ProxyController do
       # partición. Sin esto, log_request regeneraría el timestamp por intento.
       "inserted_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     }
+    |> Map.merge(
+      router_log_attrs(route, member, usage, Keyword.get(extra, :router_baseline, true))
+    )
     |> WriteWorker.new()
     |> insert_log_job(%{
       model_id: route.model.id,
@@ -3479,7 +4245,9 @@ defmodule TokengateWeb.ProxyController do
       "provider_id" => route.model_provider.credential.provider_id,
       "model_provider_id" => route.model_provider.id,
       "model_id" => route.model.id,
-      "model_requested" => route.model.name,
+      # A failed routed attempt is still a ROUTER request: the alias the client
+      # asked for stays in `model_requested`, the resolved model in `model_id`.
+      "model_requested" => router_model_requested(route.model.name),
       "model_responded" => route.model_responded,
       "agent_type" => conn.assigns.agent_type,
       "client_agent" => conn.assigns.client_agent,
@@ -3507,6 +4275,13 @@ defmodule TokengateWeb.ProxyController do
       # partición. Sin esto, log_request regeneraría el timestamp por intento.
       "inserted_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     }
+    |> Map.merge(router_log_attrs(route, member, error_usage(), false))
+    # A failed attempt books nothing, and in particular it must NOT re-book the
+    # classifier: one router request that exhausts N attempts would otherwise
+    # repeat the SAME decision cost on N rows and every SUM over the column
+    # would multiply it. The `router_decision` row (or the served row) already
+    # carries the decision cost exactly once.
+    |> Map.put("router_decision_cost_usd", nil)
     |> WriteWorker.new()
     |> insert_log_job(%{
       model_id: route.model.id,
@@ -3514,6 +4289,12 @@ defmodule TokengateWeb.ProxyController do
       status: Keyword.get(opts, :client_status),
       error_reason: Keyword.get(opts, :error_reason)
     })
+  end
+
+  # An error row books nothing: no tokens were billed and the counterfactual
+  # baseline would price a request that never happened.
+  defp error_usage do
+    %{prompt_tokens: 0, completion_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0}
   end
 
   defp enqueue_gate_error_log(member, model, agent_type, opts) do
@@ -3775,6 +4556,27 @@ defmodule TokengateWeb.ProxyController do
 
   defp error_details(:model_not_found),
     do: {404, "invalid_request_error", "model_not_found", "Model not found or not accessible"}
+
+  # ── SmartRouter alias ──────────────────────────────────────────────────
+  # The kill switch and the subject's opt-in are distinct refusals: an operator
+  # turned the router off vs this key's group/service never enabled it.
+  defp error_details(:router_disabled),
+    do:
+      {503, "service_unavailable", "router_disabled",
+       "The smart router is disabled on this gateway"}
+
+  defp error_details(:router_access_disabled),
+    do:
+      {403, "permission_error", "router_access_disabled",
+       "The smart router is not enabled for this account"}
+
+  # The engine found no servable destination: no viable use case, or every model
+  # of the chain lost its lanes. Nothing was served — a 503 with its own code,
+  # never a silent 404 that looks like a typo in the model name.
+  defp error_details(:router_no_candidates),
+    do:
+      {503, "service_unavailable", "router_no_candidates",
+       "No router destination can serve this request"}
 
   defp error_details(:model_type_mismatch),
     do:

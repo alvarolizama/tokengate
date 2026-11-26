@@ -9,6 +9,11 @@
 #      `demo_seeds.exs` (`mix ecto.demo`). Both create users whose password is
 #      public in this repository.
 #
+#      The single exception is the SmartRouter catalog at the tail of this file:
+#      the singleton config row plus its use-case presets. That is operator
+#      configuration, not demo data — the router is created DISABLED and the
+#      presets bind no models, so nothing routes and no subject is created.
+#
 # Setting TOKENGATE_ADMIN_PASSWORD is the opt-in: with it the boot creates the
 # admin, so an unattended deploy (or an instance that is already public) is
 # claimed from the start. Without it NOTHING is created — the instance boots
@@ -50,4 +55,20 @@ cond do
       })
 
     IO.puts("[seeds_prod] seeded admin user: #{user.email}")
+end
+
+# ---------------------------------------------------------------------------
+# SmartRouter — singleton config + shipped use-case presets
+# ---------------------------------------------------------------------------
+# Runs AFTER `migrate/0` (`Release.setup/0` order: create → migrate → seed), and
+# both calls are idempotent by design: the config row is pinned to one id
+# (`ON CONFLICT DO NOTHING`) and a preset whose key already exists is never
+# overwritten, so operator edits survive every deploy. The router is created
+# DISABLED and the presets bind no models: nothing routes and no subject is
+# created.
+_config = Tokengate.SmartRouter.Config.ensure!()
+%{inserted: presets_inserted} = Tokengate.SmartRouter.Presets.ensure_all!()
+
+if presets_inserted > 0 do
+  IO.puts("[seeds_prod] seeded #{presets_inserted} SmartRouter use-case presets")
 end

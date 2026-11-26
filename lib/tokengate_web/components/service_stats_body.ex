@@ -930,9 +930,14 @@ defmodule TokengateWeb.ServiceStatsBody do
 
     cells = Map.new(rows, fn r -> {{r.date, r.label}, r} end)
 
+    # Total de requests por bucket (día u hora): la barra apilada se escala
+    # sobre el total, no sobre la celda más alta — si no, los segmentos de un
+    # bucket con varios modelos suman >100% y el apilado se recorta.
+    bucket_totals = Map.new(days, fn d -> {d, bucket_total(cells, d, labels)} end)
+
     spark_max =
       days
-      |> Enum.map(fn d -> bucket_total(cells, d, labels) end)
+      |> Enum.map(&Map.get(bucket_totals, &1, 0))
       |> Enum.max(fn -> 1 end)
 
     assigns =
@@ -941,10 +946,13 @@ defmodule TokengateWeb.ServiceStatsBody do
       |> assign(:pivoted_labels, labels)
       |> assign(:label_totals, Map.new(Enum.zip(labels, label_totals)))
       |> assign(:cells, cells)
+      |> assign(:bucket_totals, bucket_totals)
       |> assign(:spark_max, spark_max)
 
     ~H"""
-    <div :if={@rows != []} class="card bg-base-100 border border-base-300 shadow-sm" id={@id}>
+    <%!-- La tarjeta se renderiza SIEMPRE: sin tráfico en la ventana muestra su
+    empty-state (antes desaparecía sin explicación y parecía rota). --%>
+    <div class="card bg-base-100 border border-base-300 shadow-sm" id={@id}>
       <div class="card-body p-4 gap-2">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="card-title text-base">
@@ -963,7 +971,12 @@ defmodule TokengateWeb.ServiceStatsBody do
           </div>
         </div>
 
-        <div class="mt-2">
+        <div :if={@rows == []} id={"#{@id}-empty"} class="py-6 text-center">
+          <.icon name="hero-chart-bars-square-left" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+          <p class="text-sm text-base-content/40">{gettext("No requests in this period.")}</p>
+        </div>
+
+        <div :if={@rows != []} class="mt-2">
           <div class="flex items-end gap-px h-32 relative">
             <div
               :for={day <- @pivoted_days}
@@ -980,12 +993,21 @@ defmodule TokengateWeb.ServiceStatsBody do
                 </div>
               </div>
 
-              <%!-- Stacked bar --%>
-              <div class="w-full flex flex-col-reverse rounded-t overflow-hidden">
+              <%!-- Stacked bar. `height` en la pila (no `h-full`): la barra se
+              escala por el TOTAL del bucket sobre una altura definida, y cada
+              segmento reparte esa altura en proporción a sus requests. Con un
+              contenedor de alto automático los `height: X%` resuelven a `auto`
+              y las barras miden 0px (la gráfica se ve vacía). --%>
+              <div
+                class="w-full flex flex-col-reverse rounded-t overflow-hidden"
+                style={"height: #{bucket_bar_pct(@bucket_totals, day, @spark_max)}%"}
+              >
                 <div
                   :for={{label, idx} <- Enum.with_index(@pivoted_labels)}
-                  class={["w-full", Stats.sparkline_color(idx)]}
-                  style={"height: #{trend_bar_height(@cells, day, label, @spark_max)}%"}
+                  class={["w-full shrink-0", Stats.sparkline_color(idx)]}
+                  style={
+                    "height: #{segment_pct(@cells, day, label, Map.get(@bucket_totals, day, 0))}%"
+                  }
                   title={"#{label}: #{bucket_cell_text(@cells, day, label)}"}
                 />
               </div>
@@ -1040,10 +1062,20 @@ defmodule TokengateWeb.ServiceStatsBody do
     |> Enum.sum_by(& &1.request_count)
   end
 
-  defp trend_bar_height(cells, day, label, spark_max) do
+  # Alto total de la barra del bucket: escala sqrt del total (misma curva que
+  # las sparklines) para que los buckets chicos sigan leyéndose.
+  defp bucket_bar_pct(bucket_totals, day, spark_max) do
+    Stats.sparkline_bar_height(Map.get(bucket_totals, day, 0), spark_max)
+  end
+
+  # Reparto proporcional dentro de la barra: los segmentos del bucket suman
+  # exactamente 100%, así el apilado nunca se recorta ni infla la barra.
+  defp segment_pct(_cells, _day, _label, total) when total in [0, 0.0], do: 0.0
+
+  defp segment_pct(cells, day, label, total) do
     case Map.get(cells, {day, label}) do
-      nil -> 0
-      row -> Stats.sparkline_bar_height(row.request_count, spark_max)
+      nil -> 0.0
+      row -> Float.round(row.request_count / total * 100, 2)
     end
   end
 

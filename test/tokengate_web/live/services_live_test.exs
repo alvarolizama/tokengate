@@ -1083,4 +1083,37 @@ defmodule TokengateWeb.ServicesLiveTest do
       assert has_element?(view, "#filter-service-unlimited.btn-primary")
     end
   end
+
+  # --------------------------------------------------------------------------
+  # SmartRouter access — flag propio del servicio
+  # --------------------------------------------------------------------------
+
+  test "editar un servicio persiste el acceso al router, audita y pinta la pastilla",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    service = service_fixture()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    refute has_element?(view, "#router-badge-#{service.id}")
+
+    view |> element("#edit-#{service.id}") |> render_click()
+    assert has_element?(view, "#service-form input[name='service[router_enabled]']")
+
+    view
+    |> form("#service-form", %{service: %{name: service.name, router_enabled: "true"}})
+    |> render_submit()
+
+    assert Accounts.get_service!(service.id).router_enabled
+    assert has_element?(view, "#router-badge-#{service.id}")
+
+    assert [audit] =
+             Tokengate.Auditing.list_audit_logs(%{
+               action: "service.update",
+               entity_id: service.id
+             })
+
+    assert audit.changes["changes"]["router_enabled"] == "true"
+  end
 end

@@ -57,6 +57,7 @@ defmodule TokengateWeb.SidebarTest do
     assert has_element?(view, "#sidebar-section-operaciones", "Operaciones")
 
     assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-providers")
+    assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-router")
     assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-models")
     assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-labs")
     refute in_section?(view, "sidebar-section-catalogo", "sidebar-link-budget-profiles")
@@ -104,8 +105,9 @@ defmodule TokengateWeb.SidebarTest do
     assert positions == Enum.sort(positions)
 
     # Inside a section the links render in this order too. In Catalog:
-    # Models -> Providers -> Labs; en Presupuesto los perfiles van antes de los top-ups.
+    # Router -> Models -> Providers -> Labs; en Presupuesto los perfiles van antes de los top-ups.
     for {first, second} <- [
+          {"sidebar-link-catalog-router", "sidebar-link-catalog-models"},
           {"sidebar-link-catalog-models", "sidebar-link-catalog-providers"},
           {"sidebar-link-catalog-providers", "sidebar-link-catalog-labs"},
           {"sidebar-link-access-services", "sidebar-link-access-users"},
@@ -131,6 +133,12 @@ defmodule TokengateWeb.SidebarTest do
 
     {:ok, view, _html} = live(recycle(conn), ~p"/stats/models")
     assert has_element?(view, "#sidebar-link-stats[aria-current=page]")
+    refute has_element?(view, "#sidebar-link-catalog-models[aria-current]")
+
+    # El Router enciende su propia entrada (y no la de Modelos, que va justo
+    # debajo: el prefijo /catalog/router no debe resolver a /catalog/models).
+    {:ok, view, _html} = live(recycle(conn), ~p"/catalog/router")
+    assert has_element?(view, "#sidebar-link-catalog-router[aria-current=page]")
     refute has_element?(view, "#sidebar-link-catalog-models[aria-current]")
   end
 

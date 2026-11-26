@@ -357,6 +357,15 @@ seed_api_key.("seed-qa-key", %{
   "label" => "seed-qa-key"
 })
 
+# ---------------------------------------------------------------------------
+# SmartRouter — singleton config + shipped use-case presets
+# ---------------------------------------------------------------------------
+# Both are idempotent and inert: the router is created DISABLED and the presets
+# carry no model bindings, so nothing routes until an operator turns it on.
+%{inserted: presets_inserted} = Tokengate.SmartRouter.Presets.ensure_all!()
+_config = Tokengate.SmartRouter.Config.ensure!()
+IO.puts("Seeded #{presets_inserted} SmartRouter use-case presets (router disabled)")
+
 IO.puts("""
 Seeds complete.
 

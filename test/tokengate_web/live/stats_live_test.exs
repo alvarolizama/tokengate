@@ -473,6 +473,13 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#group-table")
     assert has_element?(view, "#group-list-search")
     assert has_element?(view, "#bd-group-#{group.id}")
+
+    assert has_element?(
+             view,
+             "#group-link-#{group.id}[href='/stats/profiles/#{group.id}?period=today']"
+           )
+
+    assert has_element?(view, "#bd-group-#{group.id} span[aria-label='Puesto 1']")
     # El listado tiene UNA sola tabla: el card de tiers de uso por miembro salió
     # de la pestaña (el mismo agregado sigue en /budget/profiles/:id/members).
     refute has_element?(view, "#member-usage-tiers")
@@ -696,7 +703,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   test "selecting a group shows drill-down with members and models", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{group: group} = group_with_log(%{cost: "0.005"})
+    %{group: group, model: model} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/stats/profiles?group_id=#{group.id}")
@@ -705,7 +712,39 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#group-kpi-requests")
     # Since the 2026-07-30 refactor there's only one cost KPI: #group-kpi-cost.
     assert has_element?(view, "#group-kpi-cost")
-    assert has_element?(view, "#clear-group-filter")
+    assert has_element?(view, "#group-models")
+    assert has_element?(view, "#group-members")
+    assert has_element?(view, "#group-back")
+    assert has_element?(view, "#group-detail-header", group.name)
+    assert has_element?(view, "#group-models a[href='/stats/models/#{model.id}?period=today']")
+
+    # Cambiar de periodo DESDE el alias ?group_id= conserva el detalle en la
+    # ruta canónica /stats/profiles/:id.
+    assert has_element?(
+             view,
+             "#period-yesterday[href='/stats/profiles/#{group.id}?period=yesterday']"
+           )
+
+    {:ok, detail, _html} = live(conn, ~p"/stats/profiles/#{group.id}?period=today")
+    detail = wait_stats_loaded(detail)
+
+    assert has_element?(detail, "#group-detail-header", group.name)
+    assert has_element?(detail, "#group-kpi-cost")
+    assert has_element?(detail, "#nav-groups.btn-primary")
+    assert has_element?(detail, "#group-daily-chart-metric-toggle")
+  end
+
+  test "detalle del perfil de límites: un id que no existe avisa en vez de romper", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/stats/profiles/#{Ecto.UUID.generate()}")
+    view = wait_stats_loaded(view)
+
+    assert has_element?(view, "#group-not-found")
+    refute has_element?(view, "#group-kpi-cost")
   end
 
   ## Period switching --------------------------------------------------------

@@ -471,6 +471,19 @@ defmodule TokengateWeb.GroupMembersLive do
     {:noreply, assign(socket, :editing_details_member_id, nil)}
   end
 
+  ## Events — acceso SmartRouter del miembro (tri-estado) -------------------
+
+  def handle_event("set_router_access", %{"id" => member_id, "state" => state}, socket) do
+    case fetch_group_member(member_id) do
+      {:ok, member} ->
+        set_router_access(socket, member, state)
+
+      :error ->
+        {:noreply,
+         put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
+    end
+  end
+
   ## Events — extra model grants / denies (picker de 3 estados) ------------
 
   def handle_event(
@@ -641,6 +654,96 @@ defmodule TokengateWeb.GroupMembersLive do
 
   defp add_member_form do
     to_form(%{"email" => ""}, as: :add_member)
+  end
+
+  ## Helpers — SmartRouter access del miembro ------------------------------
+
+  # Tri-estado: nil = hereda el perfil · true = permite · false = niega.
+  # Pintarlo es lo único que hace este helper; el resolutor real (lo que el
+  # proxy aplica) sigue siendo `Accounts.router_enabled?/1`.
+  defp router_state(%{router_enabled: nil}), do: :inherit
+  defp router_state(%{router_enabled: true}), do: :allow
+  defp router_state(%{router_enabled: false}), do: :deny
+
+  defp router_state_label(:inherit), do: gettext("Inherited")
+  defp router_state_label(:allow), do: gettext("Allowed")
+  defp router_state_label(:deny), do: gettext("Denied")
+
+  defp router_state_badge_class(:inherit), do: "badge-ghost"
+  defp router_state_badge_class(:allow), do: "badge-success"
+  defp router_state_badge_class(:deny), do: "badge-error"
+
+  defp router_effective?(member, group) do
+    case member.router_enabled do
+      nil -> group.router_enabled == true
+      flag -> flag
+    end
+  end
+
+  defp router_effective_label(true), do: gettext("allowed")
+  defp router_effective_label(false), do: gettext("denied")
+
+  defp router_source_label(%{router_enabled: nil}), do: gettext("from the limit profile")
+
+  defp router_source_label(_member), do: gettext("own override")
+
+  defp parse_router_state("inherit"), do: {:ok, nil}
+  defp parse_router_state("allow"), do: {:ok, true}
+  defp parse_router_state("deny"), do: {:ok, false}
+  defp parse_router_state(_state), do: :error
+
+  defp set_router_access(socket, member, state) do
+    group = socket.assigns.group
+
+    with {:ok, value} <- parse_router_state(state),
+         :ok <- router_member_of_group?(member, group),
+         {:ok, updated} <- Accounts.update_group_member(member, %{router_enabled: value}) do
+      audit(socket, "group_member.router_access_change", "group_member", member.id, %{
+        "group_id" => member.group_id,
+        "router_enabled" => value,
+        "effective" => router_effective?(updated, group)
+      })
+
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Router access updated."))
+       |> refresh_member_router_access(updated)}
+    else
+      :wrong_group ->
+        {:noreply,
+         put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Could not update the router access."))}
+    end
+  end
+
+  defp router_member_of_group?(member, group) do
+    if member.group_id == group.id, do: :ok, else: :wrong_group
+  end
+
+  # El miembro editado vuelve al stream y al mapa del modal: la fila y el
+  # badge efectivo cambian en el mismo render, sin recargar la página. Se
+  # parte del struct ya cargado porque `update_group_member/2` devuelve el
+  # miembro sin `user`/`group` precargados y la fila los pinta.
+  defp refresh_member_router_access(socket, updated) do
+    case Map.get(socket.assigns.members_by_id, updated.id) do
+      nil ->
+        socket
+
+      loaded ->
+        member = %{loaded | router_enabled: updated.router_enabled}
+
+        current_members =
+          Enum.map(socket.assigns.current_members, fn row ->
+            if row.id == member.id, do: member, else: row
+          end)
+
+        socket
+        |> assign(:current_members, current_members)
+        |> assign(:members_by_id, Map.put(socket.assigns.members_by_id, member.id, member))
+        |> stream_insert(:members, member)
+    end
   end
 
   # La invariante «un usuario = un presupuesto» sale como error de índice único en
@@ -951,6 +1054,21 @@ defmodule TokengateWeb.GroupMembersLive do
                   </span>
                 </div>
               </:col>
+              <:col :let={member} label={gettext("Router")}>
+                <div id={"router-state-#{member.id}"} class="flex flex-col gap-0.5 items-start">
+                  <span class={[
+                    "badge badge-sm",
+                    router_state_badge_class(router_state(member))
+                  ]}>
+                    {router_state_label(router_state(member))}
+                  </span>
+                  <span class="text-[10px] text-base-content/50">
+                    {gettext("effective: %{state}",
+                      state: router_effective_label(router_effective?(member, @group))
+                    )}
+                  </span>
+                </div>
+              </:col>
               <:col :let={member} label={gettext("Monthly cap (UTC month)")}>
                 <div id={"credit-#{member.id}"} class="min-w-[150px]">
                   <Stats.budget_cell credit={Map.get(@member_credits, member.id)} />
@@ -1042,6 +1160,76 @@ defmodule TokengateWeb.GroupMembersLive do
           on_close="close_details"
         >
           <p class="text-xs text-base-content/50 mb-4">{member.user.name}</p>
+
+          <%!-- Acceso SmartRouter: tri-estado (heredar / permitir / negar) con el
+               estado EFECTIVO siempre a la vista. --%>
+          <div class="mb-4 pb-4 border-b border-base-300">
+            <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">
+              {gettext("SmartRouter access")}
+            </p>
+            <p class="text-xs text-base-content/40 mb-2">
+              {gettext(
+                "Inherit follows the limit profile; allow or deny overrides it for this member only."
+              )}
+            </p>
+            <div class="flex flex-wrap items-center gap-2" id={"router-access-#{member.id}"}>
+              <button
+                type="button"
+                phx-click="set_router_access"
+                phx-value-id={member.id}
+                phx-value-state="inherit"
+                class={[
+                  "btn btn-xs",
+                  if(router_state(member) == :inherit, do: "btn-primary", else: "btn-ghost")
+                ]}
+                id={"router-access-inherit-#{member.id}"}
+                aria-pressed={router_state(member) == :inherit}
+              >
+                {gettext("Inherit")}
+              </button>
+              <button
+                type="button"
+                phx-click="set_router_access"
+                phx-value-id={member.id}
+                phx-value-state="allow"
+                class={[
+                  "btn btn-xs",
+                  if(router_state(member) == :allow, do: "btn-primary", else: "btn-ghost")
+                ]}
+                id={"router-access-allow-#{member.id}"}
+                aria-pressed={router_state(member) == :allow}
+              >
+                {gettext("Allow")}
+              </button>
+              <button
+                type="button"
+                phx-click="set_router_access"
+                phx-value-id={member.id}
+                phx-value-state="deny"
+                class={[
+                  "btn btn-xs",
+                  if(router_state(member) == :deny, do: "btn-primary", else: "btn-ghost")
+                ]}
+                id={"router-access-deny-#{member.id}"}
+                aria-pressed={router_state(member) == :deny}
+              >
+                {gettext("Deny")}
+              </button>
+            </div>
+            <p
+              class="text-xs text-base-content/60 mt-2 flex items-center gap-2"
+              id={"router-effective-#{member.id}"}
+            >
+              {gettext("Effective access:")}
+              <span class={[
+                "badge badge-sm",
+                if(router_effective?(member, @group), do: "badge-success", else: "badge-error")
+              ]}>
+                {router_effective_label(router_effective?(member, @group))}
+              </span>
+              <span class="text-base-content/40">({router_source_label(member)})</span>
+            </p>
+          </div>
 
           <div>
             <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">

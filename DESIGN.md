@@ -722,8 +722,8 @@ compartir, con el porqué.
 
 ### T1. Tema y CSS propio
 
-TokenGate usa explícitamente el tema `night` como default (`themes: night --default`
-en `assets/css/app.css` y `data-theme="night"` en `root.html.heex`), en lugar del
+TokenGate usa explícitamente el tema `dark` como default (`themes: dark --default`
+en `assets/css/app.css` y `data-theme="dark"` en `root.html.heex`), en lugar del
 `dim` base del Commons (§C2). Es una elección deliberada de producto para la
 consola del gateway; el resto de tokens semánticos de daisyUI se consumen sin
 overrides locales.
@@ -736,7 +736,7 @@ Commons):
 | `@import "tailwindcss" source(none)` + `@source` ×3 | escaneo explícito de clases (v4 no autodescubre) |
 | `@import "phoenix-colocated/…"` + `@source` de `_build/dev/phoenix-colocated` | CSS de hooks colocados en LiveView (dev) |
 | `@plugin "../vendor/heroicons"` | `<.icon name="hero-…">` |
-| `@plugin "../vendor/daisyui" { themes: night --default }` | el tema activo de TokenGate |
+| `@plugin "../vendor/daisyui" { themes: dark --default }` | el tema activo de TokenGate |
 | `@custom-variant phx-click-loading` / `phx-submit-loading` / `phx-change-loading` | estados de carga de LiveView |
 | `[data-phx-session], [data-phx-teleported-src] { display: contents }` | que los wrappers de LiveView no rompan el layout |
 | `@media (min-width: 64rem)` sobre `html.sidebar-collapsed .shell-sidebar …` | el **rail** de §C12.1: `.shell-hide` se esconde, los enlaces centran su icono, el `.drawer-side` pierde el recorte y el menú de usuario abre hacia la derecha. El CSS del rail lo pone cada app: el Commons lo describe, no lo entrega |
@@ -892,7 +892,7 @@ Sin librería (Commons C9). Dos formas reales:
 - `lib/tokengate_web/live/observability_live.ex` — tabla canónica card + `table-sm`.
 - `lib/tokengate_web/stats_helpers.ex` — formatters, badges semánticos, paleta de
   proveedores y escalas de charts.
-- `assets/css/app.css` — tema `night --default`, regla global de tablas
+- `assets/css/app.css` — tema `dark --default`, regla global de tablas
   (`var(--color-base-200)`: en daisyUI 5 los alias `--b1/--b2/--b3` ya no
   existen), CSS del rail y el latido `.reset-colon`. Inventario en §T1.
 - Skills: `liveview-ui-wiring` (pickers), `liveview-nav-active-state` (estado

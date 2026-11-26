@@ -150,6 +150,10 @@ defmodule TokengateWeb.Plugs.ApiAuth do
       user_id: nil,
       status: "active",
       service_name: service.name,
+      # SmartRouter access is the service's own flag, not a profile inheritance:
+      # the virtual member has no group, so this is the only end
+      # `Accounts.router_enabled?/1` can read for a machine consumer.
+      router_enabled: service.router_enabled,
       # Preloaded associations (virtual)
       group: nil,
       user: nil,

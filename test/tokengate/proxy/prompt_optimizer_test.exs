@@ -611,4 +611,162 @@ defmodule Tokengate.Proxy.PromptOptimizerTest do
       assert PromptOptimizer.strip_reasoning(nil) == []
     end
   end
+
+  ## SmartRouter use-case passes ###############################################
+
+  describe "keep_last_n_images/2" do
+    defp vision_message(text, url) do
+      %{
+        "role" => "user",
+        "content" => [
+          %{"type" => "text", "text" => text},
+          %{"type" => "image_url", "image_url" => %{"url" => url}}
+        ]
+      }
+    end
+
+    test "keeps only the last n image-bearing messages" do
+      messages = [
+        vision_message("one", "data:one"),
+        %{"role" => "assistant", "content" => "ok"},
+        vision_message("two", "data:two"),
+        vision_message("three", "data:three")
+      ]
+
+      optimized = PromptOptimizer.keep_last_n_images(messages, 2)
+      encoded = Jason.encode!(optimized)
+
+      refute encoded =~ "data:one"
+      assert encoded =~ "data:two"
+      assert encoded =~ "data:three"
+      # The message itself survives with a deterministic placeholder.
+      assert encoded =~ "[image omitted]"
+    end
+
+    test "nil and non-positive n are no-ops" do
+      messages = [vision_message("one", "data:one")]
+
+      assert PromptOptimizer.keep_last_n_images(messages, nil) == messages
+      assert PromptOptimizer.keep_last_n_images(messages, 5) == messages
+    end
+
+    test "text-only conversations are untouched" do
+      messages = [%{"role" => "user", "content" => "hola"}]
+      assert PromptOptimizer.keep_last_n_images(messages, 0) == messages
+    end
+  end
+
+  describe "window_history/2" do
+    test "keeps the system block plus the last N turns" do
+      messages = [
+        %{"role" => "system", "content" => "SYS"},
+        %{"role" => "user", "content" => "u1"},
+        %{"role" => "assistant", "content" => "a1"},
+        %{"role" => "user", "content" => "u2"},
+        %{"role" => "assistant", "content" => "a2"},
+        %{"role" => "user", "content" => "u3"}
+      ]
+
+      assert PromptOptimizer.window_history(messages, 2) == [
+               %{"role" => "system", "content" => "SYS"},
+               %{"role" => "user", "content" => "u2"},
+               %{"role" => "assistant", "content" => "a2"},
+               %{"role" => "user", "content" => "u3"}
+             ]
+    end
+
+    test "never opens the window on an orphaned reply" do
+      messages = [
+        %{"role" => "user", "content" => "u1"},
+        %{"role" => "assistant", "content" => "a1"},
+        %{"role" => "user", "content" => "u2"},
+        %{"role" => "assistant", "content" => "a2"}
+      ]
+
+      assert PromptOptimizer.window_history(messages, 1) == [
+               %{"role" => "user", "content" => "u2"},
+               %{"role" => "assistant", "content" => "a2"}
+             ]
+    end
+
+    test "nil turns is a no-op" do
+      messages = [%{"role" => "user", "content" => "u1"}]
+      assert PromptOptimizer.window_history(messages, nil) == messages
+    end
+  end
+
+  describe "compact_json_tools/1" do
+    test "compacts tool_call arguments and tool outputs" do
+      messages = [
+        %{
+          "role" => "assistant",
+          "content" => nil,
+          "tool_calls" => [
+            %{
+              "id" => "call_1",
+              "type" => "function",
+              "function" => %{
+                "name" => "read",
+                "arguments" => ~s({"a": 1,   "b": null, "c": {"d": 2}})
+              }
+            }
+          ]
+        },
+        %{"role" => "tool", "content" => ~s({"ok": true,  "why": null})}
+      ]
+
+      [call, tool] = PromptOptimizer.compact_json_tools(messages)
+
+      assert call["tool_calls"] |> hd() |> get_in(["function", "arguments"]) ==
+               ~s({"a":1,"c":{"d":2}})
+
+      assert tool["content"] == ~s({"ok":true})
+    end
+
+    test "leaves non-JSON strings and unparseable content alone" do
+      messages = [
+        %{"role" => "tool", "content" => "plain text"},
+        %{
+          "role" => "assistant",
+          "tool_calls" => [%{"function" => %{"arguments" => "{not json"}}]
+        }
+      ]
+
+      assert PromptOptimizer.compact_json_tools(messages) == messages
+    end
+  end
+
+  describe "stale_tool_trim/2" do
+    defp tool_message(size, tag) do
+      %{"role" => "tool", "content" => String.duplicate("#{tag} ", div(size, 3))}
+    end
+
+    test "trims old tool output when the saving crosses the threshold" do
+      messages =
+        [tool_message(4_000, "old")] ++
+          Enum.map(1..6, fn i -> %{"role" => "user", "content" => "u#{i}"} end) ++
+          [tool_message(400, "recent"), tool_message(400, "newest")]
+
+      trimmed = PromptOptimizer.stale_tool_trim(messages, 10)
+
+      assert hd(trimmed)["content"] =~ "omitted"
+      # The last tool exchange always survives.
+      assert Enum.at(trimmed, -1)["content"] == Enum.at(messages, -1)["content"]
+      assert Enum.at(trimmed, -2)["content"] == Enum.at(messages, -2)["content"]
+    end
+
+    test "refuses to rewrite when the saving is below the threshold" do
+      messages =
+        [tool_message(400, "old")] ++
+          Enum.map(1..6, fn i -> %{"role" => "user", "content" => "u#{i}"} end) ++
+          [tool_message(400, "recent")]
+
+      assert PromptOptimizer.stale_tool_trim(messages, 90) == messages
+    end
+
+    test "nil threshold is a no-op" do
+      messages = [tool_message(4_000, "old")]
+      assert PromptOptimizer.stale_tool_trim(messages, nil) == messages
+    end
+  end
 end

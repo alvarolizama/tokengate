@@ -96,6 +96,16 @@
           <.icon name="hero-rectangle-stack" class="w-4 h-4" /> {gettext("Models")}
         </.link>
         <.link
+          patch={~p"/stats/router?period=#{@period}"}
+          class={[
+            "join-item btn btn-sm",
+            if(@live_action == :router, do: "btn-primary", else: "btn-ghost")
+          ]}
+          id="nav-router"
+        >
+          <.icon name="hero-arrows-right-left" class="w-4 h-4" /> {gettext("Router")}
+        </.link>
+        <.link
           patch={~p"/stats/agents?period=#{@period}"}
           class={[
             "join-item btn btn-sm",
@@ -206,6 +216,21 @@
             shown_counts={@shown_counts}
             list_search={@list_search}
           />
+        <% @live_action == :router -> %>
+          <.router
+            summary={@router_summary}
+            use_cases={@router_use_cases}
+            model_perf={@router_model_perf}
+            vs_direct={@router_vs_direct}
+            attribution={@router_attribution}
+            signals={@router_signals}
+            insights={@router_insights}
+            sources={@router_sources}
+            period={@period}
+            per_page={@per_page}
+            shown_counts={@shown_counts}
+            stats_loading={@stats_loading}
+          />
         <% @live_action == :agents -> %>
           <.agents
             agent_ranking={@agent_ranking}
@@ -277,17 +302,27 @@
               list_search={@list_search}
             />
           <% end %>
-        <% @live_action == :groups -> %>
-          <.groups
+        <% @live_action == :group or (@live_action == :groups and not is_nil(@group_id)) -> %>
+          <.group
+            group={@group}
+            group_budget={@group_budget}
             metrics={@metrics}
-            breakdown_group={@breakdown_group}
-            group_budgets={@group_budgets}
             breakdown_member={@breakdown_member}
             breakdown_model={@breakdown_model}
             drilldown_series={@drilldown_series}
             drilldown_series_labels={@drilldown_series_labels}
-            group_filter={@group_filter}
-            group={@group}
+            chart_metric={@chart_metric}
+            period={@period}
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
+            per_page={@per_page}
+            shown_counts={@shown_counts}
+            stats_loading={@stats_loading}
+          />
+        <% @live_action == :groups -> %>
+          <.groups
+            breakdown_group={@breakdown_group}
+            group_budgets={@group_budgets}
             list_search={@list_search}
             period={@period}
             sort_field={@sort_field}
@@ -316,24 +351,6 @@
             per_page={@per_page}
             shown_counts={@shown_counts}
             list_search={@list_search}
-          />
-        <% @live_action == :group -> %>
-          <.groups
-            metrics={@metrics}
-            breakdown_group={@breakdown_group}
-            group_budgets={@group_budgets}
-            group_budget={@group_budget}
-            breakdown_member={@breakdown_member}
-            breakdown_model={@breakdown_model}
-            drilldown_series={@drilldown_series}
-            drilldown_series_labels={@drilldown_series_labels}
-            group_filter={@group_id}
-            list_search={@list_search}
-            period={@period}
-            sort_field={@sort_field}
-            sort_direction={@sort_direction}
-            per_page={@per_page}
-            shown_counts={@shown_counts}
           />
       <% end %>
     </div>

@@ -271,6 +271,34 @@ defmodule TokengateWeb.AdminComponents do
     """
   end
 
+  # ---------------------------------------------------------------------------
+  # Acceso SmartRouter
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Pastilla «Router» de un sujeto con SmartRouter habilitado.
+
+  Se pinta **solo** cuando el flag está encendido (como la pastilla
+  «Unlimited»): apagado no ocupa espacio en la fila. `id` lo pone quien la usa
+  para que los tests la localicen.
+  """
+  attr :id, :string, required: true
+  attr :enabled, :boolean, required: true
+  attr :title, :string, default: nil
+
+  def router_badge(assigns) do
+    ~H"""
+    <span
+      :if={@enabled}
+      id={@id}
+      class="badge badge-sm badge-info badge-outline gap-1"
+      title={@title || gettext("SmartRouter access enabled")}
+    >
+      <.icon name="hero-bolt" class="w-3 h-3" />{gettext("Router")}
+    </span>
+    """
+  end
+
   # Ventana de páginas: `1 … n-1 n n+1 … última`, con `:gap` en los saltos.
   # Con 7 páginas o menos se muestran todas.
   defp page_window(_page, total_pages) when total_pages <= 7, do: Enum.to_list(1..total_pages)

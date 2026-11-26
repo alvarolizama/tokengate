@@ -1,7 +1,7 @@
 defmodule TokengateWeb.StatsLive.DailyStackedChart do
   @moduledoc """
   Shared responsive stacked daily bar chart for drill-down views
-  (`StatsLive.Model` and `StatsLive.Groups`).
+  (`StatsLive.Model`, `StatsLive.Provider`, `StatsLive.Agent` and `StatsLive.Group`).
 
   Places the legend below the chart with `flex-wrap` (matching `DayHourChart`)
   so narrow/mobile viewports keep the full width for the bars.
@@ -23,12 +23,26 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
     metric_atom = if assigns.metric == "cost", do: :cost, else: :requests
     pivoted = Stats.pivot_daily_series(assigns.series, metric_atom)
 
+    # Total por día (suma de todos los labels): la barra apilada se escala
+    # sobre el total del día, no sobre la celda más alta. Con la celda como
+    # escala los segmentos de un día suman >100% y el apilado se recorta.
+    day_totals =
+      Map.new(pivoted.days, fn day ->
+        {day, day_total(pivoted.series, day)}
+      end)
+
+    spark_max =
+      pivoted.days
+      |> Enum.map(&Map.get(day_totals, &1, 0))
+      |> Enum.max(fn -> 0 end)
+
     assigns =
       assigns
       |> assign(:metric_atom, metric_atom)
       |> assign(:cost_mode?, metric_atom == :cost)
       |> assign(:pivoted, pivoted)
-      |> assign(:spark_max, Stats.daily_series_max(pivoted))
+      |> assign(:day_totals, day_totals)
+      |> assign(:spark_max, spark_max)
 
     ~H"""
     <div :if={@series != []} class="card bg-base-100 border border-base-300 shadow-sm" id={@id}>
@@ -87,15 +101,22 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
                 </div>
               </div>
 
-              <%!-- Stacked bar --%>
-              <div class="w-full flex flex-col-reverse rounded-t overflow-hidden">
+              <%!-- Stacked bar. `height` en la pila: la barra se escala por el
+              TOTAL del día sobre una altura definida y cada segmento reparte
+              esa altura en proporción a su valor. Con un contenedor de alto
+              automático los `height: X%` resuelven a `auto` (barras de 0px,
+              gráfica vacía). --%>
+              <div
+                class="w-full flex flex-col-reverse rounded-t overflow-hidden"
+                style={"height: #{day_bar_pct(@day_totals, day, @spark_max)}%"}
+              >
                 <div
                   :for={label <- @labels}
                   class={[
-                    "w-full",
+                    "w-full shrink-0",
                     Stats.sparkline_color(Enum.find_index(@labels, &(&1 == label)) || 0)
                   ]}
-                  style={"height: #{Stats.sparkline_bar_height(Map.get(@pivoted.series[label] || %{}, day, 0), @spark_max)}%"}
+                  style={"height: #{day_segment_pct(@pivoted.series, label, day)}%"}
                   title={"#{label}: #{format_series_val(Map.get(@pivoted.series[label] || %{}, day, 0), @cost_mode?)}"}
                 />
               </div>
@@ -140,6 +161,32 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
       </div>
     </div>
     """
+  end
+
+  # Alto total de la barra del día: escala sqrt del total (misma curva que las
+  # sparklines) para que los días chicos sigan leyéndose.
+  defp day_bar_pct(day_totals, day, spark_max) do
+    Stats.sparkline_bar_height(Map.get(day_totals, day, 0), spark_max)
+  end
+
+  # Reparto proporcional: los segmentos del día suman 100%, así el apilado
+  # nunca se recorta ni infla la barra.
+  defp day_segment_pct(series, label, day) do
+    total = day_total(series, day)
+
+    if total > 0 do
+      value = Map.get(series[label] || %{}, day, 0)
+      Float.round(value / total * 100, 2)
+    else
+      0.0
+    end
+  end
+
+  defp day_total(series, day) do
+    series
+    |> Map.values()
+    |> Enum.map(&Map.get(&1, day, 0))
+    |> Enum.sum()
   end
 
   defp format_series_val(val, true) when is_number(val) do

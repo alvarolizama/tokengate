@@ -5,9 +5,10 @@ defmodule Tokengate.Routing.Cache do
 
   ## What is cached
 
-    * `{:model_providers, model_id, group_id}` — the ordered list of
+    * `{:model_providers, model_id, scope}` — the ordered list of
       `ModelProvider` structs (with credential + provider preloaded) visible to
-      that scope. `group_id` may be `:global` for service/virtual members.
+      that scope. `scope` is a group id, `{:service, service_id}` or `:global`
+      (group-less/service-less members, global lanes only).
     * `{:accessible_models, group_id, member_id}` — the list of `Model`
       structs a group member may route to (group grants ∪ individual extra
       grants ∪ service grants). `group_id`/`member_id` may be `:global` for
@@ -72,13 +73,29 @@ defmodule Tokengate.Routing.Cache do
   Returns the cached model providers for the given scope, computing and
   caching the result on a miss.
 
-  `group_id` may be `nil` for global/service scope (the cache key uses
-  `:global`). `fun` is the DB query — it is only executed on a cache miss.
+  `scope` is the routing scope the list belongs to:
+
+    * a group id — the lanes visible to a member of that group;
+    * `{:service, service_id}` — the global lanes plus that service's own
+      exclusive lanes. Services MUST NOT share the `:global` entry: two
+      services with a service-exclusive lane for the SAME model would
+      otherwise overwrite each other's list for a whole TTL;
+    * `nil` / `:global` — the group-less, service-less scope (global lanes
+      only).
+
+  `fun` is the DB query — it is only executed on a cache miss.
   """
-  @spec fetch_model_providers(binary(), binary() | nil, (-> [term()])) :: [term()]
-  def fetch_model_providers(model_id, group_id, fun) when is_function(fun, 0) do
-    fetch_fresh({:model_providers, model_id, group_id || :global}, fun)
+  @spec fetch_model_providers(binary(), term(), (-> [term()])) :: [term()]
+  def fetch_model_providers(model_id, scope, fun) when is_function(fun, 0) do
+    fetch_fresh({:model_providers, model_id, scope_key(scope)}, fun)
   end
+
+  # `{:service, id}` stays a tuple (it is a first-class scope); everything else
+  # follows the historical contract where a missing group is `:global`.
+  defp scope_key({:service, _id} = scope), do: scope
+  defp scope_key(:global), do: :global
+  defp scope_key(nil), do: :global
+  defp scope_key(group_id), do: group_id
 
   @doc """
   Returns the cached accessible models for a group member, computing and

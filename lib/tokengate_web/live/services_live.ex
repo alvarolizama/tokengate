@@ -38,7 +38,7 @@ defmodule TokengateWeb.ServicesLive do
 
   # The subset of `Service.changeset/2`'s `@permitted` fields worth recording
   # in `service.update`; auditing anything else logs keys the row never stores.
-  @service_audit_fields ~w(name concurrency_limit rpm_limit monthly_spend_limit_usd unlimited_spend)
+  @service_audit_fields ~w(name concurrency_limit rpm_limit monthly_spend_limit_usd unlimited_spend router_enabled)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -1293,6 +1293,19 @@ defmodule TokengateWeb.ServicesLive do
                 hint={gettext("Absolute cap (defaults to 60 when empty).")}
               />
             </div>
+            <%!-- SmartRouter del consumidor machine: flag propio, sin perfil que
+                 heredar (un servicio no pertenece a un perfil de límites). --%>
+            <div class="rounded-lg border border-base-300 bg-base-200/40 p-3 mt-4">
+              <p class="text-xs font-medium uppercase tracking-wide text-base-content/50 mb-2">
+                {gettext("SmartRouter access")}
+              </p>
+              <.input
+                field={@form[:router_enabled]}
+                type="checkbox"
+                label={gettext("Allow the SmartRouter for this service")}
+                hint={gettext("Independent of limit profiles: the service's own flag.")}
+              />
+            </div>
           </.form>
           <:footer>
             <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
@@ -1598,6 +1611,9 @@ defmodule TokengateWeb.ServicesLive do
                 subtitle={"#{service.concurrency_limit || 5} conc. · #{service.rpm_limit || 60} RPM"}
                 truncate
               />
+              <div class="flex items-center gap-1.5 mt-1 flex-wrap">
+                <.router_badge id={"router-badge-#{service.id}"} enabled={service.router_enabled} />
+              </div>
             </:col>
             <:col :let={service} label={gettext("Keys")}>
               <.keys_badge

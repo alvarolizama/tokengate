@@ -56,6 +56,14 @@ defmodule Tokengate.Logs.Inflight do
           credential_name: String.t() | nil,
           credential_id: String.t() | nil,
           provider_key_suffix: String.t() | nil,
+          # SmartRouter live fields (nil for a direct request): who is running
+          # which use case on which resolved model RIGHT NOW. Zero DB queries —
+          # the monitor reads them off the ETS entry.
+          routed_via_router: boolean(),
+          model_resolved: String.t() | nil,
+          router_use_case_key: String.t() | nil,
+          router_effort_tier: String.t() | nil,
+          router_decision_source: String.t() | nil,
           started_at: DateTime.t()
         }
 
@@ -94,6 +102,11 @@ defmodule Tokengate.Logs.Inflight do
       credential_name: Map.get(attrs, :credential_name),
       credential_id: Map.get(attrs, :credential_id),
       provider_key_suffix: Map.get(attrs, :provider_key_suffix),
+      routed_via_router: Map.get(attrs, :routed_via_router, false),
+      model_resolved: Map.get(attrs, :model_resolved),
+      router_use_case_key: Map.get(attrs, :router_use_case_key),
+      router_effort_tier: Map.get(attrs, :router_effort_tier),
+      router_decision_source: Map.get(attrs, :router_decision_source),
       started_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
 

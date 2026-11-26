@@ -230,6 +230,22 @@ defmodule Tokengate.Logs.WriteWorker do
       credential_id: args["credential_id"],
       client_agent: args["client_agent"],
       provider_key_prefix: args["provider_key_prefix"],
+      # SmartRouter telemetry (S3). Same keys on the Oban path and the
+      # synchronous fallback: both read THIS function, so an async write and a
+      # failed-enqueue insert persist identical router metadata.
+      routed_via_router: args["routed_via_router"] || false,
+      model_resolved: args["model_resolved"],
+      router_use_case_id: args["router_use_case_id"],
+      router_use_case_key: args["router_use_case_key"],
+      router_use_case_model_id: args["router_use_case_model_id"],
+      router_effort_tier: args["router_effort_tier"],
+      router_decision_source: args["router_decision_source"],
+      router_decision_ms: args["router_decision_ms"],
+      router_decision_cost_usd: args["router_decision_cost_usd"],
+      router_baseline_model_id: args["router_baseline_model_id"],
+      router_baseline_cost_usd: args["router_baseline_cost_usd"],
+      router_direct_access: args["router_direct_access"],
+      prompt_tokens_saved_est: args["prompt_tokens_saved_est"],
       inserted_at: parse_inserted_at(args["inserted_at"])
     }
   end

@@ -178,6 +178,7 @@ defmodule TokengateWeb.Router do
       live "/stats/overview", StatsLive, :index
       live "/stats/models", StatsLive, :models
       live "/stats/models/:model_id", StatsLive, :model
+      live "/stats/router", StatsLive, :router
       # Ranking de agentes de código (identidad normalizada en lectura desde
       # client_agent/agent_type): mismo scope, live_session y pipe_through.
       live "/stats/agents", StatsLive, :agents
@@ -202,6 +203,7 @@ defmodule TokengateWeb.Router do
       # Catálogo — qué se sirve y a qué costo.
       live "/catalog/providers", ProvidersLive
       live "/catalog/providers/:id/keys", ProviderKeysLive
+      live "/catalog/router", RouterLive
       live "/catalog/models", ModelsLive
       live "/catalog/models/:id", ModelProvidersLive
       live "/catalog/labs", LabsLive
