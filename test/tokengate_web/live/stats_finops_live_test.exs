@@ -186,13 +186,23 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
     # Scatter plot Y toggle (cpr -> cache) & Top 5 Users/Services tables
     assert has_element?(view, "#finops-scatter-plot")
 
-    # Cuadrante: una guía por grupo (Users y Services) con su mediana, y con
-    # muestra mínima de 10 requests facturables ningún sujeto del fixture
-    # califica todavía: el aviso lo dice en vez de coronar a nadie.
+    # Línea de referencia por grupo (mediana), etiquetada con su valor, y la
+    # esquina sombreada que marca "más volumen y menos $/req que esa mediana".
+    # El sombreado se quedó porque ubica de un golpe, pero NO es un veredicto:
+    # la lista de "más barato por request" es la que responde con un criterio
+    # absoluto.
     assert has_element?(view, "#finops-scatter-quadrant-guides")
     assert has_element?(view, "#finops-scatter-quadrant-user")
-    assert has_element?(view, "#finops-scatter-quadrant-service")
-    assert has_element?(view, "#finops-scatter-efficient-empty")
+    # El sombreado se suprime cuando el recorte no se puede leer (en el fixture
+    # la mediana de servicios queda pegada al piso y quedaría una tira de 3px).
+    assert has_element?(view, "#finops-scatter-guide-x-service")
+    assert has_element?(view, "#finops-scatter-cheapest-empty")
+
+    # La letra chica va a la vista: qué mide cada cosa y qué no. La fórmula es
+    # literal (no pasa por gettext), así que sirve de ancla estable.
+    assert has_element?(view, "#finops-glossary")
+    assert has_element?(view, "#finops-glossary", "median of X and Y, per group")
+    assert has_element?(view, "#finops-glossary", "SUM(provider_cost_usd)")
     # El sujeto 100% caché local ($0) no desaparece: baja a la tira de no
     # facturables con sus requests ahorradas.
     assert has_element?(view, "#finops-scatter-cache-only")
