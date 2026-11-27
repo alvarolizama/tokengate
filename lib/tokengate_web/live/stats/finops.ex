@@ -18,8 +18,8 @@ defmodule TokengateWeb.StatsLive.Finops do
 
   Orden de la página: quién paga (proporción + marcadores), a dónde fue cada
   dólar (anatomía), cuándo (tendencia), qué tan eficiente es cada quien
-  (mapas de sujetos y de modelos/proveedores), quién gastó más (tops) y qué
-  capacidad lo consumió (barras).
+  (mapas de sujetos y de modelos/proveedores), quién gastó más (tops), qué
+  capacidad lo consumió (barras), glosario y leyenda global al pie.
 
   Las gráficas viven en `TokengateWeb.StatsLive.FinopsCharts`.
   """
@@ -111,6 +111,8 @@ defmodule TokengateWeb.StatsLive.Finops do
       |> assign(:service_options, service_options)
       |> assign(:active_filters, active_filters)
 
+    entity_rows = if assigns.entity == "models", do: assigns.models, else: assigns.providers
+
     assigns =
       assigns
       |> assign(:overall, overall)
@@ -125,6 +127,12 @@ defmodule TokengateWeb.StatsLive.Finops do
       |> assign(:top_users, top_users)
       |> assign(:top_services, top_services)
       |> assign(:hourly?, hourly?)
+      |> assign(:entity_rows, entity_rows)
+      |> assign(:subjects_legend, FinopsCharts.legend_data(assigns.scatter, assigns.scatter_y))
+      |> assign(
+        :entities_legend,
+        FinopsCharts.legend_data(entity_rows, assigns.entity_metric)
+      )
 
     ~H"""
     <div id="finops-stats" class="space-y-6">
@@ -324,8 +332,8 @@ defmodule TokengateWeb.StatsLive.Finops do
       />
 
       <%!-- Mapas de costo unitario: SUJETOS (usuarios/servicios) y ENTIDADES
-           (modelos/proveedores) lado a lado. Las líneas punteadas son la
-           mediana de cada grupo: referencia, no meta. --%>
+           (modelos/proveedores) lado a lado. Cruz al centro del área dibujada y
+           marquitas en los ejes para la mediana de cada grupo. --%>
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="finops-efficiency">
         <FinopsCharts.efficiency_scatter
           id="finops-scatter"
@@ -338,7 +346,7 @@ defmodule TokengateWeb.StatsLive.Finops do
 
         <FinopsCharts.efficiency_scatter
           id="finops-entity-scatter"
-          rows={if @entity == "models", do: @models, else: @providers}
+          rows={@entity_rows}
           y_metric={@entity_metric}
           y_options={[
             {"cpr", gettext("$/req")},
@@ -355,10 +363,6 @@ defmodule TokengateWeb.StatsLive.Finops do
           }
         />
       </div>
-
-      <%!-- La letra chica, a la vista: qué mide cada cosa y qué NO mide. Sin
-           esto el mapa se lee como un veredicto de "eficiencia" que no es. --%>
-      <.finops_glossary />
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="finops-top">
         <.top_subjects_table
@@ -381,6 +385,15 @@ defmodule TokengateWeb.StatsLive.Finops do
         id="finops-capabilities"
         rows={@request_types}
         title={gettext("Cost by capability")}
+      />
+
+      <%!-- La letra chica, a la vista: qué mide cada cosa y qué NO mide. Sin
+           esto el mapa se lee como un veredicto de "eficiencia" que no es. --%>
+      <.finops_glossary />
+
+      <FinopsCharts.global_legend
+        subjects={@subjects_legend}
+        entities={@entities_legend}
       />
     </div>
     """

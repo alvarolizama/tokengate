@@ -11117,3 +11117,48 @@ msgstr "Gasto en errores = dinero en respuestas que fallaron (status ≥ 400) ·
 #, elixir-autogen, elixir-format
 msgid "Money burned on internal reasoning tokens, billed as output. Errors are counted first, so this bucket only holds reasoning from calls that answered."
 msgstr "Dinero quemado en tokens internos de razonamiento, cobrados como salida. Los errores se cuentan primero, así que este bloque solo tiene el razonamiento de las llamadas que sí respondieron."
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1197
+#, elixir-autogen, elixir-format
+msgid "%{kind} median: X %{x} · Y %{y}"
+msgstr "Mediana %{kind}: X %{x} · Y %{y}"
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1139
+#, elixir-autogen, elixir-format
+msgid "Bubble size = cost"
+msgstr "Tamaño de burbuja = costo"
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1154
+#, elixir-autogen, elixir-format
+msgid "Cross = center of the drawn area (not a threshold)"
+msgstr "Cruz = centro del área dibujada (no es umbral)"
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1145
+#, elixir-autogen, elixir-format
+msgid "Halo = had $0 requests served by TokenGate's own cache"
+msgstr "Halo = tuvo requests $0 servidas por la caché propia de TokenGate"
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1114
+#, elixir-autogen, elixir-format
+msgid "Map legend"
+msgstr "Leyenda de los mapas"
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1125
+#, elixir-autogen, elixir-format
+msgid "Models / providers map"
+msgstr "Mapa de modelos / proveedores"
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1159
+#, elixir-autogen, elixir-format
+msgid "Shaded = right half and bottom half of the drawn area"
+msgstr "Sombreado = mitad derecha y mitad inferior del área dibujada"
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1120
+#, elixir-autogen, elixir-format
+msgid "Subjects map"
+msgstr "Mapa de sujetos"
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:822
+#, elixir-autogen, elixir-format
+msgid "X = billable requests · Y = %{y} · axis ticks = each group's median · cross = plot center · click a bubble to filter this page"
+msgstr "X = requests facturables · Y = %{y} · marquitas en ejes = mediana de cada grupo · cruz = centro del mapa · clic en una burbuja filtra esta página"

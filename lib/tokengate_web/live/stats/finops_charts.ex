@@ -13,8 +13,11 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
       router), con las píldoras de caché y top-ups.
     * `capability_bars/1` — barras horizontales por `request_type`.
     * `efficiency_scatter/1` — mapa de cuadrantes requests × `$/req`
-      facturable (o caché), radio por costo, mediana por grupo como línea de
-      corte y lista de los sujetos eficientes, con enlace a su detalle.
+      facturable (o caché), radio por costo, cruz de referencia en el centro
+      del área dibujada, mediana por grupo como marquita en cada eje y lista
+      de los sujetos eficientes, con enlace a su detalle.
+    * `global_legend/1` — leyenda global al pie de FinOps que resume ambos
+      mapas (sujetos y modelos/proveedores) y sus medianas.
   """
 
   use TokengateWeb, :html
@@ -710,35 +713,24 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
         []
       end
 
-    # Líneas de referencia: la mediana de CADA grupo, no un umbral de bondad.
-    # Sirven para ver de un golpe quién está arriba o abajo de su propia tribu
+    # Marquitas de mediana en los ejes: la mediana de CADA grupo, no un umbral
+    # de bondad. Sirven para ver quién está arriba o abajo de su propia tribu
     # (un servicio de embeddings no se compara con un humano en Claude Code).
-    # Van etiquetadas con su valor y su grupo; no hay cuadrante sombreado.
     guides =
       groups
-      |> Enum.flat_map(fn {kind, group} ->
+      |> Enum.map(fn {kind, group} ->
         x_med = median(Enum.map(group, & &1.x))
         y_med = median(Enum.map(group, & &1.y))
 
-        px = round2(@scatter_left + :math.sqrt(x_med / x_ceil) * plot_width())
-
-        # El rótulo de la vertical se voltea al otro lado si la línea cae
-        # pegada al borde derecho: si no, se sale del SVG.
-        {x_text, x_anchor} =
-          if px > @scatter_w - @scatter_right - 64, do: {px - 3, "end"}, else: {px + 3, "start"}
-
-        [
-          %{
-            kind: kind,
-            x_label: gettext("median %{value}", value: Stats.format_compact(round(x_med))),
-            y_label: gettext("median %{value}", value: format_scatter_axis(y_med, y_metric)),
-            px: px,
-            x_text: x_text,
-            x_anchor: x_anchor,
-            py: round2(@scatter_top + (1.0 - y_med / y_ceil) * plot_height())
-          }
-        ]
+        %{
+          kind: kind,
+          px: round2(@scatter_left + :math.sqrt(x_med / x_ceil) * plot_width()),
+          py: round2(@scatter_top + (1.0 - y_med / y_ceil) * plot_height())
+        }
       end)
+
+    cx = round2(@scatter_left + plot_width() / 2)
+    cy = round2(@scatter_top + plot_height() / 2)
 
     # "Más barato por request" NO usa la mediana: ordena por costo unitario
     # ascendente entre los que superan el mínimo de requests facturables. Es un
@@ -761,9 +753,10 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
       |> assign(:y_metric, y_metric)
       |> assign(:points, points)
       |> assign(:guides, if(has_data?, do: guides, else: []))
+      |> assign(:cx, cx)
+      |> assign(:cy, cy)
       |> assign(:cheapest, cheapest)
       |> assign(:zero_billable, zero_billable)
-      |> assign(:kinds, Enum.map(groups, fn {kind, _} -> kind end))
       |> assign(:y_options, assigns.y_options || default_y_options())
       |> assign(:y_label, y_label(y_metric))
       |> assign(:has_data?, has_data?)
@@ -827,7 +820,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
 
         <p class="text-[10px] leading-snug text-base-content/40">
           {gettext(
-            "X = billable requests · Y = %{y} · bubble size = cost · halo = had $0 requests served by TokenGate's own cache, not the provider's · dashed = each group's median, labeled · shaded = more volume and lower $/req than that median · click a bubble to filter this page",
+            "X = billable requests · Y = %{y} · axis ticks = each group's median · cross = plot center · click a bubble to filter this page",
             y: @y_label
           )}
         </p>
@@ -847,80 +840,35 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
           aria-label={gettext("Unit cost map")}
           id={"#{@id}-plot"}
         >
-          <%!-- La esquina sombreada de cada grupo: más requests y menos $/req
-               que la MEDIANA de su propio grupo. Es un lugar relativo, no una
-               calificación: dice dónde está cada quien respecto a su tribu. --%>
-          <g :if={@guides != []} id={"#{@id}-quadrant-guides"}>
-            <rect
-              :for={guide <- @guides}
-              :if={@geo.w - @geo.right - guide.px > 30 and @geo.h - @geo.bottom - guide.py > 14}
-              id={"#{@id}-quadrant-#{guide.kind}"}
-              x={guide.px}
-              y={guide.py}
-              width={round2(@geo.w - @geo.right - guide.px)}
-              height={round2(@geo.h - @geo.bottom - guide.py)}
-              class={kind_fill_soft_class(guide.kind)}
-            >
-              <title>
-                {gettext(
-                  "Shaded corner: more requests and lower $/req than the median of this group. It is relative to its own group — not a grade."
-                )}
-              </title>
-            </rect>
-            <text
-              x={@geo.w - @geo.right - 4}
-              y={@geo.h - @geo.bottom - 5}
-              text-anchor="end"
-              class="fill-base-content/40"
-              font-size="8"
-            >
-              {gettext("↑ volume · ↓ $/req")}
-            </text>
-            <line
-              :for={guide <- @guides}
-              id={"#{@id}-guide-x-#{guide.kind}"}
-              x1={guide.px}
-              x2={guide.px}
-              y1={@geo.top}
-              y2={@geo.h - @geo.bottom}
-              class={kind_stroke_class(guide.kind)}
-              stroke-width="1"
-              stroke-dasharray="4 4"
-            />
-            <line
-              :for={guide <- @guides}
-              id={"#{@id}-guide-y-#{guide.kind}"}
-              x1={@geo.left}
-              x2={@geo.w - @geo.right}
-              y1={guide.py}
-              y2={guide.py}
-              class={kind_stroke_class(guide.kind)}
-              stroke-width="1"
-              stroke-dasharray="4 4"
-            />
-            <text
-              :for={guide <- @guides}
-              id={"#{@id}-guide-x-label-#{guide.kind}"}
-              x={guide.x_text}
-              y={@geo.top + 9}
-              text-anchor={guide.x_anchor}
-              class={kind_text_class(guide.kind)}
-              font-size="9"
-            >
-              {guide.x_label}
-            </text>
-            <text
-              :for={guide <- @guides}
-              id={"#{@id}-guide-y-label-#{guide.kind}"}
-              x={@geo.w - @geo.right - 2}
-              y={guide.py - 3}
-              text-anchor="end"
-              class={kind_text_class(guide.kind)}
-              font-size="9"
-            >
-              {guide.y_label}
-            </text>
-          </g>
+          <rect
+            id={"#{@id}-quadrant"}
+            x={@cx}
+            y={@cy}
+            width={round2(@geo.w - @geo.right - @cx)}
+            height={round2(@geo.h - @geo.bottom - @cy)}
+            class="fill-base-content/5"
+          />
+
+          <line
+            id={"#{@id}-cross-x"}
+            x1={@cx}
+            x2={@cx}
+            y1={@geo.top}
+            y2={@geo.h - @geo.bottom}
+            class="stroke-base-content/20"
+            stroke-width="1"
+            stroke-dasharray="2 4"
+          />
+          <line
+            id={"#{@id}-cross-y"}
+            x1={@geo.left}
+            x2={@geo.w - @geo.right}
+            y1={@cy}
+            y2={@cy}
+            class="stroke-base-content/20"
+            stroke-width="1"
+            stroke-dasharray="2 4"
+          />
 
           <line
             :for={tick <- @y_ticks}
@@ -958,6 +906,27 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
             y2={@geo.h - @geo.bottom}
             class="stroke-base-300"
             stroke-width="1"
+          />
+
+          <line
+            :for={guide <- @guides}
+            id={"#{@id}-tick-x-#{guide.kind}"}
+            x1={guide.px}
+            x2={guide.px}
+            y1={@geo.h - @geo.bottom}
+            y2={@geo.h - @geo.bottom + 5}
+            class={kind_tick_class(guide.kind)}
+            stroke-width="2.5"
+          />
+          <line
+            :for={guide <- @guides}
+            id={"#{@id}-tick-y-#{guide.kind}"}
+            x1={@geo.left - 5}
+            x2={@geo.left}
+            y1={guide.py}
+            y2={guide.py}
+            class={kind_tick_class(guide.kind)}
+            stroke-width="2.5"
           />
 
           <text
@@ -1025,34 +994,6 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
             <% end %>
           <% end %>
         </svg>
-
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1" id={"#{@id}-legend"}>
-          <div :for={kind <- @kinds} class="flex items-center gap-1.5">
-            <span class={["w-2 h-2 rounded-full", kind_dot_class(kind)]} />
-            <span class="text-[10px] text-base-content/60">{kind_label(kind)}</span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="w-3 h-3 rounded-sm bg-primary/10 border border-primary/40" />
-            <span class="text-[10px] text-base-content/60">
-              {gettext("Shaded = more volume and lower $/req than its group's median")}
-            </span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="w-4 h-0 border-t border-dashed border-base-content/50" />
-            <span class="text-[10px] text-base-content/60">
-              {gettext("Dashed = that same median, labeled with its value")}
-            </span>
-          </div>
-          <div
-            :if={Enum.any?(@kinds, &(&1 in ["user", "service"]))}
-            class="flex items-center gap-1.5"
-          >
-            <span class="w-3.5 h-3.5 rounded-full border border-dashed border-base-content/40" />
-            <span class="text-[10px] text-base-content/60">{gettext(
-              "Halo = had requests answered by TokenGate’s own cache ($0, provider never called)"
-            )}</span>
-          </div>
-        </div>
 
         <%!-- No facturable, pero tampoco invisible: los sujetos servidos al
              100% por caché local costaron $0 y no tienen `$/req` que comparar,
@@ -1126,6 +1067,141 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
             count: @min_volume
           )}
         </p>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Datos de leyenda y medianas por grupo para un mapa de dispersión.
+  """
+  def legend_data(rows, y_metric) do
+    y_metric = if y_metric in ~w(cpr cache think), do: y_metric, else: "cpr"
+
+    groups =
+      (rows || [])
+      |> Enum.map(&scatter_point(&1, y_metric, nil))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.group_by(& &1.kind)
+      |> Enum.sort_by(fn {kind, _} -> kind end)
+
+    %{
+      kinds: Enum.map(groups, fn {kind, _} -> {kind, kind_label(kind)} end),
+      medians:
+        Enum.map(groups, fn {kind, group} ->
+          x_med = median(Enum.map(group, & &1.x))
+          y_med = median(Enum.map(group, & &1.y))
+
+          %{
+            kind: kind,
+            x: Stats.format_compact(round(x_med)),
+            y: format_scatter_axis(y_med, y_metric)
+          }
+        end)
+    }
+  end
+
+  attr :id, :string, default: "finops-legend"
+  attr :subjects, :map, required: true
+  attr :entities, :map, required: true
+
+  def global_legend(assigns) do
+    ~H"""
+    <section id={@id} class="card bg-base-100 border border-base-300 shadow-sm">
+      <div class="card-body p-4 gap-3">
+        <h2 class="card-title text-base">
+          <.icon name="hero-list-bullet" class="w-5 h-5 text-base-content/60" />
+          {gettext("Map legend")}
+        </h2>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <.legend_map_block
+            id={"#{@id}-subjects"}
+            title={gettext("Subjects map")}
+            data={@subjects}
+          />
+          <.legend_map_block
+            id={"#{@id}-entities"}
+            title={gettext("Models / providers map")}
+            data={@entities}
+          />
+        </div>
+
+        <div
+          id={"#{@id}-common"}
+          class="flex flex-wrap items-center gap-x-5 gap-y-2 pt-2 border-t border-base-300/60 text-xs text-base-content/60"
+        >
+          <div class="flex items-center gap-1.5">
+            <span class="inline-flex items-end gap-0.5 shrink-0">
+              <span class="w-1.5 h-1.5 rounded-full bg-base-content/40" />
+              <span class="w-3 h-3 rounded-full bg-base-content/40" />
+            </span>
+            <span>{gettext("Bubble size = cost")}</span>
+          </div>
+
+          <div class="flex items-center gap-1.5">
+            <span class="w-3.5 h-3.5 rounded-full border border-dashed border-base-content/40 shrink-0" />
+            <span>
+              {gettext("Halo = had $0 requests served by TokenGate's own cache")}
+            </span>
+          </div>
+
+          <div class="flex items-center gap-1.5">
+            <span class="relative w-3.5 h-3.5 shrink-0 inline-flex items-center justify-center">
+              <span class="w-full border-t border-dashed border-base-content/40" />
+              <span class="absolute h-full border-l border-dashed border-base-content/40" />
+            </span>
+            <span>{gettext("Cross = center of the drawn area (not a threshold)")}</span>
+          </div>
+
+          <div class="flex items-center gap-1.5">
+            <span class="w-3 h-3 rounded-sm bg-base-content/10 border border-base-content/20 shrink-0" />
+            <span>{gettext("Shaded = right half and bottom half of the drawn area")}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :title, :string, required: true
+  attr :data, :map, required: true
+
+  defp legend_map_block(assigns) do
+    ~H"""
+    <div id={@id} class="space-y-1.5">
+      <p class="text-[10px] uppercase tracking-wide text-base-content/50 font-semibold">
+        {@title}
+      </p>
+
+      <p :if={@data.kinds == []} class="text-xs text-base-content/40">
+        {gettext("No data in this period.")}
+      </p>
+
+      <div :if={@data.kinds != []} class="space-y-1.5">
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <div :for={{kind, label} <- @data.kinds} class="flex items-center gap-1.5 text-xs">
+            <span class={["w-2.5 h-2.5 rounded-full shrink-0", kind_dot_class(kind)]} />
+            <span class="text-base-content/70">{label}</span>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <div
+            :for={med <- @data.medians}
+            class="flex items-center gap-1.5 text-xs text-base-content/60 tabular-nums"
+          >
+            <span class={["w-2.5 h-0.5 shrink-0", kind_dot_class(med.kind)]} />
+            <span>
+              {gettext("%{kind} median: X %{x} · Y %{y}",
+                kind: kind_label(med.kind),
+                x: med.x,
+                y: med.y
+              )}
+            </span>
+          </div>
+        </div>
       </div>
     </div>
     """
@@ -1606,17 +1682,9 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
   defp kind_fill_class("provider"), do: "fill-warning/70 hover:fill-warning"
   defp kind_fill_class(_), do: "fill-primary/70 hover:fill-primary"
 
-  defp kind_stroke_class("service"), do: "stroke-warning/50"
-  defp kind_stroke_class("provider"), do: "stroke-warning/50"
-  defp kind_stroke_class(_), do: "stroke-primary/40"
-
-  defp kind_text_class("service"), do: "fill-warning"
-  defp kind_text_class("provider"), do: "fill-warning"
-  defp kind_text_class(_), do: "fill-primary"
-
-  defp kind_fill_soft_class("service"), do: "fill-warning/10"
-  defp kind_fill_soft_class("provider"), do: "fill-warning/10"
-  defp kind_fill_soft_class(_), do: "fill-primary/10"
+  defp kind_tick_class("service"), do: "stroke-warning"
+  defp kind_tick_class("provider"), do: "stroke-warning"
+  defp kind_tick_class(_), do: "stroke-primary"
 
   defp plot_width, do: @scatter_w - @scatter_left - @scatter_right
   defp plot_height, do: @scatter_h - @scatter_top - @scatter_bottom

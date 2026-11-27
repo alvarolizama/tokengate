@@ -186,16 +186,15 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
     # Scatter plot Y toggle (cpr -> cache) & Top 5 Users/Services tables
     assert has_element?(view, "#finops-scatter-plot")
 
-    # Línea de referencia por grupo (mediana), etiquetada con su valor, y la
-    # esquina sombreada que marca "más volumen y menos $/req que esa mediana".
-    # El sombreado se quedó porque ubica de un golpe, pero NO es un veredicto:
-    # la lista de "más barato por request" es la que responde con un criterio
-    # absoluto.
-    assert has_element?(view, "#finops-scatter-quadrant-guides")
-    assert has_element?(view, "#finops-scatter-quadrant-user")
-    # El sombreado se suprime cuando el recorte no se puede leer (en el fixture
-    # la mediana de servicios queda pegada al piso y quedaría una tira de 3px).
-    assert has_element?(view, "#finops-scatter-guide-x-service")
+    # Cruz centrada en el área dibujada, esquina sombreada anclada al centro y
+    # marquitas en los ejes para la mediana de cada grupo (sin líneas cruzando).
+    assert has_element?(view, "#finops-scatter-cross-x")
+    assert has_element?(view, "#finops-scatter-cross-y")
+    assert has_element?(view, "#finops-scatter-quadrant")
+    assert has_element?(view, "#finops-scatter-tick-x-user")
+    assert has_element?(view, "#finops-scatter-tick-y-user")
+    assert has_element?(view, "#finops-scatter-tick-x-service")
+    assert has_element?(view, "#finops-scatter-tick-y-service")
     assert has_element?(view, "#finops-scatter-cheapest-empty")
 
     # La letra chica va a la vista: qué mide cada cosa y qué no. La fórmula es
@@ -203,6 +202,12 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
     assert has_element?(view, "#finops-glossary")
     assert has_element?(view, "#finops-glossary", "median of X and Y, per group")
     assert has_element?(view, "#finops-glossary", "SUM(provider_cost_usd)")
+    assert has_element?(view, "#finops-legend")
+
+    html = render(view)
+    {glossary_pos, _} = :binary.match(html, ~s(id="finops-glossary"))
+    {legend_pos, _} = :binary.match(html, ~s(id="finops-legend"))
+    assert legend_pos > glossary_pos
     # El sujeto 100% caché local ($0) no desaparece: baja a la tira de no
     # facturables con sus requests ahorradas.
     assert has_element?(view, "#finops-scatter-cache-only")
