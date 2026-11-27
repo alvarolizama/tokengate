@@ -231,6 +231,10 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
              "#finops-entity-scatter-metric-toggle button.btn-primary[phx-value-metric='think']"
            )
 
+    # El eje de razonamiento se rotula en %, no en dólares.
+    assert has_element?(view, "#finops-entity-scatter-plot text", "100%")
+    refute has_element?(view, "#finops-entity-scatter-plot text", "$100")
+
     # Filtros: la URL manda. Al filtrar por modelo/uso, la página se recarga
     # sólo con ese recorte y el chip lo declara.
     view
@@ -239,6 +243,13 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
 
     assert_patch(view, ~p"/stats/finops?period=week&model_id=#{model.id}")
     _ = render_async(view)
+
+    # El selector de período tiene que conservar el filtro y seguir siendo una
+    # URL válida: antes armaba `/stats/finops&model_id=…?period=…` (404).
+    assert has_element?(
+             view,
+             "#period-today[href='/stats/finops?period=today&model_id=#{model.id}']"
+           )
 
     assert has_element?(view, "#finops-filter-active")
     assert has_element?(view, "#finops-chip-model", model.name)

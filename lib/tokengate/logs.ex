@@ -401,6 +401,15 @@ defmodule Tokengate.Logs do
     |> Repo.all()
   end
 
+  # Opt-in: deja fuera la fila propia del clasificador. Las métricas SERVIDAS
+  # (resumen híbrido, su cola cruda y el guard de cobertura) lo piden; los
+  # listados de logs no, porque ahí el clasificador sí es una fila que se audita.
+  defp maybe_exclude_router_decision(query, %{exclude_router_decision: true}) do
+    where(query, [rl], is_nil(rl.request_type) or rl.request_type != "router_decision")
+  end
+
+  defp maybe_exclude_router_decision(query, _filters), do: query
+
   defp apply_log_filters(query, filters) do
     query
     |> maybe_where(:group_member_id, filters)
@@ -413,6 +422,7 @@ defmodule Tokengate.Logs do
     |> maybe_where_group_id(filters)
     |> maybe_where(:provider_id, filters)
     |> maybe_where(:credential_id, filters)
+    |> maybe_exclude_router_decision(filters)
     |> maybe_where(:model_provider_id, filters)
     |> maybe_where(:model_id, filters)
     |> maybe_where(:agent_type, filters)
@@ -2275,14 +2285,16 @@ defmodule Tokengate.Logs do
         }
       end)
 
-    # Same CASE as `Rollup.finops_overview/1`: with decision rows in the window
-    # the overhead is what THEY cost; without them, it is the per-row
-    # `router_decision_cost_usd` the proxy recorded.
+    # Suma ADITIVA: lo que costaron las filas del clasificador más la
+    # atribución por fila de las servidas. El CASE por ventana que había antes
+    # tiraba la atribución cuando la ventana mezclaba ambos tipos, y en el
+    # GROUPING SETS resolvía distinto por grupo (overall ≠ users + services).
     router_cost =
-      case decisions do
-        [] -> Enum.reduce(groups, Decimal.new(0), &Decimal.add(&1.router_decision_cost_usd, &2))
-        rows -> Enum.reduce(rows, Decimal.new(0), &Decimal.add(&1.cost_usd, &2))
-      end
+      decisions
+      |> Enum.reduce(Decimal.new(0), &Decimal.add(&1.cost_usd, &2))
+      |> Decimal.add(
+        Enum.reduce(groups, Decimal.new(0), &Decimal.add(&1.router_decision_cost_usd, &2))
+      )
 
     %{finops | router_decision_cost_usd: router_cost}
   end

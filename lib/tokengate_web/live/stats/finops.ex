@@ -462,7 +462,9 @@ defmodule TokengateWeb.StatsLive.Finops do
       },
       {
         gettext("Thinking tax"),
-        gettext("Money burned on internal reasoning tokens, billed as output."),
+        gettext(
+          "Money burned on internal reasoning tokens, billed as output. Errors are counted first, so this bucket only holds reasoning from calls that answered."
+        ),
         "cost of rows with think / effort"
       },
       {

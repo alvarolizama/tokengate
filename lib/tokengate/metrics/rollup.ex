@@ -4001,6 +4001,19 @@ defmodule Tokengate.Metrics.Rollup do
             b.think,
             b.effort_applied
           ),
+        # Razonamiento de las llamadas que SÍ respondieron: la anatomía del
+        # gasto cuenta primero los errores y sólo después el thinking, para que
+        # los dos buckets sean mutuamente excluyentes y el total cuadre.
+        think_cost_ok_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE NOT ? AND (? = true OR ? IS NOT NULL) AND (? < 400 OR ? IS NULL)), 0)",
+            b.provider_cost_usd,
+            b.is_decision,
+            b.think,
+            b.effort_applied,
+            b.status_code,
+            b.status_code
+          ),
         think_completion_tokens:
           fragment(
             "COALESCE(SUM(?) FILTER (WHERE NOT ? AND (? = true OR ? IS NOT NULL)), 0)::bigint",
@@ -4013,8 +4026,7 @@ defmodule Tokengate.Metrics.Rollup do
           fragment("COUNT(*) FILTER (WHERE NOT ? AND ? = true)", b.is_decision, b.cache_hit),
         router_decision_cost_usd:
           fragment(
-            "CASE WHEN COUNT(*) FILTER (WHERE ?) > 0 THEN COALESCE(SUM(?) FILTER (WHERE ?), 0) ELSE COALESCE(SUM(?) FILTER (WHERE NOT ?), 0) END",
-            b.is_decision,
+            "COALESCE(SUM(?) FILTER (WHERE ?), 0) + COALESCE(SUM(?) FILTER (WHERE NOT ?), 0)",
             b.provider_cost_usd,
             b.is_decision,
             b.router_decision_cost_usd,
@@ -4443,6 +4455,7 @@ defmodule Tokengate.Metrics.Rollup do
       fallback_recovered_count: finops_int(row.fallback_recovered_count),
       think_requests: finops_int(row.think_requests),
       think_cost_usd: finops_usd(row.think_cost_usd),
+      think_cost_ok_usd: finops_usd(row.think_cost_ok_usd),
       think_completion_tokens: finops_int(row.think_completion_tokens),
       local_cache_hits: finops_int(row.local_cache_hits),
       router_decision_cost_usd: finops_usd(row.router_decision_cost_usd),
@@ -4465,6 +4478,7 @@ defmodule Tokengate.Metrics.Rollup do
       fallback_recovered_count: 0,
       think_requests: 0,
       think_cost_usd: Decimal.new(0),
+      think_cost_ok_usd: Decimal.new(0),
       think_completion_tokens: 0,
       local_cache_hits: 0,
       router_decision_cost_usd: Decimal.new(0),

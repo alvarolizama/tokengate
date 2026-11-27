@@ -364,8 +364,8 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
 
     thinking =
       if single?,
-        do: subject.think_cost_usd,
-        else: add_money(users.think_cost_usd, services.think_cost_usd)
+        do: think_ok(subject),
+        else: add_money(think_ok(users), think_ok(services))
 
     errors =
       if single?,
@@ -1171,11 +1171,19 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
     }
   end
 
+  # Gasto "útil": costo menos errores y menos el razonamiento de las llamadas
+  # que SÍ respondieron. Usa `think_cost_ok_usd` (thinking sin errores) para
+  # que los tres buckets sean mutuamente excluyentes: con `think_cost_usd` un
+  # request fallido con razonamiento se restaba dos veces y el total no cuadraba.
   defp useful_cost(block) do
     block.cost_usd
-    |> Decimal.sub(block.think_cost_usd || Decimal.new(0))
     |> Decimal.sub(block.error_cost_usd || Decimal.new(0))
+    |> Decimal.sub(think_ok(block))
     |> max_money()
+  end
+
+  defp think_ok(block) do
+    Map.get(block, :think_cost_ok_usd) || Map.get(block, :think_cost_usd) || Decimal.new(0)
   end
 
   defp max_money(%Decimal{} = value) do
@@ -1623,7 +1631,8 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
     round2(@scatter_top + (1.0 - ratio) * plot_height())
   end
 
-  defp format_scatter_axis(value, "cache"), do: "#{round(value)}%"
+  defp format_scatter_axis(value, metric) when metric in ["cache", "think"],
+    do: "#{round(value)}%"
 
   defp format_scatter_axis(value, _metric),
     do: Stats.money(Decimal.from_float(value * 1.0))

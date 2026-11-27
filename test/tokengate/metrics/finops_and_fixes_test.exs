@@ -829,6 +829,89 @@ defmodule Tokengate.Metrics.FinopsAndFixesTest do
     end
   end
 
+  describe "FinOps: buckets y overhead (fixes verificados)" do
+    test "el overhead del router suma decisión + atribución y cuadra con sus partes" do
+      data = seed_finops!()
+
+      # Una servida con atribución del clasificador, en la MISMA ventana que la
+      # fila de decisión: el CASE por ventana tiraba esta atribución.
+      log!(at(data.day2, ~T[10:00:00]),
+        subject_type: "user",
+        user_id: data.user_a.id,
+        group_member_id: data.member_a.id,
+        request_type: "chat",
+        status_code: 200,
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        cost_usd: dec!("0.100000"),
+        router_decision_cost_usd: dec!("0.050000")
+      )
+
+      overview = Rollup.finops_overview(from: data.from, to: data.to)
+
+      # decisión $0.25 (log 6) + atribución $0.05 de la servida.
+      assert_decimal!("0.300000", overview.overall.router_decision_cost_usd)
+
+      parts =
+        Decimal.add(
+          overview.users.router_decision_cost_usd,
+          overview.services.router_decision_cost_usd
+        )
+
+      assert Decimal.equal?(overview.overall.router_decision_cost_usd, parts)
+    end
+
+    test "errors y thinking son excluyentes: el razonamiento de un fallo no se resta dos veces" do
+      data = seed_finops!()
+
+      # Fallo CON razonamiento: $2 que son error y thinking al mismo tiempo.
+      log!(at(data.day2, ~T[11:00:00]),
+        subject_type: "service",
+        service_id: data.service_1.id,
+        request_type: "chat",
+        status_code: 500,
+        prompt_tokens: 100,
+        completion_tokens: 100,
+        cost_usd: dec!("2.000000"),
+        think: true
+      )
+
+      overview = Rollup.finops_overview(from: data.from, to: data.to)
+
+      # `think_cost_usd` sí lo incluye; `think_cost_ok_usd` no (es de las que
+      # respondieron), y esa es la llave que resta la anatomía.
+      assert_decimal!(
+        "2.000000",
+        Decimal.sub(overview.overall.think_cost_usd, overview.overall.think_cost_ok_usd)
+      )
+
+      # Invariante de la anatomía: errores + thinking_ok nunca pasa del costo,
+      # así el gasto útil jamás se vuelve negativo ni el total se infla.
+      for block <- [overview.overall, overview.users, overview.services] do
+        covered = Decimal.add(block.error_cost_usd, block.think_cost_ok_usd)
+        assert Decimal.compare(covered, block.cost_usd) in [:lt, :eq]
+      end
+    end
+
+    test "el tráfico servido excluye al clasificador con y sin rollup" do
+      data = seed_finops!()
+      window = [from: data.from, to: data.to]
+
+      # Servidas facturables: logs 1..5 (el 6 es el clasificador).
+      served = 5
+
+      HourlyAggregate.aggregate_hours(data.from, data.to)
+      with_rollup = StatsQueries.summary(window)
+
+      # Sin rollup: el guard no puede cubrir la ventana y cae al camino crudo.
+      Ecto.Adapters.SQL.query!(Repo, "DELETE FROM request_metrics_hourly", [])
+      without_rollup = StatsQueries.summary(window)
+
+      assert with_rollup.request_count == served
+      assert without_rollup.request_count == served
+    end
+  end
+
   # ---------------------------------------------------------------------
   # FinOps: per service
   # ---------------------------------------------------------------------

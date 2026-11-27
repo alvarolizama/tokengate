@@ -450,6 +450,11 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       assert has_element?(view, "#finops-cpm")
       assert render(element(view, "#finops-out-in")) =~ "0.5x"
       assert has_element?(view, "#finops-burn")
+      # El burn sale del costo del período entre sus días: nunca $0.00 con
+      # gasto real (antes leía una llave que el summary no trae).
+      burn = render(element(view, "#finops-burn"))
+      refute burn =~ "$0.00"
+      assert burn =~ "$0."
 
       # Waste & taxes: el 500 cuesta $0.10 y el cache hit 400/1000 = 40%.
       assert render(element(view, "#finops-error-waste")) =~ "$0.1"

@@ -307,9 +307,7 @@ defmodule TokengateWeb.StatsLive do
   def period_target(%{live_action: :services}), do: "/stats/services"
   def period_target(%{live_action: :users}), do: "/stats/users"
 
-  def period_target(%{live_action: :finops} = assigns) do
-    "/stats/finops" <> finops_extra_query(assigns)
-  end
+  def period_target(%{live_action: :finops}), do: "/stats/finops"
 
   def period_target(_), do: "/stats/overview"
 

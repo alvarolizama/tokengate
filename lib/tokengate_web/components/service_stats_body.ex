@@ -605,8 +605,13 @@ defmodule TokengateWeb.ServiceStatsBody do
     overview = assigns.overview
     prev = assigns.prev_overview
 
-    avg_daily =
-      (assigns.summary && assigns.summary[:avg_daily_cost_usd]) || Decimal.new(0)
+    # "Daily burn" = gasto del periodo ÷ días del periodo. Antes leía
+    # `summary[:avg_daily_cost_usd]`, llave que `service_finops_summary/2` no
+    # devuelve (sólo overview/by_key/by_model), así que siempre daba $0.00 y
+    # `days_to_cap/2` nunca corría. Los días salen de la propia serie (un punto
+    # por día) y, si viene por hora, del período.
+    days = period_days(assigns.period, assigns.series)
+    avg_daily = Decimal.div(overview.cost_usd || Decimal.new(0), Decimal.new(days))
 
     projection = Decimal.mult(avg_daily, Decimal.new(30))
 
@@ -949,6 +954,19 @@ defmodule TokengateWeb.ServiceStatsBody do
 
   # Días hasta agotar el techo mensual al burn actual (aprox: cap / $/día).
   # Sin techo (crédito ilimitado o solo top-ups) no hay "days to cap".
+  # Días del período para promediar el burn: la serie diaria trae un punto por
+  # día; en "hoy"/"ayer" la serie es por hora y el período es un día.
+  defp period_days(period, _series) when period in ["today", "yesterday"], do: 1
+
+  defp period_days(_period, series) do
+    series
+    |> Enum.map(&Map.get(&1, :date))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> length()
+    |> max(1)
+  end
+
   defp days_to_cap(%{monthly_spend_limit_usd: %Decimal{} = cap}, %Decimal{} = avg_daily) do
     if Decimal.compare(avg_daily, Decimal.new(0)) == :gt and
          Decimal.compare(cap, Decimal.new(0)) == :gt do
@@ -957,7 +975,6 @@ defmodule TokengateWeb.ServiceStatsBody do
   end
 
   defp days_to_cap(_service, _avg_daily), do: nil
-
   ## Data loading ---------------------------------------------------------
 
   @doc """

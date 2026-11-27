@@ -1047,6 +1047,7 @@ defmodule Tokengate.Metrics.StatsQueries do
   defp raw_summary(filters) do
     filters
     |> Map.drop([:timezone])
+    |> Map.put(:exclude_router_decision, true)
     |> Logs.cost_summary()
   end
 
@@ -1210,6 +1211,11 @@ defmodule Tokengate.Metrics.StatsQueries do
   defp raw_rows_between?(opts, from, to) do
     RequestLog
     |> where([rl], rl.inserted_at >= ^from and rl.inserted_at < ^to)
+    # Mismo filtro que `HourlyAggregate` y que `Rollup.finops_*`: las filas del
+    # clasificador NO son tráfico servido. Sin esto el guard compara rollup
+    # (sin decisiones) contra raw (con decisiones), siempre falla y cae al raw
+    # que sí las cuenta: requests y costo se inflan en cada ventana con router.
+    |> where([rl], is_nil(rl.request_type) or rl.request_type != "router_decision")
     |> maybe_guard_member_ids(opts)
     |> maybe_user_ids(filter_value(opts, :user_ids))
     |> maybe_guard_model_id(opts)
