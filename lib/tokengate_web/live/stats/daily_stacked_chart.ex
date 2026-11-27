@@ -18,6 +18,7 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
   attr :show_logos, :boolean, default: false
   attr :metric, :string, default: "requests", values: ~w(requests cost)
   attr :toggle_event, :string, default: nil
+  attr :hint, :string, default: nil, doc: "nota al pie del título (qué incluye el número)"
 
   def daily_stacked_chart(assigns) do
     metric_atom = if assigns.metric == "cost", do: :cost, else: :requests
@@ -52,6 +53,9 @@ defmodule TokengateWeb.StatsLive.DailyStackedChart do
             <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
             {@title}
           </h2>
+          <p :if={@hint} id={@id && "#{@id}-hint"} class="text-[10px] text-base-content/40">
+            {@hint}
+          </p>
           <div class="flex items-center gap-2">
             <span class="text-[10px] text-base-content/40 hidden sm:inline">
               {Stats.period_label(@period)}

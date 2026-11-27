@@ -260,6 +260,9 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
     assert has_element?(view, "#finops-chip-model", model.name)
     assert has_element?(view, "#finops-filter-clear")
 
+    # Reconciliación explícita: servido ≠ real cuando hubo clasificador.
+    assert has_element?(view, "#finops-real-spend", "router")
+
     # Sin filtros: la página vuelve al agregado del período.
     view |> element("#finops-filter-clear") |> render_click()
     assert_patch(view, ~p"/stats/finops?period=week")

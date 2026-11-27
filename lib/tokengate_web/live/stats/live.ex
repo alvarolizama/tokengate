@@ -63,7 +63,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
             ${Stats.format_decimal(today_cost)}
           </span>
           <:sub>
-            {gettext("all subjects · 00:00–24:00 UTC window")}
+            {gettext("all subjects · incl. SmartRouter · 00:00–24:00 UTC window")}
             <span :if={@today_metrics.requests_total > 0} class="tabular-nums">
               · {Stats.cost_per_request(today_cost, @today_metrics.requests_total)}/req
             </span>

@@ -160,6 +160,16 @@ defmodule TokengateWeb.StatsDecisionFeaturesTest do
     view = wait_stats_loaded(view)
 
     assert has_element?(view, "#overview-daily-chart")
+
+    # En modo costo la tendencia declara que el número es gasto REAL (incluye
+    # al clasificador), porque FinOps muestra el costo servido.
+    refute has_element?(view, "#overview-daily-chart-hint")
+
+    view
+    |> element("#overview-daily-chart-metric-toggle button[phx-value-metric='cost']")
+    |> render_click()
+
+    assert has_element?(view, "#overview-daily-chart-hint", "SmartRouter")
     refute has_element?(view, "#overview-efficiency")
     assert has_element?(view, "#overview-finops-link")
     assert has_element?(view, "#overview-top-consumers", owner.name)

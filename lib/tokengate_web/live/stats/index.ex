@@ -53,6 +53,11 @@ defmodule TokengateWeb.StatsLive.Index do
         :if={admin? and @period in ["week", "30d"] and @daily_series != []}
         id="overview-daily-chart"
         title={gettext("Daily trend by provider")}
+        hint={
+          if @chart_metric == "cost" do
+            gettext("real spend per day · includes SmartRouter")
+          end
+        }
         period={@period}
         series={@daily_series}
         labels={daily_series_labels(@daily_series)}

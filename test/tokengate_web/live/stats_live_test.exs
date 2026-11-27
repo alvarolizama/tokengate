@@ -998,6 +998,9 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#live-today-cost", "Hoy · costo (UTC)")
     refute has_element?(view, "#live-today-cost", "Reinicia en")
     refute has_element?(view, "#live-today-cost", "en tu hora local")
+    # El número incluye servicios Y al clasificador: lo declara, porque FinOps
+    # muestra el costo servido y sin la nota los dos números del día no cuadran.
+    assert has_element?(view, "#live-today-cost", "SmartRouter")
   end
 
   test "Resumen: el KPI de costo declara la ventana UTC, sin reinicio", %{conn: conn} do

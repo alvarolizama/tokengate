@@ -103,8 +103,11 @@ defmodule TokengateWeb.StatsLive.Finops do
         {kind, label}
       end)
 
+    router_cost = Map.get(overall, :router_decision_cost_usd) || Decimal.new(0)
+
     assigns =
       assigns
+      |> assign(:router_cost, router_cost)
       |> assign(:model_options, model_options)
       |> assign(:provider_options, provider_options)
       |> assign(:user_options, user_options)
@@ -236,6 +239,17 @@ defmodule TokengateWeb.StatsLive.Finops do
             </h2>
             <span class="text-xs text-base-content/50 tabular-nums">
               {Stats.money(@total_cost)} · {Stats.format_number(@total_requests)} req
+              <%!-- Reconciliación con En vivo y la tendencia del Resumen, que sí
+                   incluyen al clasificador: aquí el costo es SERVIDO y el
+                   overhead del SmartRouter va aparte. Sin esta línea los tres
+                   números del mismo día no cuadran a la vista. --%>
+              <span id="finops-real-spend" class="block text-[10px] text-base-content/40">
+                {gettext("served %{served} · router %{router} · real %{real}",
+                  served: Stats.money(@total_cost),
+                  router: Stats.money(@router_cost),
+                  real: Stats.money(Decimal.add(@total_cost, @router_cost))
+                )}
+              </span>
             </span>
           </div>
 
