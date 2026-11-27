@@ -112,7 +112,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
       |> assign(:ticks, axis_ticks(scale_max))
       |> assign(:primary_label, primary_label)
       |> assign(:secondary_label, secondary_label)
-      |> assign(:secondary?, not single? and metric != "cpr")
+      |> assign(:secondary?, not single? and "service" in types and metric != "cpr")
       |> assign(:x_labels, x_labels(points))
 
     ~H"""
