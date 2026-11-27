@@ -531,8 +531,8 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       wait_loaded(view)
 
       cost = render(element(view, "#kpi-cost"))
-      refute cost =~ "of monthly cap"
-      assert cost =~ "proj"
+      refute cost =~ ~r/of monthly cap|del tope mensual/i
+      assert cost =~ ~r/proj|proy/
     end
   end
 
