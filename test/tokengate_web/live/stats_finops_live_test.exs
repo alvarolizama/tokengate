@@ -184,6 +184,14 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
     # Scatter plot Y toggle (cpr -> cache) & Top 5 Users/Services tables
     assert has_element?(view, "#finops-scatter-plot")
 
+    # Cuadrante: una guía por grupo (Users y Services) con su mediana, y con
+    # muestra mínima de 10 requests facturables ningún sujeto del fixture
+    # califica todavía: el aviso lo dice en vez de coronar a nadie.
+    assert has_element?(view, "#finops-scatter-quadrant-guides")
+    assert has_element?(view, "#finops-scatter-quadrant-user")
+    assert has_element?(view, "#finops-scatter-quadrant-service")
+    assert has_element?(view, "#finops-scatter-efficient-empty")
+
     view
     |> element("#finops-scatter-metric-toggle button[phx-value-metric='cache']")
     |> render_click()

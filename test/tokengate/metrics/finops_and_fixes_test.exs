@@ -751,6 +751,8 @@ defmodule Tokengate.Metrics.FinopsAndFixesTest do
 
       assert service_1.subject_id == data.service_1.id
       assert service_1.request_count == 2
+      assert service_1.billable_requests == 2
+      assert service_1.local_cache_hits == 1
       assert_decimal!("7.000000", service_1.cost_usd)
       assert service_1.prompt_tokens == 700
       assert service_1.completion_tokens == 200
@@ -761,6 +763,8 @@ defmodule Tokengate.Metrics.FinopsAndFixesTest do
 
       assert user_b.label == data.user_b.email
       assert user_b.request_count == 1
+      assert user_b.billable_requests == 1
+      assert user_b.local_cache_hits == 0
       assert_decimal!("2.000000", user_b.cost_usd)
       assert user_b.error_count == 1
       assert_decimal!("2.000000", user_b.error_cost_usd)

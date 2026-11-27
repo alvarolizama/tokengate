@@ -3650,6 +3650,8 @@ defmodule Tokengate.Metrics.Rollup do
         subject_id: row.user_id || row.service_id,
         label: row.user_email || row.user_name || row.service_name || "—",
         request_count: finops_int(row.request_count),
+        billable_requests: finops_int(row.billable_requests),
+        local_cache_hits: finops_int(row.local_cache_hits),
         cost_usd: finops_usd(row.cost_usd),
         prompt_tokens: finops_int(row.prompt_tokens),
         completion_tokens: finops_int(row.completion_tokens),
@@ -4102,6 +4104,12 @@ defmodule Tokengate.Metrics.Rollup do
           user_id: rl.user_id,
           service_id: rl.service_id,
           request_count: count(rl.id),
+          # Requests que SÍ se facturaron: la base del `$/req` honesto del mapa
+          # de eficiencia. Los hits de caché local escriben `$0` y, si entraran
+          # al denominador, un sujeto con mucho caché se vería "eficiente".
+          billable_requests:
+            fragment("COUNT(*) FILTER (WHERE COALESCE(?, 0) > 0)", rl.provider_cost_usd),
+          local_cache_hits: fragment("COUNT(*) FILTER (WHERE ? = true)", rl.cache_hit),
           cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
           prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
           completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
@@ -4143,6 +4151,8 @@ defmodule Tokengate.Metrics.Rollup do
         user_name: u.name,
         service_name: s.name,
         request_count: b.request_count,
+        billable_requests: b.billable_requests,
+        local_cache_hits: b.local_cache_hits,
         cost_usd: b.cost_usd,
         prompt_tokens: b.prompt_tokens,
         completion_tokens: b.completion_tokens,
