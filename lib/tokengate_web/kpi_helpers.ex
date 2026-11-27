@@ -28,6 +28,7 @@ defmodule TokengateWeb.KpiHelpers do
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Periods
+  alias TokengateWeb.StatsHelpers
 
   @doc """
   Assigns the 4-card KPI metrics for a canonical `period` ("today",
@@ -248,11 +249,11 @@ defmodule TokengateWeb.KpiHelpers do
         accent="accent"
         title={if @cost_window == "cap", do: cost_title(@period)}
       >
-        ${format_decimal(@metrics.cost_usd)}
+        {StatsHelpers.money(@metrics.cost_usd)}
         <:sub>
           {gettext("Reported by the provider")}
           <span :if={@metrics.requests_total > 0} class="tabular-nums">
-            · {avg_cost_per_req(@metrics.cost_usd, @metrics.requests_total)}/req
+            · {StatsHelpers.cost_per_request(@metrics.cost_usd, @metrics.requests_total)}/req
           </span>
           <span
             :if={@deltas && @deltas[:cost_usd] != nil}
@@ -327,51 +328,16 @@ defmodule TokengateWeb.KpiHelpers do
   # ---------------------------------------------------------------------
   # Formatting helpers (shared across pages)
   # ---------------------------------------------------------------------
+  #
+  # Una sola implementación: el formato de analíticas vive en StatsHelpers
+  # (`money/1`, `format_decimal/1`, `format_number/1`, …). Estas firmas se
+  # conservan porque otros módulos las importan (`import KpiHelpers, only:
+  # [format_compact: 1]`), pero sólo delegan — nada de copias que deriven.
 
-  def format_decimal(%Decimal{} = d) do
-    d
-    |> Decimal.round(4)
-    |> Decimal.to_string()
-  end
-
-  def format_decimal(n) when is_number(n), do: to_string(n)
-  def format_decimal(_), do: "0"
-
-  def format_number(n) when is_integer(n) do
-    Integer.to_string(abs(n))
-    |> String.reverse()
-    |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
-    |> String.reverse()
-    |> then(fn s -> if n < 0, do: "-" <> s, else: s end)
-  end
-
-  def format_number(n) when is_float(n), do: Float.to_string(n)
-  def format_number(_), do: "0"
-
-  def format_compact(n) when is_integer(n) and n >= 1_000_000_000,
-    do: "#{Float.round(n / 1_000_000_000, 1)}B"
-
-  def format_compact(n) when is_integer(n) and n >= 1_000_000,
-    do: "#{Float.round(n / 1_000_000, 1)}M"
-
-  def format_compact(n) when is_integer(n) and n >= 1_000,
-    do: "#{Float.round(n / 1_000, 1)}K"
-
-  def format_compact(n) when is_integer(n), do: Integer.to_string(n)
-  def format_compact(n) when is_float(n), do: format_compact(trunc(n))
-  def format_compact(_), do: "0"
-
-  def format_tps(nil), do: "—"
-  def format_tps(n) when is_float(n), do: Float.round(n, 1) |> Float.to_string()
-  def format_tps(n) when is_integer(n), do: to_string(n)
-
-  defp avg_cost_per_req(%Decimal{} = cost, count) when is_integer(count) and count > 0 do
-    cost
-    |> Decimal.div(Decimal.new(count))
-    |> TokengateWeb.StatsHelpers.money()
-  end
-
-  defp avg_cost_per_req(_, _), do: "—"
+  defdelegate format_decimal(value), to: StatsHelpers
+  defdelegate format_number(value), to: StatsHelpers
+  defdelegate format_compact(value), to: StatsHelpers
+  defdelegate format_tps(value), to: StatsHelpers
 
   @doc "Color class for a delta value: green for up, red for down."
   def delta_color(nil), do: ""

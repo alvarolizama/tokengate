@@ -74,10 +74,16 @@ defmodule Tokengate.Metrics.StatsQueries do
 
   @doc """
   Period summary (the KPI card numbers): request count, cost, tokens,
-  avg tps. Accepts the same filter map as `Logs.cost_summary/1`
+  `:error_count`, `:avg_latency_ms`, `:avg_ttft_ms` and `:avg_tps`. Accepts the
+  same filter map as `Logs.cost_summary/1`
   (`:from`/`:to`/`:model_id`/`:group_id`/`:service_id`/`:member_ids`/
   `:group_member_ids`) or the equivalent keyword list; extra filter keys
   are passed through to the raw side untouched.
+
+  In the hybrid path the two halves are merged field by field
+  (`merge_summaries/2`): counters are summed and every derived value is
+  recomputed from the summed inputs, so no half's errors, latency or
+  throughput can be dropped by the split.
   """
   def summary(filters \\ []) do
     filters = normalize_filters(filters) |> Logs.ensure_window!("StatsQueries.summary/1")
@@ -453,20 +459,27 @@ defmodule Tokengate.Metrics.StatsQueries do
         limit = Keyword.get(opts, :limit, 5)
         metric = Keyword.get(opts, :metric, :requests)
 
-        counts
-        |> Enum.sort(fn {b1, v1}, {b2, v2} ->
+        # Tie-break: on equal cost/count the EARLIER bucket wins, so the top-N
+        # is deterministic run to run. The old `:cost` branch compared a
+        # transposed tuple (`{v1.request_count, b2} >= {v2.request_count, b1}`),
+        # i.e. count ascending against a bucket from the OTHER row — neither
+        # antisymmetric nor stable, so the chart could reshuffle between two
+        # identical reads.
+        sorted =
           case metric do
             :cost ->
-              case Decimal.compare(v1.cost_usd, v2.cost_usd) do
-                :gt -> true
-                :lt -> false
-                :eq -> {v1.request_count, b2} >= {v2.request_count, b1}
-              end
+              Enum.sort(counts, fn {b1, v1}, {b2, v2} ->
+                case Decimal.compare(v1.cost_usd, v2.cost_usd) do
+                  :eq -> {-v1.request_count, b1} <= {-v2.request_count, b2}
+                  order -> order == :gt
+                end
+              end)
 
             _ ->
-              {-v1.request_count, b1} <= {-v2.request_count, b2}
+              Enum.sort_by(counts, fn {bucket, vals} -> {-vals.request_count, bucket} end)
           end
-        end)
+
+        sorted
         |> Enum.take(limit)
         |> Enum.map(fn {bucket, vals} ->
           %{bucket: bucket, request_count: vals.request_count, cost_usd: vals.cost_usd}
@@ -495,25 +508,20 @@ defmodule Tokengate.Metrics.StatsQueries do
   end
 
   # Suma filas planas idénticas ({model_id, provider_stats_id}) — rollup y
-  # cola cruda pueden traer la misma pareja.
+  # cola cruda pueden traer la misma pareja. `Enum.group_by` + un reduce por
+  # grupo: O(n) en lugar del `Enum.find_index` + `List.update_at` (O(n²) con
+  # una lista que además se reconstruía entera en cada fila de la cola).
   defp merge_flat_rows(rollup_rows, tail_rows) do
-    Enum.reduce(tail_rows, rollup_rows, fn tail, acc ->
-      case Enum.find_index(
-             acc,
-             &(&1.model_id == tail.model_id and &1.provider_stats_id == tail.provider_stats_id)
-           ) do
-        nil ->
-          acc ++ [tail]
-
-        idx ->
-          List.update_at(acc, idx, fn row ->
-            %{
-              row
-              | request_count: row.request_count + tail.request_count,
-                cost_usd: Decimal.add(row.cost_usd, tail.cost_usd)
-            }
-          end)
-      end
+    (rollup_rows ++ tail_rows)
+    |> Enum.group_by(&{&1.model_id, &1.provider_stats_id})
+    |> Enum.map(fn {_key, [row | rest]} ->
+      Enum.reduce(rest, row, fn other, acc ->
+        %{
+          acc
+          | request_count: acc.request_count + other.request_count,
+            cost_usd: Decimal.add(acc.cost_usd, other.cost_usd)
+        }
+      end)
     end)
   end
 
@@ -634,8 +642,14 @@ defmodule Tokengate.Metrics.StatsQueries do
   # renames a dimension, this must follow, and the parity test in
   # `stats_queries_test.exs` is what catches the drift: it asserts the hybrid
   # result equals the raw aggregation over the same window.
+  #
+  # `subject_type = 'user'` mirrors `Rollup.breakdown_by_user/1`: a SERVICE row
+  # can carry `user_id` (attribution/top-ups populate it), and without the
+  # filter the user ranking summed service traffic — and drifted from
+  # `breakdown_by_service/1` by exactly the rows that carry both ids.
   defp raw_by_user_rows(opts, from, to) do
     RequestLog
+    |> where([rl], rl.subject_type == "user")
     |> where([rl], rl.inserted_at >= ^from)
     |> maybe_to(to)
     |> maybe_member_ids(opts[:member_ids])
@@ -720,9 +734,13 @@ defmodule Tokengate.Metrics.StatsQueries do
   # Merges the two halves per user: additive counters summed, `memberships`
   # and `groups` rebuilt from the union of the live memberships each half saw.
   defp merge_user_rows(rollup_rows, raw_rows) do
-    group_names = Tokengate.Accounts.group_names_by_id()
+    rows = rollup_rows ++ raw_rows
+    # Labels are resolved ONCE per read (never per row) and not at all for an
+    # empty window — an empty period used to pay a `groups` query whose result
+    # was never printed.
+    group_names = if rows == [], do: %{}, else: Tokengate.Accounts.group_names_by_id()
 
-    (rollup_rows ++ raw_rows)
+    rows
     |> Enum.group_by(& &1.user_id)
     |> Enum.map(fn {_user_id, [first | rest]} ->
       member_ids = union_ids([first | rest], :membership_ids)
@@ -1012,7 +1030,7 @@ defmodule Tokengate.Metrics.StatsQueries do
     )
     |> rollup_day_bounds(from, to)
     |> maybe_rollup_scope(opts)
-    |> Repo.all()
+    |> Repo.all(timeout: stats_query_timeout())
     |> Enum.map(&{&1.hour, &1.n})
   end
 
@@ -1275,7 +1293,7 @@ defmodule Tokengate.Metrics.StatsQueries do
     )
     |> maybe_member_ids(opts[:member_ids])
     |> maybe_user_ids(opts[:user_ids])
-    |> Repo.all()
+    |> Repo.all(timeout: stats_query_timeout())
     |> Enum.map(&{&1.hour, &1.n})
   end
 
@@ -1603,34 +1621,64 @@ defmodule Tokengate.Metrics.StatsQueries do
   # ---------------------------------------------------------------------
 
   # Sums the additive counters of two Logs.cost_summary/1-shaped maps.
-  # `total_latency_ms` via Map.get: la cara cruda (`Logs.cost_summary/1`)
-  # no lo devuelve — sin él, el avg_tps combinado perdía la latencia del
-  # tramo crudo y el KPI quedaba sesgado.
+  #
+  # Every derived value is RE-derived from summed inputs instead of being
+  # dropped or averaged:
+  #
+  #   * `error_count` — both halves publish it (`cost_summary/1` counts the
+  #     >= 400 rows); the old merge dropped the key entirely, so a hybrid KPI
+  #     card lost the errors of the period.
+  #   * `avg_latency_ms` — weighted by each half's own `latency_count`, i.e.
+  #     total latency over total samples. Averaging the two averages gave a
+  #     1-request tail the same weight as 10k rollup requests.
+  #   * `avg_ttft_ms` — same weighting over `ttft_count` (the rollup has no
+  #     TTFT column, so it contributes samples=0 and a raw-only tail wins).
+  #   * `avg_tps` — from the summed completion tokens and total latency, the
+  #     one shared formula (`Logs.compute_tps/2`).
   defp merge_summaries(a, b) do
+    total_latency_ms = (Map.get(a, :total_latency_ms) || 0) + (Map.get(b, :total_latency_ms) || 0)
+    latency_count = (Map.get(a, :latency_count) || 0) + (Map.get(b, :latency_count) || 0)
+    completion_tokens = a.total_completion_tokens + b.total_completion_tokens
+
     %{
       total_cost_usd: Decimal.add(a.total_cost_usd, b.total_cost_usd),
       total_prompt_tokens: a.total_prompt_tokens + b.total_prompt_tokens,
-      total_completion_tokens: a.total_completion_tokens + b.total_completion_tokens,
+      total_completion_tokens: completion_tokens,
       total_cache_read_tokens: a.total_cache_read_tokens + b.total_cache_read_tokens,
       total_cache_creation_tokens: a.total_cache_creation_tokens + b.total_cache_creation_tokens,
       request_count: a.request_count + b.request_count,
-      total_latency_ms:
-        (Map.get(a, :total_latency_ms) || 0) + (Map.get(b, :total_latency_ms) || 0),
-      avg_tps: merged_tps(a, b)
+      error_count: (Map.get(a, :error_count) || 0) + (Map.get(b, :error_count) || 0),
+      total_latency_ms: total_latency_ms,
+      latency_count: latency_count,
+      ttft_count: (Map.get(a, :ttft_count) || 0) + (Map.get(b, :ttft_count) || 0),
+      avg_latency_ms: weighted_avg(total_latency_ms, latency_count),
+      avg_ttft_ms: weighted_ttft(a, b),
+      avg_tps: compute_tps(completion_tokens, total_latency_ms)
     }
   end
 
-  # avg_tps is derived (completion_tokens / latency): merge the inputs.
-  defp merged_tps(a, b) do
-    tokens = a.total_completion_tokens + b.total_completion_tokens
+  # Mean over the samples that actually measured the metric; `nil` when there
+  # are none (never an invented 0).
+  defp weighted_avg(_total, 0), do: nil
 
-    latency =
-      (Map.get(a, :total_latency_ms) || 0) + (Map.get(b, :total_latency_ms) || 0)
+  defp weighted_avg(total, count) when is_integer(count) and count > 0,
+    do: Float.round(total / count, 1)
+
+  # `avg_ttft_ms` is a mean, not a sum: rebuild it as
+  # `(avg_a * count_a + avg_b * count_b) / (count_a + count_b)` so a half that
+  # measured nothing cannot dilute the other.
+  defp weighted_ttft(a, b) do
+    a_count = Map.get(a, :ttft_count) || 0
+    b_count = Map.get(b, :ttft_count) || 0
+    a_avg = Map.get(a, :avg_ttft_ms)
+    b_avg = Map.get(b, :avg_ttft_ms)
 
     cond do
-      tokens == 0 -> nil
-      latency == 0 -> 0.0
-      true -> tokens / (latency / 1000)
+      a_avg == nil and b_avg == nil -> nil
+      b_avg == nil -> a_avg
+      a_avg == nil -> b_avg
+      a_count + b_count == 0 -> nil
+      true -> Float.round((a_avg * a_count + b_avg * b_count) / (a_count + b_count), 1)
     end
   end
 
@@ -1704,9 +1752,9 @@ defmodule Tokengate.Metrics.StatsQueries do
     |> Map.put(:avg_tps, compute_tps(tokens, latency))
   end
 
-  defp compute_tps(_tokens, 0), do: nil
-  defp compute_tps(0, _latency), do: 0.0
-  defp compute_tps(tokens, latency), do: tokens / (latency / 1000)
+  # Same shared formula as `Rollup` / `Logs` — see `Logs.compute_tps/2` for the
+  # nil/0.0 contract. Keeping a local copy is what let the three modules drift.
+  defp compute_tps(tokens, latency), do: Logs.compute_tps(tokens, latency)
 
   # ---------------------------------------------------------------------
   # Hybrid gating

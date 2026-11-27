@@ -869,7 +869,12 @@ defmodule Tokengate.Logs do
       total_completion_tokens: 0,
       total_cache_read_tokens: 0,
       total_cache_creation_tokens: 0,
-      request_count: 0
+      request_count: 0,
+      total_latency_ms: 0,
+      latency_count: 0,
+      avg_latency_ms: nil,
+      avg_tps: nil,
+      avg_ttft_ms: nil
     }
   end
 
@@ -888,11 +893,18 @@ defmodule Tokengate.Logs do
         total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
         total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
         total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
-        request_count: count(rl.id)
+        request_count: count(rl.id),
+        total_latency_ms: fragment("COALESCE(SUM(latency_ms), 0)"),
+        latency_count: fragment("COUNT(latency_ms)")
       })
 
     result = Repo.one(query, timeout: stats_timeout())
 
+    # `avg_tps` used to be a hardcoded `0.0` here while the same KPI from
+    # `cost_summary/1` was computed: the user-scoped dashboard strip showed
+    # "0 t/s" for traffic that had measured throughput, and the two summaries
+    # of the SAME period disagreed. It is derived from the totals now, with the
+    # shared `compute_tps/2` formula.
     %{
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
       total_prompt_tokens: result.total_prompt_tokens,
@@ -900,11 +912,18 @@ defmodule Tokengate.Logs do
       total_cache_read_tokens: result.total_cache_read_tokens,
       total_cache_creation_tokens: result.total_cache_creation_tokens,
       request_count: result.request_count,
-      avg_latency_ms: nil,
-      avg_tps: 0.0,
+      total_latency_ms: result.total_latency_ms,
+      latency_count: result.latency_count,
+      avg_latency_ms: avg_from_totals(result.total_latency_ms, result.latency_count),
+      avg_tps: compute_tps(result.total_completion_tokens, result.total_latency_ms),
       avg_ttft_ms: nil
     }
   end
+
+  defp avg_from_totals(total_ms, count) when is_integer(count) and count > 0,
+    do: Float.round(total_ms / count, 1)
+
+  defp avg_from_totals(_total_ms, _count), do: nil
 
   defp maybe_members_from(query, nil), do: query
   defp maybe_members_from(query, from), do: where(query, [rl], rl.inserted_at >= ^from)
@@ -958,7 +977,18 @@ defmodule Tokengate.Logs do
         total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
         total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
         request_count: count(rl.id),
+        # Both halves of a hybrid read publish the error count: the merge
+        # (`StatsQueries.merge_summaries/2`) sums it, so a period's errors can
+        # no longer disappear from the KPI card just because the window spans
+        # the rollup cutoff.
+        error_count: fragment("COUNT(*) FILTER (WHERE COALESCE(status_code, 0) >= 400)"),
         total_latency_ms: fragment("COALESCE(SUM(latency_ms), 0)"),
+        # Sample counts travel with the averages: a merged (hybrid) summary
+        # must weight `avg_latency_ms` / `avg_ttft_ms` by how many rows each
+        # half actually measured, not by request_count (a 1-request bucket with
+        # a latency must not weigh like a 10k-request one).
+        latency_count: fragment("COUNT(latency_ms)"),
+        ttft_count: fragment("COUNT(ttft_ms)"),
         avg_latency_ms: fragment("AVG(latency_ms)"),
         avg_ttft_ms: fragment("AVG(ttft_ms)")
       })
@@ -971,13 +1001,16 @@ defmodule Tokengate.Logs do
       total_cache_read_tokens: result.total_cache_read_tokens,
       total_cache_creation_tokens: result.total_cache_creation_tokens,
       request_count: result.request_count,
+      error_count: result.error_count,
       # Lo devuelve el SELECT pero hace falta en el mapa: el lado crudo del
       # híbrido (`StatsQueries.merge_summaries/2`) suma latency para el
       # avg_tps combinado — sin él, el KPI TPS pierde la latencia fresca.
       total_latency_ms: result.total_latency_ms,
+      latency_count: result.latency_count,
+      ttft_count: result.ttft_count,
       avg_latency_ms: avg_to_float(result.avg_latency_ms),
       avg_ttft_ms: avg_to_float(result.avg_ttft_ms),
-      avg_tps: compute_avg_tps(result.total_completion_tokens, result.total_latency_ms)
+      avg_tps: compute_tps(result.total_completion_tokens, result.total_latency_ms)
     }
   end
 
@@ -1606,12 +1639,29 @@ defmodule Tokengate.Logs do
   defp avg_to_float(n) when is_integer(n), do: Float.round(n / 1, 1)
   defp avg_to_float(n) when is_float(n), do: Float.round(n, 1)
 
-  defp compute_avg_tps(_tokens, 0), do: nil
-  defp compute_avg_tps(0, _latency), do: 0.0
+  @doc """
+  Tokens per second over the generation window — `completion_tokens /
+  (latency_ms / 1000)`.
 
-  defp compute_avg_tps(tokens, latency_ms) when is_integer(tokens) and is_integer(latency_ms) do
+  THE single throughput formula for every stats surface: `Rollup` and
+  `StatsQueries` delegate here instead of keeping private copies that had
+  drifted (one returned `0.0` for "no tokens", another `nil`, and a merged
+  KPI could pick either). Contract:
+
+    * `nil` when there is no latency to divide by (unmeasured, not zero);
+    * `0.0` when latency exists but nothing was generated (measured zero);
+    * `nil` for any other non-numeric input, so a NULL column never crashes
+      a dashboard read.
+  """
+  @spec compute_tps(integer() | nil, integer() | nil) :: float() | nil
+  def compute_tps(_tokens, 0), do: nil
+  def compute_tps(0, _latency), do: 0.0
+
+  def compute_tps(tokens, latency_ms) when is_integer(tokens) and is_integer(latency_ms) do
     tokens / (latency_ms / 1000)
   end
+
+  def compute_tps(_tokens, _latency), do: nil
 
   @doc """
   Per-user total historical spend across all group memberships.
@@ -2242,7 +2292,7 @@ defmodule Tokengate.Logs do
       total_latency_ms: result.total_latency_ms,
       avg_latency_ms: avg_to_float(result.avg_latency_ms),
       avg_ttft_ms: avg_to_float(result.avg_ttft_ms),
-      avg_tps: compute_avg_tps(result.total_completion_tokens, result.total_latency_ms),
+      avg_tps: compute_tps(result.total_completion_tokens, result.total_latency_ms),
       status_breakdown: %{
         "2xx" => result.status_2xx,
         "4xx" => result.status_4xx,
