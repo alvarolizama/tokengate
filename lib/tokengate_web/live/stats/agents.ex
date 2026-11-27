@@ -115,7 +115,7 @@ defmodule TokengateWeb.StatsLive.Agents do
               </:col>
               <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
                 <span class="font-mono tabular-nums">
-                  ${Stats.format_decimal(row.cost_usd)}
+                  {Stats.money(row.cost_usd)}
                 </span>
               </:col>
               <:col
@@ -219,7 +219,7 @@ defmodule TokengateWeb.StatsLive.Agents do
                 </span>
                 <span>
                   <span class="text-base-content/40">{gettext("Cost")}</span>
-                  <span class="ml-1">${Stats.format_decimal(totals.cost_usd)}</span>
+                  <span class="ml-1">{Stats.money(totals.cost_usd)}</span>
                 </span>
                 <span>
                   <span class="text-base-content/40">{gettext("Tokens in")}</span>

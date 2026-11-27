@@ -5,8 +5,8 @@
   current_path={@current_path}
 >
   <div class="space-y-6">
-    <%!-- Header + period selector (hidden on credits: budgets are live
-         calendar-day/month counters, not a rolling window) --%>
+    <%!-- Header + period selector (hidden on the live tab: "En vivo" es una
+         ventana fija de la última hora + hoy, no un rango elegible) --%>
     <.header>
       {gettext("Statistics")}
       <:subtitle>
@@ -19,7 +19,7 @@
         <%!-- Selector de período: solo en las tabs de datos. "En vivo" es una
              ventana fija (última hora + hoy), no un rango elegible; en su lugar
              el header muestra el estado de la actualización automática. --%>
-        <div :if={@live_action not in [:live, :credits]} class="flex items-center gap-3">
+        <div :if={@live_action != :live} class="flex items-center gap-3">
           <span
             :if={@stats_loading}
             class="loading loading-spinner loading-sm text-primary"
@@ -74,6 +74,16 @@
           id="nav-overview"
         >
           <.icon name="hero-chart-bar-square" class="w-4 h-4" /> {gettext("Overview")}
+        </.link>
+        <.link
+          patch={~p"/stats/finops?period=#{@period}"}
+          class={[
+            "join-item btn btn-sm",
+            if(@live_action == :finops, do: "btn-primary", else: "btn-ghost")
+          ]}
+          id="nav-finops"
+        >
+          <.icon name="hero-banknotes" class="w-4 h-4" /> {gettext("FinOps")}
         </.link>
         <.link
           patch={~p"/stats/providers?period=#{@period}"}
@@ -191,7 +201,6 @@
             metrics={@metrics}
             peak_concurrency={@peak_concurrency}
             daily_series={@daily_series}
-            efficiency={@efficiency}
             top_agents={@top_agents}
             top_consumers={@top_consumers}
             busiest_hours={@busiest_hours}
@@ -205,6 +214,16 @@
             period={@period}
             timezone={@timezone}
             current_user={@current_user}
+          />
+        <% @live_action == :finops -> %>
+          <.finops
+            overview={@finops_overview}
+            series={@finops_series}
+            request_types={@finops_request_types}
+            scatter={@finops_scatter}
+            metric={@finops_metric}
+            scatter_y={@finops_scatter_y}
+            period={@period}
           />
         <% @live_action == :providers -> %>
           <.providers

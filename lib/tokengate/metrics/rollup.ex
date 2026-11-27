@@ -25,7 +25,10 @@ defmodule Tokengate.Metrics.Rollup do
   """
 
   import Ecto.Query, warn: false
+  alias Tokengate.Accounts.ApiKey
   alias Tokengate.Accounts.GroupMember
+  alias Tokengate.Accounts.Service
+  alias Tokengate.Accounts.User
   # Stats reads scan raw request_logs across whole windows; cold, they can
   # exceed the DBConnection default (15s) in production. Analytics reads get
   # their own, generous budget instead of raising the Repo-wide timeout
@@ -510,8 +513,15 @@ defmodule Tokengate.Metrics.Rollup do
     # rotada sigue apareciendo en el ranking con TODO su histórico — antes
     # el INNER JOIN a group_members lo hacía desaparecer junto a su gasto.
     # El contexto (membresías/grupos) se resuelve con LEFT JOIN.
+    #
+    # `subject_type = 'user'` es la MISMA regla que aplica el lado híbrido
+    # (`StatsQueries.raw_by_user_rows/3`): una fila de servicio puede llevar
+    # `user_id` (top-ups y atribución heredada lo pueblan), y sin el filtro el
+    # ranking de usuarios sumaba tráfico de servicio en las filas mixtas y
+    # contradecía a `breakdown_by_service/1`.
     query =
       RequestLog
+      |> where([rl], rl.subject_type == "user")
       |> join(:left, [rl], tm in GroupMember, on: rl.group_member_id == tm.id, as: :member)
       |> join(:left, [rl], u in Tokengate.Accounts.User, on: rl.user_id == u.id, as: :user)
       |> where([user: u], not is_nil(u.id))
@@ -546,10 +556,14 @@ defmodule Tokengate.Metrics.Rollup do
     # el id es lo único que permite enlazar el perfil de límites desde el listado, y
     # resolver el nombre antes de perder el id dejaba el perfil de límites como texto
     # muerto (el campo se llamaba `group_names` pero traía ids).
-    group_names_by_id = Tokengate.Accounts.group_names_by_id()
+    #
+    # ONE read of the names per call, and none when the window has no rows: the
+    # map is built once and reused for every row instead of resolving per row,
+    # and an empty period no longer pays a query for labels it will not print.
+    rows = Repo.all(query, timeout: stats_timeout())
+    group_names_by_id = if rows == [], do: %{}, else: Tokengate.Accounts.group_names_by_id()
 
-    Repo.all(query, timeout: stats_timeout())
-    |> Enum.map(fn row ->
+    Enum.map(rows, fn row ->
       %{
         user_id: row.user_id,
         user_name: row.user_name,
@@ -2541,6 +2555,11 @@ defmodule Tokengate.Metrics.Rollup do
       request_count: result.request_count,
       error_count: result.error_count,
       total_latency_ms: result.total_latency_ms,
+      # Sample counts either side of a hybrid merge: see
+      # `StatsQueries.merge_summaries/2`. The rollup has no TTFT column, so its
+      # ttft sample count is a real zero (not a missing key).
+      latency_count: result.latency_count,
+      ttft_count: 0,
       avg_latency_ms: avg_latency_ms,
       avg_tps: compute_tps(result.total_completion_tokens, result.total_latency_ms),
       avg_ttft_ms: nil
@@ -2890,14 +2909,11 @@ defmodule Tokengate.Metrics.Rollup do
     where(query, [rl], rl.credential_id == ^credential_id)
   end
 
-  defp compute_tps(_tokens, 0), do: nil
-  defp compute_tps(0, _latency), do: 0.0
-
-  defp compute_tps(tokens, latency_ms) when is_integer(tokens) and is_integer(latency_ms) do
-    Float.round(tokens / (latency_ms / 1000), 1)
-  end
-
-  defp compute_tps(_, _), do: nil
+  # ONE throughput formula for every surface: the shared implementation lives
+  # in `Tokengate.Logs.compute_tps/2` (this module used to round here while
+  # `StatsQueries`/`Logs` did not, so the same period could show 123.5 vs
+  # 123.456 depending on which card asked).
+  defp compute_tps(tokens, latency_ms), do: Logs.compute_tps(tokens, latency_ms)
 
   # Media de latencia por request con latencia registrada. nil cuando no hay
   # ninguna muestra — un 0 inventado se leería como "instantáneo".
@@ -3458,6 +3474,943 @@ defmodule Tokengate.Metrics.Rollup do
       service_requests: row.service_requests || 0,
       service_cost_usd: Decimal.new(to_string(row.service_cost_usd || 0))
     }
+  end
+
+  # -----------------------------------------------------------------------
+  # FinOps — shared aggregates (global overview, series, breakdowns, per service)
+  # -----------------------------------------------------------------------
+  #
+  # Every read here is ONE bounded pass over `request_logs`, bounded by
+  # `Logs.ensure_window!/2`: a caller that forgets `:from` fails loudly instead
+  # of receiving "whatever survived retention" presented as a total. The rows
+  # are plain maps/lists (integers for counts/tokens, `Decimal` for money) so
+  # the UI layers can render them without knowing the query shapes.
+  #
+  # ## `router_decision` rows
+  #
+  # `request_type = 'router_decision'` is the classifier's OWN billed call, not
+  # served traffic (same rule as `SmartRouter.Analytics` and
+  # `HourlyAggregate`). Served metrics exclude those rows entirely.
+  #
+  # The same money is recorded twice by design: the served row carries
+  # `router_decision_cost_usd` (the decision step's price) and, when the
+  # operator bills it to the subject, a separate `router_decision` row carries
+  # it in `provider_cost_usd`. Adding both would report the routing cost twice,
+  # so `:router_decision_cost_usd` is taken from ONE source per window: the
+  # decision rows when any exist (they are the actual debit), the served column
+  # otherwise (the absorbed-cost mode). `finops_overview_rows/1` is that single
+  # choice, written once.
+
+  @doc """
+  FinOps overview of the window in a SINGLE pass: served traffic, money, and
+  the economics that explain it, split three ways.
+
+  Returns:
+
+      %{
+        overall:  total spent/served in the window,
+        users:    the `subject_type == "user"` block    (+ :active_subjects),
+        services: the `subject_type == "service"` block (+ :active_subjects)
+      }
+
+  Every block carries the same counters:
+
+    * `:requests`, `:cost_usd`, `:prompt_tokens`, `:completion_tokens`
+    * `:cache_read_tokens`, `:cache_creation_tokens`
+    * `:error_requests` (status >= 400) and `:error_cost_usd` (what the errors
+      cost — the waste, not the volume)
+    * `:fallback_recovered_count` (200 after a non-200 upstream attempt)
+    * `:think_requests`, `:think_cost_usd`, `:think_completion_tokens`
+      (`think == true` OR an effort was applied)
+    * `:local_cache_hits` (gateway cache, nothing reached an upstream)
+    * `:router_decision_cost_usd` (the decision step's spend — see the section
+      comment: counted once, never folded into `:cost_usd`)
+    * `:prompt_tokens_saved_est` (prompt-saving knobs' estimate)
+    * `:topup_requests`, `:topup_cost_usd` (served against a top-up debit)
+
+  `:active_subjects` (users/services blocks only) is the count of DISTINCT
+  subjects that actually served traffic — the denominator an ARPU/ARPC card
+  needs and a `COUNT(*)` cannot give.
+
+  ## Options
+
+    * `:from` — REQUIRED; `inserted_at >= from`
+    * `:to` — optional upper bound
+    * `:service_id` / `:api_key_id` / `:model_id` — optional scope (the
+      per-service summary reuses this function with `:service_id`); `"all"` and
+      `nil` both mean "no filter"
+  """
+  @spec finops_overview(keyword()) :: %{overall: map(), users: map(), services: map()}
+  def finops_overview(opts \\ []) do
+    window = finops_window!(opts, "Rollup.finops_overview/1")
+
+    rows =
+      window
+      |> finops_base_rows(opts)
+      |> finops_overview_rows()
+      |> Repo.all(timeout: stats_timeout())
+
+    by_scope = Map.new(rows, fn row -> {finops_scope_key(row), row} end)
+
+    %{
+      overall: finops_subject_totals(Map.get(by_scope, :total)),
+      users: finops_subject_totals(Map.get(by_scope, "user"), :users),
+      services: finops_subject_totals(Map.get(by_scope, "service"), :services)
+    }
+  end
+
+  @doc """
+  Daily (`granularity: :day`, the default) or hourly (`:hour`, bucketed in
+  `:timezone`) series of served traffic split by subject kind.
+
+  Returns `[%{date: Date.t() | DateTime.t(), subject_type: "user" | "service",
+  request_count: integer, cost_usd: Decimal.t(), error_cost_usd: Decimal.t(),
+  think_cost_usd: Decimal.t()}]`, ordered by `{date, subject_type}`.
+
+  `router_decision` rows are excluded (they are not served traffic), and only
+  user/service rows are returned: a legacy row with no `subject_type` has no
+  subject kind to chart.
+  """
+  @spec finops_subject_series(keyword()) :: [map()]
+  def finops_subject_series(opts \\ []) do
+    window = finops_window!(opts, "Rollup.finops_subject_series/1")
+    granularity = finops_granularity(opts)
+
+    window
+    |> finops_series_rows(opts, granularity)
+    |> Enum.filter(&(&1.subject_type in ["user", "service"]))
+    |> Enum.map(&finops_series_entry(&1, granularity))
+    |> Enum.sort_by(fn entry -> {finops_sort_key(entry.date), entry.subject_type} end)
+  end
+
+  @doc """
+  Served traffic broken down by `request_type` (`router_decision` excluded),
+  ordered by cost desc.
+
+  Returns `[%{request_type: String.t(), request_count: integer,
+  user_requests: integer, service_requests: integer, cost_usd: Decimal.t(),
+  user_cost_usd: Decimal.t(), service_cost_usd: Decimal.t(),
+  prompt_tokens: integer, completion_tokens: integer,
+  cache_read_tokens: integer, error_count: integer, error_cost_usd: Decimal.t()}]`.
+
+  Each row answers "what does this KIND of request cost, and who pays for it" —
+  the `user_*`/`service_*` split is the same `subject_type` attribution the
+  overview publishes, so the two always add up.
+  """
+  @spec finops_request_type_breakdown(keyword()) :: [map()]
+  def finops_request_type_breakdown(opts \\ []) do
+    window = finops_window!(opts, "Rollup.finops_request_type_breakdown/1")
+
+    window
+    |> finops_request_type_rows(opts)
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.map(fn row ->
+      %{
+        request_type: row.request_type || "unknown",
+        request_count: finops_int(row.request_count),
+        user_requests: finops_int(row.user_requests),
+        service_requests: finops_int(row.service_requests),
+        cost_usd: finops_usd(row.cost_usd),
+        user_cost_usd: finops_usd(row.user_cost_usd),
+        service_cost_usd: finops_usd(row.service_cost_usd),
+        prompt_tokens: finops_int(row.prompt_tokens),
+        completion_tokens: finops_int(row.completion_tokens),
+        cache_read_tokens: finops_int(row.cache_read_tokens),
+        error_count: finops_int(row.error_count),
+        error_cost_usd: finops_usd(row.error_cost_usd)
+      }
+    end)
+  end
+
+  @doc """
+  One row per ACTIVE subject in the window (users and services), for the
+  cost/volume scatter: who spends, how much, and how much of it was wasted.
+
+  Returns `[%{subject_type: "user" | "service", subject_id: binary,
+  label: String.t(), request_count: integer, cost_usd: Decimal.t(),
+  prompt_tokens: integer, completion_tokens: integer,
+  cache_read_tokens: integer, error_count: integer,
+  error_cost_usd: Decimal.t(), think_cost_usd: Decimal.t(),
+  topup_cost_usd: Decimal.t()}]`, ordered by cost desc.
+
+  The names are joined in ONE statement (two dimension tables, no per-row
+  lookup): `label` is the user's email, else the service's name, else `"—"`
+  for a subject row whose account was deleted (the traffic is still real).
+  """
+  @spec finops_subject_scatter(keyword()) :: [map()]
+  def finops_subject_scatter(opts \\ []) do
+    window = finops_window!(opts, "Rollup.finops_subject_scatter/1")
+
+    window
+    |> finops_subject_scatter_rows(opts)
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.map(fn row ->
+      %{
+        subject_type: row.subject_type,
+        subject_id: row.user_id || row.service_id,
+        label: row.user_email || row.user_name || row.service_name || "—",
+        request_count: finops_int(row.request_count),
+        cost_usd: finops_usd(row.cost_usd),
+        prompt_tokens: finops_int(row.prompt_tokens),
+        completion_tokens: finops_int(row.completion_tokens),
+        cache_read_tokens: finops_int(row.cache_read_tokens),
+        error_count: finops_int(row.error_count),
+        error_cost_usd: finops_usd(row.error_cost_usd),
+        think_cost_usd: finops_usd(row.think_cost_usd),
+        topup_cost_usd: finops_usd(row.topup_cost_usd)
+      }
+    end)
+    |> Enum.sort_by(& &1.cost_usd, &decimal_desc/2)
+  end
+
+  @doc """
+  FinOps summary of ONE service: the same economics as `finops_overview/1`
+  plus the three splits the service pages draw.
+
+  Returns:
+
+      %{
+        overview:        the `finops_overview/1` `:overall` block,
+        by_request_type: `finops_request_type_breakdown/1` scoped to the service,
+        by_key:          [%{api_key_id, label, status, request_count, cost_usd,
+                            prompt_tokens, completion_tokens, cache_read_tokens,
+                            error_count, error_cost_usd, think_cost_usd}],
+        by_model:        [%{model_name, request_count, cost_usd, prompt_tokens,
+                            completion_tokens, cache_read_tokens, error_count,
+                            error_cost_usd, think_cost_usd}]
+      }
+
+  `by_key` keeps a row for traffic whose `api_key_id` is NULL (logs written
+  before the column existed, or before the key was known): `label` is `"—"` and
+  `status` is `nil` for those, instead of hiding a real slice of the spend.
+
+  ## Options
+
+    * `:api_key_id` — `"all"` (default) or a key uuid
+    * `:from` — REQUIRED; `:to` — optional
+  """
+  @spec service_finops_summary(binary(), keyword()) :: map()
+  def service_finops_summary(service_id, opts \\ [])
+
+  def service_finops_summary(nil, _opts) do
+    %{
+      overview: finops_zero_totals(),
+      by_request_type: [],
+      by_key: [],
+      by_model: []
+    }
+  end
+
+  def service_finops_summary(service_id, opts) when is_binary(service_id) do
+    opts = Keyword.put(opts, :service_id, service_id)
+    window = finops_window!(opts, "Rollup.service_finops_summary/2")
+
+    by_key =
+      window
+      |> finops_service_key_rows(opts)
+      |> Repo.all(timeout: stats_timeout())
+      |> Enum.map(&finops_key_entry/1)
+
+    by_model =
+      window
+      |> finops_service_model_rows(opts)
+      |> Repo.all(timeout: stats_timeout())
+      |> Enum.map(&finops_model_entry/1)
+
+    %{
+      overview: finops_overview(opts).overall,
+      by_request_type: finops_request_type_breakdown(opts),
+      by_key: by_key,
+      by_model: by_model
+    }
+  end
+
+  @doc """
+  Daily (`:day`, default) or hourly (`:hour`, in `:timezone`) FinOps series for
+  ONE service: `[%{date: Date.t() | DateTime.t(), request_count: integer,
+  cost_usd: Decimal.t(), error_cost_usd: Decimal.t(),
+  think_cost_usd: Decimal.t()}]`, ordered by `date`.
+
+  Same `:api_key_id` option as `service_finops_summary/2` (`"all"` or a uuid),
+  and `router_decision` rows are excluded like everywhere else in this section.
+  """
+  @spec service_finops_series(binary(), keyword()) :: [map()]
+  def service_finops_series(service_id, opts \\ [])
+
+  def service_finops_series(nil, _opts), do: []
+
+  def service_finops_series(service_id, opts) when is_binary(service_id) do
+    opts = Keyword.put(opts, :service_id, service_id)
+    window = finops_window!(opts, "Rollup.service_finops_series/2")
+    granularity = finops_granularity(opts)
+
+    window
+    |> finops_series_rows(opts, granularity)
+    |> Enum.group_by(& &1.bucket)
+    |> Enum.map(fn {bucket, rows} ->
+      %{
+        date: finops_bucket_date(bucket, granularity),
+        request_count: rows |> Enum.map(& &1.request_count) |> Enum.sum(),
+        cost_usd: rows |> Enum.map(& &1.cost_usd) |> Enum.reduce(Decimal.new(0), &Decimal.add/2),
+        error_cost_usd:
+          rows |> Enum.map(& &1.error_cost_usd) |> Enum.reduce(Decimal.new(0), &Decimal.add/2),
+        think_cost_usd:
+          rows |> Enum.map(& &1.think_cost_usd) |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+      }
+    end)
+    |> Enum.sort_by(fn entry -> finops_sort_key(entry.date) end)
+  end
+
+  # --- FinOps: query building ---------------------------------------------
+
+  # `Logs.ensure_window!/2` is the retention contract: no `:from` is a loud
+  # failure in dev/test and a labelled clamp in production — never "everything".
+  defp finops_window!(opts, fun) do
+    opts
+    |> Map.new()
+    |> Logs.ensure_window!(fun)
+    |> then(fn window -> %{from: Map.fetch!(window, :from), to: Map.get(window, :to)} end)
+  end
+
+  # The window's rows, TAGGED with everything the FinOps aggregates need:
+  # `is_decision` classifies the classifier's own row once, so every aggregate
+  # below can filter it with a boolean instead of repeating the request_type
+  # predicate (and re-parsing it) a dozen times.
+  #
+  # Selecting into a subquery is deliberate: the aggregates then read a narrow,
+  # already-bounded row set and the `GROUP BY` keys are plain columns.
+  defp finops_base_rows(%{from: from, to: to}, opts) do
+    RequestLog
+    |> where([rl], rl.inserted_at >= ^from)
+    |> maybe_to(to)
+    |> finops_scope(opts)
+    |> select([rl], %{
+      inserted_at: rl.inserted_at,
+      subject_type: rl.subject_type,
+      is_decision: fragment("COALESCE(?, '') = 'router_decision'", rl.request_type),
+      request_type: rl.request_type,
+      user_id: rl.user_id,
+      service_id: rl.service_id,
+      model_id: rl.model_id,
+      api_key_id: rl.api_key_id,
+      status_code: rl.status_code,
+      provider_status_code: rl.provider_status_code,
+      provider_cost_usd: rl.provider_cost_usd,
+      router_decision_cost_usd: rl.router_decision_cost_usd,
+      prompt_tokens: rl.prompt_tokens,
+      completion_tokens: rl.completion_tokens,
+      cache_read_tokens: rl.cache_read_tokens,
+      cache_creation_tokens: rl.cache_creation_tokens,
+      prompt_tokens_saved_est: rl.prompt_tokens_saved_est,
+      think: rl.think,
+      effort_applied: rl.effort_applied,
+      cache_hit: rl.cache_hit,
+      credit_topup_id: rl.credit_topup_id
+    })
+    |> subquery()
+  end
+
+  defp finops_scope(query, opts) do
+    query
+    |> finops_where(:service_id, Keyword.get(opts, :service_id))
+    |> finops_where(:api_key_id, Keyword.get(opts, :api_key_id))
+    |> finops_where(:model_id, Keyword.get(opts, :model_id))
+  end
+
+  defp finops_where(query, _field, nil), do: query
+  defp finops_where(query, _field, "all"), do: query
+  defp finops_where(query, _field, :all), do: query
+
+  defp finops_where(query, :service_id, id),
+    do: where(query, [rl], rl.service_id == ^id)
+
+  defp finops_where(query, :api_key_id, id),
+    do: where(query, [rl], rl.api_key_id == ^id)
+
+  defp finops_where(query, :model_id, id),
+    do: where(query, [rl], rl.model_id == ^id)
+
+  # ONE pass, three scopes: `GROUPING SETS ((subject_type), ())` returns one row
+  # per subject kind PLUS the grand total, all from the same scan (the total is
+  # computed by Postgres, so `:overall` can never disagree with its parts by a
+  # rounding or a filter applied in Elixir).
+  defp finops_overview_rows(base) do
+    from(b in base,
+      group_by: fragment("GROUPING SETS ((?), ())", b.subject_type),
+      select: %{
+        subject_type: b.subject_type,
+        is_total: fragment("GROUPING(?)", b.subject_type),
+        request_count: fragment("COUNT(*) FILTER (WHERE NOT ?)", b.is_decision),
+        cost_usd:
+          fragment("COALESCE(SUM(?) FILTER (WHERE NOT ?), 0)", b.provider_cost_usd, b.is_decision),
+        prompt_tokens:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE NOT ?), 0)::bigint",
+            b.prompt_tokens,
+            b.is_decision
+          ),
+        completion_tokens:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE NOT ?), 0)::bigint",
+            b.completion_tokens,
+            b.is_decision
+          ),
+        cache_read_tokens:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE NOT ?), 0)::bigint",
+            b.cache_read_tokens,
+            b.is_decision
+          ),
+        cache_creation_tokens:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE NOT ?), 0)::bigint",
+            b.cache_creation_tokens,
+            b.is_decision
+          ),
+        error_requests:
+          fragment("COUNT(*) FILTER (WHERE NOT ? AND ? >= 400)", b.is_decision, b.status_code),
+        error_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE NOT ? AND ? >= 400), 0)",
+            b.provider_cost_usd,
+            b.is_decision,
+            b.status_code
+          ),
+        fallback_recovered_count:
+          fragment(
+            "COUNT(*) FILTER (WHERE NOT ? AND ? = 200 AND ? IS NOT NULL AND ? <> 200)",
+            b.is_decision,
+            b.status_code,
+            b.provider_status_code,
+            b.provider_status_code
+          ),
+        think_requests:
+          fragment(
+            "COUNT(*) FILTER (WHERE NOT ? AND (? = true OR ? IS NOT NULL))",
+            b.is_decision,
+            b.think,
+            b.effort_applied
+          ),
+        think_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE NOT ? AND (? = true OR ? IS NOT NULL)), 0)",
+            b.provider_cost_usd,
+            b.is_decision,
+            b.think,
+            b.effort_applied
+          ),
+        think_completion_tokens:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE NOT ? AND (? = true OR ? IS NOT NULL)), 0)::bigint",
+            b.completion_tokens,
+            b.is_decision,
+            b.think,
+            b.effort_applied
+          ),
+        local_cache_hits:
+          fragment("COUNT(*) FILTER (WHERE NOT ? AND ? = true)", b.is_decision, b.cache_hit),
+        router_decision_cost_usd:
+          fragment(
+            "CASE WHEN COUNT(*) FILTER (WHERE ?) > 0 THEN COALESCE(SUM(?) FILTER (WHERE ?), 0) ELSE COALESCE(SUM(?) FILTER (WHERE NOT ?), 0) END",
+            b.is_decision,
+            b.provider_cost_usd,
+            b.is_decision,
+            b.router_decision_cost_usd,
+            b.is_decision
+          ),
+        prompt_tokens_saved_est:
+          fragment(
+            "COALESCE(SUM(COALESCE(?, 0)) FILTER (WHERE NOT ?), 0)::bigint",
+            b.prompt_tokens_saved_est,
+            b.is_decision
+          ),
+        topup_requests:
+          fragment(
+            "COUNT(*) FILTER (WHERE NOT ? AND ? IS NOT NULL)",
+            b.is_decision,
+            b.credit_topup_id
+          ),
+        topup_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE NOT ? AND ? IS NOT NULL), 0)",
+            b.provider_cost_usd,
+            b.is_decision,
+            b.credit_topup_id
+          ),
+        active_users:
+          fragment("COUNT(DISTINCT ?) FILTER (WHERE NOT ?)", b.user_id, b.is_decision),
+        active_services:
+          fragment("COUNT(DISTINCT ?) FILTER (WHERE NOT ?)", b.service_id, b.is_decision)
+      }
+    )
+  end
+
+  # Hour/day buckets of served traffic per subject kind. ONE shape for both
+  # series readers: `finops_subject_series/1` charts it as-is and
+  # `service_finops_series/2` folds the (single) service's rows together.
+  defp finops_series_rows(%{from: from, to: to}, opts, granularity) do
+    timezone = finops_timezone(opts)
+
+    base =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^from)
+      |> maybe_to(to)
+      |> finops_scope(opts)
+      |> where([rl], fragment("COALESCE(?, '') <> 'router_decision'", rl.request_type))
+
+    case granularity do
+      :hour ->
+        # `GROUP BY 1, 2` (positions) instead of repeating the bucket fragment:
+        # Ecto binds `$n` per occurrence, so the same expression written twice
+        # is not the SAME expression to Postgres (param 1 vs param 5) and the
+        # planner rejects it as "must appear in GROUP BY".
+        from(rl in base,
+          group_by: [fragment("1"), fragment("2")],
+          select: %{
+            bucket:
+              fragment(
+                "date_trunc('hour', (? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?) AT TIME ZONE ?",
+                rl.inserted_at,
+                ^timezone,
+                ^timezone
+              ),
+            subject_type: rl.subject_type,
+            request_count: count(rl.id),
+            cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+            error_cost_usd:
+              fragment(
+                "COALESCE(SUM(?) FILTER (WHERE ? >= 400), 0)",
+                rl.provider_cost_usd,
+                rl.status_code
+              ),
+            think_cost_usd:
+              fragment(
+                "COALESCE(SUM(?) FILTER (WHERE ? = true OR ? IS NOT NULL), 0)",
+                rl.provider_cost_usd,
+                rl.think,
+                rl.effort_applied
+              )
+          }
+        )
+        |> Repo.all(timeout: stats_timeout())
+        |> Enum.map(&finops_series_row/1)
+
+      _ ->
+        from(rl in base,
+          group_by: [fragment("1"), fragment("2")],
+          select: %{
+            bucket:
+              fragment(
+                "((? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?)::date",
+                rl.inserted_at,
+                ^timezone
+              ),
+            subject_type: rl.subject_type,
+            request_count: count(rl.id),
+            cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+            error_cost_usd:
+              fragment(
+                "COALESCE(SUM(?) FILTER (WHERE ? >= 400), 0)",
+                rl.provider_cost_usd,
+                rl.status_code
+              ),
+            think_cost_usd:
+              fragment(
+                "COALESCE(SUM(?) FILTER (WHERE ? = true OR ? IS NOT NULL), 0)",
+                rl.provider_cost_usd,
+                rl.think,
+                rl.effort_applied
+              )
+          }
+        )
+        |> Repo.all(timeout: stats_timeout())
+        |> Enum.map(&finops_series_row/1)
+    end
+  end
+
+  defp finops_series_row(row) do
+    %{
+      bucket: row.bucket,
+      subject_type: row.subject_type,
+      request_count: finops_int(row.request_count),
+      cost_usd: finops_usd(row.cost_usd),
+      error_cost_usd: finops_usd(row.error_cost_usd),
+      think_cost_usd: finops_usd(row.think_cost_usd)
+    }
+  end
+
+  defp finops_request_type_rows(%{from: from, to: to}, opts) do
+    base =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^from)
+      |> maybe_to(to)
+      |> finops_scope(opts)
+      |> where([rl], fragment("COALESCE(?, '') <> 'router_decision'", rl.request_type))
+
+    from(rl in base,
+      group_by: rl.request_type,
+      order_by: [desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)],
+      select: %{
+        request_type: rl.request_type,
+        request_count: count(rl.id),
+        user_requests: fragment("COUNT(*) FILTER (WHERE ? = 'user')", rl.subject_type),
+        service_requests: fragment("COUNT(*) FILTER (WHERE ? = 'service')", rl.subject_type),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        user_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE ? = 'user'), 0)",
+            rl.provider_cost_usd,
+            rl.subject_type
+          ),
+        service_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE ? = 'service'), 0)",
+            rl.provider_cost_usd,
+            rl.subject_type
+          ),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_read_tokens),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+        error_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE ? >= 400), 0)",
+            rl.provider_cost_usd,
+            rl.status_code
+          )
+      }
+    )
+  end
+
+  # Names joined onto the AGGREGATE (two dimension tables, one statement):
+  # joining them into the aggregate itself would hash-join the whole window
+  # before reducing it, the exact shape this module avoids elsewhere.
+  defp finops_subject_scatter_rows(%{from: from, to: to}, opts) do
+    base =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^from)
+      |> maybe_to(to)
+      |> finops_scope(opts)
+      |> where([rl], fragment("COALESCE(?, '') <> 'router_decision'", rl.request_type))
+      |> where([rl], rl.subject_type in ["user", "service"])
+
+    buckets =
+      from(rl in base,
+        group_by: [rl.subject_type, rl.user_id, rl.service_id],
+        select: %{
+          subject_type: rl.subject_type,
+          user_id: rl.user_id,
+          service_id: rl.service_id,
+          request_count: count(rl.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+          prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+          completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+          cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_read_tokens),
+          error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+          error_cost_usd:
+            fragment(
+              "COALESCE(SUM(?) FILTER (WHERE ? >= 400), 0)",
+              rl.provider_cost_usd,
+              rl.status_code
+            ),
+          think_cost_usd:
+            fragment(
+              "COALESCE(SUM(?) FILTER (WHERE ? = true OR ? IS NOT NULL), 0)",
+              rl.provider_cost_usd,
+              rl.think,
+              rl.effort_applied
+            ),
+          topup_cost_usd:
+            fragment(
+              "COALESCE(SUM(?) FILTER (WHERE ? IS NOT NULL), 0)",
+              rl.provider_cost_usd,
+              rl.credit_topup_id
+            )
+        }
+      )
+      |> subquery()
+
+    from(b in buckets,
+      left_join: u in User,
+      on: b.user_id == u.id,
+      left_join: s in Service,
+      on: b.service_id == s.id,
+      select: %{
+        subject_type: b.subject_type,
+        user_id: b.user_id,
+        service_id: b.service_id,
+        user_email: u.email,
+        user_name: u.name,
+        service_name: s.name,
+        request_count: b.request_count,
+        cost_usd: b.cost_usd,
+        prompt_tokens: b.prompt_tokens,
+        completion_tokens: b.completion_tokens,
+        cache_read_tokens: b.cache_read_tokens,
+        error_count: b.error_count,
+        error_cost_usd: b.error_cost_usd,
+        think_cost_usd: b.think_cost_usd,
+        topup_cost_usd: b.topup_cost_usd
+      }
+    )
+  end
+
+  defp finops_service_key_rows(%{from: from, to: to}, opts) do
+    base =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^from)
+      |> maybe_to(to)
+      |> finops_scope(opts)
+      |> where([rl], fragment("COALESCE(?, '') <> 'router_decision'", rl.request_type))
+
+    buckets =
+      from(rl in base,
+        group_by: rl.api_key_id,
+        select: %{
+          api_key_id: rl.api_key_id,
+          request_count: count(rl.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+          prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+          completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+          cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_read_tokens),
+          error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+          error_cost_usd:
+            fragment(
+              "COALESCE(SUM(?) FILTER (WHERE ? >= 400), 0)",
+              rl.provider_cost_usd,
+              rl.status_code
+            ),
+          think_cost_usd:
+            fragment(
+              "COALESCE(SUM(?) FILTER (WHERE ? = true OR ? IS NOT NULL), 0)",
+              rl.provider_cost_usd,
+              rl.think,
+              rl.effort_applied
+            )
+        }
+      )
+      |> subquery()
+
+    from(b in buckets,
+      left_join: k in ApiKey,
+      on: b.api_key_id == k.id,
+      order_by: [desc: b.cost_usd],
+      select: %{
+        api_key_id: b.api_key_id,
+        label: k.label,
+        key_prefix: k.key_prefix,
+        status: k.status,
+        request_count: b.request_count,
+        cost_usd: b.cost_usd,
+        prompt_tokens: b.prompt_tokens,
+        completion_tokens: b.completion_tokens,
+        cache_read_tokens: b.cache_read_tokens,
+        error_count: b.error_count,
+        error_cost_usd: b.error_cost_usd,
+        think_cost_usd: b.think_cost_usd
+      }
+    )
+  end
+
+  defp finops_key_entry(row) do
+    %{
+      api_key_id: row.api_key_id,
+      label: row.label || row.key_prefix || "—",
+      status: row.status,
+      request_count: finops_int(row.request_count),
+      cost_usd: finops_usd(row.cost_usd),
+      prompt_tokens: finops_int(row.prompt_tokens),
+      completion_tokens: finops_int(row.completion_tokens),
+      cache_read_tokens: finops_int(row.cache_read_tokens),
+      error_count: finops_int(row.error_count),
+      error_cost_usd: finops_usd(row.error_cost_usd),
+      think_cost_usd: finops_usd(row.think_cost_usd)
+    }
+  end
+
+  defp finops_service_model_rows(%{from: from, to: to}, opts) do
+    base =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^from)
+      |> maybe_to(to)
+      |> finops_scope(opts)
+      |> where([rl], fragment("COALESCE(?, '') <> 'router_decision'", rl.request_type))
+
+    buckets =
+      from(rl in base,
+        group_by: rl.model_id,
+        select: %{
+          model_id: rl.model_id,
+          request_count: count(rl.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+          prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+          completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+          cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_read_tokens),
+          error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+          error_cost_usd:
+            fragment(
+              "COALESCE(SUM(?) FILTER (WHERE ? >= 400), 0)",
+              rl.provider_cost_usd,
+              rl.status_code
+            ),
+          think_cost_usd:
+            fragment(
+              "COALESCE(SUM(?) FILTER (WHERE ? = true OR ? IS NOT NULL), 0)",
+              rl.provider_cost_usd,
+              rl.think,
+              rl.effort_applied
+            )
+        }
+      )
+      |> subquery()
+
+    from(b in buckets,
+      left_join: ma in Model,
+      on: b.model_id == ma.id,
+      order_by: [desc: b.cost_usd],
+      select: %{
+        model_name: ma.name,
+        model_requested: b.model_id,
+        request_count: b.request_count,
+        cost_usd: b.cost_usd,
+        prompt_tokens: b.prompt_tokens,
+        completion_tokens: b.completion_tokens,
+        cache_read_tokens: b.cache_read_tokens,
+        error_count: b.error_count,
+        error_cost_usd: b.error_cost_usd,
+        think_cost_usd: b.think_cost_usd
+      }
+    )
+  end
+
+  defp finops_model_entry(row) do
+    %{
+      model_name: row.model_name || "—",
+      request_count: finops_int(row.request_count),
+      cost_usd: finops_usd(row.cost_usd),
+      prompt_tokens: finops_int(row.prompt_tokens),
+      completion_tokens: finops_int(row.completion_tokens),
+      cache_read_tokens: finops_int(row.cache_read_tokens),
+      error_count: finops_int(row.error_count),
+      error_cost_usd: finops_usd(row.error_cost_usd),
+      think_cost_usd: finops_usd(row.think_cost_usd)
+    }
+  end
+
+  # --- FinOps: mapping ----------------------------------------------------
+
+  defp finops_scope_key(row) do
+    cond do
+      row.is_total == 1 -> :total
+      row.subject_type in ["user", "service"] -> row.subject_type
+      true -> :other
+    end
+  end
+
+  defp finops_subject_totals(nil, _scope),
+    do: finops_zero_totals() |> Map.put(:active_subjects, 0)
+
+  defp finops_subject_totals(row, :users),
+    do: row |> finops_totals() |> Map.put(:active_subjects, finops_int(row.active_users))
+
+  defp finops_subject_totals(row, :services),
+    do: row |> finops_totals() |> Map.put(:active_subjects, finops_int(row.active_services))
+
+  defp finops_subject_totals(nil), do: finops_zero_totals()
+
+  defp finops_subject_totals(row), do: finops_totals(row)
+
+  defp finops_totals(row) do
+    %{
+      requests: finops_int(row.request_count),
+      cost_usd: finops_usd(row.cost_usd),
+      prompt_tokens: finops_int(row.prompt_tokens),
+      completion_tokens: finops_int(row.completion_tokens),
+      cache_read_tokens: finops_int(row.cache_read_tokens),
+      cache_creation_tokens: finops_int(row.cache_creation_tokens),
+      error_requests: finops_int(row.error_requests),
+      error_cost_usd: finops_usd(row.error_cost_usd),
+      fallback_recovered_count: finops_int(row.fallback_recovered_count),
+      think_requests: finops_int(row.think_requests),
+      think_cost_usd: finops_usd(row.think_cost_usd),
+      think_completion_tokens: finops_int(row.think_completion_tokens),
+      local_cache_hits: finops_int(row.local_cache_hits),
+      router_decision_cost_usd: finops_usd(row.router_decision_cost_usd),
+      prompt_tokens_saved_est: finops_int(row.prompt_tokens_saved_est),
+      topup_requests: finops_int(row.topup_requests),
+      topup_cost_usd: finops_usd(row.topup_cost_usd)
+    }
+  end
+
+  defp finops_zero_totals do
+    %{
+      requests: 0,
+      cost_usd: Decimal.new(0),
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      error_requests: 0,
+      error_cost_usd: Decimal.new(0),
+      fallback_recovered_count: 0,
+      think_requests: 0,
+      think_cost_usd: Decimal.new(0),
+      think_completion_tokens: 0,
+      local_cache_hits: 0,
+      router_decision_cost_usd: Decimal.new(0),
+      prompt_tokens_saved_est: 0,
+      topup_requests: 0,
+      topup_cost_usd: Decimal.new(0)
+    }
+  end
+
+  defp finops_series_entry(row, granularity) do
+    %{
+      date: finops_bucket_date(row.bucket, granularity),
+      subject_type: row.subject_type,
+      request_count: row.request_count,
+      cost_usd: row.cost_usd,
+      error_cost_usd: row.error_cost_usd,
+      think_cost_usd: row.think_cost_usd
+    }
+  end
+
+  defp finops_bucket_date(%Date{} = date, _granularity), do: date
+  defp finops_bucket_date(%DateTime{} = dt, :day), do: DateTime.to_date(dt)
+  defp finops_bucket_date(%NaiveDateTime{} = ndt, :day), do: NaiveDateTime.to_date(ndt)
+  defp finops_bucket_date(%DateTime{} = dt, _), do: dt
+  defp finops_bucket_date(%NaiveDateTime{} = ndt, _), do: to_utc_datetime(ndt)
+
+  # One comparable key for both granularities (`Date` for :day, `DateTime` for
+  # :hour) so a series is ordered by instant regardless of the shape.
+  defp finops_sort_key(%Date{} = date), do: DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+  defp finops_sort_key(%DateTime{} = dt), do: dt
+
+  defp finops_granularity(opts) do
+    case Keyword.get(opts, :granularity, :day) do
+      :hour -> :hour
+      "hour" -> :hour
+      :day -> :day
+      "day" -> :day
+      other -> raise ArgumentError, "unknown :granularity #{inspect(other)} (use :day or :hour)"
+    end
+  end
+
+  defp finops_timezone(opts), do: Keyword.get(opts, :timezone, "Etc/UTC")
+
+  defp finops_int(nil), do: 0
+  defp finops_int(n) when is_integer(n), do: n
+  defp finops_int(%Decimal{} = d), do: d |> Decimal.round(0) |> Decimal.to_integer()
+
+  defp finops_usd(nil), do: Decimal.new(0)
+  defp finops_usd(%Decimal{} = d), do: d
+  defp finops_usd(n) when is_integer(n) or is_float(n), do: Decimal.new(to_string(n))
+
+  defp decimal_desc(a, b) do
+    case Decimal.compare(a, b) do
+      :gt -> true
+      _ -> false
+    end
   end
 
   # -----------------------------------------------------------------------

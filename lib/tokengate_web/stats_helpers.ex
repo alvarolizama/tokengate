@@ -31,21 +31,20 @@ defmodule TokengateWeb.StatsHelpers do
   decimales —o un float de 4— los mostraba como "$0", que se lee como
   "no se registró gasto".
 
-    * `$0` exacto → "$0"
+    * `$0` exacto → "$0.00"
     * `< $0.01`   → 6 decimales ("$0.000004") — la resolución de la columna
-      `provider_cost_usd` (numeric(12,6)) y del rollup (cost_micro)
+      `provider_cost_usd` (numeric(12,6)) y del rollup (cost_micro). Un valor
+      aún más fino (p. ej. un costo por 1M de tokens) sube a 9 decimales en
+      vez de colapsar a "$0": un gasto real nunca se lee como «no hubo gasto».
     * `$0.01+`    → 4 decimales
   """
   def money(%Decimal{} = d) do
-    zero? = Decimal.compare(d, Decimal.new(0)) == :eq
-    sub_cent? = Decimal.compare(Decimal.abs(d), Decimal.new("0.01")) == :lt
-
     cond do
-      zero? ->
+      Decimal.compare(d, Decimal.new(0)) == :eq ->
         "$0.00"
 
-      sub_cent? ->
-        "$" <> (d |> Decimal.round(6) |> Decimal.normalize() |> Decimal.to_string(:normal))
+      Decimal.compare(Decimal.abs(d), Decimal.new("0.01")) == :lt ->
+        "$" <> sub_cent_amount(d)
 
       true ->
         "$" <> format_decimal(d)
@@ -53,6 +52,18 @@ defmodule TokengateWeb.StatsHelpers do
   end
 
   def money(_), do: "$0.00"
+
+  # Importe por debajo del centavo: se recorta a la resolución de la columna
+  # (6) y, si aun así se anulara, a 9 — nunca a "0".
+  defp sub_cent_amount(d) do
+    rounded = Decimal.round(d, 6)
+
+    if Decimal.compare(rounded, Decimal.new(0)) == :eq do
+      d |> Decimal.round(9) |> Decimal.normalize() |> Decimal.to_string(:normal)
+    else
+      rounded |> Decimal.normalize() |> Decimal.to_string(:normal)
+    end
+  end
 
   def format_number(n) when is_integer(n), do: with_thousands_separator(n)
   def format_number(n) when is_float(n), do: Float.to_string(n)
@@ -303,16 +314,6 @@ defmodule TokengateWeb.StatsHelpers do
 
   def effective_cost_per_1m(_, _, _), do: "—"
 
-  @doc "Error rate float (0.0..1.0) from error_count / request_count."
-  def error_rate_from(_errors, total) when total in [0, nil], do: 0.0
-
-  def error_rate_from(errors, total)
-      when is_integer(errors) and is_integer(total) and total > 0 do
-    Float.round(errors / total, 4)
-  end
-
-  def error_rate_from(_, _), do: 0.0
-
   @doc "Count distinct providers (by model_provider_id) in a provider breakdown."
   def distinct_providers(rows) when is_list(rows) do
     rows |> Enum.map(& &1.model_provider_id) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> length()
@@ -543,13 +544,16 @@ defmodule TokengateWeb.StatsHelpers do
 
   @doc """
   Cache hit percentage: cache_read_tokens / prompt_tokens × 100.
-  Returns "—" when prompt_tokens is 0 or nil.
+
+  Un cero es un DATO, no una ausencia: con tráfico de entrada y ningún
+  acierto rinde `"0.0%"`. `"—"` sólo cuando no hay denominador
+  (`prompt_tokens` en 0/nil) o la entrada no es válida.
   """
   def cache_hit_pct(prompt_tokens, cache_read_tokens)
-      when is_integer(prompt_tokens) and is_integer(cache_read_tokens) and prompt_tokens > 0 and
-             cache_read_tokens > 0 do
-    pct = cache_read_tokens / prompt_tokens * 100
-    "#{:erlang.float_to_binary(Float.round(pct, 1), [:compact, {:decimals, 1}])}%"
+      when is_integer(prompt_tokens) and prompt_tokens > 0 and
+             is_integer(cache_read_tokens) and cache_read_tokens >= 0 do
+    pct = Float.round(cache_read_tokens / prompt_tokens * 100, 1)
+    "#{:erlang.float_to_binary(pct, [:compact, {:decimals, 1}])}%"
   end
 
   def cache_hit_pct(_prompt_tokens, _cache_read_tokens), do: "—"
@@ -608,23 +612,6 @@ defmodule TokengateWeb.StatsHelpers do
       end)
 
     %{days: days, series: series, logos: logos}
-  end
-
-  @doc "Max single-day total across all labels (for scaling the stacked chart)."
-  def daily_series_max(%{days: days, series: series}) when days != [] do
-    days
-    |> Enum.map(fn day ->
-      Enum.reduce(series, 0, fn {_label, by_date}, acc ->
-        acc + Map.get(by_date, day, 0)
-      end)
-    end)
-    |> Enum.max(fn -> 0 end)
-  end
-
-  def daily_series_max(%{series: series}) do
-    series
-    |> Enum.flat_map(fn {_label, by_date} -> Map.values(by_date) end)
-    |> Enum.max(fn -> 0 end)
   end
 
   @doc "Sparkline bar height in % using sqrt scale."
@@ -1000,21 +987,6 @@ defmodule TokengateWeb.StatsHelpers do
   defp empty_block?(nil), do: true
   defp empty_block?([]), do: true
   defp empty_block?(_slots), do: false
-
-  @doc "Sort indicator for table headers."
-  def sort_icon(assigns) do
-    ~H"""
-    <span class="inline-block w-3 text-center">
-      <%= if @current == @field do %>
-        <%= if @direction == :asc do %>
-          ▲
-        <% else %>
-          ▼
-        <% end %>
-      <% end %>
-    </span>
-    """
-  end
 
   # ── Budget usage components (compartidos por todas las secciones) ──────
 

@@ -96,7 +96,7 @@ defmodule TokengateWeb.StatsLive.Model do
             icon="hero-currency-dollar"
             accent="accent"
           >
-            ${Stats.format_decimal(@metrics.cost_usd)}
+            {Stats.money(@metrics.cost_usd)}
             <:sub>
               <span :if={@metrics.requests_total > 0} class="tabular-nums">
                 {Stats.cost_per_request(@metrics.cost_usd, @metrics.requests_total)}/req · {Stats.effective_cost_per_1m(
@@ -109,9 +109,9 @@ defmodule TokengateWeb.StatsLive.Model do
                 :if={@model.market_input_price_per_1m && @model.market_output_price_per_1m}
                 class="block text-[10px] text-base-content/50 tabular-nums"
               >
-                {gettext("market")}: ${Stats.format_decimal(
-                  Decimal.round(@model.market_input_price_per_1m, 2)
-                )}/${Stats.format_decimal(Decimal.round(@model.market_output_price_per_1m, 2))}/1M
+                {gettext("market")}: {Stats.money(Decimal.round(@model.market_input_price_per_1m, 2))}/{Stats.money(
+                  Decimal.round(@model.market_output_price_per_1m, 2)
+                )}/1M
               </span>
             </:sub>
           </.kpi_card>
@@ -197,7 +197,7 @@ defmodule TokengateWeb.StatsLive.Model do
                     <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                   </:col>
                   <:col :let={{row, _idx}} label={gettext("Cost")} field={:cost_usd} align="right">
-                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                   </:col>
                   <:col :let={{row, _idx}} label={gettext("Cost / req")} align="right">
                     <span class="font-mono tabular-nums text-base-content/70">
@@ -262,7 +262,7 @@ defmodule TokengateWeb.StatsLive.Model do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(provider_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(provider_total.cost_usd)}</span>
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Tokens in")}</span>
@@ -327,7 +327,7 @@ defmodule TokengateWeb.StatsLive.Model do
                     <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
-                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                   </:col>
                   <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">
                     <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
@@ -348,7 +348,7 @@ defmodule TokengateWeb.StatsLive.Model do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(group_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(group_total.cost_usd)}</span>
                   </span>
                 </div>
               </div>
@@ -405,7 +405,7 @@ defmodule TokengateWeb.StatsLive.Model do
                     <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
-                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                   </:col>
                   <:col :let={row} label={gettext("TPS")} field={:avg_tps} align="right">
                     <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
@@ -426,7 +426,7 @@ defmodule TokengateWeb.StatsLive.Model do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(member_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(member_total.cost_usd)}</span>
                   </span>
                 </div>
               </div>
@@ -475,7 +475,7 @@ defmodule TokengateWeb.StatsLive.Model do
                   <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Cost")} align="right">
-                  <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Share")} align="right">
                   <span class="font-mono tabular-nums">
@@ -536,7 +536,7 @@ defmodule TokengateWeb.StatsLive.Model do
                   <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Cost")} align="right">
-                  <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Share")} align="right">
                   <span class="font-mono tabular-nums">

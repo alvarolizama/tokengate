@@ -47,8 +47,10 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   # halted by the hook.
   @allowed_events ["load_more", "set-timezone", "set_key", "filter"]
 
-  # Tabs del detalle: overview (default), logs en vivo y config read-only.
-  @tabs ["overview", "logs", "config"]
+  # Tabs del detalle (supervisado): overview, finops, logs en vivo y config
+  # read-only. Lista única en `ServiceStatsBody.tabs/2` (también la usa el
+  # admin) — este LiveView sólo declara que sí tiene config.
+  @tabs ServiceStatsBody.tabs(true, true)
 
   @impl true
   def mount(%{"service_id" => service_id}, _session, socket) do
@@ -107,6 +109,11 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
            |> assign(:stats_loading, false)
            |> assign(:tab, "overview")
            |> assign(:usage_series, [])
+           |> assign(:spend_total_usd, Decimal.new(0))
+           |> assign(:finops_summary, ServiceStatsBody.default_finops_summary())
+           |> assign(:finops_series, [])
+           |> assign(:finops_prev_overview, nil)
+           |> assign(:tabs, @tabs)
            # El cuerpo compartido lee `@streams.logs`: la carga async llega
            # después del primer render (estático y conectado), así que el
            # stream se registra vacío aquí y `apply_bundle/2` lo rellena.
@@ -158,10 +165,14 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
     if socket.assigns.denied? do
       {:noreply, socket}
     else
+      key_filter = parse_key_filter(params["key_id"], socket.assigns.service_api_keys)
+
       {:noreply,
        socket
        |> assign(:period, parse_period(params["period"]))
        |> assign(:tab, parse_tab(params["tab"]))
+       |> assign(:key_filter, key_filter)
+       |> assign(:key_filter_form, to_form(%{"key_id" => key_filter}, as: :key_filter))
        |> load_bundle()}
     end
   end
@@ -172,6 +183,17 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
 
   # Deep-link (?tab=): un tab desconocido cae a overview, nunca explota.
   defp parse_tab(tab), do: if(tab in @tabs, do: tab, else: "overview")
+
+  # `?key_id=` conservado por los links de tab/periodo. Un id ajeno al
+  # servicio (o "all") cae a "all": el scope nunca inventa una key.
+  defp parse_key_filter(nil, _api_keys), do: "all"
+  defp parse_key_filter("all", _api_keys), do: "all"
+
+  defp parse_key_filter(key_id, api_keys) when is_binary(key_id) do
+    if Enum.any?(api_keys, &(&1.id == key_id)), do: key_id, else: "all"
+  end
+
+  defp parse_key_filter(_key_id, _api_keys), do: "all"
 
   ## Revocation -----------------------------------------------------------
 
@@ -432,6 +454,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           period={@period}
           period_target={~p"/services/supervised/#{@service.id}"}
           timezone={@timezone}
+          key_filter={@key_filter}
           form={@form}
           streams={@streams}
           has_more={@has_more}
@@ -442,6 +465,11 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           show_service_summary={false}
           compact_numbers={true}
           stats_loading={@stats_loading}
+          tabs={@tabs}
+          spend_total_usd={@spend_total_usd}
+          finops_summary={@finops_summary}
+          finops_series={@finops_series}
+          finops_prev_overview={@finops_prev_overview}
         >
           <:config>
             <%!-- Read-only configuration --%>

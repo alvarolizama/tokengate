@@ -686,7 +686,7 @@
                           <span class="font-mono">{format_number(row.request_count)}</span>
                         </:col>
                         <:col :let={row} label={gettext("Cost")} align="right">
-                          <span class="font-mono">${format_decimal(row.cost_usd)}</span>
+                          <span class="font-mono">{Stats.money(row.cost_usd)}</span>
                         </:col>
                         <:col :let={row} label={gettext("Tokens in")} align="right">
                           <span class="font-mono">{format_number(row.prompt_tokens)}</span>
@@ -745,7 +745,7 @@
                           <span class="font-mono">{format_number(row.request_count)}</span>
                         </:col>
                         <:col :let={row} label={gettext("Cost")} align="right">
-                          <span class="font-mono">${format_decimal(row.cost_usd)}</span>
+                          <span class="font-mono">{Stats.money(row.cost_usd)}</span>
                         </:col>
                         <:col :let={row} label={gettext("Tokens in")} align="right">
                           <span class="font-mono">{format_number(row.prompt_tokens)}</span>

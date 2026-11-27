@@ -49,6 +49,105 @@ defmodule TokengateWeb.StatsHelpersTest do
       assert Stats.money(Decimal.new("0.01")) == "$0.0100"
       assert Stats.money(Decimal.new("4.200000")) == "$4.2000"
     end
+
+    test "por debajo de la resolución de la columna no colapsa a $0" do
+      # Un costo real nunca se lee como «no se registró gasto».
+      assert Stats.money(Decimal.new("0.0000004")) == "$0.0000004"
+    end
+  end
+
+  # El 0 no es una ausencia: con tráfico de entrada y ningún acierto de caché
+  # la tarjeta tiene que decir 0.0%, no «—» (que se lee como «no hay dato»).
+  describe "cache_hit_pct/2" do
+    test "cero aciertos con tráfico de entrada es 0.0%, no —" do
+      assert Stats.cache_hit_pct(500, 0) == "0.0%"
+    end
+
+    test "calcula el porcentaje con un decimal" do
+      assert Stats.cache_hit_pct(200, 40) == "20.0%"
+      assert Stats.cache_hit_pct(1_000, 1_000) == "100.0%"
+      assert Stats.cache_hit_pct(3, 1) == "33.3%"
+    end
+
+    test "sin denominador válido rinde —" do
+      assert Stats.cache_hit_pct(0, 0) == "—"
+      assert Stats.cache_hit_pct(0, 120) == "—"
+      assert Stats.cache_hit_pct(nil, 10) == "—"
+      assert Stats.cache_hit_pct(100, nil) == "—"
+      assert Stats.cache_hit_pct(100, -1) == "—"
+    end
+  end
+
+  describe "out_in_ratio/2" do
+    test "salida sobre entrada en múltiplos compactos" do
+      assert Stats.out_in_ratio(100, 200) == "0.5x"
+      assert Stats.out_in_ratio(300, 100) == "3.0x"
+    end
+
+    test "sin entrada válida rinde —" do
+      assert Stats.out_in_ratio(10, 0) == "—"
+      assert Stats.out_in_ratio(10, nil) == "—"
+      assert Stats.out_in_ratio(nil, 100) == "—"
+    end
+  end
+
+  describe "cost_per_request/2" do
+    test "costo medio por request con la precisión de money/1" do
+      assert Stats.cost_per_request(Decimal.new("0.01"), 4) == "$0.0025"
+      assert Stats.cost_per_request(Decimal.new("0.0004"), 100) == "$0.000004"
+      assert Stats.cost_per_request(Decimal.new(0), 5) == "$0.00"
+    end
+
+    test "sin requests o sin costo Decimal rinde —" do
+      assert Stats.cost_per_request(Decimal.new("0.01"), 0) == "—"
+      assert Stats.cost_per_request(Decimal.new("0.01"), nil) == "—"
+      assert Stats.cost_per_request(nil, 10) == "—"
+      assert Stats.cost_per_request(0.01, 10) == "—"
+    end
+  end
+
+  describe "effective_cost_per_1m/3" do
+    test "costo observado por millón de tokens (entrada + salida)" do
+      assert Stats.effective_cost_per_1m(Decimal.new("0.01"), 1_000, 1_000) == "$5.0000"
+      assert Stats.effective_cost_per_1m(Decimal.new("0.000004"), 2_000_000, 0) == "$0.000002"
+    end
+
+    test "sin tokens o sin costo Decimal rinde —" do
+      assert Stats.effective_cost_per_1m(Decimal.new("0.01"), 0, 0) == "—"
+      assert Stats.effective_cost_per_1m(nil, 100, 100) == "—"
+      assert Stats.effective_cost_per_1m(Decimal.new("0.01"), nil, 100) == "—"
+    end
+  end
+
+  # El formato del hub (KPI cards incluidas) tiene una sola implementación:
+  # KpiHelpers delega en StatsHelpers, así que el sub-centavo se lee igual en
+  # las dos superficies.
+  describe "KpiHelpers delega el formato en StatsHelpers" do
+    test "kpi_cards/1 conserva el sub-centavo en el card de costo" do
+      metrics = %{
+        requests_total: 0,
+        cost_usd: Decimal.new("0.00004"),
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        avg_tps: nil
+      }
+
+      html = render_component(&TokengateWeb.KpiHelpers.kpi_cards/1, %{metrics: metrics})
+
+      assert html =~ "$0.00004"
+      refute html =~ "$0.00<"
+    end
+
+    test "los formateadores de KpiHelpers son los de StatsHelpers" do
+      assert TokengateWeb.KpiHelpers.format_decimal(Decimal.new("0.01")) ==
+               Stats.format_decimal(Decimal.new("0.01"))
+
+      assert TokengateWeb.KpiHelpers.format_number(12_345) == Stats.format_number(12_345)
+      assert TokengateWeb.KpiHelpers.format_compact(2_000_000) == Stats.format_compact(2_000_000)
+      assert TokengateWeb.KpiHelpers.format_tps(12.34) == Stats.format_tps(12.34)
+    end
   end
 
   defmodule CellWithBlock do

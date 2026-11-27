@@ -687,4 +687,285 @@ defmodule TokengateWeb.StatsExportControllerTest do
       refute body =~ "gpt-4o"
     end
   end
+
+  ## Type contract ----------------------------------------------------------
+
+  describe "type contract" do
+    test "an unknown type is a 400, never a silent models CSV", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      conn =
+        conn
+        |> login(admin, password)
+        |> get(~p"/stats/export?type=facturas")
+
+      # Antes caía al CSV de modelos: un archivo que decía `models` en el
+      # nombre y en las columnas era una respuesta EQUIVOCADA, no un default.
+      assert json_response(conn, 400) == %{"error" => "tipo de exportación desconocido"}
+    end
+
+    test "an omitted type keeps the models default", %{conn: conn} do
+      %{owner: owner, owner_password: password} = group_with_log()
+
+      body =
+        conn
+        |> login(owner, password)
+        |> get(~p"/stats/export")
+        |> response(200)
+
+      assert body =~ "modelo,requests"
+    end
+
+    test "groups without group_id: the full table is admin-only" do
+      group_with_log()
+      %{user: plain, password: plain_password} = register("user")
+
+      # Sin `group_id` el export es `Rollup.breakdown_by_group/1`, org-wide:
+      # un no-admin no baja el listado completo (mismo criterio que el hub).
+      forbidden =
+        build_conn()
+        |> login(plain, plain_password)
+        |> get(~p"/stats/export?type=groups&period=today")
+
+      assert json_response(forbidden, 403) == %{"error" => "no autorizado"}
+
+      %{user: admin, password: admin_password} = register("admin")
+
+      body =
+        build_conn()
+        |> login(admin, admin_password)
+        |> get(~p"/stats/export?type=groups&period=today")
+        |> response(200)
+
+      assert body =~ "perfil,requests,costo"
+    end
+  end
+
+  ## FinOps export ----------------------------------------------------------
+
+  describe "finops export" do
+    test "admin: one row per subject with unit economics", %{conn: conn} do
+      u = unique()
+      {:ok, group} = Accounts.create_group(%{name: "Fin Group #{u}"})
+
+      {:ok, owner} =
+        Accounts.register_user(%{
+          email: "fin-owner-#{u}@example.com",
+          name: "Fin Owner #{u}",
+          password: "password-secret-#{u}1"
+        })
+
+      {:ok, member} = Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "Fin Prov #{u}", base_url: "http://localhost:1"})
+
+      {:ok, _log} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          user_id: owner.id,
+          provider_id: provider.id,
+          model_requested: "gpt-4o",
+          model_responded: "gpt-4o",
+          agent_type: "api",
+          status_code: 200,
+          prompt_tokens: 1_000,
+          completion_tokens: 500,
+          cache_read_tokens: 250,
+          provider_cost_usd: "0.020",
+          latency_ms: 42,
+          streaming: false,
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+
+      %{user: admin, password: password} = register("admin")
+
+      conn =
+        conn
+        |> login(admin, password)
+        |> get(~p"/stats/export?type=finops&period=today")
+
+      body = response(conn, 200)
+
+      assert body =~
+               "tipo,sujeto,requests,costo_usd,cost_per_req,tokens_in,tokens_out,cache_pct,errores,error_waste_usd,thinking_cost_usd,topup_cost_usd"
+
+      row = body |> String.split("\n") |> Enum.find(&String.contains?(&1, owner.email))
+      refute row == nil
+
+      [tipo, _sujeto, requests, cost, cost_per_req, tokens_in, tokens_out, cache_pct | _] =
+        String.split(row, ",")
+
+      assert tipo == "user"
+      assert requests == "1"
+      assert cost == "0.020000"
+      # 0.02 / 1 request, a la resolución del dinero.
+      assert cost_per_req == "0.020000"
+      assert tokens_in == "1000"
+      assert tokens_out == "500"
+      # 250 tokens de cache sobre 1000 de prompt.
+      assert cache_pct == "25.0"
+
+      [disposition] = get_resp_header(conn, "content-disposition")
+      assert disposition =~ "estadisticas_finops_today_"
+      assert disposition =~ ".csv"
+    end
+
+    test "non-admin gets 403", %{conn: conn} do
+      %{user: plain, password: password} = register("user")
+
+      conn =
+        conn
+        |> login(plain, password)
+        |> get(~p"/stats/export?type=finops&period=today")
+
+      assert json_response(conn, 403) == %{"error" => "no autorizado"}
+    end
+  end
+
+  ## Router export ----------------------------------------------------------
+
+  defp router_fixture do
+    u = unique()
+    {:ok, group} = Accounts.create_group(%{name: "Rt Group #{u}"})
+
+    {:ok, owner} =
+      Accounts.register_user(%{
+        email: "rt-owner-#{u}@example.com",
+        name: "Rt Owner #{u}",
+        password: "password-secret-#{u}1"
+      })
+
+    {:ok, member} = Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
+
+    {:ok, provider} =
+      Providers.create_provider(%{name: "Rt Prov #{u}", base_url: "http://localhost:1"})
+
+    {:ok, model} = Providers.create_model(%{name: "rt-model-#{u}", context_window: 128_000})
+
+    {:ok, _log} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        user_id: owner.id,
+        provider_id: provider.id,
+        model_id: model.id,
+        model_requested: model.name,
+        model_resolved: model.name,
+        agent_type: "api",
+        status_code: 200,
+        prompt_tokens: 1_000,
+        completion_tokens: 500,
+        provider_cost_usd: "0.020",
+        latency_ms: 1_000,
+        ttft_ms: 200,
+        streaming: false,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        routed_via_router: true,
+        router_use_case_key: "coding_implement",
+        router_effort_tier: "high",
+        router_decision_source: "classifier",
+        router_decision_ms: 120,
+        router_decision_cost_usd: "0.010",
+        router_baseline_cost_usd: "0.030"
+      })
+
+    %{model: model}
+  end
+
+  describe "router export" do
+    test "admin: use cases by default, model performance with view=models", %{conn: conn} do
+      %{model: model} = router_fixture()
+      %{user: admin, password: password} = register("admin")
+
+      conn = conn |> login(admin, password)
+
+      use_conn = get(conn, ~p"/stats/export?type=router&period=today")
+
+      [disposition] = get_resp_header(use_conn, "content-disposition")
+      assert disposition =~ "estadisticas_router_today_"
+      use_cases = response(use_conn, 200)
+
+      assert use_cases =~ "caso_uso,effort_tier,requests"
+      assert use_cases =~ "coding_implement"
+      assert use_cases =~ "high"
+
+      models = response(get(conn, ~p"/stats/export?type=router&period=today&view=models"), 200)
+
+      assert models =~ "modelo,requests,costo_usd"
+      assert models =~ model.name
+    end
+
+    test "non-admin gets 403", %{conn: conn} do
+      %{user: plain, password: password} = register("user")
+
+      conn =
+        conn
+        |> login(plain, password)
+        |> get(~p"/stats/export?type=router&period=today")
+
+      assert json_response(conn, 403) == %{"error" => "no autorizado"}
+    end
+  end
+
+  ## Ordering and filenames -------------------------------------------------
+
+  describe "sort, direction and filename" do
+    test "sort/direction reorder the exported rows", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      tag = Integer.to_string(unique())
+
+      cheap = "Svc cheap #{tag}"
+      pricy = "Svc pricy #{tag}"
+
+      for {name, cost} <- [{cheap, "0.001"}, {pricy, "0.500"}] do
+        {:ok, service} = Accounts.create_service(%{name: name})
+
+        {:ok, provider} =
+          Providers.create_provider(%{name: "P #{name}", base_url: "http://localhost:1"})
+
+        {:ok, _} =
+          Logs.log_request(%{
+            subject_type: "service",
+            service_id: service.id,
+            provider_id: provider.id,
+            model_requested: "gpt-4o",
+            status_code: 200,
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            provider_cost_usd: cost,
+            latency_ms: 42,
+            inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+          })
+      end
+
+      conn = conn |> login(admin, password)
+
+      costs =
+        fn query ->
+          conn
+          |> get(query)
+          |> response(200)
+          |> String.split("\n")
+          |> Enum.drop(1)
+          |> Enum.reject(&(&1 == ""))
+          |> Enum.filter(&String.contains?(&1, tag))
+          |> Enum.map(fn row -> row |> String.split(",") |> Enum.at(2) end)
+        end
+
+      assert costs.(~p"/stats/export?type=services&period=today&sort=cost&direction=asc") ==
+               ["0.001000", "0.500000"]
+
+      assert costs.(~p"/stats/export?type=services&period=today&sort=cost&direction=desc") ==
+               ["0.500000", "0.001000"]
+
+      # Sin `sort` el orden del agregado queda intacto (no se ordena por otra
+      # columna "en silencio").
+      assert length(costs.(~p"/stats/export?type=services&period=today")) == 2
+
+      priced = get(conn, ~p"/stats/export?type=services&period=today")
+
+      [disposition] = get_resp_header(priced, "content-disposition")
+      assert disposition =~ "estadisticas_servicios_today_"
+    end
+  end
 end

@@ -1070,7 +1070,7 @@ defmodule TokengateWeb.StatsLiveTest do
         {DateTime.add(utc_start, 1, :second), "$0.7500"}
       else
         # Espejo: 00:00:01 local, que el día UTC (00:00 UTC) no ve.
-        {DateTime.add(local_start, 1, :second), "$0.0000"}
+        {DateTime.add(local_start, 1, :second), "$0.00"}
       end
 
     # Guarda: el instante elegido cae en la diferencia de las dos ventanas, del

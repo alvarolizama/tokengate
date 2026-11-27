@@ -869,7 +869,12 @@ defmodule Tokengate.Logs do
       total_completion_tokens: 0,
       total_cache_read_tokens: 0,
       total_cache_creation_tokens: 0,
-      request_count: 0
+      request_count: 0,
+      total_latency_ms: 0,
+      latency_count: 0,
+      avg_latency_ms: nil,
+      avg_tps: nil,
+      avg_ttft_ms: nil
     }
   end
 
@@ -888,11 +893,18 @@ defmodule Tokengate.Logs do
         total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
         total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
         total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
-        request_count: count(rl.id)
+        request_count: count(rl.id),
+        total_latency_ms: fragment("COALESCE(SUM(latency_ms), 0)"),
+        latency_count: fragment("COUNT(latency_ms)")
       })
 
     result = Repo.one(query, timeout: stats_timeout())
 
+    # `avg_tps` used to be a hardcoded `0.0` here while the same KPI from
+    # `cost_summary/1` was computed: the user-scoped dashboard strip showed
+    # "0 t/s" for traffic that had measured throughput, and the two summaries
+    # of the SAME period disagreed. It is derived from the totals now, with the
+    # shared `compute_tps/2` formula.
     %{
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
       total_prompt_tokens: result.total_prompt_tokens,
@@ -900,11 +912,18 @@ defmodule Tokengate.Logs do
       total_cache_read_tokens: result.total_cache_read_tokens,
       total_cache_creation_tokens: result.total_cache_creation_tokens,
       request_count: result.request_count,
-      avg_latency_ms: nil,
-      avg_tps: 0.0,
+      total_latency_ms: result.total_latency_ms,
+      latency_count: result.latency_count,
+      avg_latency_ms: avg_from_totals(result.total_latency_ms, result.latency_count),
+      avg_tps: compute_tps(result.total_completion_tokens, result.total_latency_ms),
       avg_ttft_ms: nil
     }
   end
+
+  defp avg_from_totals(total_ms, count) when is_integer(count) and count > 0,
+    do: Float.round(total_ms / count, 1)
+
+  defp avg_from_totals(_total_ms, _count), do: nil
 
   defp maybe_members_from(query, nil), do: query
   defp maybe_members_from(query, from), do: where(query, [rl], rl.inserted_at >= ^from)
@@ -958,7 +977,18 @@ defmodule Tokengate.Logs do
         total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
         total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
         request_count: count(rl.id),
+        # Both halves of a hybrid read publish the error count: the merge
+        # (`StatsQueries.merge_summaries/2`) sums it, so a period's errors can
+        # no longer disappear from the KPI card just because the window spans
+        # the rollup cutoff.
+        error_count: fragment("COUNT(*) FILTER (WHERE COALESCE(status_code, 0) >= 400)"),
         total_latency_ms: fragment("COALESCE(SUM(latency_ms), 0)"),
+        # Sample counts travel with the averages: a merged (hybrid) summary
+        # must weight `avg_latency_ms` / `avg_ttft_ms` by how many rows each
+        # half actually measured, not by request_count (a 1-request bucket with
+        # a latency must not weigh like a 10k-request one).
+        latency_count: fragment("COUNT(latency_ms)"),
+        ttft_count: fragment("COUNT(ttft_ms)"),
         avg_latency_ms: fragment("AVG(latency_ms)"),
         avg_ttft_ms: fragment("AVG(ttft_ms)")
       })
@@ -971,13 +1001,16 @@ defmodule Tokengate.Logs do
       total_cache_read_tokens: result.total_cache_read_tokens,
       total_cache_creation_tokens: result.total_cache_creation_tokens,
       request_count: result.request_count,
+      error_count: result.error_count,
       # Lo devuelve el SELECT pero hace falta en el mapa: el lado crudo del
       # híbrido (`StatsQueries.merge_summaries/2`) suma latency para el
       # avg_tps combinado — sin él, el KPI TPS pierde la latencia fresca.
       total_latency_ms: result.total_latency_ms,
+      latency_count: result.latency_count,
+      ttft_count: result.ttft_count,
       avg_latency_ms: avg_to_float(result.avg_latency_ms),
       avg_ttft_ms: avg_to_float(result.avg_ttft_ms),
-      avg_tps: compute_avg_tps(result.total_completion_tokens, result.total_latency_ms)
+      avg_tps: compute_tps(result.total_completion_tokens, result.total_latency_ms)
     }
   end
 
@@ -1606,12 +1639,29 @@ defmodule Tokengate.Logs do
   defp avg_to_float(n) when is_integer(n), do: Float.round(n / 1, 1)
   defp avg_to_float(n) when is_float(n), do: Float.round(n, 1)
 
-  defp compute_avg_tps(_tokens, 0), do: nil
-  defp compute_avg_tps(0, _latency), do: 0.0
+  @doc """
+  Tokens per second over the generation window — `completion_tokens /
+  (latency_ms / 1000)`.
 
-  defp compute_avg_tps(tokens, latency_ms) when is_integer(tokens) and is_integer(latency_ms) do
+  THE single throughput formula for every stats surface: `Rollup` and
+  `StatsQueries` delegate here instead of keeping private copies that had
+  drifted (one returned `0.0` for "no tokens", another `nil`, and a merged
+  KPI could pick either). Contract:
+
+    * `nil` when there is no latency to divide by (unmeasured, not zero);
+    * `0.0` when latency exists but nothing was generated (measured zero);
+    * `nil` for any other non-numeric input, so a NULL column never crashes
+      a dashboard read.
+  """
+  @spec compute_tps(integer() | nil, integer() | nil) :: float() | nil
+  def compute_tps(_tokens, 0), do: nil
+  def compute_tps(0, _latency), do: 0.0
+
+  def compute_tps(tokens, latency_ms) when is_integer(tokens) and is_integer(latency_ms) do
     tokens / (latency_ms / 1000)
   end
+
+  def compute_tps(_tokens, _latency), do: nil
 
   @doc """
   Per-user total historical spend across all group memberships.
@@ -1968,7 +2018,23 @@ defmodule Tokengate.Logs do
   changed keeps ALL their history in these numbers, matching what the
   credit engine debited.
 
-  Returns the same shape as `member_stats/2`.
+  Returns the same shape as `member_stats/2`, plus a `:finops` block with the
+  per-user FinOps anatomy the detail page renders as cards (error waste,
+  thinking tax, local-cache hits, prompt tokens saved, top-up spend) — the
+  same field names `Metrics.Rollup.finops_overview/1` publishes, so a
+  per-user block and an org block are read by the same formatters.
+
+  ONE single-pass aggregate (mirrors `service_summary_core/2`): the five
+  scans this used to run — `cost_summary/1`, `status_breakdown_for_user/2`,
+  `top_models_for_user/3`, the `last_request_at` probe and
+  `realtime_summary_for_member/1` — are folded into ONE grouped read over the
+  window, keyed by `{model_requested, request_type}`. Totals, status classes,
+  top-5 models, last request, the rolling 5-minute window and the FinOps
+  block are then derived in memory from those groups.
+
+  `router_decision` rows are excluded from the FinOps block (they are not
+  served traffic — same rule as `Rollup.finops_overview/1`) while the legacy
+  totals above keep counting every row of the window, unchanged.
   """
   def user_stats(user_id, opts \\ []) when is_binary(user_id) do
     opts_map =
@@ -1985,33 +2051,260 @@ defmodule Tokengate.Logs do
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
 
-    base = where(RequestLog, [rl], rl.user_id == ^user_id)
+    cutoff = realtime_cutoff()
 
-    summary =
-      cost_summary(Map.merge(%{user_ids: [user_id]}, range))
-
-    status_class_breakdown = status_breakdown_for_user(user_id, opts_map)
-    top_models = top_models_for_user(user_id, 5, opts_map)
-
-    last_request_at =
-      base
-      |> apply_member_stats_range(range)
-      |> select([rl], rl.inserted_at)
-      |> order_by([rl], desc: rl.inserted_at)
-      |> limit(1)
-      |> Repo.one()
-
-    realtime_window =
-      base
-      |> apply_member_stats_range(range)
-      |> realtime_summary_for_member()
-
-    Map.merge(summary, %{
-      status_breakdown: status_class_breakdown,
-      top_models: top_models,
-      last_request_at: last_request_at,
-      realtime_5min: realtime_window
+    RequestLog
+    |> where([rl], rl.user_id == ^user_id)
+    |> apply_member_stats_range(range)
+    |> group_by([rl], [rl.model_requested, rl.request_type])
+    |> select([rl], %{
+      model_requested: rl.model_requested,
+      request_type: rl.request_type,
+      request_count: count(rl.id),
+      cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+      prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+      completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+      cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
+      cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
+      prompt_tokens_saved_est:
+        fragment("COALESCE(SUM(COALESCE(?, 0)), 0)::bigint", rl.prompt_tokens_saved_est),
+      error_count: fragment("COUNT(*) FILTER (WHERE COALESCE(?, 0) >= 400)", rl.status_code),
+      error_cost_usd:
+        fragment(
+          "COALESCE(SUM(?) FILTER (WHERE COALESCE(?, 0) >= 400), 0)",
+          rl.provider_cost_usd,
+          rl.status_code
+        ),
+      think_requests:
+        fragment("COUNT(*) FILTER (WHERE ? = true OR ? IS NOT NULL)", rl.think, rl.effort_applied),
+      think_cost_usd:
+        fragment(
+          "COALESCE(SUM(?) FILTER (WHERE ? = true OR ? IS NOT NULL), 0)",
+          rl.provider_cost_usd,
+          rl.think,
+          rl.effort_applied
+        ),
+      local_cache_hits: fragment("COUNT(*) FILTER (WHERE ? = true)", rl.cache_hit),
+      router_decision_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.router_decision_cost_usd),
+      topup_requests: fragment("COUNT(*) FILTER (WHERE ? IS NOT NULL)", rl.credit_topup_id),
+      topup_cost_usd:
+        fragment(
+          "COALESCE(SUM(?) FILTER (WHERE ? IS NOT NULL), 0)",
+          rl.provider_cost_usd,
+          rl.credit_topup_id
+        ),
+      status_2xx: fragment("COUNT(*) FILTER (WHERE ? BETWEEN 200 AND 299)", rl.status_code),
+      status_4xx: fragment("COUNT(*) FILTER (WHERE ? BETWEEN 400 AND 499)", rl.status_code),
+      status_5xx: fragment("COUNT(*) FILTER (WHERE ? BETWEEN 500 AND 599)", rl.status_code),
+      total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms),
+      latency_count: fragment("COUNT(?)", rl.latency_ms),
+      total_ttft_ms: fragment("COALESCE(SUM(?), 0)", rl.ttft_ms),
+      ttft_count: fragment("COUNT(?)", rl.ttft_ms),
+      last_request_at: max(rl.inserted_at),
+      rt_request_count:
+        fragment(
+          "COUNT(*) FILTER (WHERE ? >= ?)",
+          rl.inserted_at,
+          type(^cutoff, :utc_datetime)
+        ),
+      rt_error_count:
+        fragment(
+          "COUNT(*) FILTER (WHERE ? >= ? AND COALESCE(?, 0) >= 400)",
+          rl.inserted_at,
+          type(^cutoff, :utc_datetime),
+          rl.status_code
+        ),
+      rt_latency_ms:
+        fragment(
+          "COALESCE(SUM(?) FILTER (WHERE ? >= ?), 0)",
+          rl.latency_ms,
+          rl.inserted_at,
+          type(^cutoff, :utc_datetime)
+        ),
+      rt_latency_count:
+        fragment(
+          "COUNT(?) FILTER (WHERE ? >= ?)",
+          rl.latency_ms,
+          rl.inserted_at,
+          type(^cutoff, :utc_datetime)
+        )
     })
+    |> Repo.all(timeout: stats_timeout())
+    |> user_stats_from_groups()
+  end
+
+  defp realtime_cutoff do
+    DateTime.utc_now() |> DateTime.add(-300, :second) |> DateTime.truncate(:second)
+  end
+
+  # Row groups → the `member_stats/2` shape, entirely in memory: the totals
+  # are sums of the per-`{model, request_type}` groups, `top_models` regroups
+  # by model only, and the averages are the weighted means the SQL `AVG`
+  # used to compute (`SUM(x) / COUNT(x)` — identical, but measured in one
+  # pass instead of three).
+  defp user_stats_from_groups(groups) do
+    summed =
+      Enum.reduce(
+        groups,
+        %{
+          cost_usd: Decimal.new(0),
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
+          request_count: 0,
+          error_count: 0,
+          status_2xx: 0,
+          status_4xx: 0,
+          status_5xx: 0,
+          latency_ms: 0,
+          latency_count: 0,
+          ttft_ms: 0,
+          ttft_count: 0,
+          last_request_at: nil,
+          rt_request_count: 0,
+          rt_error_count: 0,
+          rt_latency_ms: 0,
+          rt_latency_count: 0
+        },
+        fn group, acc ->
+          Map.merge(acc, %{
+            cost_usd: Decimal.add(acc.cost_usd, group.cost_usd),
+            prompt_tokens: acc.prompt_tokens + group.prompt_tokens,
+            completion_tokens: acc.completion_tokens + group.completion_tokens,
+            cache_read_tokens: acc.cache_read_tokens + group.cache_read_tokens,
+            cache_creation_tokens: acc.cache_creation_tokens + group.cache_creation_tokens,
+            request_count: acc.request_count + group.request_count,
+            error_count: acc.error_count + group.error_count,
+            status_2xx: acc.status_2xx + group.status_2xx,
+            status_4xx: acc.status_4xx + group.status_4xx,
+            status_5xx: acc.status_5xx + group.status_5xx,
+            latency_ms: acc.latency_ms + group.total_latency_ms,
+            latency_count: acc.latency_count + group.latency_count,
+            ttft_ms: acc.ttft_ms + group.total_ttft_ms,
+            ttft_count: acc.ttft_count + group.ttft_count,
+            last_request_at: later(acc.last_request_at, group.last_request_at),
+            rt_request_count: acc.rt_request_count + group.rt_request_count,
+            rt_error_count: acc.rt_error_count + group.rt_error_count,
+            rt_latency_ms: acc.rt_latency_ms + group.rt_latency_ms,
+            rt_latency_count: acc.rt_latency_count + group.rt_latency_count
+          })
+        end
+      )
+
+    %{
+      total_cost_usd: summed.cost_usd,
+      total_prompt_tokens: summed.prompt_tokens,
+      total_completion_tokens: summed.completion_tokens,
+      total_cache_read_tokens: summed.cache_read_tokens,
+      total_cache_creation_tokens: summed.cache_creation_tokens,
+      request_count: summed.request_count,
+      error_count: summed.error_count,
+      total_latency_ms: summed.latency_ms,
+      latency_count: summed.latency_count,
+      ttft_count: summed.ttft_count,
+      avg_latency_ms: weighted_avg(summed.latency_ms, summed.latency_count),
+      avg_ttft_ms: weighted_avg(summed.ttft_ms, summed.ttft_count),
+      avg_tps: compute_tps(summed.completion_tokens, summed.latency_ms),
+      status_breakdown: %{
+        "2xx" => summed.status_2xx,
+        "4xx" => summed.status_4xx,
+        "5xx" => summed.status_5xx
+      },
+      top_models: top_models_from_groups(groups, 5),
+      last_request_at: summed.last_request_at,
+      realtime_5min: %{
+        request_count: summed.rt_request_count,
+        error_count: summed.rt_error_count,
+        avg_latency_ms: weighted_avg(summed.rt_latency_ms, summed.rt_latency_count),
+        error_rate: error_rate(summed.rt_request_count, summed.rt_error_count)
+      },
+      finops: user_finops_from_groups(groups)
+    }
+  end
+
+  defp weighted_avg(_sum, 0), do: nil
+  defp weighted_avg(sum, count), do: Float.round(sum / count, 1)
+
+  defp later(nil, other), do: other
+  defp later(other, nil), do: other
+  defp later(a, b), do: if(DateTime.compare(a, b) == :lt, do: b, else: a)
+
+  # Same rows, same keys and same cost-desc ordering as `top_models_for_ids/3`
+  # (which ordered by `SUM(provider_cost_usd) DESC` in SQL).
+  defp top_models_from_groups(groups, limit) do
+    groups
+    |> Enum.group_by(& &1.model_requested)
+    |> Enum.map(fn {model, rows} ->
+      %{
+        model_requested: model,
+        count: Enum.reduce(rows, 0, &(&1.request_count + &2)),
+        total_cost_usd: Enum.reduce(rows, Decimal.new(0), &Decimal.add(&1.cost_usd, &2)),
+        total_prompt_tokens: Enum.reduce(rows, 0, &(&1.prompt_tokens + &2)),
+        total_completion_tokens: Enum.reduce(rows, 0, &(&1.completion_tokens + &2))
+      }
+    end)
+    |> Enum.sort(fn a, b -> Decimal.compare(a.total_cost_usd, b.total_cost_usd) != :lt end)
+    |> Enum.take(limit)
+  end
+
+  defp decision_group?(%{request_type: "router_decision"}), do: true
+  defp decision_group?(_group), do: false
+
+  defp user_finops_from_groups(groups) do
+    {decisions, served} = Enum.split_with(groups, &decision_group?/1)
+
+    finops =
+      Enum.reduce(served, user_finops_zero(), fn group, acc ->
+        %{
+          acc
+          | requests: acc.requests + group.request_count,
+            cost_usd: Decimal.add(acc.cost_usd, group.cost_usd),
+            prompt_tokens: acc.prompt_tokens + group.prompt_tokens,
+            completion_tokens: acc.completion_tokens + group.completion_tokens,
+            cache_read_tokens: acc.cache_read_tokens + group.cache_read_tokens,
+            cache_creation_tokens: acc.cache_creation_tokens + group.cache_creation_tokens,
+            error_requests: acc.error_requests + group.error_count,
+            error_cost_usd: Decimal.add(acc.error_cost_usd, group.error_cost_usd),
+            think_requests: acc.think_requests + group.think_requests,
+            think_cost_usd: Decimal.add(acc.think_cost_usd, group.think_cost_usd),
+            local_cache_hits: acc.local_cache_hits + group.local_cache_hits,
+            prompt_tokens_saved_est: acc.prompt_tokens_saved_est + group.prompt_tokens_saved_est,
+            topup_requests: acc.topup_requests + group.topup_requests,
+            topup_cost_usd: Decimal.add(acc.topup_cost_usd, group.topup_cost_usd)
+        }
+      end)
+
+    # Same CASE as `Rollup.finops_overview/1`: with decision rows in the window
+    # the overhead is what THEY cost; without them, it is the per-row
+    # `router_decision_cost_usd` the proxy recorded.
+    router_cost =
+      case decisions do
+        [] -> Enum.reduce(groups, Decimal.new(0), &Decimal.add(&1.router_decision_cost_usd, &2))
+        rows -> Enum.reduce(rows, Decimal.new(0), &Decimal.add(&1.cost_usd, &2))
+      end
+
+    %{finops | router_decision_cost_usd: router_cost}
+  end
+
+  defp user_finops_zero do
+    %{
+      requests: 0,
+      cost_usd: Decimal.new(0),
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      error_requests: 0,
+      error_cost_usd: Decimal.new(0),
+      think_requests: 0,
+      think_cost_usd: Decimal.new(0),
+      local_cache_hits: 0,
+      router_decision_cost_usd: Decimal.new(0),
+      prompt_tokens_saved_est: 0,
+      topup_requests: 0,
+      topup_cost_usd: Decimal.new(0)
+    }
   end
 
   @doc """
@@ -2242,7 +2535,7 @@ defmodule Tokengate.Logs do
       total_latency_ms: result.total_latency_ms,
       avg_latency_ms: avg_to_float(result.avg_latency_ms),
       avg_ttft_ms: avg_to_float(result.avg_ttft_ms),
-      avg_tps: compute_avg_tps(result.total_completion_tokens, result.total_latency_ms),
+      avg_tps: compute_tps(result.total_completion_tokens, result.total_latency_ms),
       status_breakdown: %{
         "2xx" => result.status_2xx,
         "4xx" => result.status_4xx,

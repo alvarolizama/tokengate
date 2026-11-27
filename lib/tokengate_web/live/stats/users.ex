@@ -56,6 +56,11 @@ defmodule TokengateWeb.StatsLive.Users do
           <%= if Stats.has_data?(@breakdown_user) do %>
             <%!-- El buscador filtra las filas en el render (correo o nombre): no
                  toca la DB ni las claves del DashboardCache. --%>
+            <%!-- El denominador del Share es el total del PERÍODO (la lista
+                 completa), no el del filtro: escribir en el buscador no puede
+                 inflar el reparto de cada fila al 100%. El pie de la tabla sí
+                 suma lo visible, que es lo que el usuario está mirando. --%>
+            <% period_total = Stats.breakdown_total(@breakdown_user) %>
             <% rows =
               Enum.filter(
                 @breakdown_user,
@@ -96,11 +101,11 @@ defmodule TokengateWeb.StatsLive.Users do
                   <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
-                  <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Share")} align="right">
                   <span class="font-mono tabular-nums text-base-content/70">
-                    {Stats.cost_share_pct(row.cost_usd, user_total.cost_usd)}%
+                    {Stats.cost_share_pct(row.cost_usd, period_total.cost_usd)}%
                   </span>
                 </:col>
                 <:col :let={row} label={gettext("Tokens in")} field={:prompt_tokens} align="right">
@@ -129,7 +134,9 @@ defmodule TokengateWeb.StatsLive.Users do
                   <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Cost / req")} align="right">
-                  <span class="font-mono tabular-nums text-base-content/70">{cost_per_request(row)}</span>
+                  <span class="font-mono tabular-nums text-base-content/70">
+                    {Stats.cost_per_request(row.cost_usd, row.request_count)}
+                  </span>
                 </:col>
                 <:col
                   :let={row}
@@ -177,7 +184,7 @@ defmodule TokengateWeb.StatsLive.Users do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(user_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(user_total.cost_usd)}</span>
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Tokens in")}</span>
@@ -206,15 +213,4 @@ defmodule TokengateWeb.StatsLive.Users do
     </div>
     """
   end
-
-  defp cost_per_request(%{request_count: 0}), do: "—"
-
-  defp cost_per_request(%{cost_usd: %Decimal{} = cost, request_count: n}) when n > 0 do
-    cost
-    |> Decimal.div(Decimal.new(n))
-    |> Decimal.round(4)
-    |> Stats.format_decimal()
-  end
-
-  defp cost_per_request(_), do: "—"
 end

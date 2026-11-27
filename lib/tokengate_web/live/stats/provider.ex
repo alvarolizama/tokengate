@@ -88,7 +88,7 @@ defmodule TokengateWeb.StatsLive.Provider do
             icon="hero-currency-dollar"
             accent="accent"
           >
-            ${Stats.format_decimal(@provider_metrics.total_cost_usd)}
+            {Stats.money(@provider_metrics.total_cost_usd)}
             <:sub>
               <span :if={@provider_metrics.request_count > 0} class="tabular-nums">
                 {Stats.cost_per_request(
@@ -133,6 +133,18 @@ defmodule TokengateWeb.StatsLive.Provider do
               {Stats.format_compact(@provider_metrics.total_completion_tokens)}
               <span class="text-sm text-base-content/50">out</span>
             </span>
+            <%!-- Misma línea de apoyo que los KPIs de Tokens de modelo, perfil
+                 de límites y agente: el cache hit es un dato del proveedor, no
+                 un detalle escondido en la tabla de abajo. --%>
+            <:sub>
+              cache · {Stats.cache_hit_pct(
+                @provider_metrics.total_prompt_tokens,
+                @provider_metrics.total_cache_read_tokens
+              )} hit · out/in {Stats.out_in_ratio(
+                @provider_metrics.total_completion_tokens,
+                @provider_metrics.total_prompt_tokens
+              )}
+            </:sub>
           </.kpi_card>
 
           <.kpi_card
@@ -211,7 +223,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                     <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Cost")} align="right">
-                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                   </:col>
                 </.table>
               </div>
@@ -237,7 +249,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(model_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(model_total.cost_usd)}</span>
                   </span>
                 </div>
               </div>
@@ -309,7 +321,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                     <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Cost")} align="right">
-                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                   </:col>
                 </.table>
               </div>
@@ -335,7 +347,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(user_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(user_total.cost_usd)}</span>
                   </span>
                 </div>
               </div>
@@ -397,7 +409,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                       <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
                     </:col>
                     <:col :let={row} label={gettext("Cost")} align="right">
-                      <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                      <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                     </:col>
                   </.table>
                 </div>
@@ -423,7 +435,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                     </span>
                     <span>
                       <span class="text-base-content/40">{gettext("Cost")}</span>
-                      <span class="ml-1">${Stats.format_decimal(service_total.cost_usd)}</span>
+                      <span class="ml-1">{Stats.money(service_total.cost_usd)}</span>
                     </span>
                   </div>
                 </div>
@@ -480,7 +492,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                     <span class="font-mono tabular-nums">{Stats.format_tps(row.avg_tps)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Cost")} align="right">
-                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                   </:col>
                 </.table>
               </div>
@@ -506,7 +518,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(group_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(group_total.cost_usd)}</span>
                   </span>
                 </div>
               </div>

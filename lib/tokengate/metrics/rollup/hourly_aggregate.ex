@@ -13,6 +13,14 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
   Read paths live in `Tokengate.Metrics.Rollup` (`hourly_series_from_rollup/2`,
   `summary_from_rollup/2`, `top_errors_from_rollup/2`).
 
+  ## What is aggregated
+
+  Served traffic only: `request_type = 'router_decision'` rows are the
+  classifier's own billed call and are excluded, exactly like
+  `Tokengate.SmartRouter.Analytics` excludes them. Their spend is not lost —
+  it lives in `request_logs.router_decision_cost_usd` / the decision rows and
+  is read by the FinOps queries in `Tokengate.Metrics.Rollup`.
+
   ## Cost precision
 
   `provider_cost_usd` (Decimal) is stored as integer micro-USD
@@ -97,6 +105,12 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
         rl.latency_ms
       FROM request_logs rl
       WHERE rl.inserted_at >= $1 AND rl.inserted_at < $2
+        -- `router_decision` rows are the classifier's OWN billed call, not
+        -- served traffic (same rule `SmartRouter.Analytics` applies). Counting
+        -- them inflated every rollup read (requests, cost, tokens) and made the
+        -- dashboard KPI disagree with the router tab by one row per classified
+        -- request.
+        AND (rl.request_type IS NULL OR rl.request_type <> 'router_decision')
     )
     INSERT INTO request_metrics_hourly
       (id, day, hour_utc, user_id, group_member_id, model_id, provider_id,

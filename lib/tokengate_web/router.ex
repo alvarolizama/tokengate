@@ -176,6 +176,7 @@ defmodule TokengateWeb.Router do
       on_mount: [{TokengateWeb.UserAuth, :require_admin}] do
       live "/stats", StatsLive, :live
       live "/stats/overview", StatsLive, :index
+      live "/stats/finops", StatsLive, :finops
       live "/stats/models", StatsLive, :models
       live "/stats/models/:model_id", StatsLive, :model
       live "/stats/router", StatsLive, :router

@@ -159,7 +159,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           icon="hero-exclamation-triangle"
           accent="error"
         >
-          {@pulse.error_rate}%
+          {format_error_rate(@pulse.error_rate)}
           <:sub>
             {gettext("%{count} errors in 5 min", count: Stats.format_number(@pulse.error_count))}
           </:sub>
@@ -665,6 +665,16 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   defp format_avg(value, decimals) do
     :erlang.float_to_binary(value * 1.0, decimals: decimals)
   end
+
+  # `Logs.realtime_summary/2` ya entrega el error rate en escala 0..100
+  # (`Float.round(errors / total * 100, 1)`). Se formatea AQUÍ, no con
+  # `Stats.format_percent/1` (que multiplica por 100 otra vez y lo dejaría en
+  # 350%): una decimal fija, así el número no cambia de forma entre 0.0 y 100.0.
+  defp format_error_rate(rate) when is_float(rate),
+    do: "#{:erlang.float_to_binary(rate, decimals: 1)}%"
+
+  defp format_error_rate(rate) when is_integer(rate), do: "#{rate}.0%"
+  defp format_error_rate(_), do: "—"
 
   defp status_class(code) when code >= 400, do: "text-warning"
   defp status_class(_code), do: "text-success"

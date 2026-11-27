@@ -53,7 +53,7 @@ defmodule TokengateWeb.StatsLive.Group do
             :if={@group}
             href={"/stats/export?type=groups&period=#{@period}&group_id=#{@group.id}"}
             class="btn btn-sm btn-ghost"
-            id="csv-groups"
+            id="csv-group-detail"
           >
             <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV
           </.link>
@@ -123,7 +123,7 @@ defmodule TokengateWeb.StatsLive.Group do
             icon="hero-currency-dollar"
             accent="accent"
           >
-            ${Stats.format_decimal(@metrics.cost_usd)}
+            {Stats.money(@metrics.cost_usd)}
             <:sub>
               <span :if={@metrics.requests_total > 0} class="tabular-nums">
                 {Stats.cost_per_request(@metrics.cost_usd, @metrics.requests_total)}/req · {Stats.effective_cost_per_1m(
@@ -215,7 +215,7 @@ defmodule TokengateWeb.StatsLive.Group do
                     <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
-                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Cost / req")} align="right">
                     <span class="font-mono tabular-nums text-base-content/70">
@@ -268,7 +268,7 @@ defmodule TokengateWeb.StatsLive.Group do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(model_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(model_total.cost_usd)}</span>
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Tokens in")}</span>
@@ -336,7 +336,7 @@ defmodule TokengateWeb.StatsLive.Group do
                     <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
-                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Share")} align="right">
                     <span class="font-mono tabular-nums text-base-content/70">
@@ -388,7 +388,7 @@ defmodule TokengateWeb.StatsLive.Group do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(member_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(member_total.cost_usd)}</span>
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Tokens in")}</span>

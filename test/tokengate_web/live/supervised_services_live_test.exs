@@ -190,6 +190,56 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     assert render(element(view, "#totals-errors")) =~ "1"
   end
 
+  test "the spend column and the totals expose $/req and cache %", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+    service = supervised_service(user)
+
+    {:ok, _} =
+      log_for(service, %{
+        prompt_tokens: 1_000,
+        cache_read_tokens: 500,
+        provider_cost_usd: Decimal.new("2.00")
+      })
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/services/supervised")
+
+    efficiency = render(element(view, "#metric-efficiency-#{service.id}"))
+    assert efficiency =~ "$2.00"
+    assert efficiency =~ "50.0%"
+
+    totals = render(element(view, "#totals-cost"))
+    assert totals =~ "$2.00"
+    assert totals =~ "50.0%"
+  end
+
+  test "a newly assigned service brings ITS numbers, not the cached set's", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+    supervised_service(user, %{"name" => "Primero"})
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/services/supervised")
+
+    # Calienta la entrada de caché del PRIMER conjunto (sólo un servicio).
+    render(view)
+
+    u = unique()
+
+    {:ok, fresh} =
+      Accounts.create_service(%{"name" => "Nuevo #{u}", "group_id" => svc_group_id()})
+
+    {:ok, _} = log_for(fresh, %{provider_cost_usd: Decimal.new("3.00")})
+    {:ok, _} = Accounts.add_service_supervisor(fresh.id, user.id)
+
+    render(view)
+
+    assert has_element?(view, "#supervised-service-#{fresh.id}")
+    # La llave del caché incluye el conjunto de ids: sin eso, el agregado del
+    # conjunto anterior dejaría al servicio nuevo en $0 por el resto del TTL.
+    assert render(element(view, "#metric-cost-#{fresh.id}")) =~ "$3.00"
+    assert render(element(view, "#totals-cost")) =~ "$3.00"
+  end
+
   test "logs from another service never leak into the summary", %{conn: conn} do
     %{user: user, password: password} = register("user")
     service = supervised_service(user, %{"name" => "Mío"})

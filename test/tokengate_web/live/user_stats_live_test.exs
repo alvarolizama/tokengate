@@ -401,4 +401,171 @@ defmodule TokengateWeb.UserStatsLiveTest do
       assert Enum.count(log_rows(view)) == 50
     end
   end
+
+  # `:user_series` is a third async task (the trend), independent of the
+  # `stats_loading` flag the summary/logs tasks drive: wait for its card
+  # instead of guessing.
+  defp wait_for_element(view, selector, attempts \\ 200)
+
+  defp wait_for_element(view, selector, attempts) when attempts > 0 do
+    if has_element?(view, selector) do
+      view
+    else
+      Process.sleep(10)
+      wait_for_element(view, selector, attempts - 1)
+    end
+  end
+
+  defp wait_for_element(_view, selector, 0),
+    do: raise("element #{selector} never rendered")
+
+  describe "FinOps per user (S4)" do
+    test "unit economics, waste and cache posture are derived from the single pass", %{
+      conn: conn
+    } do
+      {group, user} = fixture_user_with_memberships()
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      member = hd(Accounts.list_group_members_for_user(user.id))
+
+      # Tráfico servido: 1M prompt (400k cacheados) / 500k completion, $2.
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          group_id: group.id,
+          user_email: user.email,
+          model_requested: "gpt-4o-finops",
+          status_code: 200,
+          prompt_tokens: 1_000_000,
+          completion_tokens: 500_000,
+          cache_read_tokens: 400_000,
+          prompt_tokens_saved_est: 12_345,
+          provider_cost_usd: Decimal.new("2.000000"),
+          latency_ms: 1_000,
+          think: true,
+          cache_hit: true
+        })
+
+      # Desperdicio: un 5xx que costó $0.5 sin tokens.
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          group_id: group.id,
+          user_email: user.email,
+          model_requested: "gpt-4o-finops",
+          status_code: 500,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          provider_cost_usd: Decimal.new("0.500000"),
+          latency_ms: 100
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      wait_stats_loaded(view)
+      wait_for_element(view, "#user-finops-trend")
+
+      # $2.5 de gasto / 2 requests servidas.
+      assert has_element?(view, "#user-finops-cpr", "$1.25")
+      # $2.5 sobre 1.5M tokens.
+      assert has_element?(view, "#user-finops-per-1m", "$1.6667")
+      # 500k out / 1M in.
+      assert has_element?(view, "#user-finops-out-in", "0.5x")
+      # 400k / 1M de prompt.
+      assert has_element?(view, "#user-finops-cache", "40.0%")
+      # Tokens ahorrados por el caché local (12.345 → 12.3K).
+      assert has_element?(view, "#user-finops-local-cache", "12.3K")
+      # $0.5 de $2.5 = 20% del gasto.
+      assert has_element?(view, "#user-finops-error-waste", "20.0%")
+      # La request con `think` costó $2 de $2.5 = 80%.
+      assert has_element?(view, "#user-finops-thinking", "80.0%")
+      # Sin top-ups en la ventana.
+      assert has_element?(view, "#user-finops-topups", "$0.00")
+
+      # Burn y proyección (la ventana por defecto es la semana).
+      assert has_element?(view, "#user-finops-burn-day", "promedio por día")
+      assert has_element?(view, "#user-finops-projection")
+      assert has_element?(view, "#user-finops-trend")
+    end
+
+    test "the trend chart is empty (and hidden) when the period has no traffic", %{conn: conn} do
+      {_group, user} = fixture_user_with_memberships()
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
+      wait_stats_loaded(view)
+
+      assert has_element?(view, "#user-finops")
+      refute has_element?(view, "#user-finops-trend")
+    end
+  end
+
+  describe "Logs.user_stats/2 (single-pass aggregate)" do
+    test "keeps the member_stats shape and adds the FinOps block" do
+      {group, user} = fixture_user_with_memberships()
+      member = hd(Accounts.list_group_members_for_user(user.id))
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      from = DateTime.add(now, -3_600, :second)
+
+      for {model, status, cost} <- [{"keep-a", 200, "0.001"}, {"keep-b", 503, "0.002"}] do
+        {:ok, _} =
+          Logs.log_request(%{
+            group_member_id: member.id,
+            group_id: group.id,
+            user_email: user.email,
+            model_requested: model,
+            status_code: status,
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            provider_cost_usd: Decimal.new(cost),
+            latency_ms: 100,
+            inserted_at: now
+          })
+      end
+
+      stats = Logs.user_stats(user.id, from: from, to: now)
+
+      # El shape de `member_stats/2` se conserva clave por clave...
+      for key <- [
+            :total_cost_usd,
+            :total_prompt_tokens,
+            :total_completion_tokens,
+            :total_cache_read_tokens,
+            :total_cache_creation_tokens,
+            :request_count,
+            :error_count,
+            :total_latency_ms,
+            :latency_count,
+            :ttft_count,
+            :avg_latency_ms,
+            :avg_ttft_ms,
+            :avg_tps,
+            :status_breakdown,
+            :top_models,
+            :last_request_at,
+            :realtime_5min,
+            :finops
+          ],
+          do: assert(Map.has_key?(stats, key))
+
+      assert stats.request_count == 2
+      assert stats.status_breakdown == %{"2xx" => 1, "4xx" => 0, "5xx" => 1}
+      assert stats.error_count == 1
+      assert stats.last_request_at == now
+      assert Decimal.compare(stats.total_cost_usd, Decimal.new("0.003")) == :eq
+
+      assert stats.top_models |> Enum.map(& &1.model_requested) |> Enum.sort() == [
+               "keep-a",
+               "keep-b"
+             ]
+
+      # ...y el bloque FinOps suma lo mismo desde las mismas filas.
+      assert stats.finops.requests == 2
+      assert Decimal.compare(stats.finops.cost_usd, Decimal.new("0.003")) == :eq
+      assert stats.finops.error_requests == 1
+      assert Decimal.compare(stats.finops.error_cost_usd, Decimal.new("0.002")) == :eq
+      assert stats.finops.think_requests == 0
+    end
+  end
 end

@@ -3,14 +3,29 @@ defmodule TokengateWeb.StatsExportController do
   CSV export endpoint for stats data.
 
   Accepts query params:
-    * `type`   — `models`, `groups`, `providers`, `services`, `errors`, or `logs` (required)
+    * `type`   — `models`, `groups`, `providers`, `services`, `users`, `agents`,
+      `errors`, `logs`, `finops` or `router` (omitted = `models`)
     * `period` — a canonical period: `today`, `yesterday`, `week`, `30d`
       (default: `week`; any other value — an old `month`/`last_month`/`7d`
       bookmark — degrades to the default instead of 500ing)
     * `model_id` — filter by model (for models type only)
     * `group_id`  — filter by group (for groups type only)
+    * `view`     — `use_cases` (default) or `models` (for router type only)
+    * `sort` / `direction` — optional ordering of the exported rows, with the
+      same field vocabulary the tables use (`requests`, `cost`, `tokens_in`,
+      `latency`, …); direction is `desc` unless `asc`. The DB-cursor exports
+      (logs/errors) keep their chronological order — they are never buffered
+      in memory just to be sorted.
 
-  Unknown types fall through to the models CSV — see `build_csv/5`.
+  An UNKNOWN `type` is a `400` with
+  `{"error" => "tipo de exportación desconocido"}`, never a silent models CSV:
+  a download that says `models` in the filename and in the columns is a wrong
+  answer, not a fallback. An omitted (or empty) `type` still defaults to
+  `models` — that default was the documented behaviour, not an accident.
+
+  The filename carries the window and the day
+  (`estadisticas_proveedores_<period>_<date>.csv`), so two exports of
+  different periods no longer overwrite each other in the browser.
 
   ## Streaming
 
@@ -43,6 +58,8 @@ defmodule TokengateWeb.StatsExportController do
   alias Tokengate.Metrics.StatsQueries
   alias Tokengate.Periods
   alias Tokengate.Repo
+  alias Tokengate.SmartRouter.Analytics
+  alias TokengateWeb.StatsHelpers
   alias TokengateWeb.StatsLive.Agents, as: AgentsStats
   alias TokengateWeb.TimezoneHelper
 
@@ -54,6 +71,35 @@ defmodule TokengateWeb.StatsExportController do
   # through the file.
   @export_timeout_ms 600_000
 
+  # Query-param vocabulary for `sort`: the SAME names the tables expose as
+  # sortable columns, mapped to the key each row map carries. A field that is
+  # not here (or missing from a row) leaves the exported order untouched —
+  # never a `String.to_atom/1` on user input.
+  @sort_fields %{
+    "requests" => :request_count,
+    "request_count" => :request_count,
+    "cost" => :cost_usd,
+    "cost_usd" => :cost_usd,
+    "share" => :share,
+    "tokens_in" => :prompt_tokens,
+    "prompt_tokens" => :prompt_tokens,
+    "tokens_out" => :completion_tokens,
+    "completion_tokens" => :completion_tokens,
+    "tps" => :avg_tps,
+    "avg_tps" => :avg_tps,
+    "errors" => :error_count,
+    "error_count" => :error_count,
+    "failures" => :error_rate,
+    "error_rate" => :error_rate,
+    "latency" => :avg_latency_ms,
+    "avg_latency_ms" => :avg_latency_ms,
+    "p95" => :p95_latency_ms,
+    "p95_latency_ms" => :p95_latency_ms,
+    "ttft" => :avg_ttft_ms,
+    "avg_ttft_ms" => :avg_ttft_ms,
+    "score" => :score
+  }
+
   def export(conn, params) do
     user = conn.assigns[:current_user]
     timezone = (user && user.timezone) || "Etc/UTC"
@@ -64,15 +110,25 @@ defmodule TokengateWeb.StatsExportController do
 
     type = params["type"] || "models"
 
-    case build_csv(user, type, params, opts, timezone) do
+    # `?type=` (blank) is an omitted type, not a typo: the default is `models`.
+    type = if type == "", do: "models", else: type
+
+    case build_csv(user, type, params, opts, timezone, period) do
       {:ok, {filename, header, source}} ->
         stream_csv(conn, filename, header, source)
 
       {:error, :forbidden} ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(403, Jason.encode!(%{"error" => "no autorizado"}))
+        json_error(conn, 403, "no autorizado")
+
+      {:error, :unknown_type} ->
+        json_error(conn, 400, "tipo de exportación desconocido")
     end
+  end
+
+  defp json_error(conn, status, message) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Jason.encode!(%{"error" => message}))
   end
 
   ## Chunked CSV writer -----------------------------------------------------
@@ -177,13 +233,22 @@ defmodule TokengateWeb.StatsExportController do
 
   defp csv_api_key(row, _key_labels), do: csv_escape(Map.get(row, :api_key_prefix))
 
-  defp build_csv(user, "groups", params, opts, timezone) do
+  defp build_csv(user, "groups", params, opts, timezone, period) do
     group_id = params["group_id"]
 
-    if group_id && not group_export_allowed?(user, group_id) do
-      {:error, :forbidden}
-    else
-      {:ok, build_groups_csv(user, group_id, timezone, opts)}
+    cond do
+      group_id && not group_export_allowed?(user, group_id) ->
+        {:error, :forbidden}
+
+      is_nil(group_id) && not admin?(user) ->
+        # Sin `group_id` el export es la tabla completa
+        # (`Rollup.breakdown_by_group/1`), que agrega org-wide sin filtrar por
+        # `member_ids` — la MISMA razón por la que el hub no le pinta el
+        # desglose de perfiles a un no-admin.
+        {:error, :forbidden}
+
+      true ->
+        {:ok, build_groups_csv(user, group_id, timezone, opts, period, params)}
     end
   end
 
@@ -193,16 +258,16 @@ defmodule TokengateWeb.StatsExportController do
   # `member_ids`. Un manager exportaría, entonces, el tráfico de la
   # organización entera; el mismo criterio que el drill-down de perfiles de límites: si no
   # eres admin, no baja.
-  defp build_csv(user, "providers", _params, opts, timezone) do
+  defp build_csv(user, "providers", params, opts, timezone, period) do
     if admin?(user) do
-      {:ok, build_providers_csv(opts, timezone)}
+      {:ok, build_providers_csv(opts, timezone, period, params)}
     else
       {:error, :forbidden}
     end
   end
 
-  defp build_csv(user, "errors", params, opts, timezone) do
-    {:ok, build_errors_csv(user, params, opts, timezone)}
+  defp build_csv(user, "errors", params, opts, timezone, period) do
+    {:ok, build_errors_csv(user, params, opts, timezone, period)}
   end
 
   # La tabla de servicios es admin-only en el hub (la ruta vive en la
@@ -210,9 +275,9 @@ defmodule TokengateWeb.StatsExportController do
   # rankea por servicio sin filtrar por `member_ids`: un manager exportaría
   # el tráfico de servicios de la organización entera. Mismo criterio que el
   # ranking de proveedores: si no eres admin, no baja.
-  defp build_csv(user, "services", _params, opts, timezone) do
+  defp build_csv(user, "services", params, opts, timezone, period) do
     if admin?(user) do
-      {:ok, build_services_csv(opts, timezone)}
+      {:ok, build_services_csv(opts, timezone, period, params)}
     else
       {:error, :forbidden}
     end
@@ -221,25 +286,51 @@ defmodule TokengateWeb.StatsExportController do
   # La tabla de usuarios es admin-only en el hub (live_session :admin) y
   # `StatsQueries.breakdown_by_user/1` agrega org-wide sin filtrar por
   # `member_ids`: si no eres admin, no baja.
-  defp build_csv(user, "users", _params, opts, timezone) do
+  defp build_csv(user, "users", params, opts, timezone, period) do
     if admin?(user) do
-      {:ok, build_users_csv(opts, timezone)}
+      {:ok, build_users_csv(opts, timezone, period, params)}
     else
       {:error, :forbidden}
     end
   end
 
-  defp build_csv(user, "agents", _params, opts, timezone) do
-    {:ok, build_agents_csv(user, opts, timezone)}
+  defp build_csv(user, "agents", params, opts, timezone, period) do
+    {:ok, build_agents_csv(user, opts, timezone, period, params)}
   end
 
-  defp build_csv(user, "logs", params, opts, timezone) do
-    {:ok, build_logs_csv(user, params, opts, timezone)}
+  defp build_csv(user, "logs", params, opts, timezone, period) do
+    {:ok, build_logs_csv(user, params, opts, timezone, period)}
   end
 
-  defp build_csv(user, _type, params, opts, timezone) do
-    {:ok, build_models_csv(user, params["model_id"], timezone, opts)}
+  # FinOps: la economía por sujeto (usuario/servicio) del período. El agregado
+  # es org-wide (`Rollup.finops_subject_scatter/1`), así que sólo admin.
+  defp build_csv(user, "finops", params, opts, timezone, period) do
+    if admin?(user) do
+      {:ok, build_finops_csv(opts, timezone, period, params)}
+    else
+      {:error, :forbidden}
+    end
   end
+
+  # Router: el desglose de `SmartRouter.Analytics` sobre la misma ventana. Es
+  # org-wide (no conoce scoping por miembro), así que sólo admin.
+  defp build_csv(user, "router", params, opts, timezone, period) do
+    if admin?(user) do
+      {:ok, build_router_csv(params, opts, timezone, period)}
+    else
+      {:error, :forbidden}
+    end
+  end
+
+  defp build_csv(user, "models", params, opts, timezone, period) do
+    {:ok, build_models_csv(user, params["model_id"], timezone, opts, period, params)}
+  end
+
+  # Cualquier otro `type` (typo, bookmark viejo, param forjado) es un 400
+  # explícito: el fallback silencioso a `models` devolvía un archivo que decía
+  # `models` en el nombre y en las columnas — una respuesta equivocada
+  # presentada como correcta.
+  defp build_csv(_user, _type, _params, _opts, _timezone, _period), do: {:error, :unknown_type}
 
   # A group drill-down exposes every member's email and consumption, so only
   # admins may export it.
@@ -255,12 +346,12 @@ defmodule TokengateWeb.StatsExportController do
   # tier/score y su información básica del período. Sale del MISMO agregado que
   # pinta la tabla (`Rollup.provider_ranking/2`), así el CSV y la pantalla no
   # pueden decir cosas distintas — igual que el detalle de un proveedor.
-  defp build_providers_csv(opts, timezone) do
-    rows = Rollup.provider_ranking(nil, opts)
+  defp build_providers_csv(opts, timezone, period, params) do
+    rows = Rollup.provider_ranking(nil, opts) |> maybe_sort(params)
 
     header = ~w(proveedor tier score requests fallos latencia_ms p95_ms ttft_ms)
 
-    {"estadisticas_proveedores_#{Periods.local_today(timezone)}.csv", header,
+    {export_filename("estadisticas_proveedores", period, timezone), header,
      {:mem, rows, &row_to_csv_provider/2}}
   end
 
@@ -293,12 +384,12 @@ defmodule TokengateWeb.StatsExportController do
   # Una fila por servicio, del MISMO agregado que pinta la tabla del hub
   # (`Rollup.breakdown_by_service/1`): el CSV y la pantalla no pueden decir
   # cosas distintas — igual que proveedores.
-  defp build_services_csv(opts, timezone) do
-    rows = Rollup.breakdown_by_service(opts)
+  defp build_services_csv(opts, timezone, period, params) do
+    rows = Rollup.breakdown_by_service(opts) |> maybe_sort(params)
 
     header = ~w(servicio requests costo tokens_in tokens_out tps latencia_ms)
 
-    {"estadisticas_servicios_#{Periods.local_today(timezone)}.csv", header,
+    {export_filename("estadisticas_servicios", period, timezone), header,
      {:mem, rows, &row_to_csv_service/2}}
   end
 
@@ -326,12 +417,12 @@ defmodule TokengateWeb.StatsExportController do
 
   ## Users CSV ------------------------------------------------------------
 
-  defp build_users_csv(opts, timezone) do
-    rows = StatsQueries.breakdown_by_user(opts)
+  defp build_users_csv(opts, timezone, period, params) do
+    rows = StatsQueries.breakdown_by_user(opts) |> maybe_sort(params)
 
     header = ~w(usuario nombre perfiles requests costo tokens_in tokens_out tps)
 
-    {"estadisticas_usuarios_#{Periods.local_today(timezone)}.csv", header,
+    {export_filename("estadisticas_usuarios", period, timezone), header,
      {:mem, rows, &row_to_csv_user/2}}
   end
 
@@ -355,14 +446,14 @@ defmodule TokengateWeb.StatsExportController do
 
   ## Agents CSV -----------------------------------------------------------
 
-  defp build_agents_csv(user, opts, timezone) do
+  defp build_agents_csv(user, opts, timezone, period, params) do
     opts = Keyword.put(opts, :member_ids, Accounts.scope_member_ids(user))
-    rows = AgentsStats.build_ranking(opts)
+    rows = AgentsStats.build_ranking(opts) |> maybe_sort(params)
 
     header =
       ~w(agente familia requests costo share_pct tokens_in tokens_out latencia_ms errores error_pct)
 
-    {"estadisticas_agentes_#{Periods.local_today(timezone)}.csv", header,
+    {export_filename("estadisticas_agentes", period, timezone), header,
      {:mem, rows, &row_to_csv_agent/2}}
   end
 
@@ -383,7 +474,7 @@ defmodule TokengateWeb.StatsExportController do
 
   ## Models CSV -----------------------------------------------------------
 
-  defp build_models_csv(user, model_id, timezone, opts) do
+  defp build_models_csv(user, model_id, timezone, opts, period, params) do
     # Scoping: non-admin users only export consumption of their own scope
     # (managed groups for managers, own memberships for regular users).
     opts = Keyword.put(opts, :member_ids, Accounts.scope_member_ids(user))
@@ -397,6 +488,8 @@ defmodule TokengateWeb.StatsExportController do
         Rollup.breakdown_by_model(nil, opts)
       end
 
+    rows = maybe_sort(rows, params)
+
     header =
       if model_id do
         ~w(proveedor_modelo requests costo tokens_in tokens_out tps)
@@ -406,13 +499,13 @@ defmodule TokengateWeb.StatsExportController do
 
     suffix = if model_id, do: "_modelo", else: ""
 
-    {"estadisticas_models#{suffix}_#{Periods.local_today(timezone)}.csv", header,
+    {export_filename("estadisticas_models", period, timezone, suffix), header,
      {:mem, rows, &row_to_csv/2}}
   end
 
   ## Groups CSV ------------------------------------------------------------
 
-  defp build_groups_csv(user, group_id, timezone, opts) do
+  defp build_groups_csv(user, group_id, timezone, opts, period, params) do
     rows =
       if group_id do
         # Drill-down: members of this group
@@ -421,6 +514,8 @@ defmodule TokengateWeb.StatsExportController do
         # Full table: all groups the user can see
         load_group_breakdown(user, opts)
       end
+
+    rows = maybe_sort(rows, params)
 
     header =
       if group_id do
@@ -431,13 +526,199 @@ defmodule TokengateWeb.StatsExportController do
 
     suffix = if group_id, do: "_perfil_limites", else: ""
 
-    {"estadisticas_perfiles#{suffix}_#{Periods.local_today(timezone)}.csv", header,
+    {export_filename("estadisticas_perfiles", period, timezone, suffix), header,
      {:mem, rows, &row_to_csv_group/2}}
+  end
+
+  ## FinOps CSV ------------------------------------------------------------
+
+  # Una fila por SUJETO activo del período (usuario o servicio) con su economía
+  # unitaria: costo por request, cache hit, gasto desperdiciado en errores y el
+  # sobrecosto de thinking/topups. Sale del MISMO agregado que la pestaña
+  # FinOps (`Rollup.finops_subject_scatter/1`), así el archivo y la pantalla no
+  # pueden contar dos historias.
+  defp build_finops_csv(opts, timezone, period, params) do
+    rows = Rollup.finops_subject_scatter(opts) |> maybe_sort(params)
+
+    header =
+      ~w(tipo sujeto requests costo_usd cost_per_req tokens_in tokens_out cache_pct errores error_waste_usd thinking_cost_usd topup_cost_usd)
+
+    {export_filename("estadisticas_finops", period, timezone), header,
+     {:mem, rows, &row_to_csv_finops/2}}
+  end
+
+  defp row_to_csv_finops(row, _labels) do
+    request_count = Map.get(row, :request_count, 0)
+
+    [
+      csv_escape(row.subject_type),
+      csv_escape(Map.get(row, :label)),
+      request_count,
+      decimal_to_csv(Map.get(row, :cost_usd)),
+      unit_cost_csv(Map.get(row, :cost_usd), request_count),
+      Map.get(row, :prompt_tokens, 0),
+      Map.get(row, :completion_tokens, 0),
+      csv_pct(cache_hit_pct(row)),
+      Map.get(row, :error_count, 0),
+      decimal_to_csv(Map.get(row, :error_cost_usd)),
+      decimal_to_csv(Map.get(row, :think_cost_usd)),
+      decimal_to_csv(Map.get(row, :topup_cost_usd))
+    ]
+  end
+
+  # Costo por request a la resolución del dinero (6 decimales, la misma de
+  # `provider_cost_usd`). Sin requests no hay unidad que dividir: celda vacía,
+  # no un 0 que se leería como "gratis".
+  defp unit_cost_csv(_cost, count) when count in [0, nil], do: ""
+
+  defp unit_cost_csv(%Decimal{} = cost, count) do
+    cost
+    |> Decimal.div(Decimal.new(count))
+    |> Decimal.round(6)
+    |> Decimal.to_string(:normal)
+  end
+
+  defp unit_cost_csv(cost, count) when is_number(cost),
+    do: unit_cost_csv(Decimal.from_float(cost * 1.0), count)
+
+  defp unit_cost_csv(_cost, _count), do: ""
+
+  defp cache_hit_pct(%{prompt_tokens: prompt, cache_read_tokens: hit})
+       when is_integer(prompt) and prompt > 0 and is_integer(hit) and hit >= 0 do
+    hit / prompt * 100
+  end
+
+  defp cache_hit_pct(_row), do: nil
+
+  # Porcentaje YA en escala 0..100 (las columnas de `SmartRouter.Analytics` y el
+  # cache hit de FinOps vienen así: `percent/2` multiplica por 100). `nil` es
+  # «no hay denominador», y se exporta vacío — no un 0 falso.
+  defp csv_pct(nil), do: ""
+  defp csv_pct(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string(:normal)
+  defp csv_pct(n) when is_float(n), do: Float.to_string(Float.round(n, 2))
+  defp csv_pct(n) when is_integer(n), do: Integer.to_string(n)
+  defp csv_pct(_), do: ""
+
+  # Número suelto (throughput, tokens/request, ms de decisión): sin redondear a
+  # entero, que en `tokens/seg` borraría la diferencia entre 3 y 3.9.
+  defp csv_number(nil), do: ""
+  defp csv_number(%Decimal{} = d), do: Decimal.to_string(d)
+  defp csv_number(n) when is_float(n), do: Float.to_string(Float.round(n, 2))
+  defp csv_number(n) when is_integer(n), do: Integer.to_string(n)
+  defp csv_number(_), do: ""
+
+  ## Router CSV ------------------------------------------------------------
+
+  # `SmartRouter.Analytics` sobre la MISMA ventana del selector: el desglose por
+  # caso de uso × effort tier (`use_case_breakdown/1`) o el rendimiento por
+  # modelo (`model_performance/1`). Ambos son org-wide — de ahí el admin-only.
+  defp build_router_csv(params, opts, timezone, period) do
+    case router_view(params["view"]) do
+      :models -> router_models_csv(opts, timezone, period)
+      :use_cases -> router_use_cases_csv(opts, timezone, period)
+    end
+  end
+
+  defp router_view(view) when view in ["models", "model_perf", "modelos"], do: :models
+  defp router_view(_), do: :use_cases
+
+  defp router_use_cases_csv(opts, timezone, period) do
+    rows = Analytics.use_case_breakdown(opts)
+
+    header =
+      ~w(caso_uso effort_tier requests share_pct costo_usd costo_decision_usd baseline_usd ahorro_usd ahorro_pct cache_pct error_pct fallback_pct escalation_pct prompt_tokens completion_tokens decision_ms)
+
+    {export_filename("estadisticas_router", period, timezone), header,
+     {:mem, rows, &row_to_csv_router_use_case/2}}
+  end
+
+  defp row_to_csv_router_use_case(row, _labels) do
+    [
+      csv_escape(Map.get(row, :use_case_key)),
+      csv_escape(Map.get(row, :effort_tier)),
+      Map.get(row, :request_count, 0),
+      csv_pct(Map.get(row, :share_pct)),
+      decimal_to_csv(Map.get(row, :total_cost_usd)),
+      decimal_to_csv(Map.get(row, :decision_cost_usd)),
+      decimal_to_csv(Map.get(row, :baseline_cost_usd)),
+      decimal_to_csv(Map.get(row, :net_savings_usd)),
+      csv_pct(Map.get(row, :savings_pct)),
+      csv_pct(Map.get(row, :cache_read_pct)),
+      csv_pct(Map.get(row, :error_rate_pct)),
+      csv_pct(Map.get(row, :fallback_rate_pct)),
+      csv_pct(Map.get(row, :escalation_pct)),
+      Map.get(row, :prompt_tokens, 0),
+      Map.get(row, :completion_tokens, 0),
+      csv_number(Map.get(row, :avg_decision_ms))
+    ]
+  end
+
+  defp router_models_csv(opts, timezone, period) do
+    rows = Analytics.model_performance(opts)
+
+    header =
+      ~w(modelo requests costo_usd decision_usd ahorro_usd tokens_por_segundo ttft_p50_ms ttft_p95_ms latencia_p50_ms latencia_p95_ms tokens_por_request cache_pct error_pct fallback_pct)
+
+    {export_filename("estadisticas_router", period, timezone, "_modelos"), header,
+     {:mem, rows, &row_to_csv_router_model/2}}
+  end
+
+  defp row_to_csv_router_model(row, _labels) do
+    [
+      csv_escape(Map.get(row, :model_name)),
+      Map.get(row, :request_count, 0),
+      decimal_to_csv(Map.get(row, :total_cost_usd)),
+      decimal_to_csv(Map.get(row, :decision_cost_usd)),
+      decimal_to_csv(Map.get(row, :net_savings_usd)),
+      csv_number(Map.get(row, :tokens_per_sec)),
+      csv_number(Map.get(row, :ttft_p50_ms)),
+      csv_number(Map.get(row, :ttft_p95_ms)),
+      csv_number(Map.get(row, :latency_p50_ms)),
+      csv_number(Map.get(row, :latency_p95_ms)),
+      csv_number(Map.get(row, :tokens_per_request)),
+      csv_pct(Map.get(row, :cache_read_pct)),
+      csv_pct(Map.get(row, :error_rate_pct)),
+      csv_pct(Map.get(row, :fallback_rate_pct))
+    ]
+  end
+
+  ## Export naming / ordering ----------------------------------------------
+
+  # `estadisticas_<tipo>[_<sufijo>]_<period>_<día>.csv`: la ventana va en el
+  # nombre, así dos exports de períodos distintos no se pisan en Descargas (el
+  # nombre anterior sólo llevaba el día).
+  defp export_filename(base, period, timezone, suffix \\ "") do
+    "#{base}#{suffix}_#{period}_#{Periods.local_today(timezone)}.csv"
+  end
+
+  # Ordena las filas EN MEMORIA con el mismo vocabulario (y el mismo helper)
+  # de las tablas, para que el CSV pueda salir en el orden que el usuario ve.
+  # Sin `sort` válido el orden del agregado queda intacto — nunca se ordena
+  # "en silencio" por otra columna.
+  defp maybe_sort(rows, params) do
+    case sort_field(params) do
+      nil -> rows
+      field -> StatsHelpers.sort_rows(rows, field, sort_direction(params))
+    end
+  end
+
+  defp sort_field(params) do
+    case Map.get(params, "sort") do
+      field when is_binary(field) -> Map.get(@sort_fields, String.downcase(field))
+      _ -> nil
+    end
+  end
+
+  defp sort_direction(params) do
+    case Map.get(params, "direction") do
+      "asc" -> :asc
+      _ -> :desc
+    end
   end
 
   ## Errors CSV -----------------------------------------------------------
 
-  defp build_errors_csv(user, params, opts, timezone) do
+  defp build_errors_csv(user, params, opts, timezone, period) do
     filters =
       opts
       |> Map.new()
@@ -448,13 +729,13 @@ defmodule TokengateWeb.StatsExportController do
     header =
       ~w(fecha estado modelo proveedor usuario perfil api_key error_reason prov_status latencia_ms costo_usd)
 
-    {"errores_#{Periods.local_today(timezone)}.csv", header,
+    {export_filename("errores", period, timezone), header,
      {:db, Logs.stream_logs_for_export(filters), &row_to_csv_error/2}}
   end
 
   ## Logs CSV (full export) -----------------------------------------------
 
-  defp build_logs_csv(user, params, opts, timezone) do
+  defp build_logs_csv(user, params, opts, timezone, period) do
     filters =
       opts
       |> Map.new()
@@ -464,7 +745,7 @@ defmodule TokengateWeb.StatsExportController do
     header =
       ~w(fecha estado modelo usuario perfil agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort effort_applied tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
 
-    {"logs_#{Periods.local_today(timezone)}.csv", header,
+    {"logs_#{period}_#{Periods.local_today(timezone)}.csv", header,
      {:db, Logs.stream_logs_for_export(filters), &row_to_csv_log/2}}
   end
 

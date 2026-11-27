@@ -15,9 +15,9 @@ defmodule TokengateWeb.StatsLive do
     * `:agents`   — coding-agent ranking (identity normalized in read)
     * `:provider` — one provider's hub: metrics, models served, who uses it
     * `:users`   — per-user consolidated breakdown (all memberships)
-    * `:credits` — budgets (calendar counters, no period)
+    * `:finops`  — spend economics: users vs services, anatomy, capabilities
 
-  Periods: Hoy, Ayer, Esta semana, 30d (all but :live/:credits) — the canonical
+  Periods: Hoy, Ayer, Esta semana, 30d (all but :live) — the canonical
   set in `Tokengate.Periods`; a legacy `?period=month|last_month|7d` bookmark
   degrades to the default instead of resolving to another window.
 
@@ -52,6 +52,7 @@ defmodule TokengateWeb.StatsLive do
   import TokengateWeb.StatsLive.Provider, only: [provider: 1]
   import TokengateWeb.StatsLive.Router, only: [router: 1]
   import TokengateWeb.StatsLive.LiveSection, only: [live: 1]
+  import TokengateWeb.StatsLive.Finops, only: [finops: 1]
 
   import TokengateWeb.StatsHelpers, only: [period_selector: 1, sort_rows: 3]
 
@@ -59,8 +60,9 @@ defmodule TokengateWeb.StatsLive do
 
   # Breakdown assigns whose tables have sortable column headers. The "sort"
   # event re-orders these in memory — see resort_breakdowns/3.
-  # Credits tab: budgets reload cadence after a `logs:new` broadcast (same
-  # rationale as the old CreditsLive — see its comment block).
+  #
+  # Resumen: cadencia de recarga de los contadores tras un broadcast
+  # `logs:new` (son los únicos que el tráfico nuevo invalida).
   @reload_interval_ms 3_000
 
   # "En vivo" tab: cadence of the periodic realtime refresh (matching
@@ -107,7 +109,6 @@ defmodule TokengateWeb.StatsLive do
     :breakdown_service,
     :breakdown_agent,
     :breakdown_user,
-    :member_models,
     :agent_ranking,
     :provider_ranking
   ]
@@ -131,6 +132,8 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:sort_direction, :desc)
       |> assign(:chart_metric, "requests")
       |> assign(:overview_metric, "cost")
+      |> assign(:finops_metric, "cost")
+      |> assign(:finops_scatter_y, "cpr")
       |> assign(:list_search, "")
       |> assign(:stats_loading, true)
       |> assign(:load_error, false)
@@ -286,6 +289,7 @@ defmodule TokengateWeb.StatsLive do
   def period_target(%{live_action: :groups}), do: "/stats/profiles"
   def period_target(%{live_action: :services}), do: "/stats/services"
   def period_target(%{live_action: :users}), do: "/stats/users"
+  def period_target(%{live_action: :finops}), do: "/stats/finops"
   def period_target(_), do: "/stats/overview"
 
   # Buscador de los listados rankeados (Users, Models, Providers). El texto
@@ -337,10 +341,27 @@ defmodule TokengateWeb.StatsLive do
 
   def handle_event("set_overview_metric", _params, socket), do: {:noreply, socket}
 
-  # "Ver más" de los listados largos: Créditos (una clave por perfil de límites) y los
-  # detalles de proveedor y modelo (una clave por tabla). El conteo desplegado
-  # vive en `shown_counts`, así que cada listado se despliega por su cuenta sin
-  # recargar ni volver a consultar: las filas ya están en memoria.
+  # FinOps: métrica de la tendencia (costo / requests / $/req) y eje Y de la
+  # dispersión ($/req / caché). Todo es de presentación: las filas ya están
+  # cargadas en el socket y el render se recalcula sin tocar la DB.
+  def handle_event("set_finops_metric", %{"metric" => metric}, socket)
+      when metric in ~w(cost requests cpr) do
+    {:noreply, assign(socket, :finops_metric, metric)}
+  end
+
+  def handle_event("set_finops_metric", _params, socket), do: {:noreply, socket}
+
+  def handle_event("set_finops_scatter_y", %{"metric" => metric}, socket)
+      when metric in ~w(cpr cache) do
+    {:noreply, assign(socket, :finops_scatter_y, metric)}
+  end
+
+  def handle_event("set_finops_scatter_y", _params, socket), do: {:noreply, socket}
+
+  # "Ver más" de los listados largos: los detalles de proveedor y modelo (una
+  # clave por tabla). El conteo desplegado vive en `shown_counts`, así que cada
+  # listado se despliega por su cuenta sin recargar ni volver a consultar: las
+  # filas ya están en memoria.
   def handle_event("show_more", %{"key" => key}, socket) do
     {:noreply, show_more(socket, key)}
   end
@@ -943,6 +964,10 @@ defmodule TokengateWeb.StatsLive do
 
   defp cost_per_req_delta(_, _), do: nil
 
+  # Diferencia en puntos porcentuales del cache hit. Es un 0.0 REAL cuando las
+  # dos ventanas tienen entrada y ningún acierto — `Stats.cache_hit_pct/2`
+  # devuelve "0.0%" en ese caso, no "—" —, así que el delta sólo es nil cuando
+  # falta denominador en alguna de las dos ventanas.
   defp cache_hit_delta(
          %{prompt_tokens: cur_p} = cur,
          %{prompt_tokens: prev_p} = prev
@@ -1047,7 +1072,7 @@ defmodule TokengateWeb.StatsLive do
         # Con el período "Hoy" la gráfica de perfil horario mide el día UTC en
         # curso — la misma ventana que los KPI — y sale del agregado del día
         # (ver hour_usage_tasks/2), no del perfil del período.
-        index_admin_tasks(admin?, opts) ++
+        index_admin_tasks(admin?, params, opts) ++
           hour_usage_tasks(params, opts) ++
           [
             fn ->
@@ -1180,6 +1205,31 @@ defmodule TokengateWeb.StatsLive do
         [fn -> {:service_budgets, Budgets.list_service_budgets()} end] ++
           [fn -> {:breakdown_service, breakdown_by_service_if_admin(admin?, opts)} end]
 
+      :finops ->
+        # Economía del período en cuatro lecturas acotadas (overview, serie,
+        # capabilities y dispersión), todas de la misma ventana canónica. La
+        # ruta es admin-only; el guard mantiene el bundle coherente si la
+        # acción se reusara desde una vista con scope.
+        if params.user.global_role == "admin" do
+          # "Hoy"/"Ayer" se leen por hora: en el día, un punto por día no dice
+          # nada. El resto, por día.
+          granularity = if params.period in ["today", "yesterday"], do: :hour, else: :day
+
+          [
+            fn -> {:finops_overview, Rollup.finops_overview(opts)} end,
+            fn ->
+              {:finops_series,
+               Rollup.finops_subject_series(
+                 Keyword.merge(opts, granularity: granularity, timezone: params.timezone)
+               )}
+            end,
+            fn -> {:finops_request_types, Rollup.finops_request_type_breakdown(opts)} end,
+            fn -> {:finops_scatter, Rollup.finops_subject_scatter(opts)} end
+          ]
+        else
+          []
+        end
+
       _ ->
         []
     end
@@ -1253,11 +1303,10 @@ defmodule TokengateWeb.StatsLive do
   # Admin-only infra/org-wide queries on the index view. Ahora el Resumen solo
   # conserva el pico de concurrencia (admin): rankings y tiers viven en las
   # secciones models / groups / providers.
-  defp index_admin_tasks(true, opts) do
+  defp index_admin_tasks(true, params, opts) do
     [
       fn -> {:peak_concurrency, Rollup.peak_concurrency(nil, opts)} end,
-      fn -> {:daily_series, StatsQueries.daily_series_by_provider(opts)} end,
-      fn -> {:efficiency, Rollup.efficiency_summary(opts)} end,
+      daily_series_task(params, opts),
       fn ->
         {:top_agents,
          opts
@@ -1268,7 +1317,16 @@ defmodule TokengateWeb.StatsLive do
     ]
   end
 
-  defp index_admin_tasks(false, _opts), do: []
+  defp index_admin_tasks(false, _params, _opts), do: []
+
+  # La serie diaria sólo la pinta la tarjeta "Tendencia diaria por proveedor",
+  # que únicamente aparece en ventanas de varios días (week / 30d). Con
+  # "Hoy"/"Ayer" el Resumen dibuja el perfil horario, así que escanear el
+  # período por día era trabajo que el render tiraba en cada carga.
+  defp daily_series_task(%{period: period}, opts) when period in ["week", "30d"],
+    do: fn -> {:daily_series, StatsQueries.daily_series_by_provider(opts)} end
+
+  defp daily_series_task(_params, _opts), do: fn -> {:daily_series, []} end
 
   defp compute_top_consumers(opts) do
     users =
@@ -1351,12 +1409,9 @@ defmodule TokengateWeb.StatsLive do
       provider_metrics: empty_provider_metrics(),
       model_ranking: [],
       group: nil,
-      member: nil,
-      member_models: [],
       hour_usage_by_provider: [],
       model_provider_stacked: [],
       daily_series: [],
-      efficiency: nil,
       top_agents: [],
       top_consumers: [],
       busiest_hours: [],
@@ -1382,7 +1437,11 @@ defmodule TokengateWeb.StatsLive do
       router_sources: [],
       router_shadow_comparison: [],
       router_shadow_migrations: [],
-      router_shadow_selected_id: nil
+      router_shadow_selected_id: nil,
+      finops_overview: nil,
+      finops_series: [],
+      finops_request_types: [],
+      finops_scatter: []
     }
   end
 

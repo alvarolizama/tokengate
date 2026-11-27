@@ -39,6 +39,10 @@ defmodule TokengateWeb.SupervisedServicesLive do
   # Same window the card labels advertise ("30 días").
   @summary_period "30d"
 
+  # Events that do not touch service state: the app-wide sidebar timezone
+  # selector writes the user's own preference, never service data.
+  @allowed_events ["set-timezone"]
+
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
@@ -67,7 +71,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
     attach_hook(socket, :read_only, :handle_event, fn event, _params, socket ->
       # `set-timezone` is the app-wide sidebar selector: it writes the user's
       # own timezone, never service data, so it stays allowed here.
-      if event in ["set-timezone"] do
+      if event in @allowed_events do
         {:cont, socket}
       else
         {:halt, put_flash(socket, :error, gettext("This view is read-only."))}
@@ -136,9 +140,15 @@ defmodule TokengateWeb.SupervisedServicesLive do
     # One aggregate per service for the whole set, shared between every
     # supervisor looking at their page for ~5s (DashboardCache TTL): without
     # it, N supervisors with M services each would run N×M group-by queries.
+    #
+    # The key carries the SORTED id set: the same user's set can change (a
+    # service assigned while the page is open) and a key without it would serve
+    # the previous set's aggregates — rows for a service that is no longer
+    # theirs, or zeros for one just added — for the rest of the TTL.
     summaries =
       DashboardCache.fetch_or_compute(
-        {:supervised_services_summary, user.id, @summary_period, timezone},
+        {:supervised_services_summary, user.id, @summary_period, timezone,
+         Enum.sort(service_ids)},
         fn -> Rollup.service_summaries(service_ids, from: bounds.from, to: bounds.to) end
       )
 
@@ -165,7 +175,8 @@ defmodule TokengateWeb.SupervisedServicesLive do
         request_count: 0,
         error_count: 0,
         prompt_tokens: 0,
-        completion_tokens: 0
+        completion_tokens: 0,
+        cache_read_tokens: 0
       },
       fn row, acc ->
         %{
@@ -173,7 +184,8 @@ defmodule TokengateWeb.SupervisedServicesLive do
           request_count: acc.request_count + row.request_count,
           error_count: acc.error_count + row.error_count,
           prompt_tokens: acc.prompt_tokens + row.prompt_tokens,
-          completion_tokens: acc.completion_tokens + row.completion_tokens
+          completion_tokens: acc.completion_tokens + row.completion_tokens,
+          cache_read_tokens: acc.cache_read_tokens + (row.cache_read_tokens || 0)
         }
       end
     )
@@ -217,6 +229,14 @@ defmodule TokengateWeb.SupervisedServicesLive do
     do: gettext("Cap $%{amount}/month", amount: Decimal.to_string(limit))
 
   defp limit_label(_service), do: gettext("No budget") <> " " <> gettext("(top-ups only)")
+
+  # "$0.0012 /req · cache 42.5%": la lectura de eficiencia del servicio — con
+  # la que el supervisor compara servicios y contra su total.
+  defp efficiency_label(stats) do
+    "#{Stats.cost_per_request(stats.cost_usd, stats.request_count)} /req · " <>
+      gettext("cache") <>
+      " " <> Stats.cache_hit_pct(stats.prompt_tokens, stats.cache_read_tokens)
+  end
 
   ## Render --------------------------------------------------------------
 
@@ -282,6 +302,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
                 value={format_cost(@totals.cost_usd)}
                 icon="hero-currency-dollar"
                 accent="success"
+                sub={efficiency_label(@totals)}
               />
               <.metric_tile
                 id="totals-requests"
@@ -397,7 +418,12 @@ defmodule TokengateWeb.SupervisedServicesLive do
                 >
                   {format_cost(summary_for(@summaries, service.id).cost_usd)}
                 </span>
-                <p class="text-[10px] text-base-content/40 whitespace-nowrap">{gettext("30 days")}</p>
+                <p
+                  class="text-[10px] text-base-content/40 whitespace-nowrap tabular-nums"
+                  id={"metric-efficiency-#{service.id}"}
+                >
+                  {efficiency_label(summary_for(@summaries, service.id))}
+                </p>
               </:col>
               <:col :let={service} label={gettext("Requests 30d")} align="right">
                 <% stats = summary_for(@summaries, service.id) %>

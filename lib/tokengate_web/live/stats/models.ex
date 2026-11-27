@@ -68,6 +68,9 @@ defmodule TokengateWeb.StatsLive.Models do
               |> Enum.map(& &1.model_id)
               |> Enum.with_index(1)
               |> Map.new() %>
+            <%!-- El denominador del Share es el total del PERÍODO (lista
+                 completa), no el del filtro; el pie suma lo visible. --%>
+            <% period_total = Stats.breakdown_total(@breakdown_model) %>
             <% rows = Enum.filter(@breakdown_model, &Stats.matches?(@list_search, &1.model_name)) %>
             <% model_total = Stats.breakdown_total(rows) %>
             <% list_rows = Stats.shown_rows(rows, "model-list", @shown_counts, @per_page) %>
@@ -105,11 +108,11 @@ defmodule TokengateWeb.StatsLive.Models do
                   <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
-                  <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Share")} align="right">
                   <span class="font-mono tabular-nums text-base-content/70">
-                    {Stats.cost_share_pct(row.cost_usd, model_total.cost_usd)}%
+                    {Stats.cost_share_pct(row.cost_usd, period_total.cost_usd)}%
                   </span>
                 </:col>
                 <:col :let={row} label={gettext("Cost / req")} align="right">
@@ -180,7 +183,7 @@ defmodule TokengateWeb.StatsLive.Models do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(model_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(model_total.cost_usd)}</span>
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Tokens in")}</span>
@@ -223,7 +226,7 @@ defmodule TokengateWeb.StatsLive.Models do
          market_input_price_per_1m: %Decimal{} = inp,
          market_output_price_per_1m: %Decimal{} = out
        }) do
-    "$#{Stats.format_decimal(Decimal.round(inp, 2))} / $#{Stats.format_decimal(Decimal.round(out, 2))}"
+    "#{Stats.money(Decimal.round(inp, 2))} / #{Stats.money(Decimal.round(out, 2))}"
   end
 
   defp market_price_label(_), do: "—"

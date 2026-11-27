@@ -52,6 +52,7 @@ defmodule TokengateWeb.DashboardLive do
   alias Tokengate.Repo
   alias TokengateWeb.KpiHelpers
   alias TokengateWeb.ModelPicker
+  alias TokengateWeb.StatsHelpers, as: Stats
 
   @pubsub Tokengate.PubSub
   @metrics_topic "metrics:updated"
@@ -1020,33 +1021,19 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   ## Template helpers (rendered in the .heex template) -------------------
+  #
+  # Every formatter below DELEGATES to the shared helpers: the dashboard, the
+  # `/stats` hub and the drilled-down details must render the same number the
+  # same way, so a copy that drifts is a bug in three pages at once.
 
-  def format_decimal(%Decimal{} = d) do
-    d
-    |> Decimal.round(4)
-    |> Decimal.to_string()
-  end
+  @doc "Adaptive-precision decimals — `TokengateWeb.StatsHelpers.format_decimal/1`."
+  def format_decimal(value), do: Stats.format_decimal(value)
 
-  def format_decimal(n) when is_number(n), do: to_string(n)
-  def format_decimal(_), do: "0"
-
-  def format_number(n) when is_integer(n), do: with_thousands_separator(n)
-  def format_number(n) when is_float(n), do: Float.to_string(n)
-  def format_number(_), do: "0"
+  @doc "Thousands-separated counters — `TokengateWeb.StatsHelpers.format_number/1`."
+  def format_number(n), do: Stats.format_number(n)
 
   @doc "Compact notation for big counters: 32.7K, 1.2M, 3.4B."
-  def format_compact(n) when is_integer(n) and n >= 1_000_000_000,
-    do: "#{Float.round(n / 1_000_000_000, 1)}B"
-
-  def format_compact(n) when is_integer(n) and n >= 1_000_000,
-    do: "#{Float.round(n / 1_000_000, 1)}M"
-
-  def format_compact(n) when is_integer(n) and n >= 1_000,
-    do: "#{Float.round(n / 1_000, 1)}K"
-
-  def format_compact(n) when is_integer(n), do: Integer.to_string(n)
-  def format_compact(n) when is_float(n), do: format_compact(trunc(n))
-  def format_compact(_), do: "0"
+  def format_compact(n), do: Stats.format_compact(n)
 
   @doc """
   Compact value for the cache KPI: shows the sum (read + creation) when
@@ -1057,26 +1044,17 @@ defmodule TokengateWeb.DashboardLive do
       do: "—"
 
   def format_cache_value(read, creation) do
-    format_compact((read || 0) + (creation || 0))
+    Stats.format_compact((read || 0) + (creation || 0))
   end
 
-  @doc "Delegates to `KpiHelpers.cache_hit_rate/2` so templates can call it locally."
+  @doc """
+  Canonical cache hit rate — `KpiHelpers.cache_hit_rate/2` (nil without input
+  traffic, so the slot reads "—" instead of a misleading 0.0%).
+  """
   def cache_hit_rate(read, prompt), do: KpiHelpers.cache_hit_rate(read, prompt)
 
   @doc "Formats a hit rate for the cache slot subtitle."
   def format_hit_rate(rate), do: KpiHelpers.format_hit_rate(rate)
-
-  defp with_thousands_separator(n) do
-    digits = Integer.to_string(abs(n))
-
-    grouped =
-      digits
-      |> String.reverse()
-      |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
-      |> String.reverse()
-
-    if n < 0, do: "-" <> grouped, else: grouped
-  end
 
   def format_tps(nil), do: "—"
   def format_tps(n) when is_float(n), do: Float.round(n, 1) |> Float.to_string()
