@@ -37,9 +37,14 @@ defmodule TokengateWeb.ServiceStatsBody do
   alias TokengateWeb.KpiHelpers
   alias TokengateWeb.StatsHelpers
   alias TokengateWeb.StatsHelpers, as: Stats
+  alias TokengateWeb.StatsLive.FinopsCharts
 
   @page_size 50
   @stats_task_timeout_ms 125_000
+  # El bloque realtime NO se lee dentro del agregado cacheado del periodo: su
+  # ventana de 5 minutos cambia más rápido que el TTL del summary, así que va
+  # en su propia query con su propio TTL corto.
+  @realtime_ttl_ms 2_000
 
   ## Panel ------------------------------------------------------------------
 
@@ -62,6 +67,7 @@ defmodule TokengateWeb.ServiceStatsBody do
   attr :period, :string, required: true
   attr :period_target, :string, required: true
   attr :timezone, :string, required: true
+  attr :key_filter, :string, default: "all"
   attr :form, :any, required: true
   attr :streams, :map, required: true
   attr :has_more, :boolean, default: false
@@ -74,9 +80,17 @@ defmodule TokengateWeb.ServiceStatsBody do
   attr :stats_loading, :boolean, default: false
   attr :tab, :string, default: "overview"
   attr :usage_series, :list, default: []
+  attr :spend_total_usd, :any, default: nil
+  attr :finops_summary, :any, default: nil
+  attr :finops_series, :list, default: []
+  attr :finops_prev_overview, :any, default: nil
+  attr :tabs, :list, required: true
   slot :config, doc: "contenidos extra del tab `Config` (config read-only del supervisado)"
+  slot :finops, doc: "contenidos extra al final del tab `FinOps` (opcional)"
 
   def panel(assigns) do
+    assigns = assign(assigns, :finops_overview, finops_overview(assigns.finops_summary))
+
     ~H"""
     <div class="space-y-6">
       <%!-- Toolbar: scope de key + periodo en una línea, tabs debajo del borde
@@ -123,18 +137,18 @@ defmodule TokengateWeb.ServiceStatsBody do
               target={@period_target}
               period={@period}
               id="period-selector"
-              extra_query={tab_extra_query(@tab)}
+              extra_query={tab_extra_query(@tab, @key_filter)}
             />
           </div>
           <div class="mt-2 -mb-1.5 tabs tabs-bordered" id="service-stats-tabs" role="tablist">
             <.link
-              :for={{value, label} <- panel_tabs(@config != [])}
+              :for={value <- @tabs}
               id={"tab-#{value}"}
-              patch={"#{@period_target}?tab=#{value}&period=#{@period}"}
+              patch={"#{@period_target}?tab=#{value}&period=#{@period}#{key_query(@key_filter)}"}
               role="tab"
               class={["tab tab-sm font-medium", tab_active?(@tab, value) && "tab-active"]}
             >
-              {label}
+              {tab_label(value)}
             </.link>
           </div>
         </div>
@@ -175,7 +189,7 @@ defmodule TokengateWeb.ServiceStatsBody do
             accent="accent"
           >
             {fmt_money(@summary.total_cost_usd)}
-            <:sub>{cost_sub_text(@summary, @service)}</:sub>
+            <:sub>{cost_sub_text(@summary, @service, @period)}</:sub>
           </.kpi_card>
           <.kpi_card
             id="kpi-input"
@@ -322,7 +336,7 @@ defmodule TokengateWeb.ServiceStatsBody do
                 </:col>
                 <:col :let={row} label={gettext("% of spend")} align="right">
                   <span class="text-xs tabular-nums text-base-content/60">
-                    {spend_share(row.stats.total_cost_usd, key_rows_total_cost(@key_rows))}
+                    {spend_share(row.stats.total_cost_usd, spend_total(@spend_total_usd, @key_rows))}
                   </span>
                 </:col>
                 <:col :let={row} label={gettext("Last request")}>
@@ -458,6 +472,23 @@ defmodule TokengateWeb.ServiceStatsBody do
           </div>
         </div>
       </div>
+      <%!-- ============ TAB: FinOps ============ --%>
+      <div :if={@tab == "finops"} class="space-y-6" id="service-stats-finops">
+        <.finops_tab
+          overview={@finops_overview}
+          prev_overview={@finops_prev_overview}
+          summary={@finops_summary}
+          series={@finops_series}
+          service={@service}
+          period={@period}
+          key_filter={@key_filter}
+          timezone={@timezone}
+        />
+
+        <div :if={@finops != []}>
+          {render_slot(@finops)}
+        </div>
+      </div>
       <%!-- ============ TAB: Live logs ============ --%>
       <div :if={@tab == "logs"} class="space-y-6" id="service-stats-logs-tab">
         <%!-- Filter form --%>
@@ -554,6 +585,370 @@ defmodule TokengateWeb.ServiceStatsBody do
     """
   end
 
+  ## FinOps tab ------------------------------------------------------------
+
+  attr :overview, :any, required: true
+  attr :prev_overview, :any, default: nil
+  attr :summary, :any, default: nil
+  attr :series, :list, required: true
+  attr :service, :map, required: true
+  attr :period, :string, required: true
+  attr :key_filter, :string, required: true
+  attr :timezone, :string, required: true
+
+  # Economía del servicio scoped al periodo y a la key elegida: unit economics
+  # ($/req, $/1M tok, Out/In, burn), impuestos/desperdicio (error, thinking,
+  # caché) y la eficiencia por key y por modelo. La tendencia es la MISMA serie
+  # de `Rollup.service_finops_series/2` que alimenta el chart del tab — una
+  # lectura por bloque, nada derivado de agregados de otra ventana.
+  defp finops_tab(assigns) do
+    overview = assigns.overview
+    prev = assigns.prev_overview
+
+    avg_daily =
+      (assigns.summary && assigns.summary[:avg_daily_cost_usd]) || Decimal.new(0)
+
+    projection = Decimal.mult(avg_daily, Decimal.new(30))
+
+    burn_sub =
+      case days_to_cap(assigns.service, avg_daily) do
+        nil ->
+          gettext("proj %{proj}/30d", proj: fmt_money(projection))
+
+        days ->
+          gettext("proj %{proj}/30d · ~%{days}d to the cap",
+            proj: fmt_money(projection),
+            days: days
+          )
+      end
+
+    by_key = (assigns.summary && assigns.summary.by_key) || []
+    by_model = (assigns.summary && assigns.summary.by_model) || []
+
+    chart_series = Enum.map(assigns.series, fn row -> Map.put(row, :subject_type, "service") end)
+
+    assigns =
+      assigns
+      |> assign(:overview, overview)
+      |> assign(:avg_daily, avg_daily)
+      |> assign(:burn_sub, burn_sub)
+      |> assign(:cpr_delta, cpr_delta(overview, prev))
+      |> assign(:cpr_requests, overview.requests)
+      |> assign(:out_in, Stats.out_in_ratio(overview.completion_tokens, overview.prompt_tokens))
+      |> assign(:avg_in, avg_int(overview.prompt_tokens, overview.requests))
+      |> assign(:avg_out, avg_int(overview.completion_tokens, overview.requests))
+      |> assign(:error_share, Stats.cost_share_pct(overview.error_cost_usd, overview.cost_usd))
+      |> assign(:think_share, Stats.cost_share_pct(overview.think_cost_usd, overview.cost_usd))
+      |> assign(:by_key, by_key)
+      |> assign(:by_model, by_model)
+      |> assign(:chart_series, chart_series)
+      |> assign(:hourly?, assigns.period in ["today", "yesterday"])
+
+    ~H"""
+    <div class="space-y-6">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
+            {gettext("FinOps")}
+          </h2>
+          <p class="text-xs text-base-content/50">
+            {gettext(
+              "Unit economics, waste and efficiency · %{period} · %{scope}",
+              period: Stats.period_label(@period),
+              scope:
+                if(@key_filter == "all", do: gettext("all API keys"), else: gettext("one API key"))
+            )}
+          </p>
+        </div>
+        <span class="font-mono text-sm font-semibold tabular-nums">
+          {Stats.money(@overview.cost_usd)} · {Stats.format_number(@overview.requests)} req
+        </span>
+      </div>
+
+      <%!-- Unit economics --%>
+      <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <.kpi_card
+          id="finops-cpr"
+          label={gettext("$/req")}
+          icon="hero-currency-dollar"
+          accent="primary"
+        >
+          {Stats.cost_per_request(@overview.cost_usd, @overview.requests)}
+          <:sub>
+            <%= if @cpr_delta do %>
+              <span class={cpr_delta_class(@cpr_delta)}>
+                {KpiHelpers.delta_arrow(@cpr_delta)} {KpiHelpers.abs_float(@cpr_delta)}%
+              </span>
+              {gettext("vs previous period")}
+            <% else %>
+              {format_number(@cpr_requests)} {gettext("requests")}
+            <% end %>
+          </:sub>
+        </.kpi_card>
+        <.kpi_card id="finops-cpm" label={gettext("$/1M tok")} icon="hero-calculator" accent="accent">
+          {Stats.effective_cost_per_1m(
+            @overview.cost_usd,
+            @overview.prompt_tokens,
+            @overview.completion_tokens
+          )}
+          <:sub>
+            {Stats.format_compact(@overview.prompt_tokens)} in / {Stats.format_compact(
+              @overview.completion_tokens
+            )} out
+          </:sub>
+        </.kpi_card>
+        <.kpi_card
+          id="finops-out-in"
+          label={gettext("Out/In ratio")}
+          icon="hero-arrows-right-left"
+          accent="primary"
+        >
+          {@out_in}
+          <:sub>
+            {gettext("avg %{input} in / %{output} out per request",
+              input: Stats.format_compact(@avg_in),
+              output: Stats.format_compact(@avg_out)
+            )}
+          </:sub>
+        </.kpi_card>
+        <.kpi_card id="finops-burn" label={gettext("Daily burn")} icon="hero-fire" accent="warning">
+          {Stats.money(@avg_daily)}
+          <:sub>{@burn_sub}</:sub>
+        </.kpi_card>
+      </div>
+
+      <%!-- Waste & taxes --%>
+      <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+        <.kpi_card
+          id="finops-error-waste"
+          label={gettext("Error waste")}
+          icon="hero-exclamation-triangle"
+          accent="error"
+        >
+          {Stats.money(@overview.error_cost_usd)}
+          <:sub>
+            {@error_share}% {gettext("of spend")} · {format_number(@overview.error_requests)} {gettext(
+              "failed"
+            )}
+          </:sub>
+        </.kpi_card>
+        <.kpi_card
+          id="finops-thinking-tax"
+          label={gettext("Thinking tax")}
+          icon="hero-light-bulb"
+          accent="accent"
+        >
+          {Stats.money(@overview.think_cost_usd)}
+          <:sub>
+            {@think_share}% {gettext("of spend")} · {format_number(@overview.think_requests)} {gettext(
+              "thinking"
+            )}
+          </:sub>
+        </.kpi_card>
+        <.kpi_card
+          id="finops-prompt-cache"
+          label={gettext("Prompt cache")}
+          icon="hero-circle-stack"
+          accent="neutral"
+        >
+          {Stats.cache_hit_pct(@overview.prompt_tokens, @overview.cache_read_tokens)}
+          <:sub>
+            {Stats.format_compact(@overview.cache_read_tokens)} {gettext("read")} · {Stats.format_compact(
+              @overview.cache_creation_tokens
+            )} {gettext("write")}
+          </:sub>
+        </.kpi_card>
+        <.kpi_card
+          id="finops-local-cache"
+          label={gettext("Local cache")}
+          icon="hero-bolt"
+          accent="success"
+        >
+          {format_number(@overview.local_cache_hits)}
+          <:sub>{gettext("hits served at $0")}</:sub>
+        </.kpi_card>
+        <.kpi_card
+          id="finops-cap"
+          label={gettext("Cap vs top-ups")}
+          icon="hero-banknotes"
+          accent="neutral"
+        >
+          {limit_label(@service)}
+          <:sub>
+            {Stats.money(@overview.topup_cost_usd)} · {format_number(@overview.topup_requests)} {gettext(
+              "top-ups"
+            )}
+          </:sub>
+        </.kpi_card>
+      </div>
+
+      <FinopsCharts.dual_trend_chart
+        id="finops-trend-chart"
+        title={gettext("Spend trend")}
+        hint={
+          if @hourly?,
+            do: gettext("hourly buckets · spend, errors and thinking tax of this service"),
+            else: gettext("daily buckets · spend, errors and thinking tax of this service")
+        }
+        series={@chart_series}
+        metric="cost"
+        single_subject?={true}
+        crosshair?={false}
+      />
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-4">
+            <h3 class="text-sm font-semibold mb-2">{gettext("Efficiency by API key")}</h3>
+            <div class="overflow-x-auto">
+              <.table
+                id="finops-key-table"
+                rows={@by_key}
+                row_id={fn row -> "finops-key-#{row.api_key_id || "unattributed"}" end}
+              >
+                <:col :let={row} label={gettext("Key")}>
+                  <span class="font-mono text-xs">{row.label}</span>
+                </:col>
+                <:col :let={row} label={gettext("Requests")} align="right">
+                  <span class="text-xs tabular-nums">{format_number(row.request_count)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Cost")} align="right">
+                  <span class="font-mono text-xs">{Stats.money(row.cost_usd)}</span>
+                </:col>
+                <:col :let={row} label={gettext("$/req")} align="right">
+                  <span class="text-xs tabular-nums">
+                    {Stats.cost_per_request(row.cost_usd, row.request_count)}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("$/1M tok")} align="right">
+                  <span class="text-xs tabular-nums">
+                    {Stats.effective_cost_per_1m(
+                      row.cost_usd,
+                      row.prompt_tokens,
+                      row.completion_tokens
+                    )}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Cache %")} align="right">
+                  <span class="text-xs tabular-nums">
+                    {Stats.cache_hit_pct(row.prompt_tokens, row.cache_read_tokens)}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Error waste")} align="right">
+                  <span class="text-xs tabular-nums text-error">{Stats.money(row.error_cost_usd)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Thinking tax")} align="right">
+                  <span class="text-xs tabular-nums text-accent">
+                    {Stats.money(row.think_cost_usd)}
+                  </span>
+                </:col>
+                <:empty>
+                  <p class="text-sm text-base-content/40 py-4 text-center">
+                    {gettext("No requests in this period.")}
+                  </p>
+                </:empty>
+              </.table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-4">
+            <h3 class="text-sm font-semibold mb-2">{gettext("Efficiency by model")}</h3>
+            <div class="overflow-x-auto">
+              <.table
+                id="finops-model-table"
+                rows={@by_model}
+                row_id={fn row -> "finops-model-#{finops_model_slug(row.model_name)}" end}
+              >
+                <:col :let={row} label={gettext("Model")}>
+                  <span class="font-mono text-xs">{row.model_name}</span>
+                </:col>
+                <:col :let={row} label={gettext("Requests")} align="right">
+                  <span class="text-xs tabular-nums">{format_number(row.request_count)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Cost")} align="right">
+                  <span class="font-mono text-xs">{Stats.money(row.cost_usd)}</span>
+                </:col>
+                <:col :let={row} label={gettext("$/req")} align="right">
+                  <span class="text-xs tabular-nums">
+                    {Stats.cost_per_request(row.cost_usd, row.request_count)}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("$/1M tok")} align="right">
+                  <span class="text-xs tabular-nums">
+                    {Stats.effective_cost_per_1m(
+                      row.cost_usd,
+                      row.prompt_tokens,
+                      row.completion_tokens
+                    )}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Cache %")} align="right">
+                  <span class="text-xs tabular-nums">
+                    {Stats.cache_hit_pct(row.prompt_tokens, row.cache_read_tokens)}
+                  </span>
+                </:col>
+                <:col :let={row} label={gettext("Error waste")} align="right">
+                  <span class="text-xs tabular-nums text-error">{Stats.money(row.error_cost_usd)}</span>
+                </:col>
+                <:col :let={row} label={gettext("Thinking tax")} align="right">
+                  <span class="text-xs tabular-nums text-accent">
+                    {Stats.money(row.think_cost_usd)}
+                  </span>
+                </:col>
+                <:empty>
+                  <p class="text-sm text-base-content/40 py-4 text-center">
+                    {gettext("No requests in this period.")}
+                  </p>
+                </:empty>
+              </.table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp cpr_delta(_overview, nil), do: nil
+
+  defp cpr_delta(overview, prev) do
+    with true <- overview.requests > 0,
+         true <- Map.get(prev, :requests, 0) > 0,
+         prev_cpr when prev_cpr > 0 <-
+           Decimal.to_float(Map.get(prev, :cost_usd, Decimal.new(0))) / prev.requests do
+      cur_cpr = Decimal.to_float(overview.cost_usd) / overview.requests
+      Float.round((cur_cpr - prev_cpr) / prev_cpr * 100, 1)
+    else
+      _ -> nil
+    end
+  end
+
+  # $/req sube → peor (rojo); baja → mejor (verde); plano → neutro.
+  defp cpr_delta_class(delta) when is_number(delta) and delta > 0, do: "text-error"
+  defp cpr_delta_class(delta) when is_number(delta) and delta < 0, do: "text-success"
+  defp cpr_delta_class(_delta), do: "text-base-content/50"
+
+  # La fila de modelo sin `model_id` (o modelo ya borrado) llega con nombre
+  # "—": su id de DOM es el bucket "unknown", nunca un guion suelto.
+  defp finops_model_slug(name) when name in [nil, "—"], do: "unknown"
+  defp finops_model_slug(name), do: model_row_slug(name)
+
+  defp avg_int(_tokens, requests) when requests in [0, nil], do: 0
+  defp avg_int(tokens, requests), do: div(tokens || 0, requests)
+
+  # Días hasta agotar el techo mensual al burn actual (aprox: cap / $/día).
+  # Sin techo (crédito ilimitado o solo top-ups) no hay "days to cap".
+  defp days_to_cap(%{monthly_spend_limit_usd: %Decimal{} = cap}, %Decimal{} = avg_daily) do
+    if Decimal.compare(avg_daily, Decimal.new(0)) == :gt and
+         Decimal.compare(cap, Decimal.new(0)) == :gt do
+      cap |> Decimal.div(avg_daily) |> Decimal.round(0, :half_up) |> Decimal.to_integer()
+    end
+  end
+
+  defp days_to_cap(_service, _avg_daily), do: nil
+
   ## Data loading ---------------------------------------------------------
 
   @doc """
@@ -581,6 +976,7 @@ defmodule TokengateWeb.ServiceStatsBody do
       period: assigns.period,
       timezone: assigns.timezone,
       key_filter: assigns.key_filter,
+      tab: Map.get(assigns, :tab, "overview"),
       locale: Gettext.get_locale(TokengateWeb.Gettext)
     }
   end
@@ -633,20 +1029,57 @@ defmodule TokengateWeb.ServiceStatsBody do
       Task.async(fn ->
         DashboardCache.fetch_or_compute(
           {:service_summary_core, service_id, period, timezone, key_filter},
-          fn -> Logs.service_summary_core(service_id, summary_opts) end
+          # `:realtime_5min` NO viaja dentro del agregado cacheado: su ventana
+          # cambia cada segundo y el TTL del summary la congelaría. Se lee
+          # aparte (`realtime_5min/3`, TTL ~2s) y se inyecta abajo.
+          fn ->
+            Logs.service_summary_core(service_id, summary_opts) |> Map.delete(:realtime_5min)
+          end
         )
       end)
+
+    # Query aparte para la ventana rodante de 5 min: mismo scope de servicio y
+    # key, TTL corto propio (2s), así el KPI "en 5 min" nunca queda pegado a la
+    # foto del periodo.
+    realtime_task =
+      Task.async(fn -> realtime_5min(service_id, timezone, key_filter) end)
 
     usage_series_task =
       Task.async(fn ->
         usage_series_rows(service_id, period, timezone, range, key_filter)
       end)
 
-    [key_stats, model_key_stats, summary_core, usage_series] =
+    finops? = Map.get(params, :tab) == "finops"
+
+    finops_tasks =
+      if finops? do
+        [
+          Task.async(fn -> finops_summary(service_id, period, timezone, key_filter, range) end),
+          Task.async(fn -> finops_series(service_id, period, timezone, key_filter, range) end),
+          Task.async(fn -> finops_prev_overview(service_id, period, timezone, key_filter) end)
+        ]
+      else
+        []
+      end
+
+    [key_stats, model_key_stats, summary_core, realtime_block, usage_series | finops_results] =
       Task.await_many(
-        [key_stats_task, model_key_stats_task, summary_core_task, usage_series_task],
+        [
+          key_stats_task,
+          model_key_stats_task,
+          summary_core_task,
+          realtime_task,
+          usage_series_task
+        ] ++
+          finops_tasks,
         @stats_task_timeout_ms
       )
+
+    {finops_snapshot, finops_chart, finops_prev} =
+      case finops_results do
+        [snapshot, chart, prev] -> {snapshot, chart, prev}
+        [] -> {nil, [], nil}
+      end
 
     known_ids = MapSet.new(api_keys, & &1.id)
 
@@ -680,14 +1113,88 @@ defmodule TokengateWeb.ServiceStatsBody do
     summary =
       summary_core
       |> Map.put(:top_models, top_models_from_model_key_stats(model_key_stats, key_filter))
+      |> Map.put(:realtime_5min, realtime_block)
       |> Map.merge(cost_pacing(summary_core, from, to))
 
     %{
       summary: summary,
       key_rows: key_rows,
       model_breakdown: build_model_breakdown(model_key_stats, key_rows, key_filter),
-      usage_series: usage_series
+      usage_series: usage_series,
+      # Denominador de "% of spend": el gasto del servicio COMPLETO en el
+      # periodo (todas las keys), no la lista filtrada — con una key
+      # seleccionada la tabla mostraría 100% para su única fila.
+      spend_total_usd: key_rows_total_cost(all_key_rows),
+      finops_summary: finops_snapshot,
+      finops_series: finops_chart,
+      finops_prev_overview: finops_prev
     }
+  end
+
+  ## FinOps data ---------------------------------------------------------
+
+  # Todas las lecturas FinOps del tab comparten la MISMA ventana del periodo y
+  # el mismo scope de key que el resto del cuerpo, y pasan por `DashboardCache`
+  # (igual que el summary) para que dos vistas del mismo servicio no dupliquen
+  # las cuatro queries del agregado.
+  defp finops_summary(service_id, period, timezone, key_filter, range) do
+    DashboardCache.fetch_or_compute(
+      {:service_finops_summary, service_id, period, timezone, key_filter},
+      fn ->
+        Rollup.service_finops_summary(service_id, Keyword.put(range, :api_key_id, key_filter))
+      end
+    )
+  end
+
+  defp finops_series(service_id, period, timezone, key_filter, range) do
+    granularity = if period in ["today", "yesterday"], do: :hour, else: :day
+
+    opts =
+      range
+      |> Keyword.put(:granularity, granularity)
+      |> Keyword.put(:timezone, timezone)
+      |> Keyword.put(:api_key_id, key_filter)
+
+    DashboardCache.fetch_or_compute(
+      {:service_finops_series, service_id, period, timezone, key_filter},
+      fn -> Rollup.service_finops_series(service_id, opts) end
+    )
+  end
+
+  # Overview del periodo ANTERIOR: sólo para el delta de `$/req`. Una query
+  # (GROUPING SETS) en vez del summary completo — el resto del tab no compara.
+  defp finops_prev_overview(service_id, period, timezone, key_filter) do
+    %{from: from, to: to} = Periods.previous_period_bounds(period, timezone)
+
+    DashboardCache.fetch_or_compute(
+      {:service_finops_prev_overview, service_id, period, timezone, key_filter},
+      fn ->
+        Rollup.finops_overview(
+          service_id: service_id,
+          api_key_id: key_filter,
+          from: from,
+          to: to
+        ).overall
+      end
+    )
+  end
+
+  # Ventana rodante de 5 minutos, fuera del agregado del periodo y con TTL
+  # propio de 2s: lo que pasó en los últimos 5 min no puede quedar congelado
+  # detrás de la foto del periodo (que se cachea 5s y sólo cambia con el
+  # periodo/key).
+  defp realtime_5min(service_id, timezone, key_filter) do
+    DashboardCache.fetch_or_compute(
+      {:service_realtime_5min, service_id, timezone, key_filter},
+      fn ->
+        filters =
+          %{"service_id" => service_id}
+          |> maybe_key_filter(key_filter)
+
+        Logs.realtime_summary(filters, 300)
+      end,
+      ttl: @realtime_ttl_ms
+    )
   end
 
   # Promedio diario y days/bounds del período, para el sub de la KPI de costo
@@ -1499,44 +2006,93 @@ defmodule TokengateWeb.ServiceStatsBody do
 
   ## Tabs ------------------------------------------------------------------
 
-  defp tab_extra_query("overview"), do: ""
-  defp tab_extra_query(tab) when is_binary(tab), do: "&tab=#{tab}"
+  @doc """
+  Tabs del detalle de un servicio — ÚNICA fuente: los dos LiveViews derivan de
+  aquí su `@tabs` (lista blanca de `?tab=`) y el cuerpo compone los links.
 
-  defp panel_tabs(true),
-    do: [
-      {"overview", gettext("Overview")},
-      {"logs", gettext("Live logs")},
-      {"config", gettext("Config")}
-    ]
+    * `has_config?` — la vista supervisada agrega el tab Config (read-only);
+    * `has_finops?` — agrega el tab FinOps (economía del gasto).
+  """
+  def tabs(has_config?, has_finops?) do
+    ["overview"] ++
+      if(has_finops?, do: ["finops"], else: []) ++
+      ["logs"] ++ if(has_config?, do: ["config"], else: [])
+  end
 
-  defp panel_tabs(false),
-    do: [
-      {"overview", gettext("Overview")},
-      {"logs", gettext("Live logs")}
-    ]
+  defp tab_label("overview"), do: gettext("Overview")
+  defp tab_label("finops"), do: gettext("FinOps")
+  defp tab_label("logs"), do: gettext("Live logs")
+  defp tab_label("config"), do: gettext("Config")
+  defp tab_label(other), do: other
+
+  # Query string del selector de periodo: conserva el tab activo y el scope de
+  # key vigente, así cambiar de ventana no devuelve al Overview ni pierde la
+  # key elegida.
+  defp tab_extra_query("overview", "all"), do: ""
+  defp tab_extra_query("overview", key_id), do: key_query(key_id)
+  defp tab_extra_query(tab, "all") when is_binary(tab), do: "&tab=#{tab}"
+  defp tab_extra_query(tab, key_id) when is_binary(tab), do: "&tab=#{tab}#{key_query(key_id)}"
+
+  defp key_query("all"), do: ""
+  defp key_query(key_id) when is_binary(key_id), do: "&key_id=#{key_id}"
+  defp key_query(_), do: ""
 
   defp tab_active?(tab, value), do: tab == value
 
-  ## KPI subs ---------------------------------------------------------------
+  ## Defaults ---------------------------------------------------------------
 
-  # Sub de la KPI de costo: para un PM la pregunta es "¿cada cuánto va?" —
-  # promedio diario y proyección a 30d (gasto ilimitado) o % del techo
-  # mensual (budget acotado). Ventanas cerradas (yesterday) o de un día
-  # (today) no proyectan: conservan el conteo de requests.
-  defp cost_sub_text(summary, %{unlimited_spend: true}) do
-    if summary[:avg_daily_cost_usd] && summary[:period_days] && summary.period_days >= 1 do
-      proj = Decimal.mult(summary.avg_daily_cost_usd, Decimal.new(30))
-
-      gettext("$%{daily}/day avg · proj %{proj}/30d",
-        daily: fmt_money(summary.avg_daily_cost_usd),
-        proj: fmt_money(proj)
-      )
-    else
-      safe_sub_count(summary.request_count, " " <> gettext("reqs"))
-    end
+  @doc """
+  Bloque cero del tab FinOps (misma forma que `Rollup.service_finops_summary/2`):
+  permite montar la vista sin `nil` antes de la primera carga async.
+  """
+  def default_finops_summary do
+    %{
+      overview: zero_finops_block(),
+      by_request_type: [],
+      by_key: [],
+      by_model: []
+    }
   end
 
-  defp cost_sub_text(summary, %{monthly_spend_limit_usd: %Decimal{} = cap}) do
+  defp finops_overview(nil), do: zero_finops_block()
+  defp finops_overview(%{overview: overview}), do: overview
+  defp finops_overview(block) when is_map(block), do: block
+
+  defp zero_finops_block do
+    %{
+      requests: 0,
+      cost_usd: Decimal.new(0),
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      error_requests: 0,
+      error_cost_usd: Decimal.new(0),
+      fallback_recovered_count: 0,
+      think_requests: 0,
+      think_cost_usd: Decimal.new(0),
+      local_cache_hits: 0,
+      router_decision_cost_usd: Decimal.new(0),
+      prompt_tokens_saved_est: 0,
+      topup_requests: 0,
+      topup_cost_usd: Decimal.new(0)
+    }
+  end
+
+  ## KPI subs ---------------------------------------------------------------
+
+  # Sub de la KPI de costo.
+  #
+  # "% del techo mensual" SOLO se lee cuando el periodo ES un mes calendario
+  # ("month"/"last_month"): el techo es mensual, así que comparar el gasto de
+  # una semana o de 30 días rodantes contra él da un porcentaje que no
+  # significa nada. En el resto de periodos el sub es burn diario + proyección
+  # a 30d (gasto ilimitado) — la pregunta real del PM: "¿a qué ritmo va?".
+  # Ventanas cerradas de un día (yesterday) no proyectan: conservan el conteo.
+  defp cost_sub_text(summary, %{unlimited_spend: true}, _period), do: burn_sub(summary)
+
+  defp cost_sub_text(summary, %{monthly_spend_limit_usd: %Decimal{} = cap}, period)
+       when period in ["month", "last_month"] do
     if summary[:avg_daily_cost_usd] && Decimal.compare(cap, Decimal.new(0)) == :gt do
       pct =
         Decimal.mult(Decimal.div(summary.total_cost_usd, cap), Decimal.new(100))
@@ -1548,11 +2104,29 @@ defmodule TokengateWeb.ServiceStatsBody do
         daily: fmt_money(summary.avg_daily_cost_usd)
       )
     else
-      safe_sub_count(summary.request_count, " " <> gettext("reqs"))
+      requests_sub(summary)
     end
   end
 
-  defp cost_sub_text(summary, _service),
+  defp cost_sub_text(summary, %{monthly_spend_limit_usd: %Decimal{}}, _period),
+    do: burn_sub(summary)
+
+  defp cost_sub_text(summary, _service, _period), do: requests_sub(summary)
+
+  defp burn_sub(summary) do
+    if summary[:avg_daily_cost_usd] && summary[:period_days] && summary.period_days >= 1 do
+      proj = Decimal.mult(summary.avg_daily_cost_usd, Decimal.new(30))
+
+      gettext("%{daily}/day · proj %{proj}/30d",
+        daily: fmt_money(summary.avg_daily_cost_usd),
+        proj: fmt_money(proj)
+      )
+    else
+      requests_sub(summary)
+    end
+  end
+
+  defp requests_sub(summary),
     do: safe_sub_count(summary.request_count, " " <> gettext("reqs"))
 
   # Sub de la KPI de errores: la tasa del período (4xx+5xx / requests), no la
@@ -1598,6 +2172,12 @@ defmodule TokengateWeb.ServiceStatsBody do
   defp key_rows_total_cost(key_rows) do
     Enum.reduce(key_rows, Decimal.new(0), &Decimal.add(&1.stats.total_cost_usd, &2))
   end
+
+  # Denominador de "% of spend": el gasto del servicio COMPLETO en el periodo
+  # (assign que manda la carga). Si no vino (render aislado), la suma de las
+  # filas visibles — nunca una lista recortada por el selector de key.
+  defp spend_total(%Decimal{} = total, _key_rows), do: total
+  defp spend_total(_total, key_rows), do: key_rows_total_cost(key_rows)
 
   # "53.5%" del gasto total; sin total (período vacío) → "—" para no leer
   # como gasto cero.

@@ -657,6 +657,34 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
       assert has_element?(view, "#model-breakdown-pivot-model")
       assert has_element?(view, "#supervised-service-readonly")
     end
+
+    test "the finops tab is a patch-only tab of the shared read-only body", %{conn: conn} do
+      %{user: user, password: password} = register()
+      service = service() |> supervised(user)
+
+      {:ok, _} =
+        log_for(service, %{
+          model_requested: "finops-model",
+          prompt_tokens: 1_000,
+          completion_tokens: 500,
+          cache_read_tokens: 250,
+          provider_cost_usd: Decimal.new("0.40")
+        })
+
+      conn = login(conn, user, password)
+      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}?tab=finops")
+      wait_loaded(view)
+
+      assert has_element?(view, "#tab-finops.tab-active")
+      assert has_element?(view, "#service-stats-finops")
+      assert render(element(view, "#finops-cpr")) =~ "$0.4"
+      assert has_element?(view, "#finops-trend-chart")
+      assert has_element?(view, "#finops-key-table")
+      # Sin model_id en el fixture, la fila de modelo es el bucket sin modelo.
+      assert has_element?(view, "#finops-model-unknown")
+      # Sin eventos nuevos: el tab es navegación `patch` pura.
+      assert assigns_of(view).tab == "finops"
+    end
   end
 
   # ----------------------------------------------------------------------

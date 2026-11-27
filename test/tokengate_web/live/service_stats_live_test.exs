@@ -406,6 +406,136 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
     end
   end
 
+  describe "finops tab" do
+    test "renders unit economics, waste & taxes, the trend and the efficiency tables", %{
+      conn: conn
+    } do
+      service = service_fixture()
+      key = key_fixture(service, %{"label" => "Alpha"})
+
+      {:ok, _} =
+        log_for(service, %{
+          api_key_id: key.id,
+          prompt_tokens: 1_000,
+          completion_tokens: 500,
+          cache_read_tokens: 400,
+          provider_cost_usd: Decimal.new("0.20")
+        })
+
+      {:ok, _} =
+        log_for(service, %{
+          api_key_id: key.id,
+          status_code: 500,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          provider_cost_usd: Decimal.new("0.10")
+        })
+
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}?tab=finops")
+      wait_loaded(view)
+
+      assert has_element?(view, "#tab-finops.tab-active")
+      assert has_element?(view, "#service-stats-finops")
+
+      # Unit economics: $0.30 en 2 requests → $0.15/req, Out/In 0.5x.
+      assert render(element(view, "#finops-cpr")) =~ "$0.15"
+      assert has_element?(view, "#finops-cpm")
+      assert render(element(view, "#finops-out-in")) =~ "0.5x"
+      assert has_element?(view, "#finops-burn")
+
+      # Waste & taxes: el 500 cuesta $0.10 y el cache hit 400/1000 = 40%.
+      assert render(element(view, "#finops-error-waste")) =~ "$0.1"
+      assert has_element?(view, "#finops-thinking-tax")
+      assert render(element(view, "#finops-prompt-cache")) =~ "40.0%"
+      assert has_element?(view, "#finops-local-cache")
+      assert has_element?(view, "#finops-cap")
+
+      # Tendencia y eficiencia por key/modelo (una fila real, no el empty).
+      # El log del fixture no lleva model_id: la fila de modelo es el bucket
+      # sin modelo ("unknown"), no un empty-state.
+      assert has_element?(view, "#finops-trend-chart")
+      assert has_element?(view, "#finops-key-#{key.id}")
+      assert has_element?(view, "#finops-model-unknown")
+    end
+
+    test "the key selector keeps the full-service total as the % of spend denominator", %{
+      conn: conn
+    } do
+      service = service_fixture()
+      key_a = key_fixture(service, %{"label" => "Alpha"})
+      key_b = key_fixture(service, %{"label" => "Beta"})
+
+      {:ok, _} = log_for(service, %{api_key_id: key_a.id})
+      {:ok, _} = log_for(service, %{api_key_id: key_b.id})
+
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      wait_loaded(view)
+
+      assert cell_text(view, "#api-key-row-#{key_a.id} td:nth-child(7)") == "50.0%"
+
+      view
+      |> form("#key-filter-form", %{"key_filter" => %{"key_id" => key_a.id}})
+      |> render_change()
+
+      wait_loaded(view)
+
+      # La fila visible mide contra el gasto del servicio COMPLETO, no contra
+      # la lista ya filtrada (que daría 100%).
+      assert cell_text(view, "#api-key-row-#{key_a.id} td:nth-child(7)") == "50.0%"
+    end
+
+    test "tab and period patch links carry the selected key", %{conn: conn} do
+      service = service_fixture()
+      key = key_fixture(service, %{"label" => "Beta"})
+      {:ok, _} = log_for(service, %{api_key_id: key.id})
+
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      wait_loaded(view)
+
+      view
+      |> form("#key-filter-form", %{"key_filter" => %{"key_id" => key.id}})
+      |> render_change()
+
+      wait_loaded(view)
+
+      assert render(element(view, "#tab-finops")) =~ "key_id=#{key.id}"
+      assert render(element(view, "#period-today")) =~ "key_id=#{key.id}"
+
+      # Navegar al tab FinOps relee el key_id de la URL y no pierde el scope.
+      view |> element("#tab-finops") |> render_click()
+      wait_loaded(view)
+
+      assert assigns_of(view).tab == "finops"
+      assert assigns_of(view).key_filter == key.id
+    end
+
+    test "the monthly-cap sub only reads as a percentage for a month period", %{conn: conn} do
+      {:ok, service} =
+        Accounts.create_service(%{name: "Cap #{unique()}", monthly_spend_limit_usd: "100.00"})
+
+      {:ok, _} = log_for(service, %{})
+
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+      wait_loaded(view)
+
+      cost = render(element(view, "#kpi-cost"))
+      refute cost =~ "of monthly cap"
+      assert cost =~ "proj"
+    end
+  end
+
   describe "access from the services list" do
     test "services_live has a stats link for every service", %{conn: conn} do
       service = service_fixture()

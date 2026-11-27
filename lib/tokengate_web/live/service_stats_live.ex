@@ -34,9 +34,10 @@ defmodule TokengateWeb.ServiceStatsLive do
   # Periods.period_bounds/2 (fuente única — nada de period_from local).
   @default_period "week"
 
-  # Tabs del detalle (admin): overview y logs en vivo. Sin tab de config:
-  # la administración del servicio vive en /access/services.
-  @tabs ["overview", "logs"]
+  # Tabs del detalle (admin): overview, finops y logs en vivo. Sin tab de
+  # config: la administración del servicio vive en /access/services. La lista
+  # sale de `ServiceStatsBody.tabs/2` — única fuente con `?tab=` whitelist.
+  @tabs ServiceStatsBody.tabs(false, true)
 
   @impl true
   def mount(%{"service_id" => service_id} = params, _session, socket) do
@@ -87,6 +88,11 @@ defmodule TokengateWeb.ServiceStatsLive do
       |> assign(:stats_loading, false)
       |> assign(:tab, "overview")
       |> assign(:usage_series, [])
+      |> assign(:spend_total_usd, Decimal.new(0))
+      |> assign(:finops_summary, ServiceStatsBody.default_finops_summary())
+      |> assign(:finops_series, [])
+      |> assign(:finops_prev_overview, nil)
+      |> assign(:tabs, @tabs)
       |> stream(:logs, [], reset: true)
       |> require_admin_hook()
 
@@ -215,15 +221,31 @@ defmodule TokengateWeb.ServiceStatsLive do
   # periodo.
   @impl true
   def handle_params(params, _uri, socket) do
+    key_filter = parse_key_filter(params["key_id"], socket.assigns.service_api_keys)
+
     {:noreply,
      socket
      |> assign(:period, parse_period(params["period"]))
      |> assign(:tab, parse_tab(params["tab"]))
+     |> assign(:key_filter, key_filter)
+     |> assign(:key_filter_form, to_form(%{"key_id" => key_filter}, as: :key_filter))
      |> load_bundle()}
   end
 
   # Deep-link (?tab=): desconocido cae a overview, nunca explota.
   defp parse_tab(tab), do: if(tab in @tabs, do: tab, else: "overview")
+
+  # `?key_id=` en la URL: los links de tab/periodo lo conservan. Un id ajeno al
+  # servicio (o un "all" explícito) cae a "all" — nunca scopea a una key que no
+  # es de este servicio.
+  defp parse_key_filter(nil, _api_keys), do: "all"
+  defp parse_key_filter("all", _api_keys), do: "all"
+
+  defp parse_key_filter(key_id, api_keys) when is_binary(key_id) do
+    if Enum.any?(api_keys, &(&1.id == key_id)), do: key_id, else: "all"
+  end
+
+  defp parse_key_filter(_key_id, _api_keys), do: "all"
 
   defp load_bundle(socket) do
     stats_params = ServiceStatsBody.stats_params(socket.assigns)
@@ -337,11 +359,17 @@ defmodule TokengateWeb.ServiceStatsLive do
           period={@period}
           period_target={~p"/stats/services/#{@service.id}"}
           timezone={@timezone}
+          key_filter={@key_filter}
           form={@form}
           streams={@streams}
           has_more={@has_more}
           logs_empty?={@logs_empty?}
           stats_loading={@stats_loading}
+          tabs={@tabs}
+          spend_total_usd={@spend_total_usd}
+          finops_summary={@finops_summary}
+          finops_series={@finops_series}
+          finops_prev_overview={@finops_prev_overview}
         />
       </div>
     </Layouts.dashboard>
