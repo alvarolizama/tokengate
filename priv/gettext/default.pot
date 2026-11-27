@@ -214,7 +214,7 @@ msgstr ""
 #: lib/tokengate_web/live/stats/finops_charts.ex:96
 #: lib/tokengate_web/live/stats/finops_charts.ex:100
 #: lib/tokengate_web/live/stats/finops_charts.ex:634
-#: lib/tokengate_web/live/stats/finops_charts.ex:960
+#: lib/tokengate_web/live/stats/finops_charts.ex:996
 #: lib/tokengate_web/live/stats/services.ex:29
 #: lib/tokengate_web/live/stats_live.html.heex:156
 #: lib/tokengate_web/live/supervised_services_live.ex:294
@@ -282,7 +282,7 @@ msgstr ""
 #: lib/tokengate_web/live/stats/finops.ex:169
 #: lib/tokengate_web/live/stats/finops_charts.ex:97
 #: lib/tokengate_web/live/stats/finops_charts.ex:630
-#: lib/tokengate_web/live/stats/finops_charts.ex:956
+#: lib/tokengate_web/live/stats/finops_charts.ex:992
 #: lib/tokengate_web/live/stats/users.ex:31
 #: lib/tokengate_web/live/stats_live.html.heex:146
 #: lib/tokengate_web/live/topups_live.html.heex:105
@@ -3332,7 +3332,7 @@ msgstr ""
 #: lib/tokengate_web/live/stats/finops.ex:369
 #: lib/tokengate_web/live/stats/finops_charts.ex:155
 #: lib/tokengate_web/live/stats/finops_charts.ex:568
-#: lib/tokengate_web/live/stats/finops_charts.ex:807
+#: lib/tokengate_web/live/stats/finops_charts.ex:825
 #: lib/tokengate_web/live/stats/index.ex:277
 #: lib/tokengate_web/live/stats/index.ex:341
 #: lib/tokengate_web/live/stats/provider.ex:264
@@ -9379,7 +9379,7 @@ msgstr ""
 msgid "Trace"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:1329
+#: lib/tokengate_web/live/stats/finops_charts.ex:1401
 #: lib/tokengate_web/live/stats/router.ex:860
 #, elixir-autogen, elixir-format
 msgid "Unknown"
@@ -10405,13 +10405,13 @@ msgstr ""
 #: lib/tokengate_web/live/stats/finops_charts.ex:95
 #: lib/tokengate_web/live/stats/finops_charts.ex:133
 #: lib/tokengate_web/live/stats/finops_charts.ex:612
-#: lib/tokengate_web/live/stats/finops_charts.ex:776
+#: lib/tokengate_web/live/stats/finops_charts.ex:794
 #: lib/tokengate_web/live/user_stats_live.ex:657
 #, elixir-autogen, elixir-format
 msgid "$/req"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:1381
+#: lib/tokengate_web/live/stats/finops_charts.ex:1459
 #, elixir-autogen, elixir-format
 msgid "$/req %{value}"
 msgstr ""
@@ -10429,11 +10429,6 @@ msgstr ""
 #: lib/tokengate_web/live/user_stats_live.ex:729
 #, elixir-autogen, elixir-format
 msgid "%{count} prompt tokens saved"
-msgstr ""
-
-#: lib/tokengate_web/live/stats/finops_charts.ex:1379
-#, elixir-autogen, elixir-format
-msgid "%{count} req"
 msgstr ""
 
 #: lib/tokengate_web/live/user_stats_live.ex:785
@@ -10476,7 +10471,7 @@ msgstr ""
 msgid "%{share}% of spend"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:1307
+#: lib/tokengate_web/live/stats/finops_charts.ex:1379
 #, elixir-autogen, elixir-format
 msgid "%{type}: %{cost} · %{requests} req"
 msgstr ""
@@ -10502,7 +10497,7 @@ msgid "CSV"
 msgstr ""
 
 #: lib/tokengate_web/live/stats/finops.ex:314
-#: lib/tokengate_web/live/stats/finops_charts.ex:787
+#: lib/tokengate_web/live/stats/finops_charts.ex:805
 #, elixir-autogen, elixir-format
 msgid "Cache hit %"
 msgstr ""
@@ -10514,8 +10509,8 @@ msgid "Cost by capability"
 msgstr ""
 
 #: lib/tokengate_web/live/stats/finops.ex:218
-#: lib/tokengate_web/live/stats/finops_charts.ex:764
-#: lib/tokengate_web/live/stats/finops_charts.ex:815
+#: lib/tokengate_web/live/stats/finops_charts.ex:782
+#: lib/tokengate_web/live/stats/finops_charts.ex:833
 #, elixir-autogen, elixir-format
 msgid "Efficiency map"
 msgstr ""
@@ -10672,7 +10667,7 @@ msgstr ""
 msgid "average per day · %{days}-day window"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:797
+#: lib/tokengate_web/live/stats/finops_charts.ex:815
 #, elixir-autogen, elixir-format
 msgid "cache hit %"
 msgstr ""
@@ -10682,7 +10677,7 @@ msgstr ""
 msgid "completion / prompt"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:1382
+#: lib/tokengate_web/live/stats/finops_charts.ex:1460
 #, elixir-autogen, elixir-format
 msgid "cost %{value}"
 msgstr ""
@@ -10828,42 +10823,68 @@ msgstr ""
 msgid "write"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:798
+#: lib/tokengate_web/live/stats/finops_charts.ex:816
 #, elixir-autogen, elixir-format
 msgid "$ per billable request"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:1380
+#: lib/tokengate_web/live/stats/finops_charts.ex:1454
 #, elixir-autogen, elixir-format
 msgid "%{count} billable"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:964
+#: lib/tokengate_web/live/stats/finops_charts.ex:1000
 #, elixir-autogen, elixir-format
 msgid "Efficient quadrant"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:978
+#: lib/tokengate_web/live/stats/finops_charts.ex:1050
 #, elixir-autogen, elixir-format
 msgid "Efficient services"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:979
+#: lib/tokengate_web/live/stats/finops_charts.ex:1051
 #, elixir-autogen, elixir-format
 msgid "Efficient users"
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:1011
+#: lib/tokengate_web/live/stats/finops_charts.ex:1083
 #, elixir-autogen, elixir-format
 msgid "No subject in the efficient quadrant yet (minimum %{count} billable requests)."
 msgstr ""
 
-#: lib/tokengate_web/live/stats/finops_charts.ex:793
-#, elixir-autogen, elixir-format
-msgid "X = requests · Y = %{y} · bubble size = cost · lines = period median per group · click a bubble for the subject"
-msgstr ""
-
-#: lib/tokengate_web/live/stats/finops_charts.ex:981
+#: lib/tokengate_web/live/stats/finops_charts.ex:1053
 #, elixir-autogen, elixir-format
 msgid "high volume · low $/req"
+msgstr ""
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1456
+#, elixir-autogen, elixir-format
+msgid "%{count} local cache ($0)"
+msgstr ""
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1027
+#: lib/tokengate_web/live/stats/finops_charts.ex:1033
+#, elixir-autogen, elixir-format
+msgid "%{count} req at $0"
+msgstr ""
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1455
+#, elixir-autogen, elixir-format
+msgid "%{count} total req"
+msgstr ""
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1004
+#, elixir-autogen, elixir-format
+msgid "Has $0 local-cache traffic"
+msgstr ""
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:1017
+#, elixir-autogen, elixir-format
+msgid "Non-billable · 100% local cache ($0)"
+msgstr ""
+
+#: lib/tokengate_web/live/stats/finops_charts.ex:811
+#, elixir-autogen, elixir-format
+msgid "X = billable requests · Y = %{y} · bubble size = cost · halo = has $0 local-cache traffic · lines = period median per group · click a bubble for the subject"
 msgstr ""

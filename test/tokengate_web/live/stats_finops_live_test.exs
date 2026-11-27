@@ -191,6 +191,9 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
     assert has_element?(view, "#finops-scatter-quadrant-user")
     assert has_element?(view, "#finops-scatter-quadrant-service")
     assert has_element?(view, "#finops-scatter-efficient-empty")
+    # El sujeto 100% caché local ($0) no desaparece: baja a la tira de no
+    # facturables con sus requests ahorradas.
+    assert has_element?(view, "#finops-scatter-cache-only")
 
     view
     |> element("#finops-scatter-metric-toggle button[phx-value-metric='cache']")

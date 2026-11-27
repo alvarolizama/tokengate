@@ -655,6 +655,23 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
   def efficiency_scatter(assigns) do
     y_metric = if assigns.y_metric in ~w(cpr cache), do: assigns.y_metric, else: "cpr"
 
+    # Sujetos 100% servidos por caché local: no tienen `$/req` que comparar
+    # (costaron $0), pero tampoco pueden desaparecer del mapa — se muestran
+    # aparte como lo que son, tráfico no facturable.
+    zero_billable =
+      assigns.rows
+      |> Enum.filter(fn row ->
+        (Map.get(row, :billable_requests) || row.request_count) == 0 and row.request_count > 0
+      end)
+      |> Enum.sort_by(& &1.request_count, :desc)
+      |> Enum.map(fn row ->
+        %{
+          label: row.label,
+          requests: row.request_count,
+          href: subject_href(row, assigns.period)
+        }
+      end)
+
     points =
       assigns.rows
       |> Enum.map(&scatter_point(&1, y_metric, assigns.period))
@@ -741,6 +758,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
       |> assign(:points, points)
       |> assign(:guides, if(has_data?, do: guides, else: []))
       |> assign(:efficient, efficient)
+      |> assign(:zero_billable, zero_billable)
       |> assign(:has_data?, has_data?)
       |> assign(:x_ceil, x_ceil)
       |> assign(:y_ceil, y_ceil)
@@ -791,7 +809,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
 
         <p class="text-[10px] leading-snug text-base-content/40">
           {gettext(
-            "X = requests · Y = %{y} · bubble size = cost · lines = period median per group · click a bubble for the subject",
+            "X = billable requests · Y = %{y} · bubble size = cost · halo = has $0 local-cache traffic · lines = period median per group · click a bubble for the subject",
             y:
               if(@y_metric == "cache",
                 do: gettext("cache hit %"),
@@ -923,6 +941,15 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
             <%= if point.href do %>
               <a href={point.href}>
                 <circle
+                  :if={point.local_cache_hits > 0}
+                  cx={point.px}
+                  cy={point.py}
+                  r={point.r + 3}
+                  class="fill-none stroke-base-content/25"
+                  stroke-width="1"
+                  stroke-dasharray="2 2"
+                />
+                <circle
                   cx={point.px}
                   cy={point.py}
                   r={point.r}
@@ -937,6 +964,15 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
                 </circle>
               </a>
             <% else %>
+              <circle
+                :if={point.local_cache_hits > 0}
+                cx={point.px}
+                cy={point.py}
+                r={point.r + 3}
+                class="fill-none stroke-base-content/25"
+                stroke-width="1"
+                stroke-dasharray="2 2"
+              />
               <circle
                 cx={point.px}
                 cy={point.py}
@@ -963,6 +999,42 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
             <span class="w-3 h-3 rounded-sm bg-primary/5 border border-primary/40 border-dashed" />
             <span class="text-[10px] text-base-content/60">{gettext("Efficient quadrant")}</span>
           </div>
+          <div class="flex items-center gap-1.5">
+            <span class="w-3.5 h-3.5 rounded-full border border-dashed border-base-content/40" />
+            <span class="text-[10px] text-base-content/60">{gettext("Has $0 local-cache traffic")}</span>
+          </div>
+        </div>
+
+        <%!-- No facturable, pero tampoco invisible: los sujetos servidos al
+             100% por caché local costaron $0 y no tienen `$/req` que comparar,
+             así que viven en su propia tira con sus requests ahorradas. --%>
+        <div
+          :if={@zero_billable != []}
+          id={"#{@id}-cache-only"}
+          class="pt-2 border-t border-base-300/60"
+        >
+          <p class="text-[10px] uppercase tracking-wide text-base-content/40">
+            {gettext("Non-billable · 100% local cache ($0)")}
+          </p>
+          <ul class="flex flex-wrap gap-x-3 gap-y-1">
+            <li
+              :for={{row, index} <- Enum.with_index(@zero_billable)}
+              id={"#{@id}-cache-only-#{index}"}
+            >
+              <.link :if={row.href} navigate={row.href} class="text-xs link link-hover">
+                {row.label}
+                <span class="text-base-content/50 tabular-nums">
+                  {gettext("%{count} req at $0", count: Stats.format_number(row.requests))}
+                </span>
+              </.link>
+              <span :if={is_nil(row.href)} class="text-xs">
+                {row.label}
+                <span class="text-base-content/50 tabular-nums">
+                  {gettext("%{count} req at $0", count: Stats.format_number(row.requests))}
+                </span>
+              </span>
+            </li>
+          </ul>
         </div>
 
         <%!-- Los eficientes, en UN solo lugar: alto volumen + bajo $/req contra
@@ -1366,18 +1438,24 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
       %{
         kind: row.subject_type,
         label: row.label,
-        x: requests,
+        # X = requests FACTURABLES: la misma base que el `$/req` del eje Y. El
+        # total y el caché local viajan en el tooltip y en el halo.
+        x: billable,
         y: y,
         cost: cost,
         billable: billable,
+        requests: requests,
         local_cache_hits: Map.get(row, :local_cache_hits, 0),
         href: subject_href(row, period),
         tip:
           Enum.join(
             [
               row.label,
-              gettext("%{count} req", count: Stats.format_number(requests)),
               gettext("%{count} billable", count: Stats.format_number(billable)),
+              gettext("%{count} total req", count: Stats.format_number(requests)),
+              gettext("%{count} local cache ($0)",
+                count: Stats.format_number(Map.get(row, :local_cache_hits, 0))
+              ),
               gettext("$/req %{value}", value: Stats.cost_per_request(row.cost_usd, billable)),
               gettext("cost %{value}", value: Stats.money(row.cost_usd))
             ],
