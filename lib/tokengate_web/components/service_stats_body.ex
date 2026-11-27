@@ -665,6 +665,15 @@ defmodule TokengateWeb.ServiceStatsBody do
         </span>
       </div>
 
+      <%!-- La jerga del tab, explicada donde se usa: este tab lo ve un
+           supervisor que puede no ser admin (y /stats/finops es admin-only),
+           así que el glosario no se puede enlazar. --%>
+      <p class="text-[11px] leading-snug text-base-content/40" id="service-stats-finops-glossary">
+        {gettext(
+          "Error waste = spend on answers that failed (status ≥ 400) · Thinking tax = reasoning tokens billed as output · Prompt cache = context the provider served from its own cache"
+        )}
+      </p>
+
       <%!-- Unit economics --%>
       <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         <.kpi_card

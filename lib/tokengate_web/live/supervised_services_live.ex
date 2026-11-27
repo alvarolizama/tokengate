@@ -230,9 +230,9 @@ defmodule TokengateWeb.SupervisedServicesLive do
 
   defp limit_label(_service), do: gettext("No budget") <> " " <> gettext("(top-ups only)")
 
-  # "$0.0012 /req · cache 42.5%": la lectura de eficiencia del servicio — con
+  # "$0.0012 /req · cache 42.5%": la lectura de economía unitaria del servicio — con
   # la que el supervisor compara servicios y contra su total.
-  defp efficiency_label(stats) do
+  defp unit_economics_label(stats) do
     "#{Stats.cost_per_request(stats.cost_usd, stats.request_count)} /req · " <>
       gettext("cache") <>
       " " <> Stats.cache_hit_pct(stats.prompt_tokens, stats.cache_read_tokens)
@@ -302,7 +302,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
                 value={format_cost(@totals.cost_usd)}
                 icon="hero-currency-dollar"
                 accent="success"
-                sub={efficiency_label(@totals)}
+                sub={unit_economics_label(@totals)}
               />
               <.metric_tile
                 id="totals-requests"
@@ -420,9 +420,9 @@ defmodule TokengateWeb.SupervisedServicesLive do
                 </span>
                 <p
                   class="text-[10px] text-base-content/40 whitespace-nowrap tabular-nums"
-                  id={"metric-efficiency-#{service.id}"}
+                  id={"metric-unit-economics-#{service.id}"}
                 >
-                  {efficiency_label(summary_for(@summaries, service.id))}
+                  {unit_economics_label(summary_for(@summaries, service.id))}
                 </p>
               </:col>
               <:col :let={service} label={gettext("Requests 30d")} align="right">

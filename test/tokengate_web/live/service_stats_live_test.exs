@@ -440,6 +440,11 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       assert has_element?(view, "#tab-finops.tab-active")
       assert has_element?(view, "#service-stats-finops")
 
+      # La jerga se explica en el propio tab: este lo ve un supervisor que
+      # puede no ser admin, así que no hay link al glosario de /stats/finops.
+      assert has_element?(view, "#service-stats-finops-glossary")
+      assert render(element(view, "#service-stats-finops-glossary")) =~ "Thinking tax"
+
       # Unit economics: $0.30 en 2 requests → $0.15/req, Out/In 0.5x.
       assert render(element(view, "#finops-cpr")) =~ "$0.15"
       assert has_element?(view, "#finops-cpm")

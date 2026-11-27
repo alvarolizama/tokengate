@@ -34,7 +34,7 @@ msgstr ""
 msgid "Monthly budget"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:2005
+#: lib/tokengate_web/components/service_stats_body.ex:2014
 #: lib/tokengate_web/live/dashboard_live.html.heex:300
 #: lib/tokengate_web/live/group_members_live.ex:954
 #: lib/tokengate_web/live/groups_live.ex:896
@@ -624,7 +624,7 @@ msgid "It resolves as"
 msgstr ""
 
 #: lib/tokengate_web/components/service_stats_body.ex:310
-#: lib/tokengate_web/components/service_stats_body.ex:809
+#: lib/tokengate_web/components/service_stats_body.ex:818
 #: lib/tokengate_web/live/models_live.ex:1027
 #: lib/tokengate_web/live/provider_keys_live.ex:710
 #: lib/tokengate_web/live/router_live.html.heex:594
@@ -1758,7 +1758,7 @@ msgstr ""
 msgid "An administrator can assign you services from the"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:2003
+#: lib/tokengate_web/components/service_stats_body.ex:2012
 #: lib/tokengate_web/live/supervised_service_stats_live.ex:372
 #: lib/tokengate_web/live/supervised_services_live.ex:229
 #, elixir-autogen, elixir-format
@@ -1774,8 +1774,8 @@ msgstr ""
 #: lib/tokengate_web/components/service_stats_body.ex:334
 #: lib/tokengate_web/components/service_stats_body.ex:376
 #: lib/tokengate_web/components/service_stats_body.ex:558
-#: lib/tokengate_web/components/service_stats_body.ex:815
-#: lib/tokengate_web/components/service_stats_body.ex:870
+#: lib/tokengate_web/components/service_stats_body.ex:824
+#: lib/tokengate_web/components/service_stats_body.ex:879
 #: lib/tokengate_web/kpi_helpers.ex:212
 #: lib/tokengate_web/kpi_helpers.ex:247
 #: lib/tokengate_web/live/dashboard_live.ex:1111
@@ -1915,7 +1915,7 @@ msgstr ""
 #: lib/tokengate_web/components/service_stats_body.ex:374
 #: lib/tokengate_web/components/service_stats_body.ex:518
 #: lib/tokengate_web/components/service_stats_body.ex:538
-#: lib/tokengate_web/components/service_stats_body.ex:864
+#: lib/tokengate_web/components/service_stats_body.ex:873
 #: lib/tokengate_web/live/calculator_live.html.heex:35
 #: lib/tokengate_web/live/dashboard_live.html.heex:449
 #: lib/tokengate_web/live/dashboard_live.html.heex:676
@@ -3362,8 +3362,8 @@ msgstr ""
 #: lib/tokengate_web/components/service_stats_body.ex:176
 #: lib/tokengate_web/components/service_stats_body.ex:325
 #: lib/tokengate_web/components/service_stats_body.ex:375
-#: lib/tokengate_web/components/service_stats_body.ex:812
-#: lib/tokengate_web/components/service_stats_body.ex:867
+#: lib/tokengate_web/components/service_stats_body.ex:821
+#: lib/tokengate_web/components/service_stats_body.ex:876
 #: lib/tokengate_web/live/calculator_live.html.heex:328
 #: lib/tokengate_web/live/dashboard_live.ex:1112
 #: lib/tokengate_web/live/dashboard_live.html.heex:685
@@ -4326,7 +4326,7 @@ msgstr ""
 msgid "memberships"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:682
+#: lib/tokengate_web/components/service_stats_body.ex:691
 #: lib/tokengate_web/kpi_helpers.ex:281
 #, elixir-autogen, elixir-format
 msgid "vs previous period"
@@ -4480,8 +4480,8 @@ msgstr ""
 msgid "%{provider} %{count}"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:832
-#: lib/tokengate_web/components/service_stats_body.ex:887
+#: lib/tokengate_web/components/service_stats_body.ex:841
+#: lib/tokengate_web/components/service_stats_body.ex:896
 #: lib/tokengate_web/live/stats/agent.ex:222
 #: lib/tokengate_web/live/stats/agent.ex:304
 #: lib/tokengate_web/live/stats/agents.ex:137
@@ -4669,7 +4669,7 @@ msgstr ""
 msgid "This week"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:2000
+#: lib/tokengate_web/components/service_stats_body.ex:2009
 #: lib/tokengate_web/live/group_members_live.ex:946
 #: lib/tokengate_web/live/groups_live.ex:739
 #: lib/tokengate_web/live/groups_live.ex:884
@@ -5378,7 +5378,7 @@ msgstr ""
 msgid "This service has no API keys."
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:1371
+#: lib/tokengate_web/components/service_stats_body.ex:1380
 #: lib/tokengate_web/live/dashboard_live.html.heex:731
 #, elixir-autogen, elixir-format
 msgid "Unattributed"
@@ -5391,9 +5391,9 @@ msgid "Input tokens"
 msgstr ""
 
 #: lib/tokengate_web/components/service_stats_body.ex:468
-#: lib/tokengate_web/components/service_stats_body.ex:847
-#: lib/tokengate_web/components/service_stats_body.ex:902
-#: lib/tokengate_web/components/service_stats_body.ex:1483
+#: lib/tokengate_web/components/service_stats_body.ex:856
+#: lib/tokengate_web/components/service_stats_body.ex:911
+#: lib/tokengate_web/components/service_stats_body.ex:1492
 #: lib/tokengate_web/live/user_stats_live.ex:908
 #, elixir-autogen, elixir-format
 msgid "No requests in this period."
@@ -6734,7 +6734,7 @@ msgstr ""
 msgid "Only path to unlimited; wins over the limit."
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:2022
+#: lib/tokengate_web/components/service_stats_body.ex:2031
 #: lib/tokengate_web/live/stats_live.html.heex:81
 #, elixir-autogen, elixir-format
 msgid "Overview"
@@ -7379,7 +7379,7 @@ msgstr ""
 msgid "own"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:2130
+#: lib/tokengate_web/components/service_stats_body.ex:2139
 #, elixir-autogen, elixir-format
 msgid "reqs"
 msgstr ""
@@ -7520,22 +7520,22 @@ msgstr ""
 msgid "% of spend"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:2102
+#: lib/tokengate_web/components/service_stats_body.ex:2111
 #, elixir-autogen, elixir-format
 msgid "%{pct}% of monthly cap · %{daily}/day"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:2025
+#: lib/tokengate_web/components/service_stats_body.ex:2034
 #, elixir-autogen, elixir-format
 msgid "Config"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:2024
+#: lib/tokengate_web/components/service_stats_body.ex:2033
 #, elixir-autogen, elixir-format
 msgid "Live logs"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:1467
+#: lib/tokengate_web/components/service_stats_body.ex:1476
 #, elixir-autogen, elixir-format
 msgid "Spend & requests"
 msgstr ""
@@ -7545,17 +7545,17 @@ msgstr ""
 msgid "Total"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:1471
+#: lib/tokengate_web/components/service_stats_body.ex:1480
 #, elixir-autogen, elixir-format
 msgid "by day"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:1471
+#: lib/tokengate_web/components/service_stats_body.ex:1480
 #, elixir-autogen, elixir-format
 msgid "by hour"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:2145
+#: lib/tokengate_web/components/service_stats_body.ex:2154
 #, elixir-autogen, elixir-format
 msgid "error rate"
 msgstr ""
@@ -8093,9 +8093,9 @@ msgstr ""
 msgid "Daily trend by provider"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:724
-#: lib/tokengate_web/components/service_stats_body.ex:837
-#: lib/tokengate_web/components/service_stats_body.ex:892
+#: lib/tokengate_web/components/service_stats_body.ex:733
+#: lib/tokengate_web/components/service_stats_body.ex:846
+#: lib/tokengate_web/components/service_stats_body.ex:901
 #: lib/tokengate_web/live/stats/finops.ex:469
 #: lib/tokengate_web/live/stats/finops.ex:627
 #: lib/tokengate_web/live/stats/finops.ex:689
@@ -10384,9 +10384,9 @@ msgstr ""
 msgid "force_use_case takes exactly one key; restrict_use_cases takes as many as you select."
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:688
-#: lib/tokengate_web/components/service_stats_body.ex:823
-#: lib/tokengate_web/components/service_stats_body.ex:878
+#: lib/tokengate_web/components/service_stats_body.ex:697
+#: lib/tokengate_web/components/service_stats_body.ex:832
+#: lib/tokengate_web/components/service_stats_body.ex:887
 #: lib/tokengate_web/live/stats/finops.ex:603
 #: lib/tokengate_web/live/user_stats_live.ex:671
 #, elixir-autogen, elixir-format
@@ -10408,9 +10408,9 @@ msgstr ""
 msgid "$/day burn"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:672
-#: lib/tokengate_web/components/service_stats_body.ex:818
-#: lib/tokengate_web/components/service_stats_body.ex:873
+#: lib/tokengate_web/components/service_stats_body.ex:681
+#: lib/tokengate_web/components/service_stats_body.ex:827
+#: lib/tokengate_web/components/service_stats_body.ex:882
 #: lib/tokengate_web/live/stats/finops.ex:344
 #: lib/tokengate_web/live/stats/finops.ex:599
 #: lib/tokengate_web/live/stats/finops.ex:687
@@ -10521,7 +10521,7 @@ msgid "Cost by capability"
 msgstr ""
 
 #: lib/tokengate_web/components/service_stats_body.ex:652
-#: lib/tokengate_web/components/service_stats_body.ex:2023
+#: lib/tokengate_web/components/service_stats_body.ex:2032
 #: lib/tokengate_web/live/stats/finops.ex:134
 #: lib/tokengate_web/live/stats/index.ex:368
 #: lib/tokengate_web/live/stats_live.html.heex:91
@@ -10555,7 +10555,7 @@ msgstr ""
 msgid "Out/In"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:750
+#: lib/tokengate_web/components/service_stats_body.ex:759
 #: lib/tokengate_web/live/stats/finops_charts.ex:478
 #: lib/tokengate_web/live/user_stats_live.ex:705
 #, elixir-autogen, elixir-format
@@ -10599,15 +10599,15 @@ msgstr ""
 msgid "Spend and volume trend"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:787
+#: lib/tokengate_web/components/service_stats_body.ex:796
 #: lib/tokengate_web/live/stats/finops.ex:315
 #, elixir-autogen, elixir-format
 msgid "Spend trend"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:737
-#: lib/tokengate_web/components/service_stats_body.ex:840
-#: lib/tokengate_web/components/service_stats_body.ex:895
+#: lib/tokengate_web/components/service_stats_body.ex:746
+#: lib/tokengate_web/components/service_stats_body.ex:849
+#: lib/tokengate_web/components/service_stats_body.ex:904
 #: lib/tokengate_web/live/stats/finops.ex:464
 #: lib/tokengate_web/live/stats/finops.ex:632
 #: lib/tokengate_web/live/stats/finops_charts.ex:391
@@ -10715,37 +10715,37 @@ msgstr ""
 msgid "users %{users}% · services %{services}%"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:2120
+#: lib/tokengate_web/components/service_stats_body.ex:2129
 #, elixir-autogen, elixir-format
 msgid "%{daily}/day · proj %{proj}/30d"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:772
+#: lib/tokengate_web/components/service_stats_body.ex:781
 #, elixir-autogen, elixir-format
 msgid "Cap vs top-ups"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:714
+#: lib/tokengate_web/components/service_stats_body.ex:723
 #, elixir-autogen, elixir-format
 msgid "Daily burn"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:802
+#: lib/tokengate_web/components/service_stats_body.ex:811
 #, elixir-autogen, elixir-format
 msgid "Efficiency by API key"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:857
+#: lib/tokengate_web/components/service_stats_body.ex:866
 #, elixir-autogen, elixir-format
 msgid "Efficiency by model"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:763
+#: lib/tokengate_web/components/service_stats_body.ex:772
 #, elixir-autogen, elixir-format
 msgid "Local cache"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:702
+#: lib/tokengate_web/components/service_stats_body.ex:711
 #, elixir-autogen, elixir-format
 msgid "Out/In ratio"
 msgstr ""
@@ -10755,33 +10755,33 @@ msgstr ""
 msgid "all API keys"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:708
+#: lib/tokengate_web/components/service_stats_body.ex:717
 #, elixir-autogen, elixir-format
 msgid "avg %{input} in / %{output} out per request"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:791
+#: lib/tokengate_web/components/service_stats_body.ex:800
 #, elixir-autogen, elixir-format
 msgid "daily buckets · spend, errors and thinking tax of this service"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:730
+#: lib/tokengate_web/components/service_stats_body.ex:739
 #, elixir-autogen, elixir-format
 msgid "failed"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:768
+#: lib/tokengate_web/components/service_stats_body.ex:777
 #, elixir-autogen, elixir-format
 msgid "hits served at $0"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:790
+#: lib/tokengate_web/components/service_stats_body.ex:799
 #, elixir-autogen, elixir-format
 msgid "hourly buckets · spend, errors and thinking tax of this service"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:730
-#: lib/tokengate_web/components/service_stats_body.ex:743
+#: lib/tokengate_web/components/service_stats_body.ex:739
+#: lib/tokengate_web/components/service_stats_body.ex:752
 #, elixir-autogen, elixir-format
 msgid "of spend"
 msgstr ""
@@ -10801,27 +10801,27 @@ msgstr ""
 msgid "proj %{proj}/30d · ~%{days}d to the cap"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:756
+#: lib/tokengate_web/components/service_stats_body.ex:765
 #, elixir-autogen, elixir-format
 msgid "read"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:684
+#: lib/tokengate_web/components/service_stats_body.ex:693
 #, elixir-autogen, elixir-format
 msgid "requests"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:743
+#: lib/tokengate_web/components/service_stats_body.ex:752
 #, elixir-autogen, elixir-format
 msgid "thinking"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:778
+#: lib/tokengate_web/components/service_stats_body.ex:787
 #, elixir-autogen, elixir-format
 msgid "top-ups"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:758
+#: lib/tokengate_web/components/service_stats_body.ex:767
 #, elixir-autogen, elixir-format
 msgid "write"
 msgstr ""
@@ -11104,4 +11104,9 @@ msgstr ""
 #: lib/tokengate_web/components/service_stats_body.ex:655
 #, elixir-autogen, elixir-format
 msgid "Unit economics and waste · %{period} · %{scope}"
+msgstr ""
+
+#: lib/tokengate_web/components/service_stats_body.ex:672
+#, elixir-autogen, elixir-format
+msgid "Error waste = spend on answers that failed (status ≥ 400) · Thinking tax = reasoning tokens billed as output · Prompt cache = context the provider served from its own cache"
 msgstr ""

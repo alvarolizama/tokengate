@@ -204,9 +204,9 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     conn = login(conn, user, password)
     {:ok, view, _html} = live(conn, ~p"/services/supervised")
 
-    efficiency = render(element(view, "#metric-efficiency-#{service.id}"))
-    assert efficiency =~ "$2.00"
-    assert efficiency =~ "50.0%"
+    unit_economics = render(element(view, "#metric-unit-economics-#{service.id}"))
+    assert unit_economics =~ "$2.00"
+    assert unit_economics =~ "50.0%"
 
     totals = render(element(view, "#totals-cost"))
     assert totals =~ "$2.00"
