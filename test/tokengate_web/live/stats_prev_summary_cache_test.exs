@@ -156,8 +156,8 @@ defmodule TokengateWeb.StatsPrevSummaryCacheTest do
     wait_assign(view, &(!&1.stats_loading))
 
     assert [
-             {{:stats_structural, :providers, "today", _tz, nil, nil, nil, nil, nil, nil},
-              _bundle, _}
+             {{:stats_structural, :providers, "today", _tz, nil, nil, nil, nil, nil, nil, nil,
+               nil}, _bundle, _}
            ] =
              structural_entries(:providers)
 
@@ -190,8 +190,11 @@ defmodule TokengateWeb.StatsPrevSummaryCacheTest do
   defp structural_entries(live_action) do
     :ets.tab2list(@table)
     |> Enum.filter(fn
-      {{:stats_structural, ^live_action, _, _, _, _, _, _, _, _}, _bundle, _expires_at} -> true
-      _ -> false
+      {{:stats_structural, ^live_action, _, _, _, _, _, _, _, _, _, _}, _bundle, _expires_at} ->
+        true
+
+      _ ->
+        false
     end)
   end
 

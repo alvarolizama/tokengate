@@ -187,11 +187,24 @@ defmodule TokengateWeb.StatsLive do
         _ -> nil
       end
 
-    # :provider carries the provider in the URL path (/stats/providers/:id).
+    # :provider carries the provider in the URL path (/stats/providers/:id);
+    # :finops lo usa como FILTRO en query string.
     provider_id =
       case socket.assigns.live_action do
         :provider -> cast_uuid(params["provider_id"])
+        :finops -> cast_uuid(params["provider_id"])
         _ -> nil
+      end
+
+    # Filtros propios de FinOps: permiten bajar del mapa de modelos/proveedores
+    # a "quién gastó en esto" sin salir de la sección.
+    {finops_user_id, finops_service_id} =
+      case socket.assigns.live_action do
+        :finops ->
+          {cast_uuid(params["user_id"]), cast_uuid(params["service_id"])}
+
+        _ ->
+          {nil, nil}
       end
 
     agent_key =
@@ -217,6 +230,8 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:group_filter, group_filter)
       |> assign(:group_id, group_id)
       |> assign(:provider_id, provider_id)
+      |> assign(:finops_user_id, finops_user_id)
+      |> assign(:finops_service_id, finops_service_id)
       |> assign(:agent_key, agent_key)
       |> assign(:shadow_config_id, shadow_config_id)
 
@@ -291,8 +306,28 @@ defmodule TokengateWeb.StatsLive do
   def period_target(%{live_action: :groups}), do: "/stats/profiles"
   def period_target(%{live_action: :services}), do: "/stats/services"
   def period_target(%{live_action: :users}), do: "/stats/users"
-  def period_target(%{live_action: :finops}), do: "/stats/finops"
+
+  def period_target(%{live_action: :finops} = assigns) do
+    "/stats/finops" <> finops_extra_query(assigns)
+  end
+
   def period_target(_), do: "/stats/overview"
+
+  # Filtros activos de FinOps como sufijo de query (`&model_id=…`), para que el
+  # selector de período los conserve al cambiar de ventana. Vacío en el resto
+  # de las pestañas: ahí un filtro de la sección anterior no aplica.
+  def finops_extra_query(%{live_action: :finops} = assigns) do
+    [
+      {"model_id", Map.get(assigns, :model_filter)},
+      {"provider_id", Map.get(assigns, :provider_id)},
+      {"user_id", Map.get(assigns, :finops_user_id)},
+      {"service_id", Map.get(assigns, :finops_service_id)}
+    ]
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Enum.map_join("", fn {key, value} -> "&#{key}=#{value}" end)
+  end
+
+  def finops_extra_query(_assigns), do: ""
 
   # Buscador de los listados rankeados (Users, Models, Providers). El texto
   # vive en el socket y las secciones filtran sus propias filas en el render:
@@ -375,6 +410,20 @@ defmodule TokengateWeb.StatsLive do
   end
 
   def handle_event("set_finops_entity_metric", _params, socket), do: {:noreply, socket}
+
+  # Filtros de FinOps desde los selects: arma el patch conservando el período y
+  # descartando los vacíos. La URL manda: un link filtrado se puede compartir.
+  def handle_event("finops_filter", params, socket) do
+    query =
+      [{"period", socket.assigns.period}] ++
+        for key <- ~w(model_id provider_id user_id service_id),
+            value = params[key],
+            is_binary(value) and value != "" do
+          {key, value}
+        end
+
+    {:noreply, push_patch(socket, to: "/stats/finops?" <> URI.encode_query(query))}
+  end
 
   # "Ver más" de los listados largos: los detalles de proveedor y modelo (una
   # clave por tabla). El conteo desplegado vive en `shown_counts`, así que cada
@@ -470,7 +519,7 @@ defmodule TokengateWeb.StatsLive do
   defp structural_cache_key(params) do
     {:stats_structural, params.live_action, params.period, params.timezone, params.model_filter,
      params.group_filter, params.group_id, params.provider_id, params[:agent_key],
-     cache_scope(params)}
+     params[:finops_user_id], params[:finops_service_id], cache_scope(params)}
   end
 
   # Lectura/escritura del cache con el flag de tests: deshabilitado, ambos
@@ -591,6 +640,8 @@ defmodule TokengateWeb.StatsLive do
       group_filter: assigns.group_filter,
       group_id: assigns.group_id,
       provider_id: assigns[:provider_id],
+      finops_user_id: assigns[:finops_user_id],
+      finops_service_id: assigns[:finops_service_id],
       agent_key: assigns[:agent_key],
       shadow_config_id: assigns[:shadow_config_id],
       scope_member_ids: assigns.scope_member_ids,
@@ -1233,6 +1284,15 @@ defmodule TokengateWeb.StatsLive do
           # nada. El resto, por día.
           granularity = if params.period in ["today", "yesterday"], do: :hour, else: :day
 
+          # Filtros de la sección: bajar de una burbuja (modelo, proveedor,
+          # usuario o servicio) a "quién gastó en esto" sin salir de FinOps.
+          opts =
+            opts
+            |> put_finops_filter(:model_id, params.model_filter)
+            |> put_finops_filter(:provider_id, params[:provider_id])
+            |> put_finops_filter(:user_id, params[:finops_user_id])
+            |> put_finops_filter(:service_id, params[:finops_service_id])
+
           [
             fn -> {:finops_overview, Rollup.finops_overview(opts)} end,
             fn ->
@@ -1323,6 +1383,11 @@ defmodule TokengateWeb.StatsLive do
   # Admin-only infra/org-wide queries on the index view. Ahora el Resumen solo
   # conserva el pico de concurrencia (admin): rankings y tiers viven en las
   # secciones models / groups / providers.
+  # Filtro opcional de FinOps: `nil`/`"all"` no filtran; un uuid sí.
+  defp put_finops_filter(opts, _key, nil), do: opts
+  defp put_finops_filter(opts, _key, "all"), do: opts
+  defp put_finops_filter(opts, key, value), do: Keyword.put(opts, key, value)
+
   defp index_admin_tasks(true, params, opts) do
     [
       fn -> {:peak_concurrency, Rollup.peak_concurrency(nil, opts)} end,

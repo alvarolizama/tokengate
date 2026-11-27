@@ -39,6 +39,11 @@ defmodule TokengateWeb.StatsLive.Finops do
   attr :entity_metric, :string, default: "cpr"
   attr :metric, :string, default: "cost"
   attr :scatter_y, :string, default: "cpr"
+  # Filtros activos (llegan de la URL) + sus opciones para los selects.
+  attr :model_filter, :any, default: nil
+  attr :provider_filter, :any, default: nil
+  attr :user_filter, :any, default: nil
+  attr :service_filter, :any, default: nil
   attr :period, :any, required: true
 
   def finops(assigns) do
@@ -66,6 +71,45 @@ defmodule TokengateWeb.StatsLive.Finops do
       |> Enum.take(5)
 
     hourly? = assigns.period in ["today", "yesterday"]
+
+    model_options = Enum.map(assigns.models, &{&1.entity_id, &1.label})
+    provider_options = Enum.map(assigns.providers, &{&1.entity_id, &1.label})
+
+    user_options =
+      assigns.scatter
+      |> Enum.filter(&(&1.subject_type == "user"))
+      |> Enum.map(&{&1.subject_id, &1.label})
+
+    service_options =
+      assigns.scatter
+      |> Enum.filter(&(&1.subject_type == "service"))
+      |> Enum.map(&{&1.subject_id, &1.label})
+
+    active_filters =
+      [
+        {"model", assigns.model_filter, model_options},
+        {"provider", assigns.provider_filter, provider_options},
+        {"user", assigns.user_filter, user_options},
+        {"service", assigns.service_filter, service_options}
+      ]
+      |> Enum.filter(fn {_kind, value, _options} -> not is_nil(value) end)
+      |> Enum.map(fn {kind, value, options} ->
+        label =
+          case List.keyfind(options, value, 0) do
+            {_, label} -> label
+            nil -> value
+          end
+
+        {kind, label}
+      end)
+
+    assigns =
+      assigns
+      |> assign(:model_options, model_options)
+      |> assign(:provider_options, provider_options)
+      |> assign(:user_options, user_options)
+      |> assign(:service_options, service_options)
+      |> assign(:active_filters, active_filters)
 
     assigns =
       assigns
@@ -103,6 +147,72 @@ defmodule TokengateWeb.StatsLive.Finops do
         >
           <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> {gettext("CSV")}
         </a>
+      </div>
+
+      <%!-- Filtros: bajar de una burbuja (o de un select) a "quién gastó en
+           esto". Viven en la URL para compartir la vista y sobrevivir al
+           selector de período. --%>
+      <form
+        id="finops-filter-form"
+        phx-change="finops_filter"
+        class="flex flex-wrap items-end gap-2"
+      >
+        <.filter_select
+          id="finops-filter-model"
+          name="model_id"
+          label={gettext("Model")}
+          value={@model_filter}
+          options={@model_options}
+          empty_label={gettext("All models")}
+        />
+        <.filter_select
+          id="finops-filter-provider"
+          name="provider_id"
+          label={gettext("Provider")}
+          value={@provider_filter}
+          options={@provider_options}
+          empty_label={gettext("All providers")}
+        />
+        <.filter_select
+          id="finops-filter-user"
+          name="user_id"
+          label={gettext("User")}
+          value={@user_filter}
+          options={@user_options}
+          empty_label={gettext("All users")}
+        />
+        <.filter_select
+          id="finops-filter-service"
+          name="service_id"
+          label={gettext("Service")}
+          value={@service_filter}
+          options={@service_options}
+          empty_label={gettext("All services")}
+        />
+      </form>
+
+      <div
+        :if={@active_filters != []}
+        id="finops-filter-active"
+        class="flex flex-wrap items-center gap-2"
+      >
+        <span class="text-[10px] uppercase tracking-wide text-base-content/40">
+          {gettext("Filtered by")}
+        </span>
+        <span
+          :for={{kind, label} <- @active_filters}
+          id={"finops-chip-#{kind}"}
+          class="badge badge-sm badge-primary badge-outline"
+        >
+          {label}
+        </span>
+        <.link
+          patch={"/stats/finops?period=#{@period}"}
+          id="finops-filter-clear"
+          class="text-xs link link-hover"
+        >
+          {gettext("Clear")}
+        </.link>
       </div>
 
       <%!-- Proporción Usuarios vs Servicios: quién paga el período --%>
@@ -269,6 +379,29 @@ defmodule TokengateWeb.StatsLive.Finops do
         title={gettext("Cost by capability")}
       />
     </div>
+    """
+  end
+
+  ## Select de filtro --------------------------------------------------------
+
+  attr :id, :string, required: true
+  attr :name, :string, required: true
+  attr :label, :string, required: true
+  attr :value, :any, default: nil
+  attr :options, :list, required: true
+  attr :empty_label, :string, required: true
+
+  defp filter_select(assigns) do
+    ~H"""
+    <label class="flex flex-col gap-1">
+      <span class="text-[10px] uppercase tracking-wide text-base-content/40">{@label}</span>
+      <select id={@id} name={@name} class="select select-sm select-bordered max-w-52">
+        <option value="" selected={is_nil(@value)}>{@empty_label}</option>
+        <option :for={{value, label} <- @options} value={value} selected={value == @value}>
+          {label}
+        </option>
+      </select>
+    </label>
     """
   end
 

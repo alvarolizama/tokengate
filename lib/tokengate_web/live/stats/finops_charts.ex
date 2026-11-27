@@ -826,7 +826,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
 
         <p class="text-[10px] leading-snug text-base-content/40">
           {gettext(
-            "X = billable requests · Y = %{y} · bubble size = cost · halo = has $0 local-cache traffic · lines = period median per group · click a bubble for the subject",
+            "X = billable requests · Y = %{y} · bubble size = cost · halo = has $0 local-cache traffic · lines = period median per group · click a bubble to filter this page",
             y: @y_label
           )}
         </p>
@@ -942,8 +942,8 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
           </text>
 
           <%= for point <- @points do %>
-            <%= if point.href do %>
-              <a href={point.href}>
+            <%= if point.filter_href || point.href do %>
+              <a href={point.filter_href || point.href}>
                 <circle
                   :if={point.local_cache_hits > 0}
                   cx={point.px}
@@ -1453,6 +1453,12 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
         think_cost: think,
         local_cache_hits: Map.get(row, :local_cache_hits, 0),
         href: subject_href(row, period),
+        filter_href:
+          finops_filter_href(
+            kind,
+            Map.get(row, :subject_id) || Map.get(row, :entity_id),
+            period
+          ),
         tip:
           Enum.join(
             [
@@ -1487,6 +1493,20 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
     do: "/stats/providers/#{id}?period=#{period}"
 
   defp subject_href(_row, _period), do: nil
+
+  # Clic en una burbuja = FILTRAR FinOps por ese sujeto/entidad (la vista de
+  # detalle sigue viva en las listas de eficientes y en los Top 5).
+  defp finops_filter_href(kind, id, period) when is_binary(id) do
+    case kind do
+      "user" -> "/stats/finops?user_id=#{id}&period=#{period}"
+      "service" -> "/stats/finops?service_id=#{id}&period=#{period}"
+      "model" -> "/stats/finops?model_id=#{id}&period=#{period}"
+      "provider" -> "/stats/finops?provider_id=#{id}&period=#{period}"
+      _ -> nil
+    end
+  end
+
+  defp finops_filter_href(_kind, _id, _period), do: nil
 
   defp scatter_ticks(max_value) do
     for i <- 0..3, do: max_value * i / 3

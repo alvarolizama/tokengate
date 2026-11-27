@@ -26,7 +26,12 @@
             id="stats-loading"
             title={gettext("Updating statistics…")}
           ></span>
-          <.period_selector target={period_target(assigns)} period={@period} id="period-selector" />
+          <.period_selector
+            target={period_target(assigns)}
+            period={@period}
+            extra_query={finops_extra_query(assigns)}
+            id="period-selector"
+          />
         </div>
 
         <%!-- "En vivo": mismo lugar del header que ocupaban los timeframes --%>
@@ -225,6 +230,10 @@
             providers={@finops_providers}
             entity={@finops_entity}
             entity_metric={@finops_entity_metric}
+            model_filter={@model_filter}
+            provider_filter={@provider_id}
+            user_filter={@finops_user_id}
+            service_filter={@finops_service_id}
             metric={@finops_metric}
             scatter_y={@finops_scatter_y}
             period={@period}

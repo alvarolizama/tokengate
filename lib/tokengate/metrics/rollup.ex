@@ -3909,6 +3909,8 @@ defmodule Tokengate.Metrics.Rollup do
     |> finops_where(:service_id, Keyword.get(opts, :service_id))
     |> finops_where(:api_key_id, Keyword.get(opts, :api_key_id))
     |> finops_where(:model_id, Keyword.get(opts, :model_id))
+    |> finops_where(:provider_id, Keyword.get(opts, :provider_id))
+    |> finops_where(:user_id, Keyword.get(opts, :user_id))
   end
 
   defp finops_where(query, _field, nil), do: query
@@ -3920,6 +3922,12 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp finops_where(query, :api_key_id, id),
     do: where(query, [rl], rl.api_key_id == ^id)
+
+  defp finops_where(query, :provider_id, id),
+    do: where(query, [rl], rl.provider_id == ^id)
+
+  defp finops_where(query, :user_id, id),
+    do: where(query, [rl], rl.user_id == ^id)
 
   defp finops_where(query, :model_id, id),
     do: where(query, [rl], rl.model_id == ^id)

@@ -265,6 +265,7 @@ defmodule Tokengate.Metrics.FinopsAndFixesTest do
       key_2: key_2,
       model_a: model_a,
       model_b: model_b,
+      provider_id: provider.id,
       day1: day1,
       day2: day2,
       from: at(day1, ~T[00:00:00]),
@@ -801,6 +802,30 @@ defmodule Tokengate.Metrics.FinopsAndFixesTest do
       assert provider.kind == "provider"
       assert provider.requests == 2
       assert_decimal!("5.000000", provider.cost_usd)
+    end
+  end
+
+  describe "FinOps filters (user / provider / service)" do
+    test "user_id, provider_id and service_id scope every FinOps read" do
+      data = seed_finops!()
+      scope = [from: data.from, to: data.to]
+
+      # user_a solo tiene 1 request con costo (el resto del tráfico es de
+      # servicios sin usuario): el filtro no debe arrastrar filas ajenas.
+      user_view = Rollup.finops_overview(scope ++ [user_id: data.user_a.id])
+      assert_decimal!("1.000000", user_view.overall.cost_usd)
+      assert user_view.overall.requests == 1
+
+      provider_view = Rollup.finops_overview(scope ++ [provider_id: data.provider_id])
+      assert_decimal!("5.000000", provider_view.overall.cost_usd)
+      assert provider_view.overall.requests == 2
+
+      service_view = Rollup.finops_overview(scope ++ [service_id: data.service_1.id])
+      assert_decimal!("7.000000", service_view.overall.cost_usd)
+
+      models = Rollup.finops_entity_scatter(:model, scope ++ [user_id: data.user_a.id])
+      assert Enum.map(models, & &1.label) == ["finops-model-a"]
+      assert_decimal!("1.000000", hd(models).cost_usd)
     end
   end
 

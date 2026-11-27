@@ -132,7 +132,7 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
         inserted_at: now
       })
 
-    %{user_a: user_a, user_b: user_b, service: service, group: group}
+    %{user_a: user_a, user_b: user_b, service: service, group: group, model_chat: model_chat}
   end
 
   test "non-admin cannot access /stats/finops", %{conn: conn} do
@@ -146,7 +146,9 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
     conn: conn
   } do
     %{user: admin, password: password} = register("admin")
-    %{user_a: user_a, user_b: user_b, service: service} = seed_finops_fixture()
+
+    %{user_a: user_a, user_b: user_b, service: service, model_chat: model} =
+      seed_finops_fixture()
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/stats/finops?period=week")
@@ -218,6 +220,23 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
              view,
              "#finops-entity-scatter-metric-toggle button.btn-primary[phx-value-metric='think']"
            )
+
+    # Filtros: la URL manda. Al filtrar por modelo/uso, la página se recarga
+    # sólo con ese recorte y el chip lo declara.
+    view
+    |> element("#finops-filter-form")
+    |> render_change(%{"model_id" => model.id})
+
+    assert_patch(view, ~p"/stats/finops?period=week&model_id=#{model.id}")
+    _ = render_async(view)
+
+    assert has_element?(view, "#finops-filter-active")
+    assert has_element?(view, "#finops-chip-model", model.name)
+    assert has_element?(view, "#finops-filter-clear")
+
+    # Sin filtros: la página vuelve al agregado del período.
+    view |> element("#finops-filter-clear") |> render_click()
+    assert_patch(view, ~p"/stats/finops?period=week")
 
     view
     |> element("#finops-scatter-metric-toggle button[phx-value-metric='cache']")
