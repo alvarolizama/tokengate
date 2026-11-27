@@ -195,6 +195,30 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
     # facturables con sus requests ahorradas.
     assert has_element?(view, "#finops-scatter-cache-only")
 
+    # Mapa de modelos/proveedores: mismo componente, con su propio toggle de
+    # entidad y el eje de razonamiento (costo unitario ↔ % de thinking tax).
+    assert has_element?(view, "#finops-entity-scatter-plot")
+    assert has_element?(view, "#finops-entity-scatter-entity-toggle")
+    assert has_element?(view, "#finops-entity-scatter-metric-toggle")
+
+    view
+    |> element("#finops-entity-scatter-entity-toggle button[phx-value-entity='providers']")
+    |> render_click()
+
+    assert has_element?(
+             view,
+             "#finops-entity-scatter-entity-toggle button.btn-primary[phx-value-entity='providers']"
+           )
+
+    view
+    |> element("#finops-entity-scatter-metric-toggle button[phx-value-metric='think']")
+    |> render_click()
+
+    assert has_element?(
+             view,
+             "#finops-entity-scatter-metric-toggle button.btn-primary[phx-value-metric='think']"
+           )
+
     view
     |> element("#finops-scatter-metric-toggle button[phx-value-metric='cache']")
     |> render_click()

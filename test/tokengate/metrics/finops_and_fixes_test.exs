@@ -775,6 +775,35 @@ defmodule Tokengate.Metrics.FinopsAndFixesTest do
     end
   end
 
+  describe "Rollup.finops_entity_scatter/2" do
+    test "models and providers keep billable requests and thinking tax, router_decision excluded" do
+      data = seed_finops!()
+
+      models = Rollup.finops_entity_scatter(:model, from: data.from, to: data.to)
+      model_a = Enum.find(models, &(&1.entity_id == data.model_a.id))
+
+      assert model_a.kind == "model"
+      assert model_a.label == "finops-model-a"
+      assert model_a.requests == 2
+      assert model_a.billable_requests == 2
+      assert_decimal!("4.000000", model_a.cost_usd)
+      assert_decimal!("3.000000", model_a.think_cost_usd)
+
+      # router_decision (log 6, $0.25 sobre model_a) nunca entra a las entidades:
+      # el total es el de las filas servidas ($4 + $4 + el bucket sin modelo $7).
+      total = models |> Enum.map(& &1.cost_usd) |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+      assert_decimal!("15.000000", total)
+      refute Enum.any?(models, &Decimal.equal?(&1.cost_usd, Decimal.new("0.25")))
+
+      providers = Rollup.finops_entity_scatter(:provider, from: data.from, to: data.to)
+      provider = Enum.find(providers, &(&1.label == "Finops Provider"))
+
+      assert provider.kind == "provider"
+      assert provider.requests == 2
+      assert_decimal!("5.000000", provider.cost_usd)
+    end
+  end
+
   # ---------------------------------------------------------------------
   # FinOps: per service
   # ---------------------------------------------------------------------

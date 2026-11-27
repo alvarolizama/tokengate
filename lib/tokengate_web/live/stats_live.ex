@@ -134,6 +134,8 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:overview_metric, "cost")
       |> assign(:finops_metric, "cost")
       |> assign(:finops_scatter_y, "cpr")
+      |> assign(:finops_entity, "models")
+      |> assign(:finops_entity_metric, "cpr")
       |> assign(:list_search, "")
       |> assign(:stats_loading, true)
       |> assign(:load_error, false)
@@ -357,6 +359,22 @@ defmodule TokengateWeb.StatsLive do
   end
 
   def handle_event("set_finops_scatter_y", _params, socket), do: {:noreply, socket}
+
+  # Mapa de eficiencia de modelos/proveedores: qué entidad se cambia y con qué
+  # eje (costo unitario o cuánto de su gasto fue razonamiento).
+  def handle_event("set_finops_entity", %{"entity" => entity}, socket)
+      when entity in ~w(models providers) do
+    {:noreply, assign(socket, :finops_entity, entity)}
+  end
+
+  def handle_event("set_finops_entity", _params, socket), do: {:noreply, socket}
+
+  def handle_event("set_finops_entity_metric", %{"metric" => metric}, socket)
+      when metric in ~w(cpr think) do
+    {:noreply, assign(socket, :finops_entity_metric, metric)}
+  end
+
+  def handle_event("set_finops_entity_metric", _params, socket), do: {:noreply, socket}
 
   # "Ver más" de los listados largos: los detalles de proveedor y modelo (una
   # clave por tabla). El conteo desplegado vive en `shown_counts`, así que cada
@@ -1224,7 +1242,9 @@ defmodule TokengateWeb.StatsLive do
                )}
             end,
             fn -> {:finops_request_types, Rollup.finops_request_type_breakdown(opts)} end,
-            fn -> {:finops_scatter, Rollup.finops_subject_scatter(opts)} end
+            fn -> {:finops_scatter, Rollup.finops_subject_scatter(opts)} end,
+            fn -> {:finops_models, Rollup.finops_entity_scatter(:model, opts)} end,
+            fn -> {:finops_providers, Rollup.finops_entity_scatter(:provider, opts)} end
           ]
         else
           []
@@ -1441,7 +1461,9 @@ defmodule TokengateWeb.StatsLive do
       finops_overview: nil,
       finops_series: [],
       finops_request_types: [],
-      finops_scatter: []
+      finops_scatter: [],
+      finops_models: [],
+      finops_providers: []
     }
   end
 

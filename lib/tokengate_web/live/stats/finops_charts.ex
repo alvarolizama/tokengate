@@ -651,9 +651,15 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
   # Requests facturables mínimas para entrar al cuadrante de eficientes: un
   # sujeto con una sola llamada no se corona por $/req.
   attr :min_volume, :integer, default: 10
+  # Pares {valor, etiqueta} del toggle del eje Y. `nil` = sujetos
+  # ($/req · caché); el mapa de modelos/proveedores pasa ($/req · razonamiento).
+  attr :y_options, :list, default: nil
+  # Toggle Models | Providers (solo en el mapa de entidades).
+  attr :entity_toggle_event, :string, default: nil
+  attr :entity_value, :string, default: nil
 
   def efficiency_scatter(assigns) do
-    y_metric = if assigns.y_metric in ~w(cpr cache), do: assigns.y_metric, else: "cpr"
+    y_metric = if assigns.y_metric in ~w(cpr cache think), do: assigns.y_metric, else: "cpr"
 
     # Sujetos 100% servidos por caché local: no tienen `$/req` que comparar
     # (costaron $0), pero tampoco pueden desaparecer del mapa — se muestran
@@ -661,7 +667,8 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
     zero_billable =
       assigns.rows
       |> Enum.filter(fn row ->
-        (Map.get(row, :billable_requests) || row.request_count) == 0 and row.request_count > 0
+        Map.get(row, :subject_type) in ["user", "service"] and
+          (Map.get(row, :billable_requests) || row.request_count) == 0 and row.request_count > 0
       end)
       |> Enum.sort_by(& &1.request_count, :desc)
       |> Enum.map(fn row ->
@@ -677,8 +684,8 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
       |> Enum.map(&scatter_point(&1, y_metric, assigns.period))
       |> Enum.reject(&is_nil/1)
 
-    users_points = Enum.filter(points, &(&1.kind != "service"))
-    service_points = Enum.filter(points, &(&1.kind == "service"))
+    groups = points |> Enum.group_by(& &1.kind) |> Enum.sort_by(fn {kind, _} -> kind end)
+    groups_map = Map.new(groups)
 
     x_max = points |> Enum.map(& &1.x) |> Enum.max(fn -> 0 end)
     y_max = points |> Enum.map(& &1.y) |> Enum.max(fn -> 0.0 end)
@@ -705,24 +712,20 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
       end
 
     guides =
-      [{"user", users_points}, {"service", service_points}]
-      |> Enum.flat_map(fn
-        {_kind, []} ->
-          []
+      groups
+      |> Enum.flat_map(fn {kind, group} ->
+        x_med = median(Enum.map(group, & &1.x))
+        y_med = median(Enum.map(group, & &1.y))
 
-        {kind, group} ->
-          x_med = median(Enum.map(group, & &1.x))
-          y_med = median(Enum.map(group, & &1.y))
-
-          [
-            %{
-              kind: kind,
-              x_med: x_med,
-              y_med: y_med,
-              px: round2(@scatter_left + :math.sqrt(x_med / x_ceil) * plot_width()),
-              py: round2(@scatter_top + (1.0 - y_med / y_ceil) * plot_height())
-            }
-          ]
+        [
+          %{
+            kind: kind,
+            x_med: x_med,
+            y_med: y_med,
+            px: round2(@scatter_left + :math.sqrt(x_med / x_ceil) * plot_width()),
+            py: round2(@scatter_top + (1.0 - y_med / y_ceil) * plot_height())
+          }
+        ]
       end)
 
     # Cuadrante eficiente de cada grupo: alto volumen y bajo costo unitario
@@ -730,7 +733,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
     efficient =
       guides
       |> Enum.map(fn guide ->
-        group = if guide.kind == "service", do: service_points, else: users_points
+        group = Map.get(groups_map, guide.kind, [])
 
         rows =
           group
@@ -759,6 +762,9 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
       |> assign(:guides, if(has_data?, do: guides, else: []))
       |> assign(:efficient, efficient)
       |> assign(:zero_billable, zero_billable)
+      |> assign(:kinds, Enum.map(groups, fn {kind, _} -> kind end))
+      |> assign(:y_options, assigns.y_options || default_y_options())
+      |> assign(:y_label, y_label(y_metric))
       |> assign(:has_data?, has_data?)
       |> assign(:x_ceil, x_ceil)
       |> assign(:y_ceil, y_ceil)
@@ -781,40 +787,47 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
             <.icon name="hero-chart-pie" class="w-5 h-5 text-base-content/60" />
             {@title || gettext("Efficiency map")}
           </h2>
-          <div :if={@toggle_event} class="join" id={"#{@id}-metric-toggle"}>
-            <button
-              type="button"
-              phx-click={@toggle_event}
-              phx-value-metric="cpr"
-              class={[
-                "btn btn-xs join-item",
-                if(@y_metric == "cpr", do: "btn-primary", else: "btn-ghost")
-              ]}
-            >
-              {gettext("$/req")}
-            </button>
-            <button
-              type="button"
-              phx-click={@toggle_event}
-              phx-value-metric="cache"
-              class={[
-                "btn btn-xs join-item",
-                if(@y_metric == "cache", do: "btn-primary", else: "btn-ghost")
-              ]}
-            >
-              {gettext("Cache hit %")}
-            </button>
+          <div class="flex items-center gap-2 flex-wrap">
+            <div :if={@entity_toggle_event} class="join" id={"#{@id}-entity-toggle"}>
+              <button
+                :for={
+                  {value, label} <- [
+                    {"models", gettext("Models")},
+                    {"providers", gettext("Providers")}
+                  ]
+                }
+                type="button"
+                phx-click={@entity_toggle_event}
+                phx-value-entity={value}
+                class={[
+                  "btn btn-xs join-item",
+                  if(@entity_value == value, do: "btn-primary", else: "btn-ghost")
+                ]}
+              >
+                {label}
+              </button>
+            </div>
+            <div :if={@toggle_event} class="join" id={"#{@id}-metric-toggle"}>
+              <button
+                :for={{value, label} <- @y_options}
+                type="button"
+                phx-click={@toggle_event}
+                phx-value-metric={value}
+                class={[
+                  "btn btn-xs join-item",
+                  if(@y_metric == value, do: "btn-primary", else: "btn-ghost")
+                ]}
+              >
+                {label}
+              </button>
+            </div>
           </div>
         </div>
 
         <p class="text-[10px] leading-snug text-base-content/40">
           {gettext(
             "X = billable requests · Y = %{y} · bubble size = cost · halo = has $0 local-cache traffic · lines = period median per group · click a bubble for the subject",
-            y:
-              if(@y_metric == "cache",
-                do: gettext("cache hit %"),
-                else: gettext("$ per billable request")
-              )
+            y: @y_label
           )}
         </p>
 
@@ -845,10 +858,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
               y={guide.py}
               width={round2(@geo.w - @geo.right - guide.px)}
               height={round2(@geo.h - @geo.bottom - guide.py)}
-              class={[
-                guide.kind == "service" && "fill-warning/5",
-                guide.kind != "service" && "fill-primary/5"
-              ]}
+              class={kind_fill_soft_class(guide.kind)}
             />
             <line
               :for={guide <- @guides}
@@ -856,10 +866,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
               x2={guide.px}
               y1={@geo.top}
               y2={@geo.h - @geo.bottom}
-              class={[
-                guide.kind == "service" && "stroke-warning/50",
-                guide.kind != "service" && "stroke-primary/40"
-              ]}
+              class={kind_stroke_class(guide.kind)}
               stroke-width="1"
               stroke-dasharray="4 4"
             />
@@ -869,10 +876,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
               x2={@geo.w - @geo.right}
               y1={guide.py}
               y2={guide.py}
-              class={[
-                guide.kind == "service" && "stroke-warning/50",
-                guide.kind != "service" && "stroke-primary/40"
-              ]}
+              class={kind_stroke_class(guide.kind)}
               stroke-width="1"
               stroke-dasharray="4 4"
             />
@@ -953,11 +957,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
                   cx={point.px}
                   cy={point.py}
                   r={point.r}
-                  class={[
-                    "stroke-base-100",
-                    point.kind == "service" && "fill-warning/70 hover:fill-warning",
-                    point.kind != "service" && "fill-primary/70 hover:fill-primary"
-                  ]}
+                  class={["stroke-base-100", kind_fill_class(point.kind)]}
                   stroke-width="1"
                 >
                   <title>{point.tip}</title>
@@ -977,7 +977,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
                 cx={point.px}
                 cy={point.py}
                 r={point.r}
-                class={(point.kind == "service" && "fill-warning/70") || "fill-primary/70"}
+                class={kind_fill_class(point.kind)}
                 stroke-width="1"
               >
                 <title>{point.tip}</title>
@@ -987,19 +987,18 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
         </svg>
 
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1" id={"#{@id}-legend"}>
-          <div class="flex items-center gap-1.5">
-            <span class="w-2 h-2 rounded-full bg-primary/70" />
-            <span class="text-[10px] text-base-content/60">{gettext("Users")}</span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="w-2 h-2 rounded-full bg-warning/70" />
-            <span class="text-[10px] text-base-content/60">{gettext("Services")}</span>
+          <div :for={kind <- @kinds} class="flex items-center gap-1.5">
+            <span class={["w-2 h-2 rounded-full", kind_dot_class(kind)]} />
+            <span class="text-[10px] text-base-content/60">{kind_label(kind)}</span>
           </div>
           <div class="flex items-center gap-1.5">
             <span class="w-3 h-3 rounded-sm bg-primary/5 border border-primary/40 border-dashed" />
             <span class="text-[10px] text-base-content/60">{gettext("Efficient quadrant")}</span>
           </div>
-          <div class="flex items-center gap-1.5">
+          <div
+            :if={Enum.any?(@kinds, &(&1 in ["user", "service"]))}
+            class="flex items-center gap-1.5"
+          >
             <span class="w-3.5 h-3.5 rounded-full border border-dashed border-base-content/40" />
             <span class="text-[10px] text-base-content/60">{gettext("Has $0 local-cache traffic")}</span>
           </div>
@@ -1046,9 +1045,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
         >
           <div :for={{kind, rows} <- @efficient}>
             <p class="text-[10px] uppercase tracking-wide text-base-content/40">
-              {if kind == "service",
-                do: gettext("Efficient services"),
-                else: gettext("Efficient users")}
+              {efficient_label(kind)}
               <span class="normal-case tracking-normal">
                 · {gettext("high volume · low $/req")}
               </span>
@@ -1410,12 +1407,20 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
   defp slug(_), do: "unknown"
 
   defp scatter_point(row, y_metric, period) do
-    requests = row.request_count
+    requests = Map.get(row, :request_count) || Map.get(row, :requests) || 0
     billable = Map.get(row, :billable_requests) || requests
     cost = Decimal.to_float(row.cost_usd)
+    think = Decimal.to_float(Map.get(row, :think_cost_usd) || Decimal.new(0))
+    kind = Map.get(row, :subject_type) || Map.get(row, :kind) || "model"
 
     y =
       cond do
+        y_metric == "think" and cost > 0 ->
+          think / cost * 100
+
+        y_metric == "think" ->
+          nil
+
         y_metric == "cache" and row.prompt_tokens > 0 ->
           row.cache_read_tokens / row.prompt_tokens * 100
 
@@ -1436,7 +1441,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
       nil
     else
       %{
-        kind: row.subject_type,
+        kind: kind,
         label: row.label,
         # X = requests FACTURABLES: la misma base que el `$/req` del eje Y. El
         # total y el caché local viajan en el tooltip y en el halo.
@@ -1445,6 +1450,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
         cost: cost,
         billable: billable,
         requests: requests,
+        think_cost: think,
         local_cache_hits: Map.get(row, :local_cache_hits, 0),
         href: subject_href(row, period),
         tip:
@@ -1457,7 +1463,10 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
                 count: Stats.format_number(Map.get(row, :local_cache_hits, 0))
               ),
               gettext("$/req %{value}", value: Stats.cost_per_request(row.cost_usd, billable)),
-              gettext("cost %{value}", value: Stats.money(row.cost_usd))
+              gettext("cost %{value}", value: Stats.money(row.cost_usd)),
+              gettext("reasoning %{value}",
+                value: Stats.money(Map.get(row, :think_cost_usd) || Decimal.new(0))
+              )
             ],
             " · "
           )
@@ -1470,6 +1479,12 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
 
   defp subject_href(%{subject_type: "service", subject_id: id}, period) when is_binary(id),
     do: "/stats/services/#{id}?period=#{period}"
+
+  defp subject_href(%{kind: "model", entity_id: id}, period) when is_binary(id),
+    do: "/stats/models/#{id}?period=#{period}"
+
+  defp subject_href(%{kind: "provider", entity_id: id}, period) when is_binary(id),
+    do: "/stats/providers/#{id}?period=#{period}"
 
   defp subject_href(_row, _period), do: nil
 
@@ -1492,6 +1507,45 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
       (Enum.at(sorted, mid - 1) + Enum.at(sorted, mid)) / 2
     end
   end
+
+  # --- Etiquetas del mapa (sujetos vs entidades) ---------------------------
+
+  defp default_y_options do
+    [
+      {"cpr", gettext("$/req")},
+      {"cache", gettext("Cache hit %")}
+    ]
+  end
+
+  defp y_label("think"), do: gettext("reasoning % of spend")
+  defp y_label("cache"), do: gettext("cache hit %")
+  defp y_label(_), do: gettext("$ per billable request")
+
+  defp kind_label("model"), do: gettext("Models")
+  defp kind_label("provider"), do: gettext("Providers")
+  defp kind_label("service"), do: gettext("Services")
+  defp kind_label(_), do: gettext("Users")
+
+  defp efficient_label("model"), do: gettext("Efficient models")
+  defp efficient_label("provider"), do: gettext("Efficient providers")
+  defp efficient_label("service"), do: gettext("Efficient services")
+  defp efficient_label(_), do: gettext("Efficient users")
+
+  defp kind_dot_class("service"), do: "bg-warning/70"
+  defp kind_dot_class("provider"), do: "bg-warning/70"
+  defp kind_dot_class(_), do: "bg-primary/70"
+
+  defp kind_fill_class("service"), do: "fill-warning/70 hover:fill-warning"
+  defp kind_fill_class("provider"), do: "fill-warning/70 hover:fill-warning"
+  defp kind_fill_class(_), do: "fill-primary/70 hover:fill-primary"
+
+  defp kind_stroke_class("service"), do: "stroke-warning/50"
+  defp kind_stroke_class("provider"), do: "stroke-warning/50"
+  defp kind_stroke_class(_), do: "stroke-primary/40"
+
+  defp kind_fill_soft_class("service"), do: "fill-warning/5"
+  defp kind_fill_soft_class("provider"), do: "fill-warning/5"
+  defp kind_fill_soft_class(_), do: "fill-primary/5"
 
   defp plot_width, do: @scatter_w - @scatter_left - @scatter_right
   defp plot_height, do: @scatter_h - @scatter_top - @scatter_bottom

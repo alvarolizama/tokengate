@@ -3666,6 +3666,98 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   @doc """
+  Per-model or per-provider rows for the FinOps efficiency map:
+  `[%{kind: "model" | "provider", entity_id, label, requests, billable_requests,
+      cost_usd, think_cost_usd, error_cost_usd, prompt_tokens, completion_tokens,
+      cache_read_tokens}]`, ranked by cost desc.
+
+  `router_decision` rows are excluded (classifier spend lives in
+  `finops_overview/1`) and `billable_requests` is the denominator of the honest
+  `$/req`: local cache hits write `$0` and must not buy efficiency.
+  """
+  @spec finops_entity_scatter(:model | :provider, keyword()) :: [map()]
+  def finops_entity_scatter(kind, opts \\ [])
+
+  def finops_entity_scatter(kind, opts) when kind in [:model, :provider] do
+    window = finops_window!(opts, "Rollup.finops_entity_scatter/2")
+    dimension = if kind == :model, do: :model_id, else: :provider_id
+
+    rows =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^window.from)
+      |> maybe_to(window.to)
+      |> finops_scope(opts)
+      |> where([rl], fragment("COALESCE(?, '') <> 'router_decision'", rl.request_type))
+      |> group_by([rl], field(rl, ^dimension))
+      |> select([rl], %{
+        entity_id: field(rl, ^dimension),
+        request_count: count(rl.id),
+        billable_requests:
+          fragment("COUNT(*) FILTER (WHERE COALESCE(?, 0) > 0)", rl.provider_cost_usd),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        think_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE ? = true OR ? IS NOT NULL), 0)",
+            rl.provider_cost_usd,
+            rl.think,
+            rl.effort_applied
+          ),
+        error_cost_usd:
+          fragment(
+            "COALESCE(SUM(?) FILTER (WHERE ? >= 400), 0)",
+            rl.provider_cost_usd,
+            rl.status_code
+          ),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", rl.cache_read_tokens)
+      })
+      |> Repo.all(timeout: stats_timeout())
+
+    labels = finops_entity_labels(kind, Enum.map(rows, & &1.entity_id))
+
+    rows
+    |> Enum.map(fn row ->
+      %{
+        kind: Atom.to_string(kind),
+        entity_id: row.entity_id,
+        label: Map.get(labels, row.entity_id, "—"),
+        requests: finops_int(row.request_count),
+        billable_requests: finops_int(row.billable_requests),
+        cost_usd: finops_usd(row.cost_usd),
+        think_cost_usd: finops_usd(row.think_cost_usd),
+        error_cost_usd: finops_usd(row.error_cost_usd),
+        prompt_tokens: finops_int(row.prompt_tokens),
+        completion_tokens: finops_int(row.completion_tokens),
+        cache_read_tokens: finops_int(row.cache_read_tokens)
+      }
+    end)
+    |> Enum.sort_by(& &1.cost_usd, &decimal_desc/2)
+  end
+
+  defp finops_entity_labels(:model, ids) do
+    ids
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> then(fn ids ->
+      from(m in Model, where: m.id in ^ids, select: {m.id, m.name})
+      |> Repo.all(timeout: stats_timeout())
+    end)
+    |> Map.new()
+  end
+
+  defp finops_entity_labels(:provider, ids) do
+    ids
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> then(fn ids ->
+      from(p in Provider, where: p.id in ^ids, select: {p.id, p.name})
+      |> Repo.all(timeout: stats_timeout())
+    end)
+    |> Map.new()
+  end
+
+  @doc """
   FinOps summary of ONE service: the same economics as `finops_overview/1`
   plus the three splits the service pages draw.
 

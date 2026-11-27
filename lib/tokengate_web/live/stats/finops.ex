@@ -13,6 +13,13 @@ defmodule TokengateWeb.StatsLive.Finops do
     * `finops_series`         — `Rollup.finops_subject_series/1`
     * `finops_request_types`  — `Rollup.finops_request_type_breakdown/1`
     * `finops_scatter`        — `Rollup.finops_subject_scatter/1`
+    * `finops_models`         — `Rollup.finops_entity_scatter(:model, ...)`
+    * `finops_providers`      — `Rollup.finops_entity_scatter(:provider, ...)`
+
+  Orden de la página: quién paga (proporción + marcadores), a dónde fue cada
+  dólar (anatomía), cuándo (tendencia), qué tan eficiente es cada quien
+  (mapas de sujetos y de modelos/proveedores), quién gastó más (tops) y qué
+  capacidad lo consumió (barras).
 
   Las gráficas viven en `TokengateWeb.StatsLive.FinopsCharts`.
   """
@@ -26,6 +33,10 @@ defmodule TokengateWeb.StatsLive.Finops do
   attr :series, :list, default: []
   attr :request_types, :list, default: []
   attr :scatter, :list, default: []
+  attr :models, :list, default: []
+  attr :providers, :list, default: []
+  attr :entity, :string, default: "models"
+  attr :entity_metric, :string, default: "cpr"
   attr :metric, :string, default: "cost"
   attr :scatter_y, :string, default: "cpr"
   attr :period, :any, required: true
@@ -183,6 +194,12 @@ defmodule TokengateWeb.StatsLive.Finops do
         />
       </div>
 
+      <FinopsCharts.spend_anatomy_bar
+        id="finops-anatomy"
+        overview={@overview}
+        title={gettext("Where every dollar went")}
+      />
+
       <FinopsCharts.dual_trend_chart
         id="finops-trend-chart"
         title={gettext("Spend trend")}
@@ -196,18 +213,9 @@ defmodule TokengateWeb.StatsLive.Finops do
         toggle_event="set_finops_metric"
       />
 
-      <FinopsCharts.spend_anatomy_bar
-        id="finops-anatomy"
-        overview={@overview}
-        title={gettext("Where every dollar went")}
-      />
-
-      <FinopsCharts.capability_bars
-        id="finops-capabilities"
-        rows={@request_types}
-        title={gettext("Cost by capability")}
-      />
-
+      <%!-- Mapas de eficiencia: SUJETOS (usuarios/servicios) y ENTIDADES
+           (modelos/proveedores) lado a lado. Ambos comparten las líneas de
+           mediana por grupo y el cuadrante eficiente. --%>
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="finops-efficiency">
         <FinopsCharts.efficiency_scatter
           id="finops-scatter"
@@ -218,23 +226,48 @@ defmodule TokengateWeb.StatsLive.Finops do
           title={gettext("Efficiency map")}
         />
 
-        <div class="space-y-4">
-          <.top_subjects_table
-            id="finops-top-users"
-            title={gettext("Top 5 users by cost")}
-            subject="user"
-            rows={@top_users}
-            period={@period}
-          />
-          <.top_subjects_table
-            id="finops-top-services"
-            title={gettext("Top 5 services by cost")}
-            subject="service"
-            rows={@top_services}
-            period={@period}
-          />
-        </div>
+        <FinopsCharts.efficiency_scatter
+          id="finops-entity-scatter"
+          rows={if @entity == "models", do: @models, else: @providers}
+          y_metric={@entity_metric}
+          y_options={[
+            {"cpr", gettext("$/req")},
+            {"think", gettext("Reasoning %")}
+          ]}
+          toggle_event="set_finops_entity_metric"
+          entity_toggle_event="set_finops_entity"
+          entity_value={@entity}
+          period={@period}
+          title={
+            if @entity == "models",
+              do: gettext("Efficiency map · models"),
+              else: gettext("Efficiency map · providers")
+          }
+        />
       </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="finops-top">
+        <.top_subjects_table
+          id="finops-top-users"
+          title={gettext("Top 5 users by cost")}
+          subject="user"
+          rows={@top_users}
+          period={@period}
+        />
+        <.top_subjects_table
+          id="finops-top-services"
+          title={gettext("Top 5 services by cost")}
+          subject="service"
+          rows={@top_services}
+          period={@period}
+        />
+      </div>
+
+      <FinopsCharts.capability_bars
+        id="finops-capabilities"
+        rows={@request_types}
+        title={gettext("Cost by capability")}
+      />
     </div>
     """
   end
