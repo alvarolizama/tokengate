@@ -197,17 +197,15 @@ defmodule TokengateWeb.StatsFinopsLiveTest do
     assert has_element?(view, "#finops-scatter-tick-y-service")
     assert has_element?(view, "#finops-scatter-cheapest-empty")
 
-    # La letra chica va a la vista: qué mide cada cosa y qué no. La fórmula es
-    # literal (no pasa por gettext), así que sirve de ancla estable.
-    assert has_element?(view, "#finops-glossary")
-    assert has_element?(view, "#finops-glossary", "median of X and Y, per group")
-    assert has_element?(view, "#finops-glossary", "SUM(provider_cost_usd)")
+    # Una sola tarjeta al pie: cómo leer los mapas, sin tabla ni párrafos.
     assert has_element?(view, "#finops-legend")
+    assert has_element?(view, "#finops-legend", "Mediana")
 
+    # La leyenda va al final de la página, después de las tablas y capacidades.
     html = render(view)
-    {glossary_pos, _} = :binary.match(html, ~s(id="finops-glossary"))
+    {capabilities_pos, _} = :binary.match(html, ~s(id="finops-capabilities"))
     {legend_pos, _} = :binary.match(html, ~s(id="finops-legend"))
-    assert legend_pos > glossary_pos
+    assert legend_pos > capabilities_pos
     # El sujeto 100% caché local ($0) no desaparece: baja a la tira de no
     # facturables con sus requests ahorradas.
     assert has_element?(view, "#finops-scatter-cache-only")

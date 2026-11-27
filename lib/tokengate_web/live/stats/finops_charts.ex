@@ -820,7 +820,7 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
 
         <p class="text-[10px] leading-snug text-base-content/40">
           {gettext(
-            "X = billable requests · Y = %{y} · axis ticks = each group's median · cross = plot center · click a bubble to filter this page",
+            "X = billable requests · Y = %{y} · click a bubble to filter",
             y: @y_label
           )}
         </p>
@@ -1106,104 +1106,50 @@ defmodule TokengateWeb.StatsLive.FinopsCharts do
   attr :entities, :map, required: true
 
   def global_legend(assigns) do
+    medians =
+      (assigns.subjects.medians ++ assigns.entities.medians)
+      |> Enum.map_join(" · ", fn med -> "#{kind_label(med.kind)} #{med.x} / #{med.y}" end)
+
+    assigns = assign(assigns, :medians, medians)
+
     ~H"""
     <section id={@id} class="card bg-base-100 border border-base-300 shadow-sm">
-      <div class="card-body p-4 gap-3">
-        <h2 class="card-title text-base">
-          <.icon name="hero-list-bullet" class="w-5 h-5 text-base-content/60" />
-          {gettext("Map legend")}
+      <div class="card-body p-3 gap-1">
+        <h2 class="card-title text-sm">
+          <.icon name="hero-information-circle" class="w-4 h-4 text-base-content/60" />
+          {gettext("How to read this")}
         </h2>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <.legend_map_block
-            id={"#{@id}-subjects"}
-            title={gettext("Subjects map")}
-            data={@subjects}
-          />
-          <.legend_map_block
-            id={"#{@id}-entities"}
-            title={gettext("Models / providers map")}
-            data={@entities}
-          />
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-base-content/60">
+          <span
+            :for={{kind, label} <- @subjects.kinds ++ @entities.kinds}
+            class="flex items-center gap-1.5"
+          >
+            <span class={["w-2.5 h-2.5 rounded-full shrink-0", kind_dot_class(kind)]} />
+            {label}
+          </span>
+          <span class="text-base-content/40">·</span>
+          <span>{gettext("size = cost")}</span>
+          <span>{gettext("halo = $0 local cache")}</span>
+          <span>{gettext("cross = center")}</span>
+          <span>{gettext("shaded = right + bottom half")}</span>
         </div>
 
-        <div
-          id={"#{@id}-common"}
-          class="flex flex-wrap items-center gap-x-5 gap-y-2 pt-2 border-t border-base-300/60 text-xs text-base-content/60"
-        >
-          <div class="flex items-center gap-1.5">
-            <span class="inline-flex items-end gap-0.5 shrink-0">
-              <span class="w-1.5 h-1.5 rounded-full bg-base-content/40" />
-              <span class="w-3 h-3 rounded-full bg-base-content/40" />
-            </span>
-            <span>{gettext("Bubble size = cost")}</span>
-          </div>
+        <p class="text-[11px] text-base-content/50 tabular-nums">
+          {gettext("Median")}: {@medians}
+        </p>
 
-          <div class="flex items-center gap-1.5">
-            <span class="w-3.5 h-3.5 rounded-full border border-dashed border-base-content/40 shrink-0" />
-            <span>
-              {gettext("Halo = had $0 requests served by TokenGate's own cache")}
-            </span>
-          </div>
+        <p class="text-[11px] text-base-content/40">
+          {gettext(
+            "Thinking tax = reasoning billed as output · Error waste = status ≥ 400 · Router = classifier"
+          )}
+        </p>
 
-          <div class="flex items-center gap-1.5">
-            <span class="relative w-3.5 h-3.5 shrink-0 inline-flex items-center justify-center">
-              <span class="w-full border-t border-dashed border-base-content/40" />
-              <span class="absolute h-full border-l border-dashed border-base-content/40" />
-            </span>
-            <span>{gettext("Cross = center of the drawn area (not a threshold)")}</span>
-          </div>
-
-          <div class="flex items-center gap-1.5">
-            <span class="w-3 h-3 rounded-sm bg-base-content/10 border border-base-content/20 shrink-0" />
-            <span>{gettext("Shaded = right half and bottom half of the drawn area")}</span>
-          </div>
-        </div>
+        <p class="text-[10px] text-base-content/30">
+          {gettext("X = billable requests. No quality, no latency, no efficiency score.")}
+        </p>
       </div>
     </section>
-    """
-  end
-
-  attr :id, :string, required: true
-  attr :title, :string, required: true
-  attr :data, :map, required: true
-
-  defp legend_map_block(assigns) do
-    ~H"""
-    <div id={@id} class="space-y-1.5">
-      <p class="text-[10px] uppercase tracking-wide text-base-content/50 font-semibold">
-        {@title}
-      </p>
-
-      <p :if={@data.kinds == []} class="text-xs text-base-content/40">
-        {gettext("No data in this period.")}
-      </p>
-
-      <div :if={@data.kinds != []} class="space-y-1.5">
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <div :for={{kind, label} <- @data.kinds} class="flex items-center gap-1.5 text-xs">
-            <span class={["w-2.5 h-2.5 rounded-full shrink-0", kind_dot_class(kind)]} />
-            <span class="text-base-content/70">{label}</span>
-          </div>
-        </div>
-
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <div
-            :for={med <- @data.medians}
-            class="flex items-center gap-1.5 text-xs text-base-content/60 tabular-nums"
-          >
-            <span class={["w-2.5 h-0.5 shrink-0", kind_dot_class(med.kind)]} />
-            <span>
-              {gettext("%{kind} median: X %{x} · Y %{y}",
-                kind: kind_label(med.kind),
-                x: med.x,
-                y: med.y
-              )}
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
     """
   end
 
