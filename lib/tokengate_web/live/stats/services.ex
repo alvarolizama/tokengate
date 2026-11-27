@@ -54,6 +54,9 @@ defmodule TokengateWeb.StatsLive.Services do
           <%= if Stats.has_data?(@breakdown_service) do %>
             <%!-- El buscador filtra las filas en el render: no toca la DB ni las
                    claves del DashboardCache. --%>
+            <%!-- El denominador del Share es el total del PERÍODO; el pie suma
+                 sólo las filas visibles (lo que el usuario está mirando). --%>
+            <% period_total = Stats.breakdown_total(@breakdown_service) %>
             <% rows =
               Enum.filter(@breakdown_service, &Stats.matches?(@list_search, &1.service_name)) %>
             <% service_total = Stats.breakdown_total(rows) %>
@@ -81,11 +84,11 @@ defmodule TokengateWeb.StatsLive.Services do
                   <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
-                  <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Share")} align="right">
                   <span class="font-mono tabular-nums text-base-content/70">
-                    {Stats.cost_share_pct(row.cost_usd, service_total.cost_usd)}%
+                    {Stats.cost_share_pct(row.cost_usd, period_total.cost_usd)}%
                   </span>
                 </:col>
                 <:col :let={row} label={gettext("Cost / req")} align="right">
@@ -165,7 +168,7 @@ defmodule TokengateWeb.StatsLive.Services do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(service_total.cost_usd)}</span>
+                    <span class="ml-1">{Stats.money(service_total.cost_usd)}</span>
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Tokens in")}</span>

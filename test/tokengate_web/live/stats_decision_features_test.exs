@@ -150,7 +150,7 @@ defmodule TokengateWeb.StatsDecisionFeaturesTest do
            )
   end
 
-  test "Overview muestra tendencia diaria (week), eficiencia/desperdicio, consumidores, agentes y toggle costo/requests",
+  test "Overview muestra tendencia diaria (week), consumidores, agentes y toggle costo/requests (sin #overview-efficiency, movido a /stats/finops)",
        %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     %{model_expensive: model_exp, owner: owner, service: service} = seed_fixture()
@@ -160,8 +160,8 @@ defmodule TokengateWeb.StatsDecisionFeaturesTest do
     view = wait_stats_loaded(view)
 
     assert has_element?(view, "#overview-daily-chart")
-    assert has_element?(view, "#overview-efficiency")
-    assert has_element?(view, "#overview-efficiency", "$0.01")
+    refute has_element?(view, "#overview-efficiency")
+    assert has_element?(view, "#overview-finops-link")
     assert has_element?(view, "#overview-top-consumers", owner.name)
     assert has_element?(view, "#overview-top-consumers", service.name)
     assert has_element?(view, "#overview-top-agents", "Claude Code")

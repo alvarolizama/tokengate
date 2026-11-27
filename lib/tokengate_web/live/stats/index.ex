@@ -15,7 +15,6 @@ defmodule TokengateWeb.StatsLive.Index do
   attr :metrics, :any, required: true
   attr :peak_concurrency, :any, required: true
   attr :daily_series, :any, default: []
-  attr :efficiency, :any, default: nil
   attr :top_agents, :any, default: []
   attr :top_consumers, :any, default: []
   attr :busiest_hours, :any, required: true
@@ -61,107 +60,6 @@ defmodule TokengateWeb.StatsLive.Index do
         metric={@chart_metric}
         toggle_event="set_chart_metric"
       />
-
-      <%!-- Eficiencia y desperdicio: responde "por qué cuesta tanto" --%>
-      <div
-        :if={admin? and @efficiency != nil}
-        id="overview-efficiency"
-        class="grid grid-cols-1 sm:grid-cols-3 gap-4"
-      >
-        <% cache_pp = get_in(@metrics, [:deltas, :cache_hit_pp]) %>
-        <% cost_req_delta = get_in(@metrics, [:deltas, :cost_per_req]) %>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-4">
-            <div class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              {gettext("Cache efficiency")}
-            </div>
-            <div class="mt-1 flex items-baseline gap-2">
-              <span class="text-xl font-bold tabular-nums">
-                {Stats.cache_hit_pct(@metrics.prompt_tokens, @metrics.cache_read_tokens)}
-              </span>
-              <span
-                :if={cache_pp != nil}
-                class={[
-                  "text-xs font-medium tabular-nums",
-                  if(cache_pp >= 0, do: "text-success", else: "text-warning")
-                ]}
-              >
-                {if(cache_pp >= 0, do: "+", else: "")}{cache_pp} pp
-              </span>
-            </div>
-            <p class="text-xs text-base-content/50 tabular-nums">
-              {gettext("%{read} read · %{write} write",
-                read: Stats.format_compact(@metrics.cache_read_tokens),
-                write: Stats.format_compact(@metrics.cache_creation_tokens)
-              )}
-            </p>
-          </div>
-        </div>
-
-        <% eff_err_rate =
-          if(@efficiency.total_requests > 0,
-            do: @efficiency.error_requests / @efficiency.total_requests,
-            else: 0.0
-          ) %>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-4">
-            <div class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              {gettext("Error waste")}
-            </div>
-            <div class="mt-1 flex items-baseline gap-2">
-              <span class="text-xl font-bold text-warning tabular-nums">
-                ${Stats.format_decimal(@efficiency.error_cost_usd)}
-              </span>
-              <span class="text-xs text-base-content/60 tabular-nums">
-                ({Stats.format_percent(eff_err_rate)})
-              </span>
-            </div>
-            <p class="text-xs text-base-content/50 tabular-nums">
-              {gettext("%{errors} failed of %{total} requests",
-                errors: Stats.format_number(@efficiency.error_requests),
-                total: Stats.format_number(@efficiency.total_requests)
-              )}
-              <span :if={@efficiency.fallback_recovered_count > 0}>
-                · {gettext("%{n} recovered",
-                  n: Stats.format_number(@efficiency.fallback_recovered_count)
-                )}
-              </span>
-            </p>
-          </div>
-        </div>
-
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-4">
-            <div class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              {gettext("Unit economics")}
-            </div>
-            <div class="mt-1 flex items-baseline gap-2">
-              <span class="text-xl font-bold tabular-nums">
-                {Stats.cost_per_request(@metrics.cost_usd, @metrics.requests_total)}/req
-              </span>
-              <span
-                :if={cost_req_delta != nil}
-                class={[
-                  "text-xs font-medium tabular-nums",
-                  if(cost_req_delta > 0, do: "text-warning", else: "text-success")
-                ]}
-              >
-                {if(cost_req_delta >= 0, do: "+", else: "")}{cost_req_delta}%
-              </span>
-            </div>
-            <p class="text-xs text-base-content/50 tabular-nums">
-              {Stats.effective_cost_per_1m(
-                @metrics.cost_usd,
-                @metrics.prompt_tokens,
-                @metrics.completion_tokens
-              )}/1M tok · out/in {Stats.out_in_ratio(
-                @metrics.completion_tokens,
-                @metrics.prompt_tokens
-              )}
-            </p>
-          </div>
-        </div>
-      </div>
 
       <%!-- KPIs secundarios: concurrencia, horas y minutos pico --%>
       <% hours_rows =
@@ -458,9 +356,18 @@ defmodule TokengateWeb.StatsLive.Index do
                 <.icon name="hero-users" class="w-5 h-5 text-base-content/60" />
                 {gettext("Top consumers")}
               </h2>
-              <span class="text-[10px] text-base-content/40">
-                {gettext("users & services by cost")}
-              </span>
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] text-base-content/40">
+                  {gettext("users & services by cost")}
+                </span>
+                <.link
+                  patch={~p"/stats/finops?period=#{@period}"}
+                  class="btn btn-xs btn-ghost"
+                  id="overview-finops-link"
+                >
+                  {gettext("FinOps")} →
+                </.link>
+              </div>
             </div>
             <ul class="mt-1">
               <Stats.ranked_row

@@ -66,7 +66,7 @@ defmodule TokengateWeb.StatsLive.Agent do
             icon="hero-currency-dollar"
             accent="accent"
           >
-            ${Stats.format_decimal(sum.cost_usd)}
+            {Stats.money(sum.cost_usd)}
             <:sub>
               {Stats.cost_per_request(sum.cost_usd, sum.request_count)}/req · {Stats.effective_cost_per_1m(
                 sum.cost_usd,
@@ -163,7 +163,7 @@ defmodule TokengateWeb.StatsLive.Agent do
                   </span>
                 </:col>
                 <:col :let={row} label={gettext("Cost")} align="right">
-                  <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                  <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                 </:col>
                 <:col :let={row} label={gettext("Share")} align="right">
                   <span class="font-mono tabular-nums">
@@ -207,7 +207,7 @@ defmodule TokengateWeb.StatsLive.Agent do
                     <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Cost")} align="right">
-                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Share")} align="right">
                     <span class="font-mono tabular-nums">
@@ -294,7 +294,7 @@ defmodule TokengateWeb.StatsLive.Agent do
                     <span class="font-mono tabular-nums">{Stats.format_number(row.request_count)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Cost")} align="right">
-                    <span class="font-mono tabular-nums">${Stats.format_decimal(row.cost_usd)}</span>
+                    <span class="font-mono tabular-nums">{Stats.money(row.cost_usd)}</span>
                   </:col>
                   <:col :let={row} label={gettext("Share")} align="right">
                     <span class="font-mono tabular-nums">

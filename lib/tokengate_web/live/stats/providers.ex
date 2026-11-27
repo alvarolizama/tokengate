@@ -70,6 +70,12 @@ defmodule TokengateWeb.StatsLive.Providers do
               |> Enum.map(& &1.provider_id)
               |> Enum.with_index(1)
               |> Map.new() %>
+            <%!-- El denominador del Share es el costo del PERÍODO (ranking
+                 completo), no el del filtro; el pie suma las filas visibles. --%>
+            <% period_cost =
+              Enum.reduce(@provider_ranking, Decimal.new(0), fn r, acc ->
+                Decimal.add(acc, Map.get(r, :cost_usd, Decimal.new(0)))
+              end) %>
             <% rows =
               Enum.filter(
                 @provider_ranking,
@@ -118,12 +124,12 @@ defmodule TokengateWeb.StatsLive.Providers do
                 </:col>
                 <:col :let={row} label={gettext("Cost")} field={:cost_usd} align="right">
                   <span class="font-mono tabular-nums">
-                    ${Stats.format_decimal(Map.get(row, :cost_usd, Decimal.new(0)))}
+                    {Stats.money(Map.get(row, :cost_usd, Decimal.new(0)))}
                   </span>
                 </:col>
                 <:col :let={row} label={gettext("Share")} align="right">
                   <span class="font-mono tabular-nums text-base-content/70">
-                    {Stats.cost_share_pct(Map.get(row, :cost_usd, Decimal.new(0)), total_cost)}%
+                    {Stats.cost_share_pct(Map.get(row, :cost_usd, Decimal.new(0)), period_cost)}%
                   </span>
                 </:col>
                 <:col :let={row} label={gettext("Cost / req")} align="right">
@@ -177,7 +183,7 @@ defmodule TokengateWeb.StatsLive.Providers do
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Cost")}</span>
-                    <span class="ml-1">${Stats.format_decimal(total_cost)}</span>
+                    <span class="ml-1">{Stats.money(total_cost)}</span>
                   </span>
                   <span>
                     <span class="text-base-content/40">{gettext("Failures")}</span>
