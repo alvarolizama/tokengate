@@ -653,7 +653,7 @@ defmodule TokengateWeb.ServiceStatsBody do
           </h2>
           <p class="text-xs text-base-content/50">
             {gettext(
-              "Unit economics, waste and efficiency · %{period} · %{scope}",
+              "Unit economics and waste · %{period} · %{scope}",
               period: Stats.period_label(@period),
               scope:
                 if(@key_filter == "all", do: gettext("all API keys"), else: gettext("one API key"))

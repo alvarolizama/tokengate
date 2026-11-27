@@ -10750,11 +10750,6 @@ msgstr ""
 msgid "Out/In ratio"
 msgstr ""
 
-#: lib/tokengate_web/components/service_stats_body.ex:655
-#, elixir-autogen, elixir-format
-msgid "Unit economics, waste and efficiency · %{period} · %{scope}"
-msgstr ""
-
 #: lib/tokengate_web/components/service_stats_body.ex:659
 #, elixir-autogen, elixir-format
 msgid "all API keys"
@@ -11104,4 +11099,9 @@ msgstr ""
 #: lib/tokengate_web/live/stats/finops_charts.ex:829
 #, elixir-autogen, elixir-format
 msgid "X = billable requests · Y = %{y} · bubble size = cost · halo = had $0 requests served by TokenGate's own cache, not the provider's · dashed = each group's median, labeled · shaded = more volume and lower $/req than that median · click a bubble to filter this page"
+msgstr ""
+
+#: lib/tokengate_web/components/service_stats_body.ex:655
+#, elixir-autogen, elixir-format
+msgid "Unit economics and waste · %{period} · %{scope}"
 msgstr ""

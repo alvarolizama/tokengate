@@ -10757,11 +10757,6 @@ msgstr "Caché local"
 msgid "Out/In ratio"
 msgstr "Proporción Out/In"
 
-#: lib/tokengate_web/components/service_stats_body.ex:655
-#, elixir-autogen, elixir-format
-msgid "Unit economics, waste and efficiency · %{period} · %{scope}"
-msgstr "Economía unitaria, desperdicio y eficiencia · %{period} · %{scope}"
-
 #: lib/tokengate_web/components/service_stats_body.ex:659
 #, elixir-autogen, elixir-format
 msgid "all API keys"
@@ -11112,3 +11107,8 @@ msgstr "Ese sujeto tuvo al menos una request contestada por la caché propia de 
 #, elixir-autogen, elixir-format
 msgid "X = billable requests · Y = %{y} · bubble size = cost · halo = had $0 requests served by TokenGate's own cache, not the provider's · dashed = each group's median, labeled · shaded = more volume and lower $/req than that median · click a bubble to filter this page"
 msgstr "X = requests facturables · Y = %{y} · tamaño = costo · halo = tuvo requests $0 servidas por la caché propia de TokenGate, no por la del proveedor · punteado = la mediana de cada grupo, rotulada · sombreado = más volumen y menos $/req que esa mediana · clic en una burbuja filtra esta página"
+
+#: lib/tokengate_web/components/service_stats_body.ex:655
+#, elixir-autogen, elixir-format
+msgid "Unit economics and waste · %{period} · %{scope}"
+msgstr "Economía unitaria y desperdicio · %{period} · %{scope}"
