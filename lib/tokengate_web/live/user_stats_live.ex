@@ -5,11 +5,22 @@ defmodule TokengateWeb.UserStatsLive do
 
   Shows aggregated KPI cards (requests, cost, tokens, top models, status
   breakdown, last request) for the canonical period (`?period=`, default
-  `"week"` via `Tokengate.Periods`) and a paginated stream of the user's
-  recent logs across all memberships. Data loads asynchronously via
-  `start_async/3`; real-time updates arrive via `logs:new` PubSub.
+  `"week"` via `Tokengate.Periods`), a per-user **FinOps** section — unit
+  economics (`$/req`, `$/1M tok`, Out/In, prompt-cache hit rate), waste
+  (`Error waste`, `Thinking tax`), cache savings (`Local cache ($0)`,
+  prompt tokens saved), top-up spend and the `$/day` burn with its 30-day
+  projection — a spend/volume trend (hourly for the single-day windows,
+  daily for `week`/`30d`) and a paginated stream of the user's recent logs
+  across all memberships. Data loads asynchronously via `start_async/3`;
+  real-time updates arrive via `logs:new` PubSub.
 
   Path: `/stats/users/:user_id`
+
+  Presentation is NOT duplicated here: money, token, latency, status,
+  filter and log-matching helpers all come from
+  `TokengateWeb.ServiceStatsBody` / `TokengateWeb.StatsHelpers`, the same
+  ones the supervised-service detail renders with, so the two surfaces
+  cannot drift apart.
 
   Admin-only by router; defense-in-depth `require_admin_hook/1` rejects
   event traffic from non-admins (a malicious client could otherwise
@@ -21,13 +32,31 @@ defmodule TokengateWeb.UserStatsLive do
 
   import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
 
+  # Shared presentation with the service detail: ONE money/tokens/latency/
+  # status/formatter set and ONE filter-matching rule for both surfaces.
+  import TokengateWeb.ServiceStatsBody,
+    only: [
+      default_filters: 0,
+      default_summary: 0,
+      drop_empty_filters: 1,
+      fmt_ms: 1,
+      fmt_money: 1,
+      fmt_tps: 1,
+      format_cost: 1,
+      last_request_label: 2,
+      log_matches_filters?: 4,
+      model_display: 2,
+      parse_date_filters: 2,
+      status_badge: 1
+    ]
+
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
+  alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
-  alias TokengateWeb.KpiHelpers
-  alias TokengateWeb.ServiceStatsBody
   alias TokengateWeb.StatsHelpers, as: Stats
+  alias TokengateWeb.StatsLive.FinopsCharts
 
   @page_size 50
   @summary_refresh_interval_ms 2_000
@@ -67,7 +96,10 @@ defmodule TokengateWeb.UserStatsLive do
           # el empty-state (se recalcula en cada `handle_async(:user_logs, ...)`).
           |> assign(:logs_empty?, true)
           |> assign(:page_size, @page_size)
-          |> assign(:summary, default_summary())
+          |> assign(:summary, initial_summary())
+          |> assign(:burn, empty_burn())
+          |> assign(:series, [])
+          |> assign(:trend_metric, "cost")
           |> assign(:user_breakdowns, %{agents: [], providers: []})
           |> assign(:summary_loading, true)
           |> assign(:logs_loading, true)
@@ -138,7 +170,7 @@ defmodule TokengateWeb.UserStatsLive do
       timezone = socket.assigns.timezone
       filters = socket.assigns.filters
 
-      if log_matches_filters?(log, filters, timezone) do
+      if log_matches_filters?(log, filters, timezone, nil) do
         socket =
           socket
           |> stream_insert(:logs, log, at: 0, limit: @page_size)
@@ -204,6 +236,14 @@ defmodule TokengateWeb.UserStatsLive do
     end
   end
 
+  # Toggle of the trend chart: the same three metrics the FinOps page offers.
+  def handle_event("user_trend_metric", %{"metric" => metric}, socket)
+      when metric in ~w(cost requests cpr) do
+    {:noreply, assign(socket, :trend_metric, metric)}
+  end
+
+  def handle_event("user_trend_metric", _params, socket), do: {:noreply, socket}
+
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   ## Async data loading ----------------------------------------------------
@@ -233,6 +273,16 @@ defmodule TokengateWeb.UserStatsLive do
         Logs.user_breakdowns(user_id, from: from, to: to)
       end)
     end)
+    |> start_async(:user_series, fn ->
+      %{from: from, to: to} = Periods.period_bounds(period, timezone)
+
+      # Rollup reads `request_metrics_hourly` and falls back to raw logs when
+      # the tail bucket is not aggregated yet; the window stays bounded by the
+      # period, so the trend never scans past the selected range.
+      DashboardCache.fetch_or_compute({:user_stats_series, user_id, period, timezone}, fn ->
+        Rollup.hourly_series_for_users([user_id], [from: from, to: to], timezone)
+      end)
+    end)
   end
 
   defp start_logs_load(socket, mode) do
@@ -253,7 +303,7 @@ defmodule TokengateWeb.UserStatsLive do
       base_filters =
         filters
         |> Map.put("user_ids", [user_id])
-        |> ServiceStatsBody.parse_date_filters(timezone)
+        |> parse_date_filters(timezone)
         |> drop_empty_filters()
 
       query_filters =
@@ -276,6 +326,7 @@ defmodule TokengateWeb.UserStatsLive do
     {:noreply,
      socket
      |> assign(:summary, summary)
+     |> assign(:burn, burn_rate(summary, socket.assigns.period, socket.assigns.timezone))
      |> assign(:summary_loading, false)
      |> assign(:summary_error, false)
      |> update_status_flags()}
@@ -297,6 +348,14 @@ defmodule TokengateWeb.UserStatsLive do
 
   def handle_async(:user_breakdowns, {:exit, _reason}, socket) do
     {:noreply, socket}
+  end
+
+  def handle_async(:user_series, {:ok, hour_rows}, socket) do
+    {:noreply, assign(socket, :series, trend_series(hour_rows, socket.assigns.period))}
+  end
+
+  def handle_async(:user_series, {:exit, _reason}, socket) do
+    {:noreply, assign(socket, :series, [])}
   end
 
   def handle_async(:user_logs, {:ok, {mode, logs}}, socket) do
@@ -352,98 +411,81 @@ defmodule TokengateWeb.UserStatsLive do
     |> assign(:load_error, socket.assigns.summary_error or socket.assigns.logs_error)
   end
 
-  # Logs.list_logs/1 doesn't tolerate empty-string values for boolean
-  # fields (streaming) — strip them before forwarding.
-  defp drop_empty_filters(filters) do
-    filters
-    |> Enum.reject(fn {_k, v} -> v in [nil, ""] end)
-    |> Map.new()
+  ## FinOps derivations ----------------------------------------------------
+
+  # `ServiceStatsBody.default_summary/0` is the shared shape; the detail adds
+  # the per-user FinOps block, so the very first paint (before the async read
+  # lands) already renders zeros instead of crashing on a missing key.
+  defp initial_summary do
+    default_summary()
+    |> Map.put(:finops, %{
+      requests: 0,
+      cost_usd: Decimal.new(0),
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      error_requests: 0,
+      error_cost_usd: Decimal.new(0),
+      think_requests: 0,
+      think_cost_usd: Decimal.new(0),
+      local_cache_hits: 0,
+      router_decision_cost_usd: Decimal.new(0),
+      prompt_tokens_saved_est: 0,
+      topup_requests: 0,
+      topup_cost_usd: Decimal.new(0)
+    })
   end
 
-  defp default_filters do
+  # Burn: the window's spend spread over its days (never less than one day —
+  # "today" is a partial day, and dividing by 0.4 would invent a daily rate
+  # nobody is running), projected to 30 days.
+  defp burn_rate(%{total_cost_usd: cost}, period, timezone) do
+    %{from: from, to: to} = Periods.period_bounds(period, timezone)
+    days = max(1.0, DateTime.diff(to, from, :second) / 86_400)
+
+    per_day = Decimal.div(cost, Decimal.new(Float.to_string(days)))
+
     %{
-      "status_class" => "",
-      "streaming" => "",
-      "from" => "",
-      "to" => "",
-      "model_search" => ""
+      days: days,
+      per_day: per_day,
+      projection_30d: Decimal.mult(per_day, Decimal.new(30))
     }
   end
 
-  defp default_summary do
-    %{
-      total_cost_usd: Decimal.new(0),
-      total_prompt_tokens: 0,
-      total_completion_tokens: 0,
-      total_cache_read_tokens: 0,
-      total_cache_creation_tokens: 0,
-      request_count: 0,
-      avg_latency_ms: nil,
-      avg_tps: 0.0,
-      avg_ttft_ms: nil,
-      status_breakdown: %{"2xx" => 0, "4xx" => 0, "5xx" => 0},
-      top_models: [],
-      last_request_at: nil,
-      realtime_5min: %{request_count: 0, error_count: 0, avg_latency_ms: nil, error_rate: 0.0}
-    }
-  end
+  defp empty_burn, do: %{days: 1.0, per_day: Decimal.new(0), projection_30d: Decimal.new(0)}
 
-  ## Filter helpers -------------------------------------------------------
-
-  defp log_matches_filters?(log, filters, timezone) do
-    status_class = filters["status_class"]
-    streaming = filters["streaming"]
-    search = filters["model_search"]
-
-    cond do
-      status_class not in [nil, ""] and not status_class_match?(log.status_code, status_class) ->
-        false
-
-      streaming not in [nil, ""] and not streaming_match?(log.streaming, streaming) ->
-        false
-
-      search not in [nil, ""] and
-          not (String.contains?(log.model_requested || "", search) or
-                   String.contains?(log.model_responded || "", search)) ->
-        false
-
-      true ->
-        date_range_match?(log.inserted_at, filters["from"], filters["to"], timezone)
+  # Trend: `Rollup.hourly_series_for_users/3` always buckets by LOCAL hour.
+  # `today`/`yesterday` chart those hours as-is; the wider windows fold them
+  # into their local day (sums only — no extra query).
+  defp trend_series(hour_rows, period) do
+    if hourly_period?(period) do
+      Enum.map(hour_rows, &trend_point(&1.hour, &1))
+    else
+      hour_rows
+      |> Enum.group_by(&DateTime.to_date(&1.hour))
+      |> Enum.sort_by(fn {day, _rows} -> day end)
+      |> Enum.map(fn {day, rows} ->
+        trend_point(
+          day,
+          Enum.reduce(rows, %{request_count: 0, cost_usd: Decimal.new(0)}, &sum_point/2)
+        )
+      end)
     end
   end
 
-  defp status_class_match?(_, ""), do: true
-  defp status_class_match?(status, "2xx"), do: status >= 200 and status < 300
-  defp status_class_match?(status, "4xx"), do: status >= 400 and status < 500
-  defp status_class_match?(status, "5xx"), do: status >= 500 and status < 600
-  defp status_class_match?(_, _), do: true
-
-  defp streaming_match?(_, ""), do: true
-  defp streaming_match?(streaming, "true"), do: streaming == true
-  defp streaming_match?(streaming, "false"), do: streaming == false
-  defp streaming_match?(_, _), do: true
-
-  defp date_range_match?(_dt, "", "", _timezone), do: true
-
-  defp date_range_match?(dt, from, to, timezone) do
-    after_from =
-      case parse_date_string(from, timezone) do
-        nil -> true
-        from_dt -> DateTime.compare(dt, from_dt) != :lt
-      end
-
-    before_to =
-      case parse_date_string(to, timezone, :end_of_day) do
-        nil -> true
-        to_dt -> DateTime.compare(dt, to_dt) != :gt
-      end
-
-    after_from and before_to
+  defp trend_point(date, %{request_count: request_count, cost_usd: cost_usd}) do
+    %{date: date, subject_type: "user", request_count: request_count, cost_usd: cost_usd}
   end
 
-  defp parse_date_string(date_str, timezone, mode \\ :start_of_day) do
-    TokengateWeb.TimezoneHelper.parse_local_date(date_str, timezone, mode)
+  defp sum_point(row, acc) do
+    %{
+      request_count: acc.request_count + row.request_count,
+      cost_usd: Decimal.add(acc.cost_usd, row.cost_usd)
+    }
   end
+
+  defp hourly_period?(period), do: period in ["today", "yesterday"]
 
   ## Render ----------------------------------------------------------------
 
@@ -554,11 +596,9 @@ defmodule TokengateWeb.UserStatsLive do
                 {gettext("cached %{cached} · hit %{rate}",
                   cached: Stats.format_number(@summary.total_cache_read_tokens),
                   rate:
-                    KpiHelpers.format_hit_rate(
-                      KpiHelpers.cache_hit_rate(
-                        @summary.total_cache_read_tokens,
-                        @summary.total_prompt_tokens
-                      )
+                    Stats.cache_hit_pct(
+                      @summary.total_prompt_tokens,
+                      @summary.total_cache_read_tokens
                     )
                 )}
               </:sub>
@@ -601,6 +641,198 @@ defmodule TokengateWeb.UserStatsLive do
             </.kpi_card>
           </div>
 
+          <%!-- Per-user FinOps: unit economics, waste and cache posture --%>
+          <section id="user-finops" class="space-y-3">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <h2 class="text-sm font-semibold flex items-center gap-2">
+                <.icon name="hero-banknotes" class="w-4 h-4 text-base-content/60" />
+                {gettext("FinOps — unit economics and waste")}
+              </h2>
+              <span class="text-[10px] text-base-content/40">{Stats.period_label(@period)}</span>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+              <.kpi_card
+                id="user-finops-cpr"
+                label={gettext("$/req")}
+                icon="hero-currency-dollar"
+                accent="accent"
+              >
+                {Stats.cost_per_request(@summary.finops.cost_usd, @summary.finops.requests)}
+                <:sub>
+                  {gettext("%{count} served reqs",
+                    count: Stats.format_number(@summary.finops.requests)
+                  )}
+                </:sub>
+              </.kpi_card>
+
+              <.kpi_card
+                id="user-finops-per-1m"
+                label={gettext("$/1M tok")}
+                icon="hero-calculator"
+                accent="accent"
+              >
+                {Stats.effective_cost_per_1m(
+                  @summary.finops.cost_usd,
+                  @summary.finops.prompt_tokens,
+                  @summary.finops.completion_tokens
+                )}
+                <:sub>
+                  {gettext("%{count} tokens",
+                    count:
+                      Stats.format_compact(
+                        @summary.finops.prompt_tokens + @summary.finops.completion_tokens
+                      )
+                  )}
+                </:sub>
+              </.kpi_card>
+
+              <.kpi_card
+                id="user-finops-out-in"
+                label={gettext("Out/In")}
+                icon="hero-arrows-right-left"
+                accent="primary"
+              >
+                {Stats.out_in_ratio(
+                  @summary.finops.completion_tokens,
+                  @summary.finops.prompt_tokens
+                )}
+                <:sub>{gettext("completion / prompt")}</:sub>
+              </.kpi_card>
+
+              <.kpi_card
+                id="user-finops-cache"
+                label={gettext("Prompt cache")}
+                icon="hero-circle-stack"
+                accent="primary"
+              >
+                {Stats.cache_hit_pct(
+                  @summary.finops.prompt_tokens,
+                  @summary.finops.cache_read_tokens
+                )}
+                <:sub>
+                  {gettext("%{read} read · %{write} write",
+                    read: Stats.format_compact(@summary.finops.cache_read_tokens),
+                    write: Stats.format_compact(@summary.finops.cache_creation_tokens)
+                  )}
+                </:sub>
+              </.kpi_card>
+
+              <.kpi_card
+                id="user-finops-local-cache"
+                label={gettext("Local cache ($0)")}
+                icon="hero-bolt"
+                accent="success"
+              >
+                {Stats.format_number(@summary.finops.local_cache_hits)}
+                <:sub>
+                  {gettext("%{count} prompt tokens saved",
+                    count: Stats.format_compact(@summary.finops.prompt_tokens_saved_est)
+                  )}
+                </:sub>
+              </.kpi_card>
+
+              <.kpi_card
+                id="user-finops-error-waste"
+                label={gettext("Error waste")}
+                icon="hero-fire"
+                accent="error"
+              >
+                {Stats.money(@summary.finops.error_cost_usd)}
+                <:sub>
+                  {gettext("%{share} of spend · %{count} errors",
+                    share:
+                      Stats.format_percent(
+                        Stats.cost_share_pct(
+                          @summary.finops.error_cost_usd,
+                          @summary.finops.cost_usd
+                        ) / 100
+                      ),
+                    count: Stats.format_number(@summary.finops.error_requests)
+                  )}
+                </:sub>
+              </.kpi_card>
+
+              <.kpi_card
+                id="user-finops-thinking"
+                label={gettext("Thinking tax")}
+                icon="hero-light-bulb"
+                accent="warning"
+              >
+                {Stats.money(@summary.finops.think_cost_usd)}
+                <:sub>
+                  {gettext("%{share} of spend · %{count} think reqs",
+                    share:
+                      Stats.format_percent(
+                        Stats.cost_share_pct(
+                          @summary.finops.think_cost_usd,
+                          @summary.finops.cost_usd
+                        ) / 100
+                      ),
+                    count: Stats.format_number(@summary.finops.think_requests)
+                  )}
+                </:sub>
+              </.kpi_card>
+
+              <.kpi_card
+                id="user-finops-topups"
+                label={gettext("Top-ups vs quota")}
+                icon="hero-arrow-up-circle"
+                accent="neutral"
+              >
+                {Stats.money(@summary.finops.topup_cost_usd)}
+                <:sub>
+                  {gettext("%{count} reqs paid with a top-up",
+                    count: Stats.format_number(@summary.finops.topup_requests)
+                  )}
+                </:sub>
+              </.kpi_card>
+            </div>
+
+            <%!-- Burn: average daily spend of the window and its 30d run rate --%>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <.kpi_card
+                id="user-finops-burn-day"
+                label={gettext("$/day burn")}
+                icon="hero-fire"
+                accent="accent"
+              >
+                {Stats.money(@burn.per_day)}
+                <:sub>
+                  {gettext("average per day · %{days}-day window", days: fmt_days(@burn.days))}
+                </:sub>
+              </.kpi_card>
+
+              <.kpi_card
+                id="user-finops-projection"
+                label={gettext("30-day projection")}
+                icon="hero-chart-bar"
+                accent="warning"
+              >
+                {Stats.money(@burn.projection_30d)}
+                <:sub>
+                  {gettext("at the current burn rate")}
+                </:sub>
+              </.kpi_card>
+            </div>
+          </section>
+
+          <%!-- Spend / volume trend (hourly for a single day, daily beyond) --%>
+          <FinopsCharts.dual_trend_chart
+            :if={@series != []}
+            id="user-finops-trend"
+            title={gettext("Spend and volume trend")}
+            hint={
+              gettext(
+                "This user's traffic in the selected window, bucketed by %{bucket} in the local timezone.",
+                bucket: if(hourly_period?(@period), do: gettext("hour"), else: gettext("day"))
+              )
+            }
+            series={@series}
+            metric={@trend_metric}
+            toggle_event="user_trend_metric"
+          />
+
           <%!-- Memberships + Status breakdown + Top models --%>
           <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
             <div class="card bg-base-100 border border-base-300 shadow-sm">
@@ -641,21 +873,25 @@ defmodule TokengateWeb.UserStatsLive do
                   </span>
                 </div>
                 <div class="space-y-2">
-                  <.status_row
-                    class_label="2xx"
-                    count={@summary.status_breakdown["2xx"]}
-                    tone="success"
-                  />
-                  <.status_row
-                    class_label="4xx"
-                    count={@summary.status_breakdown["4xx"]}
-                    tone="warning"
-                  />
-                  <.status_row
-                    class_label="5xx"
-                    count={@summary.status_breakdown["5xx"]}
-                    tone="error"
-                  />
+                  <%!-- Una fila por clase de status: el badge ES la etiqueta, así
+                       que no hace falta un componente local (el `status_row/1`
+                       compartido es privado de `ServiceStatsBody`). --%>
+                  <div
+                    :for={
+                      {class_label, badge} <- [
+                        {"2xx", "badge-success"},
+                        {"4xx", "badge-warning"},
+                        {"5xx", "badge-error"}
+                      ]
+                    }
+                    class="flex items-center justify-between"
+                    id={"user-status-#{class_label}"}
+                  >
+                    <span class={["badge badge-sm", badge]}>{class_label}</span>
+                    <span class="text-sm font-mono">
+                      {Integer.to_string(Map.get(@summary.status_breakdown, class_label, 0))}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -908,73 +1144,17 @@ defmodule TokengateWeb.UserStatsLive do
     """
   end
 
-  attr :class_label, :string, required: true
-  attr :count, :integer, default: 0
-  attr :tone, :string, default: "default"
-
-  defp status_row(assigns) do
-    ~H"""
-    <div class="flex items-center justify-between">
-      <span class={["badge badge-sm", row_tone(@tone)]}>{@class_label}</span>
-      <span class="text-sm font-mono">{Integer.to_string(@count)}</span>
-    </div>
-    """
-  end
-
-  defp row_tone("error"), do: "badge-error"
-  defp row_tone("warning"), do: "badge-warning"
-  defp row_tone("success"), do: "badge-success"
-  defp row_tone(_), do: "badge-ghost"
+  ## Presentation helpers -------------------------------------------------
 
   defp error_accent(%{"5xx" => n}) when n > 0, do: "error"
   defp error_accent(%{"4xx" => n}) when n > 0, do: "warning"
   defp error_accent(_), do: "neutral"
 
-  ## Format helpers -------------------------------------------------------
+  defp fmt_days(days) when days == 1.0, do: "1"
 
-  defp format_cost(%Decimal{} = d) do
-    d |> Decimal.to_float() |> :erlang.float_to_binary([:compact, {:decimals, 6}])
+  defp fmt_days(days) do
+    :erlang.float_to_binary(Float.round(days * 10) / 10, [:compact, {:decimals, 1}])
   end
-
-  defp format_cost(nil), do: "—"
-
-  defp fmt_money(%Decimal{} = d), do: Stats.money(d)
-
-  defp fmt_money(_), do: "$0"
-
-  defp fmt_tps(nil), do: "—"
-  defp fmt_tps(tps) when tps in [+0.0, -0.0, 0.0], do: "—"
-
-  defp fmt_tps(tps) when is_number(tps) do
-    tps |> Float.round(1) |> :erlang.float_to_binary([:compact, {:decimals, 1}])
-  end
-
-  defp fmt_tps(_), do: "—"
-
-  defp fmt_ms(nil), do: "—"
-  defp fmt_ms(ms) when is_number(ms), do: "#{Float.round(ms, 0) |> trunc()} ms"
-  defp fmt_ms(_), do: "—"
-
-  defp model_display(req, resp) do
-    cond do
-      is_binary(resp) and resp != "" and resp != req -> "#{req} → #{resp}"
-      true -> req || "—"
-    end
-  end
-
-  defp status_badge(code) when is_integer(code) and code >= 200 and code < 300,
-    do: "badge-success"
-
-  defp status_badge(code) when is_integer(code) and code >= 400 and code < 500,
-    do: "badge-warning"
-
-  defp status_badge(code) when is_integer(code) and code >= 500 and code < 600, do: "badge-error"
-  defp status_badge(_), do: "badge-ghost"
-
-  defp last_request_label(nil, _tz), do: "—"
-
-  defp last_request_label(%DateTime{} = dt, tz),
-    do: TokengateWeb.TimezoneHelper.format_datetime(dt, tz)
 
   defp format_rate(n) when is_integer(n), do: Integer.to_string(n)
 
